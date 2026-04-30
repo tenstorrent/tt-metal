@@ -1,17 +1,18 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_to_all_async.hpp"
 #include <utility>
-#include "ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_op.hpp"
-#include "ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteAllToAllAsync::invoke(
+ttnn::Tensor all_to_all_async(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& persistent_intermediate_buffer,
     ttnn::Tensor& persistent_output_buffer,
@@ -31,37 +32,35 @@ ttnn::Tensor ExecuteAllToAllAsync::invoke(
         persistent_output_buffer = composite_common::composite_all_to_all(
             input_tensor, in_dim, out_dim, num_links, memory_config, subdevice_id);
         return persistent_output_buffer;
-    } else {
-        auto input_shape = input_tensor.logical_shape();
-        auto rank = input_shape.rank();
-        uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
-
-        if (rank == 4 && ((in_dim == 2 && out_dim == 3 && (input_shape[out_dim] / num_devices) % 32 == 0) ||
-                          (in_dim == 3 && out_dim == 2 && input_shape[in_dim] % 32 == 0))) {
-            return ttnn::operations::experimental::ccl::all_to_all_async(
-                input_tensor,
-                persistent_intermediate_buffer,
-                persistent_output_buffer,
-                in_dim,
-                out_dim,
-                multi_device_global_semaphore,
-                num_links,
-                memory_config,
-                topology,
-                subdevice_id);
-        } else {
-            std::optional<ttnn::Tensor> optional_persistent_output_buffer = persistent_output_buffer;
-            return ttnn::operations::experimental::ccl::all_to_all_async_generic(
-                input_tensor,
-                optional_persistent_output_buffer,
-                in_dim,
-                out_dim,
-                num_links,
-                memory_config,
-                topology,
-                subdevice_id);
-        }
     }
+    auto input_shape = input_tensor.logical_shape();
+    auto rank = input_shape.rank();
+    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
+
+    if (rank == 4 && ((in_dim == 2 && out_dim == 3 && (input_shape[out_dim] / num_devices) % 32 == 0) ||
+                      (in_dim == 3 && out_dim == 2 && input_shape[in_dim] % 32 == 0))) {
+        return ttnn::experimental::prim::all_to_all_async(
+            input_tensor,
+            persistent_intermediate_buffer,
+            persistent_output_buffer,
+            in_dim,
+            out_dim,
+            multi_device_global_semaphore,
+            num_links,
+            memory_config,
+            topology,
+            subdevice_id);
+    }
+    std::optional<ttnn::Tensor> optional_persistent_output_buffer = persistent_output_buffer;
+    return ttnn::experimental::all_to_all_async_generic(
+        input_tensor,
+        in_dim,
+        out_dim,
+        optional_persistent_output_buffer,
+        num_links,
+        memory_config,
+        topology,
+        subdevice_id);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

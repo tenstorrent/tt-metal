@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,7 +40,7 @@ void BM_DistributedHostBufferSequentialTransform(benchmark::State& state) {
     auto buffer = create_distributed_host_buffer(state.range(0));
     auto transform_fn = get_transform_fn();
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto transformed_buffer =
             buffer.transform(transform_fn, DistributedHostBuffer::ProcessShardExecutionPolicy::SEQUENTIAL);
         benchmark::DoNotOptimize(transformed_buffer);
@@ -51,7 +51,7 @@ void BM_DistributedHostBufferParallelTransform(benchmark::State& state) {
     auto buffer = create_distributed_host_buffer(state.range(0));
     auto transform_fn = get_transform_fn();
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto transformed_buffer =
             buffer.transform(transform_fn, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
         benchmark::DoNotOptimize(transformed_buffer);

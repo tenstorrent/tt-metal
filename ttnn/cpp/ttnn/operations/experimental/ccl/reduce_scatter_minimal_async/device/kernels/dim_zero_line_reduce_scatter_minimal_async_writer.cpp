@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -141,7 +141,7 @@ void kernel_main() {
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
-    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, page_size);
+    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -164,7 +164,7 @@ void kernel_main() {
     arg_idx += output_rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
+    auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 #endif
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
@@ -251,9 +251,7 @@ void kernel_main() {
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader{
-                {0, 0},  // ignore
-                static_cast<uint16_t>(page_size)},
+            NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
@@ -314,7 +312,7 @@ void kernel_main() {
                             mux_connection_handle,
                             pkt_scatter_hdr,
                             l1_read_addr,
-                            NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                            NocUnicastScatterCommandHeader({noc_address0, noc_address1}));
                         l1_read_addr += page_size * 2;
                     } else {
                         ASSERT(false);

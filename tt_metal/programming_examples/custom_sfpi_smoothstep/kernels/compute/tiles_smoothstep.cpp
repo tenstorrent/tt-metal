@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_api.h"
 
 // The SFPU itself only available on the MATH core. The TRISC_MATH macro
 // is defined when the code is being compiled for the MATH core.
@@ -56,12 +56,10 @@ inline void smoothstep_tile_face(float edge0, float edge1, float inv_delta) {
  *   - Results written to specified Dst register
  */
 inline void my_smoothstep_tiles(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-    MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
-        smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
+    MATH(_llk_math_eltwise_unary_sfpu_params_(smoothstep_tile_face, idx_dst0, VectorMode::RC, edge0, edge1, inv_delta));
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
     // Input circular buffer for tiles
@@ -101,4 +99,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE

@@ -1,9 +1,7 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/blank.h"
+#include "api/compute/blank.h"
 
-namespace NAMESPACE {
-void MAIN {}
-}  // namespace NAMESPACE
+void kernel_main() {}

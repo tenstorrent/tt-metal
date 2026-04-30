@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,14 +6,16 @@
 
 #include <cstdint>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 enum class TensorMemoryLayout {
     INTERLEAVED = 0,
     HEIGHT_SHARDED = 2,
     WIDTH_SHARDED = 3,
     BLOCK_SHARDED = 4,
+    ND_SHARDED = 5,  // The ND_SHARDED value is reserved for cases where the ND sharding pattern cannot be represented
+                     // by any of the legacy 2D sharding strategies. For more info, see the end of
+                     // tech_reports/tensor_sharding/tensor_sharding.md
 };
 
 enum class ShardOrientation {
@@ -36,5 +38,4 @@ enum class BufferType {
     TRACE,
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

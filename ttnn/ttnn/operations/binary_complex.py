@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -38,9 +38,6 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
     return torch.div(input_tensor_a, input_tensor_b)
-
-
-ttnn.attach_golden_function(ttnn.divide, golden_function=_golden_function)
 
 
 __all__ = []

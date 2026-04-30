@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     uint32_t y_addr = get_arg_val<uint32_t>(0);
@@ -22,13 +22,10 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
-    uint32_t y_tile_bytes = get_tile_size(cb_y);
-    uint32_t dy_tile_bytes = get_tile_size(cb_dy);
-
     constexpr auto y_args = TensorAccessorArgs<0>();
     constexpr auto dy_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
-    const auto y_in = TensorAccessor(y_args, y_addr, y_tile_bytes);
-    const auto dy_in = TensorAccessor(dy_args, dy_addr, dy_tile_bytes);
+    const auto y_in = TensorAccessor(y_args, y_addr);
+    const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += onetile) {

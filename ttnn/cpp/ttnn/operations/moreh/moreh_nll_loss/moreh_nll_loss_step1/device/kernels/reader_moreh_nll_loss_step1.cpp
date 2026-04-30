@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto target_addr = get_arg_val<uint32_t>(i++);
     auto weight_addr = get_arg_val<uint32_t>(i++);
@@ -18,21 +19,19 @@ void kernel_main() {
 
     constexpr uint32_t cb_target = tt::CBIndex::c_0;
     constexpr uint32_t cb_weight = tt::CBIndex::c_1;
-
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
-    const uint32_t target_tile_bytes = get_tile_size(cb_target);
 
     constexpr bool weight_has_value = get_compile_time_arg_val(0) == 1;
     constexpr auto target_args = TensorAccessorArgs<1>();
     constexpr auto weight_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
 
-    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
+    const auto addrg_target = TensorAccessor(target_args, target_addr);
 
 #if defined(WEIGHT)
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 #endif
 
     constexpr uint32_t onetile = 1;
@@ -46,7 +45,7 @@ void kernel_main() {
 
 #if defined(WEIGHT)
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, weight_num_tile);
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
 
     cb_wait_front(cb_weight, weight_num_tile);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);

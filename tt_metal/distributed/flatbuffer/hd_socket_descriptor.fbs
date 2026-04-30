@@ -1,0 +1,36 @@
+namespace tt.tt_metal.distributed.flatbuffer;
+
+table HDSocketDescriptor {
+    // Socket identity
+    socket_type: string;
+
+    // Named shared memory
+    shm_name: string;
+    shm_size: uint64;
+
+    // Buffer layout (offsets within the shm region)
+    data_offset: uint32;
+    bytes_acked_offset: uint32;
+    bytes_sent_offset: uint32;
+
+    // Socket parameters
+    fifo_size: uint32;
+    h2d_mode: uint32;
+
+    // Device-side L1 addresses
+    config_buffer_address: uint32;
+    aligned_data_buf_start: uint32;
+
+    // Core identification
+    device_id: uint32;
+    core_x: uint32;
+    core_y: uint32;
+
+    // Pre-resolved transport info
+    virtual_core_x: uint32;
+    virtual_core_y: uint32;
+    pcie_alignment: uint32;
+    bytes_acked_device_offset: uint32;
+}
+
+root_type HDSocketDescriptor;

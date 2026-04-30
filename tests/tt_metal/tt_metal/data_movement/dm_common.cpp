@@ -1,11 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dm_common.hpp"
 #include "device_fixture.hpp"
+#include "hal_types.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::unit_tests::dm {
 
@@ -21,21 +23,19 @@ static uint32_t obtain_page_size_bytes(ARCH arch) { return (arch == ARCH::BLACKH
 L1AddressInfo get_l1_address_and_size(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreCoord& core_coord) {
     // Obtaining L1 address and size for a specific core //
-    const IDevice* device = mesh_device->get_device(0);
+    const IDevice* device = mesh_device->impl().get_device(0);
 
     CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
 
-    uint64_t core_l1_base_address = device->get_dev_addr(physical_core, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    uint64_t core_l1_size = device->get_dev_size(physical_core, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const auto& hal = MetalContext::instance().hal();
+    HalProgrammableCoreType core_type = device->get_programmable_core_type(physical_core);
+    uint64_t core_l1_base_address = hal.get_dev_addr(core_type, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    uint64_t core_l1_size = hal.get_dev_size(core_type, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     return {core_l1_base_address, core_l1_size};
-
-    // Obtaining hardcoded values for L1 address and size //
-
-    // return {HARDCODED_L1_MEMORY_BASE_ADDRESS, HARDCODED_L1_MEMORY_SIZE_BYTES};
 }
 
-DramAddressInfo get_dram_address_and_size(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+DramAddressInfo get_dram_address_and_size() {
     // Obtaining DRAM address and size //
 
     auto dram_base_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
@@ -46,7 +46,7 @@ DramAddressInfo get_dram_address_and_size(const std::shared_ptr<distributed::Mes
 
 std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const IDevice* device = mesh_device->get_device(0);
+    const IDevice* device = mesh_device->impl().get_device(0);
     ARCH arch = device->arch();
 
     // Use core {0,0} as representative core for computing physical constraints

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,10 @@ using SortedParameters = std::map<std::string, autograd::TensorPtr>;
 
 class RemoteOptimizer : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "RemoteOptimizer";
+    }
+
     RemoteOptimizer(serialization::NamedParameters parameters, int aggregator_rank);
 
     void zero_grad() override;

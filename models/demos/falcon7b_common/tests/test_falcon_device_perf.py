@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
@@ -56,8 +55,6 @@ def test_device_perf_wh_bare_metal(
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
-    disable_persistent_kernel_cache()
-
     if llm_mode == "prefill":
         expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
             DeviceSetup.WORMHOLE_B0
@@ -90,9 +87,9 @@ def test_device_perf_wh_bare_metal(
         ("prefill", 1, 128, 0, "BFLOAT16-DRAM", 2115),
         ("prefill", 1, 1024, 0, "BFLOAT16-DRAM", 3120),
         ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2870),
-        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 629),
+        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 647),
         ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 572),
-        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 533),
+        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 548),
     ),
 )
 def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, samples):

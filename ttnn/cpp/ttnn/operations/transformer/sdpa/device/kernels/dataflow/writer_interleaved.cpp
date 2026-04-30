@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
@@ -28,8 +28,11 @@ void kernel_main() {
     constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(19);
+    constexpr bool use_lightweight_mask = get_compile_time_arg_val(20) == 1;
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
 
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -40,37 +43,78 @@ void kernel_main() {
     const uint32_t local_q_start = get_arg_val<uint32_t>(6);
     const uint32_t local_q_end = get_arg_val<uint32_t>(7);
     const uint32_t num_phases = get_arg_val<uint32_t>(8);
-    const uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(9);
-    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(10);
+    const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(9);
+    uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(10);
+    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(11);
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(11);
-        write_offset_phase_2 = get_arg_val<uint32_t>(12);
+        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(12);
+        write_offset_phase_2 = get_arg_val<uint32_t>(13);
     }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_chunk_start_idx = tt::CBIndex::c_9;
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
-    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
+    const auto out_writer = TensorAccessor(out_args, out_addr);
 
     const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
-    uint32_t barrier_count = 0;
 
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
-    generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_identity_scale_in,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+
+    // Lightweight mask: generate template tiles once, leave permanently fronted.
+    // Non-causal: 1 tile (neginf). Causal: 2 tiles (neginf + diagonal).
+    if constexpr (use_lightweight_mask) {
+        constexpr uint32_t mask_tile_size_bytes = get_tile_size(cb_mask_in);
+        constexpr uint32_t lw_mask_tiles = is_causal ? 2 : 1;
+        cb_reserve_back(cb_mask_in, lw_mask_tiles);
+
+        // Tile 0: all -inf
+        auto* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_mask_in));
+        for (uint32_t i = 0; i < mask_tile_size_bytes / sizeof(uint32_t); i++) {
+            ptr[i] = 0xFF80FF80;  // -inf in bfloat16
+        }
+
+        // Tile 1: causal diagonal (0 where col<=row, -inf where col>row)
+        if constexpr (is_causal) {
+            fill_causal_diagonal_tile_bf16<mask_tile_size_bytes>(cb_mask_in, 1);
+        }
+
+        cb_push_back(cb_mask_in, lw_mask_tiles);
+    }
+
+    if constexpr (is_chunked) {
+        if (use_chunk_start_idx_tensor != 0) {
+            cb_wait_front(cb_chunk_start_idx, 1);
+            auto chunk_start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_chunk_start_idx));
+            uint32_t chunk_start_idx = chunk_start_ptr[0];
+            cb_pop_front(cb_chunk_start_idx, 1);
+            const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
+            chunk_start_t_in_q_chunks_phase_1 = chunk_start_idx / q_chunk_size;
+            if (num_phases == 2) {
+                chunk_start_t_in_q_chunks_phase_2 = chunk_start_t_in_q_chunks_phase_1;
+            }
+        }
+    }
 
     uint32_t chunk_start_t_in_q_chunks = 0;
     uint32_t write_offset = 0;
@@ -88,75 +132,66 @@ void kernel_main() {
                 for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                     uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
-                uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                if (q_iter < q_chunk_div_2) {  // bottom half
-                    q_chunk = local_q_start + q_iter;
-                } else {
-                    uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                    q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-                }
+                    uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
+                    if (q_iter < q_chunk_div_2) {  // bottom half
+                        q_chunk = local_q_start + q_iter;
+                    } else {
+                        uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
+                        q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
+                    }
 #else
-                q_chunk = local_q_start + q_iter;
+                    q_chunk = local_q_start + q_iter;
 #endif
 
-                if constexpr (is_causal || sliding_window_size > 0) {
-                    uint32_t offset_q_chunk = q_chunk;
-                    if constexpr (is_chunked) {
-                        // Bump it up to the chunk start
-                        offset_q_chunk += chunk_start_t_in_q_chunks;
+                    // Generate mask only when user didn't provide one.
+                    // Lightweight path already has a single -inf tile fronted — skip generate_mask.
+                    if constexpr (!use_provided_mask && !use_lightweight_mask) {
+                        generate_mask<is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
+                            Sq_chunk_t,
+                            Sk_chunk_t,
+                            q_chunk,
+                            chunk_start_t_in_q_chunks,
+                            true,
+                            false,
+                            unpadded_Sk,
+                            0,
+                            is_causal);
                     }
-                    uint32_t q_low_idx =
-                        offset_q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
-                    uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
 
-                    for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
-                        const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
-                        const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
-                        // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-                        // Q-range = [q_low, q_high)
-                        // K-range = [k_low, k_high)
-                        // does_overlap = not (q_low >= k_high or k_low >= q_high)
-                        // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                        // Read mask chunk
-                        if (!(q_low_idx >= k_high_idx) || sliding_window_size > 0) {
-                            // If no sliding window, only generate mask along diagonal
-                            // Otherwise, generate mask for all chunks
-                            generate_mask<cb_mask_in>(
-                                Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
-                        }
+                    // Wait for compute to deliver output chunk
+                    /*
+                      Determine how many rows of OUT will be written. Both start and end rows are
+                      capped by valid_Sqt, since Sq padding is independent of Sk padding.
+                    */
+                    const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+                    const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
+                    const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
+                    uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+                    if constexpr (use_streaming_compute) {
+                        // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
+                        // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
+                        // are padding and get popped without being written.
+                        write_block_row_grouped(
+                            out_writer,
+                            cb_out,
+                            Sq_chunk_t,
+                            out_row_tile_count,
+                            vDHt,
+                            out_tile_id,
+                            tile_bytes,
+                            out_subblock_h,
+                            barrier_threshold);
+                    } else {
+                        write_block(
+                            out_writer,
+                            cb_out,
+                            out_chunk_tiles,
+                            out_row_tile_count,
+                            vDHt,
+                            out_tile_id,
+                            tile_bytes,
+                            barrier_threshold);
                     }
-                } else if constexpr (use_padded_mask) {
-                    // Generate non-causal padded mask only once per q chunk since it is only non-zero on the last K
-                    // chunk if it exists at all.
-                    generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_Sk);
-                }
-
-                // Wait for compute to deliver output chunk
-                /*
-                Determine how many rows of OUT will be written. Both start and end rows are
-                capped by valid_Sqt, since Sq padding is independent of Sk padding.
-                */
-                const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
-                const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
-                const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-                uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
-                cb_wait_front(cb_out, out_chunk_tiles);
-                barrier_count = 0;
-                uint32_t l1_read_addr = get_read_ptr(cb_out);
-                for (uint32_t row = 0; row < out_row_tile_count; ++row) {
-                    for (uint32_t col = 0; col < vDHt; ++col) {
-                        noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
-                        ++out_tile_id;
-                        l1_read_addr += tile_bytes;
-
-                        if (++barrier_count == barrier_threshold) {
-                            noc_async_writes_flushed();
-                            barrier_count = 0;
-                        }
-                    }
-                }
-                noc_async_write_barrier();
-                cb_pop_front(cb_out, out_chunk_tiles);
                 }
             }
         }

@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#pragma once
+
+#include "api/dataflow/dataflow_api.h"
 
 template <typename T = uint16_t>
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
@@ -15,7 +17,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     // Writer config
     const uint32_t writer_addr = get_write_ptr(cb_id);
     volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(writer_addr);
-    const uint16_t w = wt << 5;  // wt * 2^(5)
+    const uint32_t w = wt << 5;  // wt * 2^(5)
 
     // Writer loop
     uint32_t count = 0;

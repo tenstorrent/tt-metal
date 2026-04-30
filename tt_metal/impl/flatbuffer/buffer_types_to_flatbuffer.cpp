@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,8 +27,9 @@ flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED: return flatbuffer::TensorMemoryLayout::HeightSharded;
         case TensorMemoryLayout::WIDTH_SHARDED: return flatbuffer::TensorMemoryLayout::WidthSharded;
         case TensorMemoryLayout::BLOCK_SHARDED: return flatbuffer::TensorMemoryLayout::BlockSharded;
+        case TensorMemoryLayout::ND_SHARDED: return flatbuffer::TensorMemoryLayout::NdSharded;
+        default: TT_THROW("Unsupported TensorMemoryLayout to flatbuffer.");
     }
-    TT_THROW("Unsupported TensorMemoryLayout to flatbuffer.");
 }
 
 // For page sizes, keep lambda usage consistent across types.
@@ -45,7 +46,7 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
         std::vector<FlatBufferType> vec;
         for (size_t i = 0; i < array.size(); i++) {
             if (array[i]) {
-                vec.push_back(FlatBufferType{i, to_flatbuffer(*array[i])});
+                vec.push_back(FlatBufferType{static_cast<uint32_t>(i), to_flatbuffer(*array[i])});
             }
         }
         return builder.CreateVectorOfStructs(vec);

@@ -1,1 +1,1 @@
-../../../../../models/experimental/stable_diffusion_xl_base/refiner/tests/pcc/test_module_tt_crossattnmidblock2d.py
+../../../../../models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_module_tt_crossattnmidblock2d.py

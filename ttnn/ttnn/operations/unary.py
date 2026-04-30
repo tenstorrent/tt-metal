@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@ def register_ttnn_cpp_unary_function(unary_function):
 
         def torch_hardmish(x):
             x_f32 = x.to(torch.float32)
-            result_f32 = x_f32 * torch.clamp(x_f32 + 2.8, min=0.0, max=5.0) / 5
+            result_f32 = x_f32 * torch.clamp(x_f32 * 0.5 + 1.0, min=0.0, max=1.0)
 
             if x.dtype == torch.bfloat16:
                 # Simulate SFPSTORE truncating
@@ -39,6 +39,7 @@ def register_ttnn_cpp_unary_function(unary_function):
         name_to_golden_function = {
             "abs": torch.abs,
             "atan": torch.atan,
+            "bitcast": lambda x, dtype, **_: x.view(dtype),
             "cos": torch.cos,
             "erfinv": torch.erfinv,
             "exp2": torch.exp2,
@@ -100,7 +101,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "rad2deg": torch.rad2deg,
             "sinh": torch.sinh,
             "softsign": torch.nn.functional.softsign,
-            "swish": torch.nn.functional.hardswish,
+            "swish": torch.nn.functional.silu,
             "tril": torch.tril,
             "triu": torch.triu,
         }
@@ -121,6 +122,7 @@ def register_ttnn_cpp_unary_function(unary_function):
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.abs,
     ttnn.atan,
+    ttnn.bitcast,
     ttnn.cos,
     ttnn.erfinv,
     ttnn.exp2,
@@ -263,6 +265,31 @@ def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.pow, golden_function=_golden_function_pow)
+
+
+def _golden_function_xielu(x, *args, alpha_p=0.8, alpha_n=0.8, **kwargs):
+    # xIELU (Expanded Integral of the Exponential Linear Unit)
+    # A Custom piecewise trainable activation function from "Deriving Activation Functions Using Integration" paper (https://arxiv.org/abs/2411.13010)
+
+    # With beta = 0.5 and eps = -1e-6:
+    #      x > 0 :  alpha_p * x^2 + beta * x
+    #      x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+    import torch
+
+    dtype = x.dtype
+    if dtype == torch.bfloat16:
+        # Compute the golden reference in float32 and convert to bf16 only once after evaluation for a more reliable comparison.
+        x = x.to(torch.float32)
+    beta = 0.5
+    eps = -1e-6
+    pos_part = alpha_p * x * x + beta * x
+    x_clipped = torch.minimum(x, torch.full_like(x, eps))
+    neg_part = alpha_n * torch.expm1(x_clipped) - alpha_n * x + beta * x
+    out = torch.where(x > 0, pos_part, neg_part)
+    return out.to(dtype)
+
+
+ttnn.attach_golden_function(ttnn.xielu, golden_function=_golden_function_xielu)
 
 
 def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
@@ -555,15 +582,17 @@ def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
 ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_softshrink)
 
 
-def _golden_function_logit(input_tensor_a, *args, eps=None, device, **kwargs):
+def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.special.logit(input_tensor_a, eps=eps),
-        nan=device.sfpu_nan(),
-        posinf=device.sfpu_inf(),
-        neginf=-device.sfpu_inf(),
-    )
+    if eps is not None and eps > 0.5:
+        # Manual implementation to avoid platform-dependent UB in torch.special.logit
+        # when eps > 0.5 (std::clamp with lo > hi is undefined behavior).
+        lo = 1.0 - eps
+        hi = eps
+        x = torch.clamp(input_tensor_a, lo, hi)
+        return torch.log(x / (1.0 - x))
+    return torch.special.logit(input_tensor_a, eps=eps)
 
 
 ttnn.attach_golden_function(ttnn.logit, golden_function=_golden_function_logit)
@@ -766,10 +795,10 @@ def _golden_function_frac(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.frac, golden_function=_golden_function_frac)
 
 
-def _golden_function_rdiv(input_tensor_a, value, *args, round_mode=None, **kwargs):
+def _golden_function_rdiv(input_tensor_a, value, *args, rounding_mode=None, **kwargs):
     import torch
 
-    return torch.div(torch.full_like(input_tensor_a, value), input_tensor_a, rounding_mode=round_mode)
+    return torch.div(torch.full_like(input_tensor_a, value), input_tensor_a, rounding_mode=rounding_mode)
 
 
 ttnn.attach_golden_function(ttnn.rdiv, golden_function=_golden_function_rdiv)
@@ -784,5 +813,7 @@ def _golden_function_alt_complex_rotate90(input_tensor_a, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.alt_complex_rotate90, golden_function=_golden_function_alt_complex_rotate90)
+
+SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 
 __all__ = []

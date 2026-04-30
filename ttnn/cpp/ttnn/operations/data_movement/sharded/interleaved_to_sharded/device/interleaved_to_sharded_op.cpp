@@ -1,87 +1,164 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/hal.hpp>
-
 #include "interleaved_to_sharded_op.hpp"
-#include "interleaved_to_sharded_program_factory.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/device_operation.hpp"
+#include <tt-metalium/hal.hpp>
+#include <ttnn/operation.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 
-using namespace tt::tt_metal;
+namespace ttnn::prim {
 
-namespace ttnn::operations::data_movement {
+std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_inputs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& output_mem_config = operation_attributes.output_mem_config;
+    const auto& output_dtype = operation_attributes.output_dtype;
 
-void InterleavedToShardedDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
-
-    if (!output_tensors.empty() && output_tensors[0].has_value()) {
-        const auto& output_tensor = output_tensors[0].value();
-        TT_FATAL(output_tensor.logical_shape() == input_tensor.logical_shape(), "Mismatched output shape");
-        TT_FATAL(output_tensor.memory_config() == this->output_mem_config, "Mismatched output memory config");
-        TT_FATAL(output_tensor.dtype() == this->output_dtype, "Mismatched output dtype");
-        TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-        TT_FATAL(output_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
-        TT_FATAL(output_tensor.device() == input_tensor.device(), "Operands to shard need to be on the same device!");
+    if (input_tensor.storage_type() != StorageType::DEVICE) {
+        return {false, "Operands to shard need to be on device!"};
+    }
+    if (input_tensor.buffer() == nullptr) {
+        return {false, "Operands to shard need to be allocated in buffers on device!"};
     }
 
-    TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Input tensor memory layout must be INTERLEAVED but got {}", input_tensor.memory_config().memory_layout());
-    TT_FATAL(this->output_mem_config.is_sharded(), "Output memory config must be sharded");
-    if (this->output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_FATAL(this->output_mem_config.buffer_type() == BufferType::L1, "We don't support DRAM block sharding");
+    // Reject dtype/layout combinations that would hard-fail during TensorSpec construction in compute_output_specs().
+    // These low-precision packed formats require tiled layout.
+    const bool output_dtype_requires_tile =
+        output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B;
+    if (output_dtype_requires_tile && input_tensor.layout() == Layout::ROW_MAJOR) {
+        return {false, "Output dtype BFLOAT8_B/BFLOAT4_B requires TILE layout, but input tensor layout is ROW_MAJOR"};
+    }
+
+    // TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.
+    // Use the normalized memory config for validation so that convertible ND specs are accepted.
+    auto resolved_output_mem_config = output_mem_config;
+    if (output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+        auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+        if (output_spec.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+            return {
+                false,
+                "interleaved_to_sharded does not support ND sharding. Please use ttnn.to_memory_config or "
+                "ttnn.copy instead."};
+        }
+        resolved_output_mem_config = output_spec.memory_config();
+    }
+    if (tensor_args.output_tensor.has_value()) {
+        const auto& output_tensor = tensor_args.output_tensor.value();
+        if (output_tensor.logical_shape() != input_tensor.logical_shape()) {
+            return {false, "Mismatched output shape"};
+        }
+        if (output_tensor.memory_config() != resolved_output_mem_config) {
+            return {false, "Mismatched output memory config"};
+        }
+        if (output_tensor.dtype() != output_dtype) {
+            return {false, "Mismatched output dtype"};
+        }
+        if (output_tensor.storage_type() != StorageType::DEVICE) {
+            return {false, "Operands to shard need to be on device!"};
+        }
+        if (output_tensor.buffer() == nullptr) {
+            return {false, "Operands to shard need to be allocated in buffers on device!"};
+        }
+        if (output_tensor.device() != input_tensor.device()) {
+            return {false, "Operands to shard need to be on the same device!"};
+        }
+        if (output_tensor.layout() != input_tensor.layout()) {
+            return {false, "Output tensor layout must match input tensor layout"};
+        }
+    }
+    if (input_tensor.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+        return {false, fmt::format("Input tensor memory layout must be INTERLEAVED, but got {}", input_tensor.memory_config().memory_layout())};
+    }
+    if (!output_mem_config.is_sharded()) {
+        return {false, "Output memory config must be sharded"};
+    }
+
+    if (resolved_output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        if (resolved_output_mem_config.buffer_type() != tt::tt_metal::BufferType::L1) {
+            return {false, "We don't support DRAM block sharding"};
+        }
     }
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        TT_FATAL((*this->output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() % hal::get_l1_alignment() == 0, "Shard page size must currently have L1 aligned page size");
+        if ((*resolved_output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() %
+                tt::tt_metal::hal::get_l1_alignment() != 0) {
+            return {false, "Shard page size must currently have L1 aligned page size"};
+        }
     }
-    if (input_tensor.dtype() != this->output_dtype) {
-        TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor layout must be TILE when dtype conversion is needed but got {}", input_tensor.layout());
+    if (input_tensor.dtype() != output_dtype) {
+        if (input_tensor.layout() != Layout::TILE) {
+            return {false, "Input tensor layout must be TILE when dtype conversion is needed"};
+        }
     }
+    if (input_tensor.layout() == Layout::TILE) {
+        auto tile = input_tensor.tensor_spec().tile();
+        if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+            return {false, fmt::format("interleaved_to_sharded requires standard 32x32 tiles, got {}x{}", tile.get_height(), tile.get_width())};
+        }
+        if (tensor_args.output_tensor.has_value()) {
+            auto out_tile = tensor_args.output_tensor.value().tensor_spec().tile();
+            if (out_tile != tile) {
+                return {false, "Output tensor tile shape must match input tensor tile shape"};
+            }
+        }
+    }
+    return {true, ""};
 }
 
+void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto [valid, msg] = validate_inputs(operation_attributes, tensor_args);
+    TT_FATAL(valid, "{}", msg);
+}
 
-std::vector<ttnn::TensorSpec> InterleavedToShardedDeviceOperation::compute_output_specs(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    if (!output_tensors.empty() && output_tensors[0].has_value()) {
-        return {output_tensors[0]->tensor_spec()};
+InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor.value().tensor_spec();
     }
-    const auto& input_tensor = input_tensors.at(0);
-    return {TensorSpec(input_tensor.logical_shape(), TensorLayout::fromPaddedShape(
-        output_dtype,
-        PageConfig(input_tensor.layout()),
-        output_mem_config,
+
+    const auto& input_tensor = tensor_args.input_tensor;
+    return TensorSpec(
         input_tensor.logical_shape(),
-        input_tensor.padded_shape()))};
+        tt::tt_metal::TensorLayout(
+            operation_attributes.output_dtype,
+            tt::tt_metal::PageConfig(input_tensor.layout()),
+            operation_attributes.output_mem_config));
 }
 
-std::vector<Tensor> InterleavedToShardedDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    if (!output_tensors.empty() && output_tensors[0].has_value()) {
-        return {output_tensors[0].value()};
+InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor.value();
     }
-    const auto& input_tensor = input_tensors.at(0);
-    auto spec = compute_output_specs(input_tensors, output_tensors)[0];
-    return {create_device_tensor(spec, input_tensor.device())};
+
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(spec, input_tensor.device());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
-InterleavedToShardedDeviceOperation::create_op_performance_model(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-        input_tensors, output_tensors, ideal_dev_clock_cycles);
-    return result;
+ttsl::hash::hash_t InterleavedToShardedDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    return tt::tt_metal::operation::hash_operation<InterleavedToShardedDeviceOperation>(
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.keep_l1_aligned,
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_tensor.layout(),
+        input_tensor.padded_shape());
 }
 
-operation::ProgramWithCallbacks InterleavedToShardedDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = output_tensors.at(0);
-    return detail::interleaved_to_sharded_multi_core(input_tensor, output_tensor, this->keep_l1_aligned);
+Tensor interleaved_to_sharded(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::DataType& output_dtype,
+    bool keep_l1_aligned,
+    const std::optional<Tensor>& preallocated_output) {
+    return ttnn::device_operation::launch<InterleavedToShardedDeviceOperation>(
+        InterleavedToShardedParams{output_mem_config, output_dtype, keep_l1_aligned},
+        InterleavedToShardedInputs{input_tensor, preallocated_output});
 }
-
-
-}
+}  // namespace ttnn::prim

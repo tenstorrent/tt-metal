@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 #include <tuple>
 #include <string>
 #include <utility>
-#include "tt_metal/api/tt-metalium/mesh_graph.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 namespace tt::tt_fabric {
 

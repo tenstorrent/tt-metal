@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -36,10 +36,10 @@ constexpr size_t n_cbs = 32;
 constexpr size_t data_buffer_size = cb_n_pages * cb_n_pages;
 
 std::vector<std::shared_ptr<Buffer>> create_output_buffers(
-    distributed::MeshWorkload& workload, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    distributed::MeshWorkload& /*workload*/, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     std::vector<std::shared_ptr<Buffer>> output_buffers;
     output_buffers.reserve(n_cbs);
@@ -85,8 +85,8 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        const auto master_semaphore = CreateSemaphore(program_, worker_core, 0, tt::CoreType::WORKER);
-        const auto subordinate_semaphore = CreateSemaphore(program_, worker_core, 0, tt::CoreType::WORKER);
+        const auto master_semaphore = CreateSemaphore(program_, worker_core, 0);
+        const auto subordinate_semaphore = CreateSemaphore(program_, worker_core, 0);
 
         std::vector<CBHandle> cbs;
         cbs.reserve(n_cbs);
@@ -121,6 +121,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         tt::tt_metal::SetRuntimeArgs(program_, subordinate_kernel_id, worker_core, subordinate_rt_args);
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         std::vector<uint32_t> out_buf(data_buffer_size);
         for (size_t i = 0; i < n_cbs; i++) {

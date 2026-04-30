@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -421,7 +421,7 @@ class TtBEVFormerLayer:
                 ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
 
-            # spaital cross attention
+            # spatial cross attention
             elif layer == "cross_attn":
                 query = self.attentions[attn_index](
                     query,

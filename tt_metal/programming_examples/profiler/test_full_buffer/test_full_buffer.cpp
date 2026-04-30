@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,27 +8,22 @@
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
 // Local constants for profiler example
-constexpr uint32_t OP_COUNT = 1000;
-constexpr uint32_t MARKER_COUNT = 4;
+constexpr uint32_t DRAM_MARKER_COUNT = 6000;
+constexpr uint32_t FULL_L1_MARKER_COUNT = 256;
 
 void RunFillUpAllBuffers(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count, bool fast_dispatch) {
-    IDevice* device = mesh_device->get_devices()[0];
-
     CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
-    auto eth_cores = device->get_active_ethernet_cores(true);
 
     // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;
@@ -62,19 +57,9 @@ void RunFillUpAllBuffers(
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
-    for (auto core : eth_cores) {
-        tt_metal::CreateKernel(
-            program,
-            "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_ether.cpp",
-            (CoreCoord){core.x, core.y},
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
-    }
-
     workload.add_program(device_range, std::move(program));
     if (fast_dispatch) {
-        for (int i = 0;
-             i < OP_COUNT * MARKER_COUNT / loop_count;
-             i++) {
+        for (int i = 0; i < DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT; i++) {
             // Enqueue the same mesh workload multiple times to generate profiler traffic
             distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
         }

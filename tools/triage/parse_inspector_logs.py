@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -66,7 +66,7 @@ BinaryStatus: TypeAlias = Literal["notSent", "inFlight", "committed"]
 
 @dataclass
 class DeviceBinaryStatus:
-    deviceId: int
+    metalDeviceId: int
     status: BinaryStatus
 
 
@@ -83,9 +83,19 @@ class MeshDeviceBinaryStatus:
 
 
 @dataclass
+class MeshWorkloadRuntimeEntry:
+    workloadId: int
+    runtimeId: int
+    operationName: str = ""
+    operationParameters: str = ""
+    traceId: int = 0xFFFFFFFF
+
+
+@dataclass
 class MeshWorkloadData:
     meshWorkloadId: int
     programs: list[MeshWorkloadProgramData]
+    binary_status_per_mesh_device: dict[int, BinaryStatus]
 
     @cached_property
     def binaryStatusPerMeshDevice(self) -> list[MeshDeviceBinaryStatus]:
@@ -93,8 +103,6 @@ class MeshWorkloadData:
             MeshDeviceBinaryStatus(meshId=mesh_id, status=status)
             for mesh_id, status in self.binary_status_per_mesh_device.items()
         ]
-
-    binary_status_per_mesh_device: dict[int, BinaryStatus]
 
     def get_device_binary_status(self, mesh_id: int) -> BinaryStatus:
         return self.binary_status_per_mesh_device.get(mesh_id, "notSent")
@@ -409,15 +417,12 @@ def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
 def get_log_directory(log_directory: str | None = None) -> str:
     if log_directory:
         return log_directory
-    elif "TT_METAL_INSPECTOR_LOG_PATH" in os.environ:
-        return os.environ.get("TT_METAL_INSPECTOR_LOG_PATH")
-    elif "TT_METAL_HOME" in os.environ:
-        return os.path.join(os.environ.get("TT_METAL_HOME"), "generated", "inspector")
+    elif "TT_METAL_LOGS_PATH" in os.environ:
+        return os.path.join(os.environ.get("TT_METAL_LOGS_PATH"), "generated", "inspector")
     else:
         import tempfile
 
         return os.path.join(tempfile.gettempdir(), "tt-metal", "inspector")
-    assert False, "unreachable"
 
 
 class InspectorLogsData:
@@ -434,11 +439,54 @@ class InspectorLogsData:
 
     @cached_property
     def mesh_workloads(self):
-        GetMeshWorkloadResults = namedtuple("GetMeshWorkloadResults", ["meshWorkloads"])
-        return GetMeshWorkloadResults(meshWorkloads=list(get_mesh_workloads(self.log_directory).values()))
+        GetMeshWorkloadResults = namedtuple("GetMeshWorkloadResults", ["meshWorkloads", "runtimeIds"])
+        return GetMeshWorkloadResults(
+            meshWorkloads=list(get_mesh_workloads(self.log_directory).values()), runtimeIds=self._get_runtime_entries()
+        )
+
+    def _get_runtime_entries(self) -> list[MeshWorkloadRuntimeEntry]:
+        """Parse runtime entries from logs"""
+        yaml_path = os.path.join(self.log_directory, "mesh_workloads_log.yaml")
+        data = read_yaml(yaml_path)
+        runtime_entries = []
+        # Build a map from (workload_id, runtime_id) -> entry so runtime_entry logs can enrich them
+        entry_map: dict[tuple[int, int], MeshWorkloadRuntimeEntry] = {}
+        for entry in data:
+            if "workload_runtime_id" in entry:
+                info = entry["workload_runtime_id"]
+                wid = int(info.get("mesh_workload_id"))
+                rid = int(info.get("runtime_id"))
+                re = MeshWorkloadRuntimeEntry(workloadId=wid, runtimeId=rid)
+                runtime_entries.append(re)
+                entry_map[(wid, rid)] = re
+            elif "runtime_entry" in entry:
+                info = entry["runtime_entry"]
+                wid = int(info.get("mesh_workload_id"))
+                rid = int(info.get("runtime_id"))
+                trace_id = int(info["trace_id"])
+                existing = entry_map.get((wid, rid))
+                if existing is not None:
+                    existing.operationName = info.get("name", "")
+                    existing.operationParameters = info.get("parameters", "")
+                    existing.traceId = trace_id
+                else:
+                    re = MeshWorkloadRuntimeEntry(
+                        workloadId=wid,
+                        runtimeId=rid,
+                        operationName=info.get("name", ""),
+                        operationParameters=info.get("parameters", ""),
+                        traceId=trace_id,
+                    )
+                    runtime_entries.append(re)
+                    entry_map[(wid, rid)] = re
+        return runtime_entries
 
     def getMeshWorkloads(self):
         return self.mesh_workloads
+
+    def getMeshWorkloadRuntimeEntries(self):
+        GetMeshWorkloadRuntimeEntriesResults = namedtuple("GetMeshWorkloadRuntimeEntriesResults", ["runtimeEntries"])
+        return GetMeshWorkloadRuntimeEntriesResults(runtimeEntries=self._get_runtime_entries())
 
     @cached_property
     def kernels(self) -> dict[int, KernelData]:
@@ -458,8 +506,8 @@ class InspectorLogsData:
 
     @cached_property
     def devices_in_use(self):
-        GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["deviceIds"])
-        return GetDevicesInUseResults(deviceIds=list(get_devices_in_use(self.getPrograms().programs)))
+        GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["metalDeviceIds"])
+        return GetDevicesInUseResults(metalDeviceIds=list(get_devices_in_use(self.getPrograms().programs)))
 
     def getDevicesInUse(self):
         return self.devices_in_use
@@ -505,7 +553,7 @@ def main():
     print()
 
     mesh_workloads = get_mesh_workloads(log_directory, verbose=True)
-    print("Mesh Workloads:")
+    print(f"Mesh Workloads: {len(mesh_workloads)} found {mesh_workloads.keys()}")
     for mesh_workload in mesh_workloads.values():
         print(f"  Mesh Workload ID {mesh_workload.meshWorkloadId}")
         print(f"    Programs:")

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -75,11 +75,6 @@ def get_default_hifi2_kernel_config():
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
-        )
-    else:
-        hifi2_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
         )
     return hifi2_kernel_config
 

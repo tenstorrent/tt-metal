@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -30,8 +30,6 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
 def test_ci_dispatch(model_weights):
     logger.info(f"Running fast dispatch tests for {model_weights}")
 
-    if os.getenv("LLAMA_DIR"):
-        del os.environ["LLAMA_DIR"]
     os.environ["HF_MODEL"] = model_weights
     os.environ["TT_CACHE_PATH"] = get_hf_tt_cache_path(model_weights)
 
@@ -47,6 +45,7 @@ def test_ci_dispatch(model_weights):
             "models/tt_transformers/tests/test_decoder_prefill.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
+        + (["--timeout", "600"] if "mistral" in model_weights.lower() else [])
     )
     if exit_code == pytest.ExitCode.TESTS_FAILED:
         pytest.fail(

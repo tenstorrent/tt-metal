@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     int i{0};
     const auto num_cols_per_core = get_arg_val<uint32_t>(i++);
     const auto Ht = get_arg_val<uint32_t>(i++);
@@ -126,22 +126,9 @@ void MAIN {
                 cb_push_back(cb_xpowadd, onetile);
             }
         }
-        // Sum(|x|^p)
-        tile_regs_acquire();
-        cb_wait_front(cb_xpowadd, onetile);
-        cb_reserve_back(cb_xpowsum, onetile);
-
-        reduce_init_delta_with_dt(cb_xpowsum, cb_xpowadd, cb_one);
-        reduce_tile(cb_xpowadd, cb_one, 0, 0, dst0);
-        reduce_uninit();
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_xpowsum);
-        tile_regs_release();
-
-        cb_pop_front(cb_xpowadd, onetile);
-        cb_push_back(cb_xpowsum, onetile);
+        // Sum(|x|^p) - reduce single pre-accumulated tile
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            cb_xpowadd, cb_one, cb_xpowsum, compute_kernel_lib::ReduceInputBlockShape::single());
 
         power_tile_to_cb(cb_xpowsum, cb_tmp0, cb_tmp1, cb_recip_p_decimal, cb_tmp2, cb_y, recip_p, recip_p_is_negative);
     }
@@ -152,6 +139,4 @@ void MAIN {
     if (do_mask_h) {
         cb_pop_front(cb_mask_h, onetile);
     }
-
-}  // void MAIN
-}  // namespace NAMESPACE
+}

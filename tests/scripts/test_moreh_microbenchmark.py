@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -767,9 +767,9 @@ def test_matmul_single_core_sharded(
         ("wormhole_b0", np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
         ("wormhole_b0", np.array([32768, 12 * 256]), 1, 8, 2, 12, 0),
         ("wormhole_b0", np.array([2048, 3840]), 1, 4, 1, 12, 0),  # Padded FF1 shapes for llama 70b on TG
-        ("blackhole", np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
-        ("blackhole", np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
-        ("blackhole", np.array([32768, 8 * 256]), 1, 8, 2, 8, 0),
+        ("blackhole", np.array([16 * 32768, 8 * 128]), 1, 16 * 8, 0, 8, 0),
+        ("blackhole", np.array([16 * 32768, 8 * 128]), 1, 16 * 8, 1, 8, 0),
+        ("blackhole", np.array([16 * 32768, 8 * 256]), 1, 16 * 8, 2, 8, 0),
         ("blackhole", np.array([2048, 3840]), 1, 4, 1, 8, 0),  # Padded FF1 shapes for llama 70b on TG
     ],
 )
@@ -812,8 +812,8 @@ def test_dram_read_all_core(arch, test_vector, num_tests, nblock, data_format, n
         bw_lower_bound = 250.0
         bw_upper_bound = 270.0
     elif arch == "blackhole":
-        bw_lower_bound = 350.0
-        bw_upper_bound = 380.0
+        bw_lower_bound = 490.0
+        bw_upper_bound = 512.0
     else:
         assert False, f"Unsupported architecture: {arch}"
     assert bw_lower_bound <= throughput

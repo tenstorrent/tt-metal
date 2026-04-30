@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,6 +21,7 @@ struct GoldenConfig {
     int face_c_dim = 16;
     int num_faces = 4;
     bool tiny_tile = false;
+    uint32_t datum_bytes = 2;  // bytes per element: 2=BF16 (default), 1=FP8, 4=FP32
 };
 
 std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_vec, const GoldenConfig& config);
@@ -70,5 +71,12 @@ std::vector<uint16_t> gold_reduce_hw(
 // Assumes all elements in bfloat16
 std::vector<uint32_t> gold_standard_tilize_w_elwadd(
     const std::vector<uint32_t>& src0_vec, const std::vector<uint32_t>& src1_vec, const GoldenConfig& config);
+
+// Used if golden function needs pack_rows details
+struct PackRowsConfig {
+    int num_rows{};
+};
+
+std::vector<uint32_t> gold_standard_pack_rows(const std::vector<uint32_t>& src_vec, const PackRowsConfig& config);
 
 }  // namespace unit_tests::compute

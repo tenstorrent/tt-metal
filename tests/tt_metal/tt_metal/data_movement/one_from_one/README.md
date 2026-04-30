@@ -10,9 +10,9 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 ## Test Flow
 L1 memory is allocated on two Tensix cores: one subordinate core (sender) and one master core (receiver). Data is written into the L1 memory on the subordinate core. The master core issues NOC read transactions to retrieve data from the subordinate core's L1 memory. Once data is transferred, the master core uses hardware barriers to ensure data validity and completion of the transaction.
 
-Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
+Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through an equality check.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:
@@ -51,7 +51,7 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 This test suite now includes tests using the new device 2.0 experimental NOC API. These tests provide the same functionality as the original tests but use an updated API design:
 
 ### Key Features of Device 2.0 API Tests:
-- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint`, and `experimental::noc_traits_t` for structured NOC operations
+- **Experimental NOC API**: Uses `experimental::Noc` and `experimental::UnicastEndpoint` for structured NOC operations
 - **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
 
 ### Device 2.0 Kernels:

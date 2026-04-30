@@ -1,7 +1,7 @@
 # metal_BERT_large 11
 
 ## Platforms:
-    Grayskull (e150), Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction
 BERT stands for Bidirectional Encoder Representations from Transformers. Unlike recent language representation models, BERT is designed to pre-train deep bidirectional representations from unlabeled text by jointly conditioning on both left and right context in all layers. As a result, the pre-trained BERT model can be fine-tuned with just one additional output layer to create state-of-the-art models for a wide range of tasks, such as question answering and language inference, without substantial task-specific architecture modifications.
@@ -13,11 +13,11 @@ BERT stands for Bidirectional Encoder Representations from Transformers. Unlike 
 ## How to Run
 ### Batch Support Chart
 Replace `BATCH_SIZE` with the appropriate size for your device according to this chart:
-| Batch size | Grayskull (e150)   | Wormhole (n150)    | Wormhole (n300)    |
-|------------|--------------------|--------------------|--------------------|
-| 7          | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| 8          | :white_check_mark: | :white_check_mark: | :white_check_mark: |
-| 12         | :white_check_mark: | :x:                | :x:                |
+| Batch size | Wormhole (n150)    | Wormhole (n300)    |
+|------------|--------------------|--------------------|
+| 7          | :white_check_mark: | :white_check_mark: |
+| 8          | :white_check_mark: | :white_check_mark: |
+| 12         | :x:                | :x:                |
 
 ### Run the Demo
 ```

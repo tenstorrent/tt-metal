@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import abstractmethod
@@ -12,6 +12,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
+from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -22,6 +23,13 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.tt_transformers.tt.common import PagedAttentionConfig
+
+
+def _has_distinct_buffer(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
+    try:
+        return a.buffer_address() != b.buffer_address()
+    except Exception:
+        return a is not b
 
 
 class DecoderBlock2DBase(DecoderBlockBase):
@@ -67,10 +75,11 @@ class DecoderBlock2DBase(DecoderBlockBase):
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
         mla_cache: torch.Tensor | None = None,
+        kv_cache_override: KvCacheConfig | None = None,
     ) -> ModelState:
         return {
             "mla_norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
-            "mla": cls.create_mla_state(hf_config, paged_config, mesh_device, ccl, mla_cache),
+            "mla": cls.create_mla_state(hf_config, paged_config, mesh_device, ccl, mla_cache, kv_cache_override),
             "mlp_norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "mlp": cls.create_mlp_state(hf_config, mesh_device, ccl),
         }
@@ -120,7 +129,8 @@ class DecoderBlock2DBase(DecoderBlockBase):
         # MLA norm
         mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
         mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
-        ttnn.deallocate(mla_norm_in)
+        if _has_distinct_buffer(mla_norm_in, x):
+            ttnn.deallocate(mla_norm_in)
 
         # MLA
         mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
@@ -134,7 +144,8 @@ class DecoderBlock2DBase(DecoderBlockBase):
         # MLP norm
         mlp_norm_in = ttnn.to_memory_config(x, **cfg["mlp_norm_reshard"])
         mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, cfg["mlp_norm"])
-        ttnn.deallocate(mlp_norm_in)
+        if _has_distinct_buffer(mlp_norm_in, x):
+            ttnn.deallocate(mlp_norm_in)
 
         # MLP
         mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
@@ -153,8 +164,9 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
-        return MLA2D.prefill_model_config(hf_config, mesh_device)
+        return MLA2D.prefill_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
 
     @classmethod
     @abstractmethod
@@ -162,12 +174,13 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """
         Decode configuration for the MLA component of the decoder layer.
         This method should be implemented by subclasses to handle specific MLA configurations.
         """
-        return MLA2D.decode_model_config(hf_config, mesh_device)
+        return MLA2D.decode_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
 
     @classmethod
     @abstractmethod
@@ -178,8 +191,9 @@ class DecoderBlock2DBase(DecoderBlockBase):
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
         mla_cache: torch.Tensor | None = None,
+        kv_cache_override: KvCacheConfig | None = None,
     ) -> ModelState:
-        return MLA2D.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache)
+        return MLA2D.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache, kv_cache_override)
 
     @classmethod
     @abstractmethod

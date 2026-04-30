@@ -1,16 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <tt-metalium/host_api.hpp>
-
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -29,7 +26,7 @@ void run_softmax(distributed::MeshDevice* device, const ttnn::Shape& shape) {
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {
@@ -38,7 +35,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-        auto device = device_owner.get();
+        auto* device = device_owner.get();
 
         run_softmax(device, Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}));
         run_softmax(device, Shape({1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}));

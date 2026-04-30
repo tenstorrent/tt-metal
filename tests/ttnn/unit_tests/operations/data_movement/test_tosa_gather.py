@@ -1,14 +1,13 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
-@pytest.mark.skip("#26985: ND PCC failure, seems slight but APC must be stable")
 @pytest.mark.parametrize(
     "N, K, C, W",
     [
@@ -40,4 +39,4 @@ def test_tosa_gather_general(N, K, C, W, device):
     ttnn_gather = ttnn.tosa_gather(ttnn_input, ttnn_index)
 
     assert ttnn_gather.shape == torch_gather.shape
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    assert_equal(torch_gather, ttnn.to_torch(ttnn_gather))

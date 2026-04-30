@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -23,15 +23,13 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
@@ -39,10 +37,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-
-namespace tt {
-namespace tt_metal {}  // namespace tt_metal
-}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -273,9 +267,9 @@ TEST_F(MeshDispatchFixture, TensixMatmulSingleCoreSmall) {
     int out_subblock_h = 4;
     int out_subblock_w = 4;
 
-    for (unsigned int id = 0; id < devices_.size(); id++) {
+    for (const auto& device : devices_) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_single_core::matmul_single_core(
-            this, devices_.at(id), M, N, K, out_subblock_h, out_subblock_w));
+            this, device, M, N, K, out_subblock_h, out_subblock_w));
     }
 }
 
@@ -289,9 +283,9 @@ TEST_F(MeshDispatchFixture, TensixMatmulSingleCore) {
     uint32_t N = 16;
     int out_subblock_h = 4;
     int out_subblock_w = 2;
-    for (unsigned int id = 0; id < devices_.size(); id++) {
+    for (const auto& device : devices_) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_single_core::matmul_single_core(
-            this, devices_.at(id), M, N, K, out_subblock_h, out_subblock_w));
+            this, device, M, N, K, out_subblock_h, out_subblock_w));
     }
 }
 

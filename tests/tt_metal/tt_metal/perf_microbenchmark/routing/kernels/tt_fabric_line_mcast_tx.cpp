@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -80,7 +80,13 @@ void kernel_main() {
     zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
     fabric_set_mcast_route(
-        (MeshPacketHeader*)fwd_packet_header, fwd_dev_id, fwd_mesh_id, num_hops_e, num_hops_w, num_hops_n, num_hops_s);
+        (HybridMeshPacketHeader*)fwd_packet_header,
+        fwd_dev_id,
+        fwd_mesh_id,
+        num_hops_e,
+        num_hops_w,
+        num_hops_n,
+        num_hops_s);
 
     setup_connection_and_headers(fwd_fabric_connection, fwd_packet_header, noc_dest_addr, packet_payload_size_bytes);
 
@@ -93,6 +99,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_packets; i++) {
         time_seed = prng_next(time_seed);
         DPRINT << "Send packet" << ENDL();
+        DEVICE_PRINT("Send packet\n");
         send_packet(
             fwd_packet_header,
             noc_dest_addr,

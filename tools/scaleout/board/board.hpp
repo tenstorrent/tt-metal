@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -87,6 +87,9 @@ public:
 
     // Mark a port as used (remove from available list)
     void mark_port_used(PortType port_type, PortId port_id);
+
+    // Get all ASIC locations on this board
+    const std::unordered_set<uint32_t>& get_asic_locations() const;
 
 protected:
     // Unconnected ports

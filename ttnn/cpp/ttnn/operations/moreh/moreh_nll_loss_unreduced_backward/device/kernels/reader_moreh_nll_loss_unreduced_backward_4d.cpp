@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto target_addr = get_arg_val<uint32_t>(i++);
     auto output_grad_addr = get_arg_val<uint32_t>(i++);
@@ -22,28 +23,27 @@ void kernel_main() {
 
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
-    // ublocks size defined in tiles
-    const uint32_t target_tile_bytes = get_tile_size(cb_target);
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
 
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
+    // ublocks size defined in tiles
+
     const DataFormat weight_data_format = get_dataformat(cb_weight);
 
-    const uint32_t output_grad_tile_bytes = get_tile_size(cb_output_grad);
     const DataFormat output_grad_data_format = get_dataformat(cb_output_grad);
 
     constexpr auto target_args = TensorAccessorArgs<0>();
     constexpr auto output_grad_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
     constexpr auto weight_args = TensorAccessorArgs<output_grad_args.next_compile_time_args_offset()>();
 
-    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
-    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr, output_grad_tile_bytes);
+    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_output_grad = TensorAccessor(output_grad_args, output_grad_addr);
     constexpr uint32_t onetile = 1;
 
 #if defined(WEIGHT)
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, Ct);
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);
 
     cb_wait_front(cb_weight, Ct);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);

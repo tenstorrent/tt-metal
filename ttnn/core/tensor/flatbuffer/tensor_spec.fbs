@@ -25,6 +25,7 @@ enum TensorMemoryLayout: ushort {
     HeightSharded = 2,
     WidthSharded = 3,
     BlockSharded = 4,
+    NdSharded = 5,
 }
 
 enum BufferType: ushort {

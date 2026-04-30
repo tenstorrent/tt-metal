@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-#include <string.h>
+#include <cstdint>
+#include <cstring>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -18,16 +18,14 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "fmt/base.h"
 #include "gtest/gtest.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -35,11 +33,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace {
     constexpr size_t ELEMENTS_PER_TILE = 1024;
@@ -88,7 +84,7 @@ protected:
     // Hook method to be implemented by derived classes
     virtual void print_datum(std::stringstream& ss, uint32_t datum) = 0;
 
-    void print_new_line(std::stringstream& ss, uint32_t i) {
+    void print_new_line(std::stringstream& ss, uint32_t i) const {
         if (i > 0) {
             ss << std::endl;
         }
@@ -240,10 +236,16 @@ using DramBuffer = std::shared_ptr<distributed::MeshBuffer>;
 
 // Generates the runtime arguments for the DRAM kernel
 static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer& dram_buffer, size_t num_tiles) {
+    // create_dram_mesh_buffer() configures page_size = byte_size (whole-buffer
+    // single page), so page_size/aligned_page_size would over-return the
+    // stride. Derive per-tile stride from total size / num_tiles instead.
+    const uint32_t per_tile_stride =
+        num_tiles == 0 ? 0 : static_cast<uint32_t>(dram_buffer->device_local_size() / num_tiles);
     return {
         static_cast<uint32_t>(dram_buffer->address()),
         static_cast<uint32_t>(0),
         static_cast<uint32_t>(num_tiles),
+        per_tile_stride,
     };
 }
 
@@ -294,7 +296,7 @@ static DramBuffer prepare_reader(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = {DEFAULT_INPUT_CB_INDEX}});
+            .compile_args = {DEFAULT_INPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the reader kernel
     tt_metal::SetRuntimeArgs(
@@ -326,7 +328,7 @@ static DramBuffer prepare_writer(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {DEFAULT_OUTPUT_CB_INDEX}});
+            .compile_args = {DEFAULT_OUTPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the writer kernel
     tt_metal::SetRuntimeArgs(
@@ -418,10 +420,9 @@ static bool reader_datacopy_writer(
     // Check the print log against golden output.
     if (config.data_format == tt::DataFormat::Float32 && arch == ARCH::WORMHOLE_B0) {
         // Skip all device-side warning lines added before each tile print
-        DeleteLinesStartingWith(
-            DPrintMeshFixture::dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
     }
-    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 
     // Compare input and output data
     return input_data == output_data;
@@ -457,10 +458,6 @@ protected:
     void TearDown() override { DPrintMeshFixture::TearDown(); }
 
     void RunDestPrintTest(const DestPrintTestConfig& config) {
-        if (config.data_format == tt::DataFormat::Float32 && this->arch_ == ARCH::GRAYSKULL) {
-            GTEST_SKIP() << "Float32 dest is not supported on grayskull.";
-        }
-
         if (config.data_format == tt::DataFormat::Int32 && this->arch_ != ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Int32 dest is not supported on non-blackhole.";
         }

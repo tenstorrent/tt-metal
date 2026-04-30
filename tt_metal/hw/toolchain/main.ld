@@ -5,7 +5,7 @@
 #if (defined(COMPILE_FOR_BRISC) + defined(COMPILE_FOR_NCRISC) +         \
      defined(COMPILE_FOR_IERISC) + defined(COMPILE_FOR_SUBORDINATE_IERISC) +  \
      defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_MAIN_AERISC) + defined(COMPILE_FOR_SUBORDINATE_AERISC) + \
-     defined(COMPILE_FOR_AERISC) + defined(COMPILE_FOR_DM)) != 1
+     defined(COMPILE_FOR_AERISC) + defined(COMPILE_FOR_DM) + defined(COMPILE_FOR_DRISC)) != 1
 #error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
 #endif
 
@@ -14,7 +14,6 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 OUTPUT_ARCH(riscv)
 
 #include "dev_mem_map.h"
-#include "tensix_dev_map.h"
 
 #if defined(COMPILE_FOR_BRISC)
 #define DATA_START MEM_LOCAL_BASE
@@ -114,6 +113,13 @@ OUTPUT_ARCH(riscv)
 #define TEXT_SIZE MEM_DM_KERNEL_SIZE
 #endif
 
+#elif defined(COMPILE_FOR_DRISC)
+#define DATA_START MEM_LOCAL_BASE
+#define DATA_SIZE MEM_DRISC_LOCAL_SIZE
+#define STACK_MIN_SIZE MEM_DRISC_STACK_MIN_SIZE
+#define TEXT_START MEM_DRISC_FIRMWARE_BASE
+#define TEXT_SIZE MEM_DRISC_FIRMWARE_SIZE
+
 #else
 #error "compiling for unknown"
 #endif
@@ -128,6 +134,24 @@ PHDRS {
 
 SECTIONS
 {
+  /* DEVICE_PRINT string table – file-only section, VMA = 0x6400000 */
+  .device_print_strings 0x6400000 :
+  {
+    __device_print_strings_start = .;
+    KEEP(*(.device_print_strings))
+    __device_print_strings_end = .;
+    . = ALIGN(4);
+  }
+
+  /* DEVICE_PRINT strings info table – file-only section, VMA = 0x6500000 */
+  .device_print_strings_info 0x6500000 :
+  {
+      __device_print_strings_info_start = .;
+      KEEP(*(.device_print_strings_info))
+      __device_print_strings_info_end = .;
+    . = ALIGN(4);
+  }
+
 #if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :
 #else
@@ -156,7 +180,7 @@ SECTIONS
 
 /* Finish off the text area.  */
 #if defined(TYPE_FIRMWARE)
-/* Need separation beteen end of firmware and start of kernel, so that
+/* Need separation between end of firmware and start of kernel, so that
    they don't share unflushable i$ cache lines.  */
 #if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SUBORDINATE_IERISC) \
     || defined(COMPILE_FOR_MAIN_AERISC) || defined(COMPILE_FOR_SUBORDINATE_AERISC) \
@@ -242,10 +266,11 @@ SECTIONS
 #endif
 #endif
 
-  /* The loader uses this data to check for size overflows.
-     We don't do it here, as the failure mode would be bad (no executable to examine).  */
-  .phdrs 0 (INFO) :
+  /* The loader uses this data to trim segments and check for size overflows.
+     SEGMENT_ADDR:TRIM_BOUND:SIZE_LIMIT */
+  .segments 0 (INFO) :
   {
+    LONG(ADDR(.text)) LONG(ADDR(.text))
     LONG(TEXT_SIZE
 #if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE)) \
     && !defined(COMPILE_FOR_AERISC) && !defined(COMPILE_FOR_SUBORDINATE_AERISC) \
@@ -253,7 +278,7 @@ SECTIONS
          - (__fw_export_text_end - TEXT_START)
 #endif
          )
-    LONG(DATA_SIZE - STACK_MIN_SIZE
+   LONG(ADDR(.data)) LONG(ADDR(.data)) LONG(DATA_SIZE - STACK_MIN_SIZE
 #if defined(TYPE_KERNEL)
          - (__fw_export_ldm_end - DATA_START)
 #endif
@@ -353,5 +378,6 @@ SECTIONS
 
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_BRISC)
 /* Tensix memory mapped devices (also visible from brisc). */
-PROVIDE(__instrn_buffer = INSTRN_BUF_BASE);
+/* TODO delete when transition complete  */
+PROVIDE(__instrn_buffer = 0xFFE40000);
 #endif

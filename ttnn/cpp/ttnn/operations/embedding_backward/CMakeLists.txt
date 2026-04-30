@@ -1,7 +1,7 @@
 add_library(ttnn_op_embedding_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Embedding::Backward ALIAS ttnn_op_embedding_backward)
 
-target_precompile_headers(ttnn_op_embedding_backward REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_embedding_backward TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_embedding_backward)
 
 set_target_properties(

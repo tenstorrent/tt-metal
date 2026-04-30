@@ -29,28 +29,38 @@ Both API versions run the same test cases but use different underlying implement
 
 ## Tests in the Test Suite
 
-| Name                        | ID(s)                | Description                                                                             |
-| ----------                  | -----                | ----------------------------------------------------                                    |
-| DRAM Unary                  | 0-3                  | Transactions between DRAM and a single Tensix core.                                     |
-| One to One                  | 4, 50, 150-151, 158  | Write transactions between two Tensix cores.                                            |
-| One From One                | 5, 51, 152-153, 159  | Read transactions between two Tensix cores.                                             |
-| One to all                  | 6-8, 52, 154-155     | Writes transaction from one core to all cores.                                          |
-| One to all Multicast        | 9-14, 53-54, 100-102 | Writes transaction from one core to all cores using multicast.                          |
-| One From All                | 15, 30, 156-157      | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
-| Loopback                    | 16, 55               | Does a loopback operation where one cores writes to itself.                             |
-| Reshard Hardcoded           | 17-20                | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
-| Conv Hardcoded              | 21-23                | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
-| Interleaved Page Read/Write | 61-69, 71-75         | Reads and writes pages between interleaved buffers and a Tensix core.                   |
-| One Packet Read/Write       | 80-83                | Reads or writes packets between two Tensix cores.                                       |
-| DRAM Sharded Read           | 84-86                | Reads from sharded DRAM into one core.                                                  |
-| Multi Interleaved           | 110-127              | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
-| Core Bidrectional           | 140-148              | Tensix core reads from and writes to another Tensix core simultaneously.                |
-| Deinterleave                | 200-201              | Tests deinterleaving. **(Slow Dispatch)**                                               |
-| All to all                  | 300-308              | Write transactions from multiple cores to multiple cores.                               |
-| All from all                | 310-318              | Read transactions from multiple cores to multiple cores.                                |
-| I2S Hardcoded               | 400-405              | Tests interleaved to sharded data movement operations for different memory layouts.     |
-| Inline Direct Write         | 500-501              | Inline DW transactions between two Tensix cores.                                        |
-| Transaction ID              | 600-602              | Tests the usage and effects of transaction IDs in NOC transactions.                     |
+| Name                        | ID(s)                           | Description                                                                             |
+| ----------                  | -----                           | ----------------------------------------------------                                    |
+| DRAM Unary                  | 0-3, 40                         | Transactions between DRAM and a single Tensix core.                                     |
+| One to One                  | 4, 50, 150-151, 158             | Write transactions between two Tensix cores.                                            |
+| One From One                | 5, 51, 152-153, 159             | Read transactions between two Tensix cores.                                             |
+| One to all                  | 6-8, 52, 154-155, 170-172       | Writes transaction from one core to all cores.                                          |
+| One to all Multicast        | 9-14, 24-26, 53-54, 56, 100-102, 173-180 | Writes transaction from one core to all cores using multicast.                   |
+| One From All                | 15, 30, 156-157                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
+| Loopback                    | 16, 55                          | Does a loopback operation where one cores writes to itself.                             |
+| Reshard Hardcoded           | 17-20                           | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
+| Conv Hardcoded              | 21-23                           | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
+| Interleaved Page Read/Write | 61-69, 71-75                    | Reads and writes pages between interleaved buffers and a Tensix core.                   |
+| One Packet Read/Write       | 80-83                           | Reads or writes packets between two Tensix cores.                                       |
+| DRAM Sharded Read           | 84-87                           | Reads from sharded DRAM into one core.                                                  |
+| Multi Interleaved           | 110-127                         | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
+| Core Bidrectional           | 140-148                         | Tensix core reads from and writes to another Tensix core simultaneously.                |
+| Deinterleave                | 200-201                         | Tests deinterleaving. **(Slow Dispatch)**                                               |
+| All to all                  | 300-308                         | Write transactions from multiple cores to multiple cores.                               |
+| All from all                | 310-318                         | Read transactions from multiple cores to multiple cores.                                |
+| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.                          |
+| Multicast Atomic Semaphore  | 321-328                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
+| I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
+| Inline Direct Write         | 500-501, 507                    | Inline DW transactions between two (unicast) or multiple (multicast) Tensix cores.      |
+| DRAM Neighbour Tests        | 502-505, 508-509                | Each core reads from its closest DRAM.                                                  |
+| Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
+| PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
+| PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
+| Matmul                      | 1000-1228                       | 1D v1, 1D v2, and 2D matmul DM tests across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. Per-variant offsets: 1D v1 +0 (1000-1028), 1D v2 +100 (1100-1128), 2D +200 (1200-1228). 1D: in0 multicast + in1 DRAM read. 2D: in0 row multicast + in1 column multicast (all L1, no DRAM). |
+| NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
+| NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
+| Quasar Addrgen              | 900-909                         | Quasar-only: example kernels exercising the hardware address generator (1D/2D/face/interleaved). Requires Quasar simulator. |
+| Quasar IDMA                 | 910-911                         | Quasar-only: example kernels exercising the IDMA engine (basic linear copy and 1D strided). Requires Quasar simulator. |
 
 
 ## Running Tests

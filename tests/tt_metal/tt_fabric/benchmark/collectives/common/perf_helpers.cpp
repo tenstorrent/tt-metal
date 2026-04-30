@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
-
-#include <tt-metalium/device_pool.hpp>
 
 namespace tt::tt_fabric::bench {
 
@@ -93,16 +91,6 @@ PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_
         pts.push_back(run_unicast_once(fixture, p));
     }
     return aggregate_stats(pts);
-}
-
-tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id) {
-    auto devices = tt::DevicePool::instance().get_all_active_devices();
-    for (auto* d : devices) {
-        if (d->id() == phys_id) {
-            return d;
-        }
-    }
-    return nullptr;
 }
 
 }  // namespace tt::tt_fabric::bench

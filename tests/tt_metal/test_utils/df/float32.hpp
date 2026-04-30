@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,8 +37,8 @@ public:
         return v;
     }
     uint32_t to_packed() const { return uint32_data; }
-    bool operator==(float32 rhs) { return uint32_data == rhs.uint32_data; }
-    bool operator!=(float32 rhs) { return uint32_data != rhs.uint32_data; }
+    bool operator==(float32 rhs) const { return uint32_data == rhs.uint32_data; }
+    bool operator!=(float32 rhs) const { return uint32_data != rhs.uint32_data; }
 };
 
 inline std::ostream& operator<<(std::ostream& os, const float32& val) {

@@ -1,0 +1,99 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include "../../../unified_kernels/kernel_op_api.hpp"
+#include "../../../unified_kernels/kernel_utils.hpp"
+#include "../../../unified_kernels/all_reduce.hpp"
+
+void kernel_main() {
+    constexpr bool is_sender = get_named_compile_time_arg_val("is_allreduce_sender_core") == 1;
+    constexpr bool is_receiver = get_named_compile_time_arg_val("is_allreduce_receiver_core") == 1;
+
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+    if constexpr (is_sender) {
+        using WriterCT = deepseek_b1_ops::AllReduce::WriterCTArgs<
+            get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
+            get_named_compile_time_arg_val("allreduce_input_num_tiles"),
+            get_named_compile_time_arg_val("allreduce_page_size_bytes"),
+            get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+            get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
+            get_named_compile_time_arg_val("allreduce_num_chunks"),
+            get_named_compile_time_arg_val("allreduce_num_links"),
+            get_named_compile_time_arg_val("allreduce_writer_link_index"),
+            get_named_compile_time_arg_val("allreduce_writer_signal_local_ready"),
+            get_named_compile_time_arg_val("allreduce_skip_local_push")>;
+
+        deepseek_b1_ops::AllReduce::SenderArgs args{};
+        args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
+        args.dest_noc_x = get_common_arg_val<uint32_t>(1);
+        args.dest_noc_y = get_common_arg_val<uint32_t>(2);
+        args.per_core_rta_start_idx = 0;
+
+        deepseek_b1_ops::AllReduce::WriterSingleLink<WriterCT> writer;
+        {
+            DeviceZoneScopedN("CCL_SENDER_WRITER");
+            writer.open_connections(args);
+            writer(args);
+        }
+    }
+#endif
+
+#if defined(COMPILE_FOR_NCRISC)
+    if constexpr (is_receiver) {
+        using ReaderCT = deepseek_b1_ops::AllReduce::ReaderCTArgs<
+            get_named_compile_time_arg_val("allreduce_recv_local_data_cb_id"),
+            get_named_compile_time_arg_val("allreduce_remote_data_cb_id"),
+            get_named_compile_time_arg_val("allreduce_residual_cb_id"),
+            get_named_compile_time_arg_val("allreduce_has_residual"),
+            get_named_compile_time_arg_val("allreduce_total_num_tiles"),
+            get_named_compile_time_arg_val("allreduce_page_size_bytes"),
+            get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+            get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
+            get_named_compile_time_arg_val("allreduce_num_chunks"),
+            get_named_compile_time_arg_val("allreduce_num_links")>;
+
+        deepseek_b1_ops::AllReduce::ReceiverArgs args{};
+        args.sem_bank_addr_0 = get_common_arg_val<uint32_t>(0);
+        args.sem_bank_addr_1 = get_common_arg_val<uint32_t>(1);
+        args.sender_noc_x = get_common_arg_val<uint32_t>(2);
+        args.sender_noc_y = get_common_arg_val<uint32_t>(3);
+        args.sender_local_data_l1_addr = get_common_arg_val<uint32_t>(4);
+        args.local_ready_sem_bank_addr = get_common_arg_val<uint32_t>(5);
+
+        // Residual CB is tensor-backed (data already in L1); signal TRISC so
+        // Compute's cb_wait_front(cb_residual) unblocks. Reader no longer does
+        // this — responsibility moved to the caller.
+        if constexpr (ReaderCT::has_residual) {
+            cb_reserve_back(ReaderCT::residual_cb_id, ReaderCT::total_num_tiles);
+            cb_push_back(ReaderCT::residual_cb_id, ReaderCT::total_num_tiles);
+        }
+
+        deepseek_b1_ops::AllReduce::Reader<ReaderCT> reader;
+        {
+            DeviceZoneScopedN("CCL_RECEIVER");
+            reader(args);
+        }
+    }
+#endif
+
+#if defined(COMPILE_FOR_TRISC)
+    if constexpr (is_receiver) {
+        using ComputeCT = deepseek_b1_ops::AllReduce::ComputeCTArgs<
+            get_named_compile_time_arg_val("allreduce_cb_remote"),
+            get_named_compile_time_arg_val("allreduce_cb_local"),
+            get_named_compile_time_arg_val("allreduce_cb_out"),
+            get_named_compile_time_arg_val("allreduce_cb_residual"),
+            get_named_compile_time_arg_val("allreduce_has_residual"),
+            get_named_compile_time_arg_val("allreduce_num_tiles")>;
+
+        deepseek_compute_kernel_init();
+
+        deepseek_b1_ops::AllReduce::ComputeArgs args{};
+        deepseek_b1_ops::AllReduce::Compute<ComputeCT> compute;
+        {
+            DeviceZoneScopedN("CCL_COMPUTE");
+            compute(args);
+        }
+    }
+#endif
+}

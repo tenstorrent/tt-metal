@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,9 @@
 #include "ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
-namespace ttnn::operations::moreh::moreh_norm {
-Tensor MorehNorm::invoke(
+namespace ttnn {
+
+Tensor moreh_norm(
     const Tensor& input,
     float p,
     std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
@@ -23,7 +24,7 @@ Tensor MorehNorm::invoke(
         dim = std::make_optional(dims);
     }
     auto INF = std::numeric_limits<float>::infinity();
-    if (auto single_dim = std::get_if<int64_t>(&dim.value())) {
+    if (auto* single_dim = std::get_if<int64_t>(&dim.value())) {
         if (p == 0.0 || p == INF || p == -INF) {
             return ttnn::prim::moreh_norm(input, p, *single_dim, keepdim, output, memory_config, compute_kernel_config);
         }
@@ -54,7 +55,8 @@ Tensor MorehNorm::invoke(
             ttnn::prim::moreh_norm(input, p, dims.front(), keepdim, std::nullopt, memory_config, compute_kernel_config);
         dims.erase(dims.begin());
         return ttnn::moreh_sum(tmp_output, dims, keepdim, output, memory_config, compute_kernel_config);
-    } else if (p == INF || p == -INF) {
+    }
+    if (p == INF || p == -INF) {
         auto tmp_output =
             ttnn::prim::moreh_norm(input, p, dims.front(), keepdim, std::nullopt, memory_config, compute_kernel_config);
         using idx_t = decltype(dims.size());
@@ -64,10 +66,10 @@ Tensor MorehNorm::invoke(
         }
         return ttnn::prim::moreh_norm(
             tmp_output, p, dims.back(), keepdim, output, memory_config, compute_kernel_config);
-    } else {
-        auto tmp_output = ttnn::moreh_abs_pow(input, p, std::nullopt, memory_config, compute_kernel_config);
-        tmp_output = ttnn::moreh_sum(tmp_output, dims, keepdim, std::nullopt, memory_config, compute_kernel_config);
-        return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
     }
+    auto tmp_output = ttnn::moreh_abs_pow(input, p, std::nullopt, memory_config, compute_kernel_config);
+    tmp_output = ttnn::moreh_sum(tmp_output, dims, keepdim, std::nullopt, memory_config, compute_kernel_config);
+    return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_norm
+
+}  // namespace ttnn

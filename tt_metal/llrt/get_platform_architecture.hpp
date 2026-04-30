@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -77,14 +77,16 @@ inline tt::ARCH get_physical_architecture() {
 inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtoptions) {
     auto arch = tt::ARCH::Invalid;
     // If running in mock mode, derive architecture from provided cluster descriptor
-    if (rtoptions.get_target_device() == tt::TargetDevice::Mock) {
+    if (rtoptions.get_target_device() == tt::TargetDevice::Mock ||
+        rtoptions.get_target_device() == tt::TargetDevice::Emule) {
         auto cluster_desc = umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
         if (cluster_desc && cluster_desc->get_number_of_chips() > 0) {
             auto chips = cluster_desc->get_all_chips();
             arch = cluster_desc->get_arch(*chips.begin());
         }
         return arch;
-    } else if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
+    }
+    if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
         auto soc_desc =
             umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         arch = umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);

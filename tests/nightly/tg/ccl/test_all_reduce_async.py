@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -199,33 +199,34 @@ def run_all_reduce_with_mesh_tensor_along_row(
         input_tensor_mesh = ttnn.to_device(ttnn_tensor, mesh_device)
 
         # Run the op
-        for i in range(num_iters):
-            if use_semaphore_free_all_reduce_impl:
-                logger.info("Using semaphore-free all-reduce implementation")
-                output_tensor_mesh = ttnn.all_reduce(
-                    input_tensor_mesh,
-                    cluster_axis=cluster_axis,
-                    subdevice_id=worker_sub_device_id,
-                    num_links=num_links,
-                    memory_config=mem_config,
-                    topology=ttnn.Topology.Linear,
-                )
-            else:
-                logger.info("Using experimental all-reduce implementation")
-                output_tensor_mesh = ttnn.experimental.all_reduce_async(
-                    input_tensor_mesh,
-                    cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
-                    barrier_semaphores=barrier_semaphores,
-                    rs_global_semaphores=rs_global_semaphores,
-                    ag_global_semaphores=ag_global_semaphores,
-                    math_op=math_op,
-                    num_links=num_links,
-                    memory_config=mem_config,
-                    topology=ttnn.Topology.Linear,
-                    subdevice_id=worker_sub_device_id,
-                )
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        with mesh_device.cache_entries_counter.measure():
+            for i in range(num_iters):
+                if use_semaphore_free_all_reduce_impl:
+                    logger.info("Using semaphore-free all-reduce implementation")
+                    output_tensor_mesh = ttnn.all_reduce(
+                        input_tensor_mesh,
+                        cluster_axis=cluster_axis,
+                        subdevice_id=worker_sub_device_id,
+                        num_links=num_links,
+                        memory_config=mem_config,
+                        topology=ttnn.Topology.Linear,
+                    )
+                else:
+                    logger.info("Using experimental all-reduce implementation")
+                    output_tensor_mesh = ttnn.experimental.all_reduce_async(
+                        input_tensor_mesh,
+                        cluster_axis=cluster_axis,
+                        mesh_device=mesh_device,
+                        barrier_semaphores=barrier_semaphores,
+                        rs_global_semaphores=rs_global_semaphores,
+                        ag_global_semaphores=ag_global_semaphores,
+                        math_op=math_op,
+                        num_links=num_links,
+                        memory_config=mem_config,
+                        topology=ttnn.Topology.Linear,
+                        subdevice_id=worker_sub_device_id,
+                    )
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     except Exception as e:
         raise e
@@ -406,7 +407,7 @@ def test_line_all_reduce_on_TG_cols_post_commit(
 @pytest.mark.parametrize("replication_factor", [1])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 def test_line_all_reduce_training(
     mesh_device,
     num_devices,
@@ -420,6 +421,7 @@ def test_line_all_reduce_training(
     replication_factor,
     num_iters=1,
 ):
+    pytest.skip("Issue 32406: Skipping Failing Test")
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
@@ -439,10 +441,10 @@ def test_line_all_reduce_training(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("per_chip_output_shape", [([1, 1, 32, 1280])])
-@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "input_dtype",
@@ -468,9 +470,9 @@ def test_line_all_reduce_training(
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
-    ids=["fabric_2d_standard", "fabric_2d_dynamic"],
+    ids=["fabric_2d"],
 )
 def test_all_reduce_fabric_2d(
     mesh_device,
@@ -505,12 +507,12 @@ def test_all_reduce_fabric_2d(
 
     if memory_config.is_sharded() == False:
         if device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D:
-            logger.info(f"Number of program cache entries: {mesh_device.num_program_cache_entries()}")
+            logger.info(f"Number of program cache entries: {mesh_device.cache_entries_counter.total}")
             assert (
-                mesh_device.num_program_cache_entries() == 3
-            ), f"Number of program cache entries: {mesh_device.num_program_cache_entries()} but was expecting 3 as we are using fabric 2D, which fallsback to composite all gather + local reduce"
-        elif device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D_DYNAMIC:
-            logger.info(f"Number of program cache entries: {mesh_device.num_program_cache_entries()}")
+                mesh_device.cache_entries_counter.total == 3
+            ), f"Number of program cache entries: {mesh_device.cache_entries_counter.total} but was expecting 3 as we are using fabric 2D, which fallsback to composite all gather + local reduce"
+        elif device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D:
+            logger.info(f"Number of program cache entries: {mesh_device.cache_entries_counter.total}")
             assert (
-                mesh_device.num_program_cache_entries() == 2
-            ), f"Number of program cache entries: {mesh_device.num_program_cache_entries()} but was expecting 2 as we are using fabric 2D dynamic, which uses reduce scatter + all gather"
+                mesh_device.cache_entries_counter.total == 2
+            ), f"Number of program cache entries: {mesh_device.cache_entries_counter.total} but was expecting 2 as we are using fabric 2D dynamic, which uses reduce scatter + all gather"

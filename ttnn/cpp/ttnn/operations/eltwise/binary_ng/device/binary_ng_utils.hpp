@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,16 @@ enum class KernelName {
     ReaderColBcastNg,
     ReaderRowBColABcastNg,
     ReaderScalarBcastNg,
+    ReaderRmNoBcastNg,
+    ReaderRmRowBcastNg,
+    ReaderRmColBcastNg,
+    ReaderRmRowBColABcastNg,
+    ReaderRmScalarBcastNg,
+    ReaderRmScalarOpNg,
+    WriterRmNoBcastNg,
     ComputeRowBcastNg,
+    ComputeColBcastNg,
+    ComputeScalarBcastNg,
     ComputeRowColBcastNg,
 };
 
@@ -40,7 +49,7 @@ struct BinaryNgKernelConfig {
     std::optional<uint32_t> bcast_input;
 };
 
-std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu);
+std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op);
 
 struct OpConfig {
     enum class FpuBinaryOp { ADD, SUB, MUL };
@@ -49,6 +58,10 @@ struct OpConfig {
         SUB,
         MUL,
         DIV,
+        DIV_FLOOR,
+        DIV_TRUNC,
+        REMAINDER,
+        FMOD,
         POWER,
         RSUB,
         GCD,
@@ -65,11 +78,15 @@ struct OpConfig {
         MAXIMUM,
         MINIMUM,
         XLOGY,
+        ATAN2,
         LT,
         GT,
         GE,
         LE,
         HYPOT,
+        WHERE,
+        EQ,
+        NE,
     };
 
     template <class EnumT>
@@ -86,11 +103,11 @@ struct OpConfig {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype = std::nullopt);
 
-uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype, bool is_quant_op);
+uint32_t pack_scalar_runtime_arg(unary::ScalarVariant scalar, DataType dtype, bool is_quant_op);
 
 std::map<std::string, std::string> make_dataflow_defines(
     DataType dtype, std::optional<DataType> b_dtype = std::nullopt);
@@ -113,4 +130,13 @@ struct AllShardVolumes {
 std::optional<AllShardVolumes> get_shard_volumes(
     const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c);
 
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
+
+bool is_uneven(const TensorSpec& t);
+
+bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c);
+
+ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
+
+MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b);
 }  // namespace ttnn::operations::binary_ng

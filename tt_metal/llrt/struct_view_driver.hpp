@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -73,6 +73,7 @@ private:
 template <typename Struct>
 class StructBuffer;
 
+// NOLINTNEXTLINE(bugprone-crtp-constructor-accessibility)
 template <bool Const, typename Struct>
 class BaseStructView {
 private:
@@ -132,6 +133,7 @@ private:
     byte_type* base_;
 };
 
+// NOLINTBEGIN(bugprone-crtp-constructor-accessibility)
 template <typename Struct>
 class StructBuffer {
 public:
@@ -163,6 +165,7 @@ protected:
     StructInfo info_;
     std::unique_ptr<std::byte[]> storage_;
 };
+// NOLINTEND(bugprone-crtp-constructor-accessibility)
 
 namespace stream_suppliments {
 

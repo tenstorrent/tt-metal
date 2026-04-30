@@ -46,6 +46,35 @@ From within the `ttnn/tutorials` directory, launch the notebooks with:
 jupyter lab --no-browser --port=8888
 ```
 
+## Tools and Instruments
+
+### [TT-Triage](https://github.com/tenstorrent/tt-metal/blob/main/tools/triage/tt-triage.md)
+The TT-Triage tool diagnoses failures by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores. It identifies running kernels and provides callstack data for troubleshooting.
+
+### [TT-NN Visualizer](https://github.com/tenstorrent/ttnn-visualizer)
+A comprehensive tool for visualizing and analyzing model execution, offering interactive graphs, memory plots, tensor details, buffer overviews, operation flow graphs, and multi-instance support with file or SSH-based report loading.
+
+### [TT-Exalens](https://github.com/tenstorrent/tt-exalens)
+The TT-Exalens repository describes TT-Lensium, a low-level debugging tool for Tenstorrent hardware. It allows developers to access and communicate with Wormhole and Blackhole devices.
+
+### [TT-SMI](https://github.com/tenstorrent/tt-smi)
+The TT-SMI repository describes the Tenstorrent System Management Interface. This command line utility can interact with Tenstorrent devices on host. TT-SMI provides an easy to use interface displaying device, telemetry, and firmware information.
+
+### [Model Explorer](https://github.com/tenstorrent/model-explorer)
+The Model Explorer is an intuitive and hierarchical visualization tool using model graphs. It organizes model operations into nested layers and provides features for model exploration and debugging.
+
+### [Tracy Profiler](https://github.com/tenstorrent/tracy)
+The Tracy Profiler is a real-time nanosecond resolution, remote telemetry, hybrid frame, and sampling tool. Tracy supports profiling CPU, GPU, memory allocation, locks, context switches, and more.
+
+### [Kernel Print Debug](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/kernel_print.html)
+DPRINT can print variables, addresses, and circular buffer data from kernels to the host terminal or log file. This feature is useful for debugging issues with kernels.
+
+### [Watcher](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/tt-metalium/tools/watcher.rst)
+Watcher monitors firmware and kernels for common programming errors, and overall device status. If an error or hang occurs, Watcher displays log data of that occurrence.
+
+### [Inspector](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/tt-metalium/tools/inspector.rst)
+Inspector provides insights into host runtime. It logs necessary data for investigation and allows queries to host runtime data.
+
 ## For Contributors
 
 ### Linking TT-NN with your C++ projects
@@ -59,7 +88,7 @@ Current best example can be found in the training framework here:
 All tests can be found under tests/ttnn
 
 #### What is the difference between each kind of test?
- * tests/ttnn/sweep_tests
+ * tests/ttnn/python_api_testing/sweep_tests
      * Used to check coverage of what is and what is NOT supported
      * Tests can be added well before the actual implementation is finished
      * These tests do not block the continuous integration pipeline
@@ -72,13 +101,8 @@ All tests can be found under tests/ttnn
 #### Why do the sweep tests use a dictionary for all the combinations of input and then use a special run method?  Could you not have done this with a traditional pytest instead?
 The primary reason was because we needed a way to create a consolidated report per operation in the form of a csv file.  The idea was that each operation would get its own python file where all the test combinations are handled by a single run method.  Each permutation of the input combinations would become the header for the resulting csv which is then uploaded and reported on.
 
-How do I run sweep tests with pytest?
- To run all of the sweep tests for a given python operation file:
-  * `pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>`
-  * Example for matmul: `pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul`
- To run just one sample combination for an operation:
-   * `pytest <full-path-to-tt-metal>/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_<operation>[<operation>.py-<index-of-test-instance>]`
-   * Example for matmul: `pytest /home/ubuntu/git/tt-metal/tests/ttnn/sweep_tests/test_all_sweep_tests.py::test_matmul[matmul.py-0]`
+#### How do I run sweep tests with pytest?
+See [sweep test readme](../tests/ttnn/python_api_testing/sweep_tests/README.md).
 
 #### What if my device hangs?
 Reset with `tt-smi -tr 0` where 0 represents the device id.
@@ -113,17 +137,17 @@ In addition, you can add the following environment variable to print currently e
 #### How to launch C++ example code from VSCode
 * Add the Makefile Tools extension
 * Be sure to build with `make tests/tt_eager`
-* Update launch.json to debug the code sample you want to run.  For example if you want to run test_bert, your update to launch.json might look like:
+* Update launch.json to debug the code sample you want to run.  For example if you want to run a test, your update to launch.json might look like:
     ```
             {
-                "name": "test_bert",
+                "name": "test_example",
                 "type": "cppdbg",
                 "request": "launch",
                 "args": [],
                 "stopAtEntry": false,
                 "externalConsole": false,
                 "cwd": "${workspaceFolder}/build",
-                "program": "${workspaceFolder}/build/test/tt_eager/integration_tests/test_bert",
+                "program": "${workspaceFolder}/build/test/tt_eager/ops/test_eltwise_binary_op",
                 "MIMode": "gdb",
                 "miDebuggerPath": "gdb",
                 "setupCommands": [

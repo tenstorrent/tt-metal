@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <array>
 #include <limits>
 #include <utility>
@@ -129,7 +130,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
 
     auto applicable_to_coord = [&](const MeshCoordinate& coord,
                                    size_t cluster_axis,
-                                   size_t axis_size,
+                                   size_t /*axis_size*/,
                                    tt::tt_fabric::RoutingDirection direction) -> bool {
         auto boundary_mode = detail::get_boundary_mode(topology);
         int offset = positive_direction(direction) ? 1 : -1;
@@ -143,7 +144,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         // TODO: remove usage of get_device, need api to return correct routing planes accounting for fast dispatch
         // usage should only be active for T3K
         if (mesh_device.is_local(coord)) {
-            auto device = mesh_device.get_device(coord);
+            auto* device = mesh_device.get_device(coord);
             bool is_mmio_capable = device->is_mmio_capable();
             is_mesh_mmio_capable &= is_mmio_capable;
             log_debug(tt::LogOp, "mesh_coordinate: {}, is_mmio_capable: {}", coord, is_mmio_capable);
@@ -156,7 +157,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
                     auto planes_in_direction =
                         tt::tt_fabric::get_num_available_routing_planes_in_direction(fabric_node_id, direction);
                     // if the device is not mmio capable then one link on some axis will be unavailable
-                    // ideally we only subtract if we're targetting that cluster axis, but we don't have access to that
+                    // ideally we only subtract if we're targeting that cluster axis, but we don't have access to that
                     // information here to be safe, we subtract 1 regardless of the axis when the axis is not available
                     log_debug(
                         tt::LogOp,

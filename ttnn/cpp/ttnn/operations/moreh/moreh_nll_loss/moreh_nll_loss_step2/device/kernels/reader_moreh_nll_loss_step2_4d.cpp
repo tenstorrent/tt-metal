@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto input_addr = get_arg_val<uint32_t>(i++);
     auto target_addr = get_arg_val<uint32_t>(i++);
@@ -25,21 +26,18 @@ void kernel_main() {
     constexpr uint32_t cb_weight = tt::CBIndex::c_2;
     constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
 
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
+
     constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
     constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
 
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
-    const uint32_t input_tile_bytes = get_tile_size(cb_input);
     const auto input_data_format = get_dataformat(cb_input);
 
-    const uint32_t target_tile_bytes = get_tile_size(cb_target);
-
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
     const auto weight_data_format = get_dataformat(cb_weight);
 
-    const uint32_t divisor_tile_bytes = get_tile_size(cb_divisor);
     const auto divisor_data_format = get_dataformat(cb_divisor);
 
     constexpr auto input_args = TensorAccessorArgs<0>();
@@ -47,14 +45,14 @@ void kernel_main() {
     constexpr auto weight_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
     constexpr auto divisor_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 
-    const auto addrg_input = TensorAccessor(input_args, input_addr, input_tile_bytes);
-    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto addrg_input = TensorAccessor(input_args, input_addr);
+    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
     constexpr uint32_t onetile = 1;
 
 #if defined(DIVISOR)
-    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr, divisor_tile_bytes);
+    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr);
 
     read_tile(cb_divisor, addrg_divisor, 0);
 #endif
@@ -63,7 +61,7 @@ void kernel_main() {
     cb_reserve_back(cb_weight, weight_num_tile);
 
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, weight_num_tile);
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
 
     cb_wait_front(cb_weight, weight_num_tile);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);

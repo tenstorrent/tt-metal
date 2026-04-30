@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,9 +6,8 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::softmax {
+namespace ttml::metal {
 
-struct SoftmaxOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& input, int32_t dim);
-};
-}  // namespace ttml::metal::ops::softmax
+ttnn::Tensor softmax(const ttnn::Tensor& input, int32_t dim);
+
+}  // namespace ttml::metal

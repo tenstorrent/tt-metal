@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,7 @@ enum BinaryStatus {
 }
 
 struct DeviceBinaryStatus {
-    deviceId @0 :UInt64;
+    metalDeviceId @0 :UInt64;
     status @1 :BinaryStatus;
 }
 
@@ -65,6 +65,14 @@ struct MeshWorkloadData {
     binaryStatusPerMeshDevice @2 :List(MeshDeviceBinaryStatus);
 }
 
+struct MeshWorkloadRuntimeEntry {
+    workloadId @0 :UInt64;
+    runtimeId @1 :UInt64;
+    operationName @2 :Text;
+    operationParameters @3 :Text;
+    traceId @4 :UInt32 = 0xFFFFFFFF;
+}
+
 # Build environment info for a specific device
 # Used to get correct firmware path for each device and build config,
 # enabling correct firmware path resolution without relying on relative
@@ -73,18 +81,20 @@ struct BuildEnvData {
     buildKey @0 :UInt64; # Unique identifier for the build configuration
     firmwarePath @1 :Text; # Absolute path to the firmware directory for this device
     fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
+    # Whether DRAM programmable RISC cores are enabled on this device (Blackhole only)
+    dramProgrammableCoresEnabled @3 :Bool;
 }
 
 struct BuildEnvPerDevice {
-    deviceId @0 :UInt64;
+    metalDeviceId @0 :UInt64;
     buildInfo @1 :BuildEnvData;
 }
 
 # Per Dispatch Core Information
 struct CoreInfo {
     workType @0: Text;
-    deviceId @1: Int32;
-    servicingDeviceId @2: Int32;
+    metalDeviceId @1: Int32;
+    servicingMetalDeviceId @2: Int32;
     eventID @3: UInt32;
     cqId @4: UInt8;
 }
@@ -101,7 +111,7 @@ struct VirtualCore {
 # Contains virtual coordinates and associated information
 struct CoreEntry {
   key  @0 :VirtualCore;       # chip,x,y (virtual)
-  info @1 :CoreInfo;  # deviceId, servicingDeviceId, workType, cqId
+  info @1 :CoreInfo;  # metalDeviceId, servicingMetalDeviceId, workType, cqId
 }
 
 # Simplified core type enum for grouping cores by their storage category
@@ -120,6 +130,42 @@ struct CoreEntriesByCategory {
     entries @1 :List(CoreEntry);
 }
 
+# Mapping from logical metal ID to unique ID
+struct MetalDeviceIdToUniqueId {
+    metalDeviceId @0 :UInt64;
+    uniqueId @1 :UInt64;
+}
+
+# Logical (x, y) coordinate without chip - chip is the map key
+struct LogicalCoord {
+    x @0 :UInt64;
+    y @1 :UInt64;
+}
+
+# Per-chip: block type -> list of logical coordinates
+struct BlocksByTypePerChip {
+    activeEth @0 :List(LogicalCoord);
+    idleEth @1 :List(LogicalCoord);
+}
+
+# One entry per chip: chipId -> blocks by type
+struct ChipBlocksByType {
+    chipId @0 :UInt64;
+    blocks @1 :BlocksByTypePerChip;
+}
+
+enum ConfigurationScope {
+    environment @0;
+    rtOptions @1;
+    ttnnConfig @2;
+}
+
+struct ConfigurationEntry {
+    name @0 :Text;
+    value @1 :Text;
+    scope @2 :ConfigurationScope;
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -131,7 +177,7 @@ interface Inspector {
     getMeshWorkloads @2 () -> (meshWorkloads :List(MeshWorkloadData));
 
     # Get list of local devices that are being used by this Metal runtime
-    getDevicesInUse @3 () -> (deviceIds :List(UInt64));
+    getDevicesInUse @3 () -> (metalDeviceIds :List(UInt64));
 
     # Search for a kernel
     getKernel @4 (watcherKernelId :Int32) -> (kernel :KernelData);
@@ -144,4 +190,16 @@ interface Inspector {
 
     # Get all core Info
     getAllDispatchCoreInfos @6 () -> (coresByCategory :List(CoreEntriesByCategory));
+
+    # Get mapping from metal device ID to unique ID for all devices
+    getMetalDeviceIdMappings @7 () -> (mappings :List(MetalDeviceIdToUniqueId));
+
+    # Get runtime entries for mesh workloads
+    getMeshWorkloadRuntimeEntries @8 () -> (runtimeEntries :List(MeshWorkloadRuntimeEntry));
+
+    # Chip -> block type -> list of logical (x,y). One entry per chip.
+    getBlocksByType @9 () -> (chips :List(ChipBlocksByType));
+
+    # Get configuration data (environment variables, runtime options, TTNN config)
+    getConfiguration @10 () -> (entries :List(ConfigurationEntry));
 }

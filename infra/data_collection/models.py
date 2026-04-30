@@ -12,9 +12,14 @@ class InfraErrorV1(enum.Enum):
     API_RATE_LIMIT_FAILURE = enum.auto()
     RUNNER_CARD_IN_USE_FAILURE = enum.auto()
     JOB_HANG = enum.auto()
+    TT_TRIAGE_JOB_HANG = enum.auto()
 
 
 class TestErrorV1(enum.Enum):
     PY_TEST_FAILURE = enum.auto()
     CPP_TEST_FAILURE = enum.auto()
     UNKNOWN_TEST_FAILURE = enum.auto()
+
+
+class CodeQualityErrorV1(enum.Enum):
+    CLANG_TIDY_VIOLATION = enum.auto()

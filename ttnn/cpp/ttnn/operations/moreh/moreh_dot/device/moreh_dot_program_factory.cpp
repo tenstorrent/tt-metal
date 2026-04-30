@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,11 +20,9 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
 
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto src0_buffer = input_a.buffer();
-    auto src1_buffer = input_b.buffer();
-    auto dst_buffer = output.buffer();
-    float scaler = 1.0f;
-
+    auto* src0_buffer = input_a.buffer();
+    auto* src1_buffer = input_b.buffer();
+    auto* dst_buffer = output.buffer();
     Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.dtype());
@@ -63,14 +61,16 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
             {CBIndex::c_25, im1_t},
         });
 
-    std::vector<uint32_t> reader_compile_time_args = {*reinterpret_cast<uint32_t*>(&scaler)};
+    std::vector<uint32_t> reader_compile_time_args = {};
     TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(src1_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CBIndex::c_16};
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
+    const auto* const reader_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
+    const auto* const writer_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
@@ -81,7 +81,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     const uint32_t core_num = 1;
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp";
+    const auto* const compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp";
     const auto compute_kernel_id = CreateComputeKernel(
         program,
         compute_kernel_file,
@@ -107,7 +107,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
 
 void MorehDotOperation::SingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
@@ -117,9 +117,9 @@ void MorehDotOperation::SingleCore::override_runtime_arguments(
     const auto& input_a = tensor_args.input_a;
     const auto& input_b = tensor_args.input_b;
 
-    auto src_buffer_a = input_a.buffer();
-    auto src_buffer_b = input_b.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer_a = input_a.buffer();
+    auto* src_buffer_b = input_b.buffer();
+    auto* dst_buffer = output.buffer();
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});

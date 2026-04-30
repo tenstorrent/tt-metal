@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 // Now include the actual ControlPlane header with friend declaration
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId

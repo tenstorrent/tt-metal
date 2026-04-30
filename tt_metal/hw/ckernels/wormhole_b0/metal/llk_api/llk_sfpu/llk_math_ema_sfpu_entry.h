@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "llk_math_eltwise_ternary_sfpu.h"
+#include "sfpu/ckernel_sfpu_ema.h"
 
 namespace ckernel {
 

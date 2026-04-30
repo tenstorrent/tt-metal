@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdlib>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #define TILE_WIDTH 32
 
@@ -21,7 +21,7 @@ void kernel_main() {
     uint32_t num_bytes_per_tile = TILE_WIDTH * element_size;
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, num_bytes_per_tile);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     union value {
         float f;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@ namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
 
-bool get_op_approx_mode(UnaryOpType op_type);
 using DataType = tt::tt_metal::DataType;
 
 template <typename T = float>
@@ -46,6 +45,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::RELU_MAX:
         case UnaryOpType::RELU_MIN:
         case UnaryOpType::POWER:
+        case UnaryOpType::POWER_ITERATIVE:
         case UnaryOpType::LEAKY_RELU:
         case UnaryOpType::ELU:
         case UnaryOpType::GELU:
@@ -53,11 +53,11 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::SQRT:
         case UnaryOpType::HEAVISIDE:
         case UnaryOpType::ERF:
-        case UnaryOpType::ERFC:
         case UnaryOpType::RSUB:
         case UnaryOpType::RDIV:
         case UnaryOpType::EXP:
         case UnaryOpType::SOFTPLUS:
+        case UnaryOpType::XIELU:
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
@@ -69,6 +69,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_GE:
         case UnaryOpType::UNARY_LE:
         case UnaryOpType::TYPECAST:
+        case UnaryOpType::BITCAST:
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_AND:
         case UnaryOpType::BITWISE_OR:
@@ -78,6 +79,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::FILL:
         case UnaryOpType::ROUND:
         case UnaryOpType::SIGMOID:
+        case UnaryOpType::LOGIT:
         case UnaryOpType::PRELU_SFPU:
         case UnaryOpType::FMOD:
         case UnaryOpType::MINIMUM:
@@ -95,7 +97,9 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::THRESHOLD:
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::SELU:
-        case UnaryOpType::RPOW: return true;
+        case UnaryOpType::RPOW:
+        case UnaryOpType::MISH:
+        case UnaryOpType::POLYGAMMA: return true;
         default: return false;
     }
     return false;
@@ -103,8 +107,11 @@ bool is_parametrized_type(T val) {
 
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
 
-std::string get_compute_kernel_path(
-    UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
+std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
+
+uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype);
+uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);
+uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype);
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
 }  // namespace ttnn::operations::unary::utils

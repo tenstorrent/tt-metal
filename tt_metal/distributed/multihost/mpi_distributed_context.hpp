@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <mpi.h>
 #include <memory>
+#include <optional>
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
@@ -38,7 +39,7 @@ private:
 // ---------------------------------------------------------------------
 class MPIRequest : public Request {
 public:
-    explicit MPIRequest(MPI_Request req) : req_(req), done_(false) {}
+    explicit MPIRequest(MPI_Request req) : req_(req) {}
 
     Status wait() override;
     std::optional<Status> test() override;
@@ -58,7 +59,16 @@ public:
     // factory (initialises MPI environment once per process)
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
+    /// MPI communicator spanning the full job (`MPI_COMM_WORLD`). Rank/size are global even when
+    /// `get_current_world()` was split via `TT_RUN_SUBCONTEXT_ID`. Safe to use for cross-subcontext p2p.
+    static ContextPtr get_world_context();
     static bool is_initialized();
+
+    [[nodiscard]] std::optional<SubcontextId> subcontext_id() const override;
+    [[nodiscard]] int subcontext_count() const override;
+    [[nodiscard]] Size subcontext_size(SubcontextId subcontext_id) const override;
+    [[nodiscard]] tt::stl::Span<const int> subcontext_sizes() const override;
+    [[nodiscard]] Rank local_to_world_rank(SubcontextId subcontext_id, Rank local_rank) const override;
 
     // destructor – communicator MPI_COMM_WORLD is freed automatically by MPI_Finalize
     // All other communicators are freed here
@@ -73,10 +83,10 @@ public:
     /* ---------------- point‑to‑point ------------------- */
     void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
     void ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    void recv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
+    void recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const override;
 
     [[nodiscard]] RequestPtr isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
-    [[nodiscard]] RequestPtr irecv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
+    [[nodiscard]] RequestPtr irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const override;
 
     /* ---------------- collectives ---------------------- */
     void broadcast(tt::stl::Span<std::byte> buf, Rank root) const override;
@@ -125,8 +135,10 @@ private:
     int rank_{0};
     int size_{0};
 
-    // caching our own world communicator which is duplicator of MPI_COMM_WORLD
+    // Subcommunicator for this process after optional TT_RUN_SUBCONTEXT_ID split (or duplicate of world).
     inline static ContextPtr current_world_;
+    // Lazily-created view of MPI_COMM_WORLD (not freed in destructor).
+    inline static ContextPtr mpi_job_world_;
 };
 
 }  // namespace tt::tt_metal::distributed::multihost

@@ -137,8 +137,7 @@ The overall flow follows the standard pattern for unary compute kernels:
 .. code-block:: cpp
 
     // tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
         constexpr auto cb_in0 = tt::CBIndex::c_0;
@@ -147,7 +146,7 @@ The overall flow follows the standard pattern for unary compute kernels:
         constexpr float edge0 = 0.0f;
         constexpr float edge1 = 1.0f;
         // pre-calculate inverse as it is used multiple times and slow (the Baby RISC-V cores)
-        // uses software floating-point. Constexpr making this evaulation compile-time
+        // uses software floating-point. Constexpr making this evaluation compile-time
         constexpr float inv_delta = 1.0f / (edge1 - edge0);
 
         init_sfpu(cb_in0, cb_out0);
@@ -196,7 +195,7 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     // High-level API function
     // Accepts `edge0`, `edge1` and `inv_delta` as parameters
     inline void my_smoothstep_tile(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-        MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
+        MATH(_llk_math_eltwise_unary_sfpu_params_(
             smoothstep_tile_face,
             idx_dst0,
             VectorMode::RC, // Apply on all 4 faces of the tile

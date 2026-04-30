@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_query_op_runtime.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
@@ -28,11 +27,9 @@
 #include <umd/device/types/arch.hpp>
 #include "common/tt_backend_api_types.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace ttnn::operations::binary::test {
 
@@ -79,8 +76,12 @@ TEST_P(BinaryOpTraceRuntime, Add) {
     const auto& [input_spec_a, input_spec_b] = GetParam();
 
     {
-        auto device = device_;
-        auto query = ttnn::graph::query_op_runtime(ttnn::add, device, input_spec_a, input_spec_b);
+        auto* device = device_;
+        auto query = ttnn::graph::query_op_runtime(
+            [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
+            device,
+            input_spec_a,
+            input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
@@ -92,7 +93,7 @@ TEST_P(BinaryOpTraceRuntime, AddChain) {
 
     {
         auto add_chain = [](const auto& i0, const auto& i1) { return ttnn::add(i0, ttnn::add(i0, i1)); };
-        auto device = device_;
+        auto* device = device_;
         auto query = ttnn::graph::query_op_runtime(add_chain, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);

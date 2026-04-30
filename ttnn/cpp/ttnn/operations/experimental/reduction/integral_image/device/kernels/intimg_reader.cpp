@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include "common_dataflow.hpp"
 
@@ -56,10 +56,10 @@ void kernel_main() {
     const uint32_t input_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
     using input_number_type = std_type_t<get_dataformat(ctas.input_cb)>;
-    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_base_addr, get_tile_size(ctas.input_cb));
-    constexpr uint32_t num_slices_along_channels = block_depth_ceil(ctas.num_channels, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_base_addr);
+    constexpr uint32_t num_slices_along_channels = ceil(ctas.num_channels, ctas.tile_width);
+    constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_width);
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();

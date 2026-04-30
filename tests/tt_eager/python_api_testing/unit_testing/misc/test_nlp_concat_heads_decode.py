@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,9 @@ def num_to_corerange(x):
     )
 
 
-def run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, batch, sub_core_grids=None):
+def run_test_concat_head(
+    device, n_local_heads, padded_local_heads, head_dim, batch, input_sub_core_grids=None, compute_sub_core_grids=None
+):
     ## Split Heads
     padded_batch = nearest_32(batch)
     seq_len = 1
@@ -40,12 +42,30 @@ def run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, ba
     # Prepare input
     concat_head_input = torch.rand(1, batch, padded_local_heads, head_dim)
 
-    if sub_core_grids is None:
+    if input_sub_core_grids is None:
         shard_grid = ttnn.CoreRangeSet({num_to_corerange(batch)})
     else:
-        shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-            sub_core_grids.bounding_box().start, batch, sub_core_grids, row_wise=True
+        shard_grid = input_sub_core_grids
+
+    # If the provided input sub core grids has enough cores, use that one for compute otherwise
+    # we expect a compute sub core grid which must have at least n_local_heads cores to be provided
+
+    if shard_grid.num_cores() >= n_local_heads:
+        sub_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            shard_grid.bounding_box().start, n_local_heads, shard_grid, row_wise=True
         )
+    elif compute_sub_core_grids is not None:
+        sub_core_grids = compute_sub_core_grids
+        assert (
+            sub_core_grids.num_cores() >= n_local_heads
+        ), "compute_sub_core_grids must have at least n_local_heads cores"
+    else:
+        # n_local_heads > input shard grid: auto-generate a compute grid that fits n_local_heads.
+        # The op requires input batch <= 32 (one input core per user) but allows num_heads up to
+        # the device's worker grid, so this branch is needed to exercise n_local_heads > 32 paths
+        # in test_concat_head (which doesn't pass an explicit compute grid).
+        sub_core_grids = ttnn.num_cores_to_corerangeset(n_local_heads, device.compute_with_storage_grid_size(), True)
+
     SCORES_BATCHED_MM_OUTPUT_MEMCFG = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -68,6 +88,7 @@ def run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, ba
     concat_head_output = ttnn.experimental.nlp_concat_heads_decode(
         concat_head_input_tt,
         num_heads=n_local_heads,
+        sub_core_grids=sub_core_grids,
     )  # seqlen, 1, batch, hidden_size
 
     logger.info(f"concat_head_output: {concat_head_output.memory_config()}")
@@ -86,7 +107,23 @@ def run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, ba
 
 @pytest.mark.parametrize(
     "n_local_heads, padded_local_heads, head_dim, batch_size",
-    ((8, 32, 128, 32), (17, 32, 96, 32), (32, 32, 64, 32), (8, 32, 128, 16)),
+    (
+        # Single head-tile (padded_local_heads == 32)
+        (8, 32, 128, 32),
+        (17, 32, 96, 32),
+        (32, 32, 64, 32),
+        (8, 32, 128, 16),
+        # Multiple head-tiles (padded_local_heads > 32)
+        (8, 64, 64, 32),  # 2 head-tiles, low utilization
+        (32, 64, 64, 32),  # 2 head-tiles, fully populated within first tile
+        (32, 64, 128, 32),  # 2 head-tiles + multi-tile head_dim
+        (16, 96, 64, 32),  # 3 head-tiles
+        # n_local_heads > 32 — exercises head_tile_idx > 0 in the offset formula
+        # (batch is capped at 32 by the op; n_local_heads uses device compute grid)
+        (40, 64, 64, 8),  # heads 32..39 read from 2nd head-tile
+        (64, 64, 64, 8),  # all 32 heads in 2nd head-tile fully populated
+        (40, 96, 64, 8),  # 3 head-tiles, heads 32..39 from 2nd tile (non-power-of-2 padded_local_heads)
+    ),
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_concat_head(
@@ -104,9 +141,9 @@ def test_concat_head(
 
 
 @pytest.mark.parametrize(
-    "n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids",
+    "n_local_heads, padded_local_heads, head_dim, batch_size, input_sub_core_grids, compute_sub_core_grids",
     (
-        (
+        (  # Test Case 0: Input is sharded on 8 cores, use all 8 cores for compute
             8,
             32,
             128,
@@ -115,6 +152,63 @@ def test_concat_head(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
                     ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                ]
+            ),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                ]
+            ),
+        ),
+        (  # Test Case 1: Input is sharded on only 1 core, use the compute sub core grids for compute
+            8,
+            32,
+            128,
+            1,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
+                ]
+            ),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                ]
+            ),
+        ),
+        (  # Test Case 2: padded_local_heads=64 (multi head-tile path) on subcoregrids
+            8,
+            64,
+            128,
+            8,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                ]
+            ),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                ]
+            ),
+        ),
+        (  # Test Case 3: n_local_heads=64 — exercises head_tile_idx > 0 on subcoregrids
+            64,
+            64,
+            64,
+            8,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+                ]
+            ),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
                 ]
             ),
         ),
@@ -126,11 +220,20 @@ def test_concat_head_subcoregrids(
     padded_local_heads,
     head_dim,
     batch_size,
-    sub_core_grids,
+    input_sub_core_grids,
+    compute_sub_core_grids,
     mesh_device,
 ):
     torch.manual_seed(0)
 
     for i in range(3):
         # multiple loops to test program caching
-        run_test_concat_head(mesh_device, n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids)
+        run_test_concat_head(
+            mesh_device,
+            n_local_heads,
+            padded_local_heads,
+            head_dim,
+            batch_size,
+            input_sub_core_grids,
+            compute_sub_core_grids,
+        )

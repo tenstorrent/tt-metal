@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.unit_tests.operations.eltwise.test_quantization import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.test_quantization2 import (
     convert_scalar_to_ttnn_tensor,
     calculate_scale_zero_point_per_tensor,
     calculate_scale_zero_point_per_channel,

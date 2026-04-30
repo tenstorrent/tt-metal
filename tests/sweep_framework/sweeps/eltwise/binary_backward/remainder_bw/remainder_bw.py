@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +44,6 @@ parameters = {
 
 def mesh_device_fixture():
     device = ttnn.open_device(device_id=0)
-    assert not ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_device(device)

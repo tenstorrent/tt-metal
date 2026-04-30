@@ -1,16 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <map>
 #include <string>
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
@@ -18,7 +16,7 @@
 
 namespace tt_metal = tt::tt_metal;
 
-int main(int argc, char** argv) {
+int main() {
     int device_id = 0;
     auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();

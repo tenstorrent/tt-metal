@@ -1,0 +1,10 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: 0,16,4,20,8,24,12,28,14,30,10,26,6,22,2,18
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: 19,3,23,7,27,11,31,15,29,13,25,9,21,5,17,1
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto"

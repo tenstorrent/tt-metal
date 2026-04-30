@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     const auto op = operation_attributes.op;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto device = input.device();
+    auto* device = input.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
@@ -62,7 +62,8 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
         {
             {tt::CBIndex::c_0, 2},                         // input
             {tt::CBIndex::c_1, 1},                         // mask
-            {tt::CBIndex::c_2, 1},                         // scaler
+            {tt::CBIndex::c_2, 1},                         // max scaler
+            {tt::CBIndex::c_3, 1},                         // sum scaler
             {tt::CBIndex::c_16, 2},                        // output
             {tt::CBIndex::c_24, 2, intermed_data_format},  // exp(x)
             {tt::CBIndex::c_25, 1, intermed_data_format},  // reduce
@@ -71,7 +72,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
             {tt::CBIndex::c_28, 1, intermed_data_format},  // tmp
         });
 
-    // create read/wrtie kernel
+    // create read/write kernel
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -162,7 +163,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
 
 void MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;

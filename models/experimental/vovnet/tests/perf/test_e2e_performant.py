@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,8 @@ from models.experimental.vovnet.common import VOVNET_L1_SMALL_SIZE
 
 
 def get_expected_times(name):
-    base = {"vovnet": (172, 0.0082)}
+    # See issue #41006. Recent single-card perf runs observed vovnet up to 0.0096s.
+    base = {"vovnet": (172, 0.0098)}
     return base[name]
 
 

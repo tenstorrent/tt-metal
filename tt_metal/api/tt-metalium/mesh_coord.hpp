@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,12 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <type_traits>
 #include <vector>
 
-#include <tt_stl/reflection.hpp>
+#include <fmt/core.h>
+
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/maybe_remote.hpp>
@@ -114,7 +116,7 @@ bool operator>(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator<=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 
-std::ostream& operator<<(std::ostream& os, const MeshCoordinate& shape);
+std::ostream& operator<<(std::ostream& os, const MeshCoordinate& coord);
 
 // Represents a range of MeshCoordinates. Requires that mesh coordinates have the same dimensionality.
 class MeshCoordinateRange {
@@ -169,6 +171,14 @@ public:
     // Iterator over the range, provides access to coordinates in row-major order.
     class Iterator {
     public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = MeshCoordinate;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const MeshCoordinate*;
+        using reference = const MeshCoordinate&;
+
+        // Default-constructs a singular (invalid) iterator. Required by std::forward_iterator.
+        Iterator() : current_coord_(MeshCoordinate::zero_coordinate(0)) {}
         Iterator& operator++();
         Iterator operator++(int);
         const MeshCoordinate& operator*() const;
@@ -205,6 +215,7 @@ private:
 
 bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
 bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
+bool operator<(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
 std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range);
 
 // Represents a set of non-overlapping MeshCoordinateRanges.
@@ -217,7 +228,7 @@ public:
     explicit MeshCoordinateRangeSet(const MeshCoordinateRange&);
 
     // Merges the given range into the set.
-    void merge(const MeshCoordinateRange& range);
+    void merge(const MeshCoordinateRange& to_merge);
 
     // Returns the number of ranges in the set.
     size_t size() const { return ranges_.size(); }
@@ -327,6 +338,7 @@ public:
         using reference = ValueProxy&;
 
         Iterator& operator++();
+        Iterator operator++(int);
         ValueProxy& operator*() { return value_proxy_; }
         const ValueProxy& operator*() const { return value_proxy_; }
         ValueProxy* operator->() { return &value_proxy_; }
@@ -356,6 +368,7 @@ public:
         using reference = const ValueProxy&;
 
         ConstIterator& operator++();
+        ConstIterator operator++(int);
         const ValueProxy& operator*() const { return value_proxy_; }
         const ValueProxy* operator->() const { return &value_proxy_; }
         bool operator==(const ConstIterator& other) const;
@@ -447,8 +460,8 @@ MeshContainer<T>::MeshContainer(const MeshShape& shape, std::vector<T> values) :
     shape_(shape), coord_range_(shape), values_(std::move(values)) {
     TT_FATAL(
         shape.mesh_size() == values_.size(),
-        "Shape and values size mismatch; shape: {}, values: {}",
-        shape,
+        "Shape and values size mismatch; shape mesh_size: {}, values size: {}",
+        shape.mesh_size(),
         values_.size());
 }
 
@@ -493,6 +506,13 @@ typename MeshContainer<T>::Iterator& MeshContainer<T>::Iterator::operator++() {
 }
 
 template <typename T>
+typename MeshContainer<T>::Iterator MeshContainer<T>::Iterator::operator++(int) {
+    auto tmp = *this;
+    ++*this;
+    return tmp;
+}
+
+template <typename T>
 MeshContainer<T>::ConstIterator::ConstIterator(
     const MeshContainer* container, const MeshCoordinateRange::Iterator& coord_iter, size_t linear_index) :
     container_(container),
@@ -510,6 +530,13 @@ typename MeshContainer<T>::ConstIterator& MeshContainer<T>::ConstIterator::opera
         coord_iter_ != container_->coord_range_.end() ? *coord_iter_ : MeshCoordinate::zero_coordinate(container_->shape().dims()),
         linear_index_ < container_->values_.size() ? &container_->values_[linear_index_] : nullptr);
     return *this;
+}
+
+template <typename T>
+typename MeshContainer<T>::ConstIterator MeshContainer<T>::ConstIterator::operator++(int) {
+    auto tmp = *this;
+    ++*this;
+    return tmp;
 }
 
 template <typename T>
@@ -554,6 +581,35 @@ typename MeshContainer<T>::ConstIterator MeshContainer<T>::end() const {
 
 }  // namespace tt::tt_metal::distributed
 
+// Out-of-line string conversions (defined in mesh_coord.cpp).
+namespace ttsl::fmt_detail {
+std::string to_string(const tt::tt_metal::distributed::MeshShape& shape);
+std::string to_string(const tt::tt_metal::distributed::MeshCoordinate& coord);
+std::string to_string(const tt::tt_metal::distributed::MeshCoordinateRange& range);
+}  // namespace ttsl::fmt_detail
+
+// Lightweight fmt::formatters – delegate to out-of-line to_string().
+template <>
+struct fmt::formatter<tt::tt_metal::distributed::MeshShape> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::distributed::MeshShape& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};
+
+template <>
+struct fmt::formatter<tt::tt_metal::distributed::MeshCoordinate> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::distributed::MeshCoordinate& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};
+
+template <>
+struct fmt::formatter<tt::tt_metal::distributed::MeshCoordinateRange> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::distributed::MeshCoordinateRange& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};
+
 namespace std {
 
 template <typename T>
@@ -572,23 +628,17 @@ struct tuple_element<1, tt::tt_metal::distributed::detail::MeshCoordinateValuePr
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinate> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept;
 };
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinateRange> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept;
 };
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinateRangeSet> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept;
 };
 
 }  // namespace std

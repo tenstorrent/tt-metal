@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -72,14 +72,16 @@ def run_clone(
         device=device,
         dtype=get_lib_dtype(ttnn, input_dtype),
         layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
-    ).to(device, input_memory_config)
-
-    ttnn_output = ttnn.clone(
-        ttnn_input,
-        dtype=get_lib_dtype(ttnn, output_dtype),
-        memory_config=output_memory_config,
-        compute_kernel_config=get_compute_kernel_options(compute_kernel_options),
+        memory_config=input_memory_config,
     )
+
+    with device.cache_entries_counter.measure():
+        ttnn_output = ttnn.clone(
+            ttnn_input,
+            dtype=get_lib_dtype(ttnn, output_dtype),
+            memory_config=output_memory_config,
+            compute_kernel_config=get_compute_kernel_options(compute_kernel_options),
+        )
 
     torch_output = ttnn.to_torch(ttnn_output).reshape(shape)
 
@@ -252,7 +254,6 @@ def test_clone_callback(
     Test case to verify the clone operation with various input/output dtype combinations.
     """
     torch.manual_seed(2024)
-    num_program_cache_entries_list = []
     for i in range(2):
         run_clone(
             [1, 3, 320, 384],
@@ -266,7 +267,188 @@ def test_clone_callback(
         )
         torch_dummy = torch.randn([32, 32])
         ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
-        num_program_cache_entries_list.append(device.num_program_cache_entries())
-    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    assert num_program_cache_entries_list[0] > 0
-    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+        if i == 0:
+            first_count = device.cache_entries_counter.total
+        else:
+            assert device.cache_entries_counter.total == first_count
+    logger.info(f"cache_entries_counter.total={device.cache_entries_counter.total}")
+    assert device.cache_entries_counter.total > 0
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 64 * 32, 64 * 32],
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_strategy",
+    [
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardStrategy.BLOCK,
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardOrientation.COL_MAJOR,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        "bfloat16",
+        "float32",
+    ],
+)
+def test_clone_sharded_tilized(
+    shape,
+    shard_strategy,
+    shard_orientation,
+    input_dtype,
+    device,
+):
+    """
+    Test case to verify the clone operation with tilized sharded tensors.
+    Tests various sharding strategies (HEIGHT, WIDTH, BLOCK) with identical input/output shard specs.
+    """
+    torch.manual_seed(2024)
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    x_grid_size = compute_grid_size.x
+    y_grid_size = compute_grid_size.y
+    while shape[-1] % x_grid_size != 0:
+        x_grid_size = x_grid_size - 1
+    while shape[-2] % y_grid_size != 0:
+        y_grid_size = y_grid_size - 1
+    shard_grid = ttnn.CoreGrid(y=y_grid_size, x=x_grid_size)
+
+    shard_memory_config = ttnn.create_sharded_memory_config(
+        shape=shape,
+        core_grid=shard_grid,
+        strategy=shard_strategy,
+        orientation=shard_orientation,
+    )
+
+    run_clone(
+        shape=shape,
+        input_memory_config=shard_memory_config,
+        output_memory_config=shard_memory_config,
+        input_dtype=input_dtype,
+        output_dtype=None,
+        tilized=True,
+        compute_kernel_options=None,
+        device=device,
+    )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 128, 64],
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_strategy",
+    [
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardStrategy.BLOCK,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        "bfloat16",
+        "float32",
+    ],
+)
+def test_clone_sharded_row_major(
+    shape,
+    shard_strategy,
+    input_dtype,
+    device,
+):
+    """
+    Test case to verify the clone operation with sharded tensors in ROW_MAJOR layout.
+    """
+    torch.manual_seed(2024)
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    x_grid_size = compute_grid_size.x
+    y_grid_size = compute_grid_size.y
+    while shape[-1] % x_grid_size != 0:
+        x_grid_size = x_grid_size - 1
+    while shape[-2] % y_grid_size != 0:
+        y_grid_size = y_grid_size - 1
+
+    shard_grid = ttnn.CoreGrid(y=y_grid_size, x=x_grid_size)
+
+    shard_memory_config = ttnn.create_sharded_memory_config(
+        shape=shape,
+        core_grid=shard_grid,
+        strategy=shard_strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    run_clone(
+        shape=shape,
+        input_memory_config=shard_memory_config,
+        output_memory_config=shard_memory_config,
+        input_dtype=input_dtype,
+        output_dtype=None,
+        tilized=False,
+        compute_kernel_options=None,
+        device=device,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [
+        ("bfloat16", "float32"),
+        ("float32", "bfloat16"),
+    ],
+)
+def test_clone_sharded_dtype_conversion(
+    input_dtype,
+    output_dtype,
+    device,
+):
+    """
+    Test case to verify the clone operation with sharded tensors and dtype conversion.
+    Dtype conversion is only supported with TILE layout.
+    """
+    torch.manual_seed(2024)
+
+    shape = [1, 1, 64 * 32, 32]
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+
+    x_grid_size = compute_grid_size.x
+    y_grid_size = compute_grid_size.y
+    while shape[-1] % x_grid_size != 0:
+        x_grid_size = x_grid_size - 1
+    while shape[-2] % y_grid_size != 0:
+        y_grid_size = y_grid_size - 1
+
+    shard_grid = ttnn.CoreGrid(y=y_grid_size, x=x_grid_size)
+
+    shard_memory_config = ttnn.create_sharded_memory_config(
+        shape=shape,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    run_clone(
+        shape=shape,
+        input_memory_config=shard_memory_config,
+        output_memory_config=shard_memory_config,
+        input_dtype=input_dtype,
+        output_dtype=output_dtype,
+        tilized=True,
+        compute_kernel_options=None,
+        device=device,
+    )

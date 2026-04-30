@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layer_norm_module.hpp"
 
 #include "core/tt_tensor_utils.hpp"
+#include "ops/layernorm_op.hpp"
 
 namespace ttml::modules {
 

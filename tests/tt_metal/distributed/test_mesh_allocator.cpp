@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
 #include <mesh_device.hpp>
-#include <stddef.h>
+#include <cstddef>
 #include <memory>
 
 #include <tt-metalium/buffer.hpp>

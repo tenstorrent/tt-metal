@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 UNET_FULL_MODEL_PCC = 0.99840
 UNET_FULL_MODEL_PCC_BH = 0.99780
 
-UNET_TRACE_REGION_SIZE = 483328
+UNET_TRACE_REGION_SIZE = 768 * 1024
 UNET_L1_SMALL_REGION_SIZE = 9344
 
 

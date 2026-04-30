@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <numeric>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -17,13 +17,12 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -33,6 +32,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
 
 using namespace tt;
@@ -104,7 +104,6 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 
     CoreCoord unharvested_logical_grid_size;
     switch (arch) {
-        case tt::ARCH::GRAYSKULL: unharvested_logical_grid_size = CoreCoord(12, 10); break;
         case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
         case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
         default: TT_THROW("Unsupported arch {}", get_umd_arch_name());
@@ -206,7 +205,7 @@ namespace tt::tt_metal {
 // This is meant to exercise noc_inline_dw_write API
 TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
     CoreCoord start_core{0, 0};
-    const uint32_t stream_id = 0;
+    const uint32_t stream_id = 32;
     const uint32_t stream_reg = 4;
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
@@ -217,7 +216,7 @@ TEST_F(MeshDeviceFixture, TensixDirectedStreamRegWriteRead) {
         tt_metal::Program program = tt_metal::CreateProgram();
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
 
         CoreCoord logical_grid_size = mesh_device->compute_with_storage_grid_size();
         CoreCoord end_core{logical_grid_size.x - 1, logical_grid_size.y - 1};
@@ -336,7 +335,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWrite4BAlignment) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t receiver_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1) + 4;
         EXPECT_EQ(receiver_addr % 4, 0)
             << "Expected dest address to be 4B aligned to test noc_inline_dw_write alignment rule";
@@ -380,7 +379,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNoc) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t first_receiver_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         uint32_t second_receiver_addr =
             first_receiver_addr + MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -438,7 +437,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t base_receiver_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1) + 4;
         std::vector<uint32_t> readback(num_writes * sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, base_receiver_addr, readback);
@@ -493,7 +492,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t receiver_addr0 = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         uint32_t receiver_addr2 = receiver_addr0 + (num_writes_per_risc * l1_alignment);
         std::vector<uint32_t> readback(num_writes_total * l1_alignment / sizeof(uint32_t), 0);
@@ -562,12 +561,12 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
 }
 
 void run_local_noc_stream_reg_inc(
-    MeshDispatchFixture* fixture,
+    MeshDispatchFixture* /*fixture*/,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& core,
     const HalProgrammableCoreType& hal_programmable_core_type) {
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // Set up program and command queue
     distributed::MeshWorkload workload;
@@ -645,7 +644,7 @@ TEST_F(MeshDeviceFixture, TensixTestNocStreamRegs) {
 
 TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
     auto mesh_device = this->devices_[0];
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // Skip if no active ethernet cores on this device
     if (device->get_active_ethernet_cores(true).empty()) {
@@ -660,7 +659,7 @@ TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
 
 TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
     auto mesh_device = this->devices_[0];
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // Skip if no idle ethernet cores on this device
     if (device->get_inactive_ethernet_cores().empty()) {

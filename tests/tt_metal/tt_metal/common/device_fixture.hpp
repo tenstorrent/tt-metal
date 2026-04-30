@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/device_pool.hpp>
 #include <limits>
 #include <algorithm>
 
@@ -39,6 +38,7 @@ protected:
             ids.push_back(id);
         }
         this->create_devices(ids);
+        init_max_cbs();
     }
 
     void TearDown() override {
@@ -52,7 +52,7 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
@@ -100,6 +100,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
+        init_max_cbs();
     }
 
     void TearDown() override {
@@ -112,7 +113,7 @@ protected:
 
     virtual bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
@@ -155,6 +156,22 @@ protected:
             GTEST_SKIP();
         }
         this->create_devices();
+        init_max_cbs();
+    }
+};
+
+class QuasarMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+protected:
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        if (this->arch_ != tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not a Quasar device";
+        }
+        this->create_devices();
+        init_max_cbs();
     }
 };
 

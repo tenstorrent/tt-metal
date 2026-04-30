@@ -14,7 +14,6 @@ The full example program is in [matmul_multi_core.cpp](../../../tt_metal/program
 To build and execute, you may use the following commands:
 Then run the following:
 ```bash
-    export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/metal_example_matmul_multi_core
 ```

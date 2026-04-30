@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -90,4 +90,4 @@ def run(
     *,
     device,
 ):
-    raise Exception("Stack is not supported, TODO: Pybind wrapper for concat")
+    raise Exception("Stack is not supported, TODO: nanobind wrapper for concat")

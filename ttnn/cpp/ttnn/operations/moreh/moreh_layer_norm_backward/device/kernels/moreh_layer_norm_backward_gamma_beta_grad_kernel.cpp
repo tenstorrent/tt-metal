@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t num_cols_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t origin_H = get_compile_time_arg_val(1);
     constexpr uint32_t origin_W = get_compile_time_arg_val(2);
@@ -268,54 +268,52 @@ void MAIN {
 
         if (gamma_grad_has_value) {
             // Compute cb_dgamma
-            tile_regs_acquire();
-            cb_wait_front(cb_ydyadd, onetile);
-            cb_reserve_back(cb_dgamma, onetile);
-
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[y * dy]
-                reduce_init_delta_with_dt(cb_dgamma, cb_ydyadd, cb_scaler);
-                reduce_tile(cb_ydyadd, cb_scaler, 0, 0, dst0);
-                reduce_uninit();
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_ydyadd, cb_scaler, cb_dgamma, compute_kernel_lib::ReduceInputBlockShape::single());
             } else {
                 // Just copy
+                tile_regs_acquire();
+                cb_wait_front(cb_ydyadd, onetile);
+                cb_reserve_back(cb_dgamma, onetile);
+
                 copy_tile_init_with_dt(cb_ydyadd);
                 copy_tile(cb_ydyadd, 0, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_dgamma);
+
+                cb_pop_front(cb_ydyadd, onetile);
+                cb_push_back(cb_dgamma, onetile);
+                tile_regs_release();
             }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_dgamma);
-
-            cb_pop_front(cb_ydyadd, onetile);
-            cb_push_back(cb_dgamma, onetile);
-            tile_regs_release();
         }  // gamma_grad_has_value
 
         if (beta_grad_has_value) {
             // Compute cb_dbeta
-            tile_regs_acquire();
-            cb_wait_front(cb_dyadd, onetile);
-            cb_reserve_back(cb_dbeta, onetile);
-
             if (is_lastdim_layernorm || is_groupnorm) {
                 // Sum[dy]
-                reduce_init_delta_with_dt(cb_dbeta, cb_dyadd, cb_scaler);
-                reduce_tile(cb_dyadd, cb_scaler, 0, 0, dst0);
-                reduce_uninit();
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_dyadd, cb_scaler, cb_dbeta, compute_kernel_lib::ReduceInputBlockShape::single());
             } else {
                 // Just copy
+                tile_regs_acquire();
+                cb_wait_front(cb_dyadd, onetile);
+                cb_reserve_back(cb_dbeta, onetile);
+
                 copy_tile_init_with_dt(cb_dyadd);
                 copy_tile(cb_dyadd, 0, dst0);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(dst0, cb_dbeta);
+
+                cb_pop_front(cb_dyadd, onetile);
+                cb_push_back(cb_dbeta, onetile);
+                tile_regs_release();
             }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_dbeta);
-
-            cb_pop_front(cb_dyadd, onetile);
-            cb_push_back(cb_dbeta, onetile);
-            tile_regs_release();
         }  // beta_grad_has_value
 
     }  // outer_idx loop
@@ -327,6 +325,4 @@ void MAIN {
     if (do_mask_w) {
         cb_pop_front(cb_mask_w, onetile);
     }
-
-}  // void MAIN
-}  // namespace NAMESPACE
+}

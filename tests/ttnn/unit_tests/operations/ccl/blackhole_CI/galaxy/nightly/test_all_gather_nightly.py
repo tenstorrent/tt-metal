@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -288,7 +288,6 @@ def test_all_gather_ring_nightly(
     num_buffers_per_channel,
     cluster_axis,
 ):
-    pytest.skip("Galaxy is currently mesh only")
     num_devices = bh_2d_mesh_device.shape[cluster_axis]
     if cluster_axis == 0:
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))

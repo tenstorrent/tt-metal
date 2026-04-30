@@ -1,25 +1,21 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hc_sum_reduce.hpp"
 
-#include "device/hc_sum_reduce_op.hpp"
+#include "device/hc_sum_reduce_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteHCSumReduce::invoke(
+ttnn::Tensor hc_sum_reduce(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
-    const std::optional<MathFidelity> math_fidelity) {
-    auto program = HCSumReduce{
-        memory_config.value_or(input.memory_config()),
-        dtype.value_or(input.dtype()),
-        math_fidelity.value_or(MathFidelity::HiFi4)};
-    return operation::run(program, {input}, {}, {}).at(0);
+    const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
+    return ttnn::prim::hc_sum_reduce(input, memory_config, dtype, math_fidelity);
 }
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::experimental

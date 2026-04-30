@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,7 +31,7 @@ struct DramAddressInfo {
 };
 
 // Function to get DRAM address and size
-DramAddressInfo get_dram_address_and_size(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+DramAddressInfo get_dram_address_and_size();
 
 // Function to compute physical constraints
 std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(

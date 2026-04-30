@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 
 /*
  *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------
- * This file is intended to be useable across both host and device code. Therefore.
+ * This file is intended to be usable across both host and device code. Therefore.
  *
  * DO NOT include any headers that are not host/device agnostic.
  * DO NOT use any types that do not have fixed sizes across host and device.
@@ -24,8 +24,7 @@
  * invocations and program creation.
  */
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 enum EriscDataMoverBufferSharingMode : uint32_t {
     NOT_SHARED = 0,
@@ -304,5 +303,4 @@ inline void advance_worker_global_page_interleaved (
 static constexpr uint32_t UNINITIALIZED_VALUE_U32 = std::numeric_limits<uint32_t>::max();
 static constexpr uint16_t UNINITIALIZED_VALUE_U16 = std::numeric_limits<uint16_t>::max();
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::ccl

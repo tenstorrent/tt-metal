@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 template <typename T>
 void write_mean_rstd(
@@ -17,6 +17,7 @@ void write_mean_rstd(
     uint32_t Ht,
     uint32_t Wt,
     T addrg) {
+    using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
@@ -85,6 +86,7 @@ void write_mean_rstd(
 }
 
 void kernel_main() {
+    using namespace tt::constants;
     const auto output_addr = get_arg_val<uint32_t>(0);
     const auto mean_addr = get_arg_val<uint32_t>(1);
     const auto rstd_addr = get_arg_val<uint32_t>(2);
@@ -108,15 +110,13 @@ void kernel_main() {
 
     // output
     const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     // mean
-    const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const auto mean_addrg = TensorAccessor(mean_args, mean_addr, mean_tile_bytes);
+    const auto mean_addrg = TensorAccessor(mean_args, mean_addr);
 
     // rstd
-    const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr, rstd_tile_bytes);
+    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr);
 
     uint32_t offs = 0;
     constexpr uint32_t onetile = 1;

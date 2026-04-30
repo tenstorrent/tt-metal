@@ -1,26 +1,24 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#define REDUCE_OP (PoolType::SUM)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/comp.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
-#include "debug/dprint.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/comp.h"
+#include "api/compute/reduce.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
+#include "api/debug/dprint.h"
 #include "ckernel_sfpu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 using namespace ckernel;
 
-namespace NAMESPACE {
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
 void sub_exp_block_bcast_cols_inplace() {
     // Precondition: in0_cb has rows*cols produced
@@ -164,45 +162,18 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     }
 }
 
-template <
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t in0_cb,
-    uint32_t scale_cb,
-    uint32_t out_cb,
-    uint32_t rows,
-    uint32_t cols>
-void reduce_c() {
-    // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in_cb, uint32_t scale_cb, uint32_t out_cb>
+void reduce_c(uint32_t rows, uint32_t cols) {
+    // Precondition: in_cb has rows*cols produced. in_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
-    // Postcondition: in0_cb has rows*cols produced
-    // Precondition: scale_cb has 1 produced
+    // Postcondition: in_cb has rows*cols produced
+    // Postcondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
-    reconfig_data_format(in0_cb, scale_cb);
-    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
-    const uint32_t num_tiles = rows * cols;
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
+    compute_kernel_lib::reduce<pool_type, reduce_dim, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+        in_cb, scale_cb, out_cb, compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
 
-    constexpr uint32_t reduce_dst_idx = 0;
-
-    for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
-        for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-        }
-
-        cb_reserve_back(out_cb, 1);
-        pack_reconfig_data_format(out_cb);
-        pack_tile(reduce_dst_idx, out_cb);
-        cb_push_back(out_cb, 1);
-        release_dst();
-    }
-
-    reduce_uninit();
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 
@@ -218,6 +189,7 @@ template <
     uint32_t index_transposed_cb_index,
     uint32_t values_cb_index,
     uint32_t output_ind_cb_index,
+    uint32_t tile_width,
     bool first_call>
 void top_k() {
     // dest indices for where to unpack the tiles for the llk
@@ -324,7 +296,7 @@ void top_k() {
             cb_push_back(index_transposed_cb_index, Wt);
         }
 
-        constexpr uint32_t Kt = K % TILE_WIDTH == 0 ? K / TILE_WIDTH : K / TILE_WIDTH + 1;
+        constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
@@ -361,7 +333,7 @@ void top_k() {
     // sfpu::_init_sfpu_config_reg();
 }
 
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t topk_mask_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t expert_mask_cb_index = get_compile_time_arg_val(2);
@@ -381,8 +353,9 @@ void MAIN {
 
     constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
     constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(17);
 
-    constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : K / 32 + 1;
+    constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
     // mask out invalid experts
     // TODO: fix the bug that makes this give bad results
@@ -401,6 +374,7 @@ void MAIN {
         index_transposed_cb_index,
         values_cb_index,
         output_ind_cb_index,
+        tile_width,
         true>();
 
     // mask out all experts except the top-k
@@ -408,9 +382,9 @@ void MAIN {
     eqz_block_inplace(output_ind_cb_index, Ht * Kt);
 
     // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max>(Ht, Kt);
     sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt>();
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum>(Ht, Kt);
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
 
@@ -418,6 +392,5 @@ void MAIN {
     mul_block_inplace(values_cb_index, output_ind_cb_index, Ht * Kt);
 
     // final sum
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index, Ht, Kt>();
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, out_cb_index>(Ht, Kt);
 }
-}  // namespace NAMESPACE

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -86,6 +85,10 @@ public:
     uint32_t max_size() const;
     uint32_t buffer_size() const;
 
+    uint32_t address_offset() const;
+
+    void set_address_offset(uint32_t offset);
+
     const Buffer* shadow_global_buffer{nullptr};
 
     class Builder {
@@ -132,6 +135,7 @@ private:
     // Will be removed once tests are updated to respect the correct `max_size_` constraint
     uint32_t max_size_ = 0;
     uint32_t buffer_size_ = 0;
+    uint32_t address_offset_ = 0;
 };
 
 bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);

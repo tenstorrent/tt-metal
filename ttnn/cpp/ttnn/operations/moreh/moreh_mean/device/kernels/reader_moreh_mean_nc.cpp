@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dprint.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "api/debug/dprint.h"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -31,9 +31,8 @@ void kernel_main() {
     fill_cb_with_value(cb_id_in2, scaler.u, 1);
 
     uint32_t l1_write_addr_in0;
-    uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
     constexpr auto input_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto s = TensorAccessor(input_args, input_addr);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         uint32_t hw_tile_id = i % HtWt;

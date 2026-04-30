@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 #include <random>
 #include <stdexcept>
 #include <unordered_set>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::tools::mem_bench {
 

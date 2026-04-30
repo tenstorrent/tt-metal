@@ -6,7 +6,7 @@ Ordering (NOC, CMD_BUF, VC)
 NoC requests/responses are usually asynchronous, but they can have an implicit ordering, or you could enforce an explicit ordering. In this section, we will go over
 command buffers (`CMD_BUF`), virtual channels (`VC`), and allocation of virtual channels.
 
-There are two NoCs (NoC-0 and NoC-1) that are completely phyiscally replicated and separated.
+There are two NoCs (NoC-0 and NoC-1) that are completely physically replicated and separated.
 The only communication between these NoCs is through software or L1 memory.
 For each NoC, we have 4 command buffers: `RD_CMD_BUF`, `WR_CMD_BUF`, `WR_REG_CMD_BUF`, `AT_CMD_BUF`.
 We usually use the `WR_CMD_BUF` for all writes, except for the atomic ones where we use `AT_CMD_BUF`, e.g.

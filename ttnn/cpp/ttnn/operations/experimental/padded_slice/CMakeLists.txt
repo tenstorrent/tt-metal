@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_padded_slice ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::PaddedSlice ALIAS ttnn_op_experimental_padded_slice)
 
-target_precompile_headers(ttnn_op_experimental_padded_slice REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_padded_slice TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_padded_slice)
 set_target_properties(
     ttnn_op_experimental_padded_slice
@@ -24,8 +24,10 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         padded_slice.cpp
-        device/padded_slice_op.cpp
-        device/padded_slice_program_factory.cpp
+        device/padded_slice_device_operation.cpp
+        device/padded_slice_utils.cpp
+        device/padded_slice_rm_program_factory.cpp
+        device/padded_slice_tile_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_padded_slice PRIVATE ${FixmeOpIncDirs})

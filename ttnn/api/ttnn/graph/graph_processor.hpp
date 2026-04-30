@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,12 +7,25 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <nlohmann/json.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/reports.hpp"
 
+#include <atomic>
+#include <chrono>
+#include <filesystem>
 #include <mutex>
 #include <stack>
 #include <unordered_map>
+#include <unordered_set>
 #include <any>
+
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}
+
 namespace ttnn::graph {
+
+// Node identifiers in the graph
+using node_id = int;
 
 class ProcessorHooks : public tt::tt_metal::IGraphHooks {
 private:
@@ -60,7 +73,8 @@ public:
 
     void track_program(tt::tt_metal::Program* program, const tt::tt_metal::IDevice* device) override;
 
-    void track_function_start(std::string_view function_name, std::span<std::any> args) override;
+    void track_function_start(
+        std::string_view function_name, std::span<tt::tt_metal::TrackedArgument> input_parameters) override;
 
     void track_function_end() override;
     void track_function_end(const std::any& output) override;
@@ -70,28 +84,55 @@ public:
     nlohmann::json end_capture() override;
 
     struct Vertex {
-        int counter = 0;
+        node_id counter = 0;
         std::string node_type;
         std::unordered_map<std::string, std::string> params;
         std::vector<std::string> arguments;
-        std::vector<int> connections;
+        std::vector<node_id> connections;
+        std::vector<node_id> input_tensors;
+        int stacking_level = 0;
+        uint64_t duration_ns = 0;  // Duration in nanoseconds (for function_end nodes)
     };
+
+    nlohmann::json get_report() const;
 
 private:
     std::shared_ptr<ProcessorHooks> hook;
 
     std::mutex mutex;
     RunMode run_mode = RunMode::NORMAL;
-    std::stack<int> current_op_id;
-    std::unordered_map<std::int64_t, int> buffer_id_to_counter;
-    std::unordered_map<std::int64_t, int> tensor_id_to_counter;
-    int last_finished_op_id = -1;
+    std::stack<node_id> current_op_id;
+    std::unordered_map<std::int64_t, node_id> buffer_id_to_counter;
+    node_id last_finished_op_id = -1;
     std::vector<Vertex> graph;
+    std::vector<node_id> current_input_tensors;
 
-    int add_tensor(const Tensor& t);
-    int add_buffer(const tt::tt_metal::Buffer* buffer);
+    // Duration tracking - stack of start timestamps for nested operations
+    using time_point = std::chrono::steady_clock::time_point;
+    std::stack<time_point> function_start_times;
+
+    // Capture timing
+    time_point capture_start_time;
+    uint64_t capture_start_timestamp_ns = 0;
+
+    // Device info captured at track time (keyed by device_id)
+    std::unordered_map<uint32_t, nlohmann::json> captured_device_info;
+    // Device pointers for buffer pages (only valid during capture)
+    std::vector<tt::tt_metal::distributed::MeshDevice*> captured_mesh_devices;
+    // Per-operation buffer snapshots (function_start counter -> buffers)
+    std::unordered_map<node_id, std::vector<ttnn::reports::BufferInfo>> per_op_buffers_;
+    // Buffer pages keyed by address, with versioning for re-allocations.
+    // Each address maps to a list of (allocation_counter, pages) pairs so that
+    // re-allocations at the same address with different page configs are preserved.
+    std::unordered_map<uint64_t, std::vector<std::pair<uint32_t, std::vector<ttnn::reports::BufferPageInfo>>>>
+        buffer_pages_by_address_;
+
+    node_id add_tensor(const Tensor& t);
+    node_id add_buffer(const tt::tt_metal::Buffer* buffer);
 
     void begin_function_process(const Tensor& tensor);
+
+    void begin_function_process(const std::reference_wrapper<const Tensor>& tensor_ref);
 
     template <typename T>
     void begin_function_process(const std::optional<T>& tensor_opt);
@@ -111,9 +152,21 @@ private:
 
     void clean_hook();
 
+    void track_device(const tt::tt_metal::IDevice* device);
+
 public:
     static void begin_graph_capture(RunMode mode);
     static nlohmann::json end_graph_capture();
+
+    static nlohmann::json end_graph_capture_to_file(const std::filesystem::path& report_path);
+
+    // Detailed buffer tracing control
+    static void enable_detailed_buffer_tracing();
+    static void disable_detailed_buffer_tracing();
+    static bool is_detailed_buffer_tracing_enabled();
+
+private:
+    static std::atomic<bool> capture_detailed_buffer_tracing_;
 };
 
 /**
@@ -129,9 +182,15 @@ public:
  */
 class ScopedGraphCapture {
 public:
-    ScopedGraphCapture(GraphProcessor::RunMode mode);
+    explicit ScopedGraphCapture(GraphProcessor::RunMode mode);
+
+    ScopedGraphCapture(GraphProcessor::RunMode mode, std::filesystem::path report_path);
+
     ~ScopedGraphCapture();
+
     nlohmann::json end_graph_capture();
+
+    nlohmann::json end_graph_capture_to_file(const std::filesystem::path& report_path);
 
     ScopedGraphCapture(const ScopedGraphCapture&) = delete;
     ScopedGraphCapture(ScopedGraphCapture&&) = delete;
@@ -140,5 +199,6 @@ public:
 
 private:
     bool is_active = false;
+    std::filesystem::path auto_report_path;
 };
 }  // namespace ttnn::graph

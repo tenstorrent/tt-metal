@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -16,7 +16,7 @@ void kernel_main() {
     constexpr bool is_dram = true;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id);
     constexpr auto s_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(s_args, input_addr, single_tile_size_bytes);
+    const auto s = TensorAccessor(s_args, input_addr);
 
     uint32_t block_size = num_cb_tiles;
     cb_reserve_back(cb_id, num_cb_tiles);

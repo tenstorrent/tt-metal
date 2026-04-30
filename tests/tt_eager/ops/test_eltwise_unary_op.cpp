@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -14,20 +14,20 @@
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
-#include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/device.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::distributed::MeshDevice;
@@ -39,7 +39,7 @@ namespace detail {
 float sqrt(float x) { return std::sqrt(x); }
 float exp(float x) { return std::exp(x); }
 float recip(float x) { return 1 / x; }
-float gelu(float x) { return x * (0.5 * (1 + std::erf(x / std::sqrt(2)))); }
+float gelu(float x) { return x * (0.5 * (1 + std::erf(x / std::numbers::sqrt2))); }
 float relu(float x) { return std::max(0.0f, x); }
 float sigmoid(float x) { return 1 / (1 + std::exp(-x)); }
 float log(float x) { return std::log(x); }
@@ -108,7 +108,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
         auto device_output = ttnn::tanh(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     }
-    TT_ASSERT(false, "Unsupported function");
+    TT_FATAL(false, "Unsupported function");
     return false;
 }
 
@@ -116,22 +116,41 @@ void test_operation_infrastructure() {
     using namespace tt::constants;
     log_info(tt::LogTest, "Running {}", __func__);
 
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
+    using Op = ttnn::operations::unary::UnaryDeviceOperation;
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
+    auto* device = device_owner.get();
 
     auto shape = ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
     auto input_tensor =
         ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to_layout(Layout::TILE).to_device(device);
 
-    ttnn::operations::unary::operation_attributes_t op_args{
-        {UnaryWithParam{UnaryOpType::SQRT}}, DataType::BFLOAT16, tt::tt_metal::MemoryConfig{}, false, false};
-    ttnn::operations::unary::tensor_args_t tensor_args{input_tensor};
-    auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
-    TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);
+    auto mem_config = tt::tt_metal::MemoryConfig{};
+    auto worker_grid = ttnn::operations::unary::get_worker_grid(
+        input_tensor, std::nullopt, std::optional<tt::tt_metal::MemoryConfig>(mem_config), std::nullopt, mem_config);
+
+    Op::operation_attributes_t op_args{
+        .op_chain = {EltwiseUnaryWithParam{UnaryOpType::SQRT}},
+        .output_dtype = DataType::BFLOAT16,
+        .memory_config = mem_config,
+        .fp32_dest_acc_en = false,
+        .preserve_fp32_precision = false,
+        .bfp8_pack_precise = false,
+        .worker_grid = worker_grid,
+        .sub_core_grids = std::nullopt,
+    };
+    Op::tensor_args_t tensor_args{.input = input_tensor, .output_tensor = std::nullopt};
+    auto program_hash = Op::compute_program_hash(op_args, tensor_args);
+    auto program_hash_repeat = Op::compute_program_hash(op_args, tensor_args);
+    TT_FATAL(program_hash != 0, "compute_program_hash returned 0 — likely a bug");
+    TT_FATAL(
+        program_hash == program_hash_repeat,
+        "UnaryDeviceOperation::compute_program_hash must be deterministic ({} vs {})",
+        program_hash,
+        program_hash_repeat);
 }
 
 void test_shape_padding() {
@@ -143,8 +162,8 @@ void test_shape_padding() {
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
-    ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device);
+    auto* device = device_owner.get();
+    ttnn::SetDefaultDevice(device);
 
     ttnn::Shape input_shape({1, 1, 13, 18});
     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
@@ -161,16 +180,14 @@ void test_shape_padding() {
     TT_FATAL(output_tensor.logical_shape() == input_shape, "Error");
 }
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 template <bool approx_value = false>
 struct exp_with_param {
     static Tensor fn(const tt::tt_metal::Tensor& t) {
         return ttnn::exp(t, approx_value, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
     }
 };
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 void test_numerically() {
     log_info(tt::LogTest, "Running {}", __func__);
@@ -182,7 +199,7 @@ void test_numerically() {
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
+    auto* device = device_owner.get();
 
     ttnn::Shape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
     {
@@ -238,7 +255,7 @@ void test_program_cache() {
 
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-    auto device = device_owner.get();
+    auto* device = device_owner.get();
 
     auto run_tests = [&]() {
         // Program Cache Miss
@@ -285,7 +302,7 @@ void test_program_cache() {
     TT_FATAL(device->num_program_cache_entries() == 0, "Error");
 }
 
-int main(int argc, char** argv) {
+int main() {
     // test_operation_infrastructure();
     test_shape_padding();
     test_numerically();

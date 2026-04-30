@@ -6,18 +6,27 @@ set(MAIN_SOURCES
     3tier/common.cpp
 )
 
+set(llama_inference_SOURCES
+    llama_inference.cpp
+    utils.cpp
+)
+
 set(OPTIMIZER_SOURCES
     3tier/optimizer_worker.cpp
     3tier/common.cpp
+    utils.cpp
 )
 
 set(AGGREGATOR_SOURCES
     3tier/aggregator_worker.cpp
     3tier/common.cpp
+    utils.cpp
 )
 
 add_executable(nano_gpt ${MAIN_SOURCES})
 target_link_libraries(nano_gpt PRIVATE ttml)
+add_executable(llama_inference ${llama_inference_SOURCES})
+target_link_libraries(llama_inference PRIVATE ttml)
 add_executable(nano_gpt_aggregator ${AGGREGATOR_SOURCES})
 target_link_libraries(nano_gpt_aggregator PRIVATE ttml)
 add_executable(nano_gpt_optimizer ${OPTIMIZER_SOURCES})
@@ -27,19 +36,20 @@ target_compile_definitions(
     nano_gpt
     PRIVATE
         DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
-        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
+        CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
+target_compile_definitions(llama_inference PRIVATE CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs")
 target_compile_definitions(
     nano_gpt_aggregator
     PRIVATE
         DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
-        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
+        CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
 target_compile_definitions(
     nano_gpt_optimizer
     PRIVATE
         DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
-        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/configs"
+        CONFIGS_FOLDER="${TT_TRAIN_SOURCE_DIR}/configs"
 )
 
 # Define the target file location

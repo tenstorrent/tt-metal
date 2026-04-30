@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/work_split.hpp"
-#include "grid_sample_op.hpp"
 #include "grid_sample_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
@@ -15,17 +14,17 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
 
-namespace ttnn::operations::grid_sample {
+namespace ttnn::prim {
 
-tt::tt_metal::operation::ProgramWithCallbacks grid_sample_bilinear_program_factory(
-    const Tensor& input_tensor,
-    const Tensor& grid_tensor,
-    const Tensor& output_tensor,
-    const std::string& padding_mode,
-    bool align_corners,
-    bool use_precomputed_grid,
-    bool batch_output_channels) {
+GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFactory::create(
+    const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor) {
+    const Tensor& input_tensor = tensor_args.input_tensor;
+    const Tensor& grid_tensor = tensor_args.grid;
+    bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
+    bool batch_output_channels = operation_attributes.batch_output_channels;
+
     const bool is_sharded = grid_tensor.is_sharded();
     tt::tt_metal::Program program{};
 
@@ -58,7 +57,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_bilinear_program_facto
         grid_nsticks_per_core = grid_shard_spec.shape[0];
         output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
 
-        num_cores = (total_grid_nsticks + grid_nsticks_per_core - 1) / grid_nsticks_per_core;
+        num_cores = grid_shard_spec.num_cores();
         all_cores = grid_shard_spec.grid;
         logical_cores = corerange_to_cores(
             all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
@@ -226,26 +225,32 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_bilinear_program_facto
             input_cb_index_1,                  // ct_arg[8]: input_cb_index_1
             scalar_cb_index_0,                 // ct_arg[9]: scalar_cb_index_0
             scalar_cb_index_1,                 // ct_arg[10]: scalar_cb_index_1
-            DUMMY_CB_ID,                       // ct_arg[11]: unused
-            DUMMY_CB_ID,                       // ct_arg[12]: unused
-            DUMMY_CB_ID,                       // ct_arg[13]: unused
-            DUMMY_CB_ID,                       // ct_arg[14]: unused
-            DUMMY_CB_ID,                       // ct_arg[15]: unused
-            DUMMY_CB_ID,                       // ct_arg[16]: unused
-            output_cb_index,                   // ct_arg[17]: output_cb_index
-            DUMMY_CB_ID,                       // ct_arg[18]: unused
-            ONE_SCALAR_PER_CORE,               // ct_arg[19]: ONE_SCALAR_PER_CORE
-            pre_tilize_cb_id,                  // ct_arg[20]: pre_tilize_cb_id
-            is_output_tiled ? 1U : 0U,         // ct_arg[21]: is_output_tiled
-            is_output_block_format ? 1U : 0U,  // ct_arg[22]: is_output_block_format
-            false,                             // ct_arg[23]: return_indices (unused)
-            1,                                 // ct_arg[24]: stride_h (unused)
-            1,                                 // ct_arg[25]: stride_w (unused)
-            1,                                 // ct_arg[26]: in_h_padded (unused)
-            1,                                 // ct_arg[27]: in_w_padded (unused)
-            1,                                 // ct_arg[28]: eff_kernel_h (unused)
-            1,                                 // ct_arg[29]: eff_kernel_w (unused)
-            1,                                 // ct_arg[30]: pad_l (unused)
+            output_cb_index,                   // ct_arg[11]: output_cb_index
+            ONE_SCALAR_PER_CORE,               // ct_arg[12]: ONE_SCALAR_PER_CORE
+            pre_tilize_cb_id,                  // ct_arg[13]: pre_tilize_cb_id
+            is_output_tiled ? 1U : 0U,         // ct_arg[14]: is_output_tiled
+            is_output_block_format ? 1U : 0U,  // ct_arg[15]: is_output_block_format
+            DUMMY_CB_ID,                       // ct_arg[16]: unused (in_idx_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[17]: unused (pack_tmp_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[18]: unused (pack_idx_tmp_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[19]: unused (right_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[20]: unused (down_left_wrap_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[21]: unused (up_left_wrap_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[22]: unused (out_idx_cb_id for mpwi)
+            1,                                 // ct_arg[23]: stride_h (unused by grid_sample)
+            1,                                 // ct_arg[24]: stride_w (unused by grid_sample)
+            1,                                 // ct_arg[25]: in_h_padded (unused by grid_sample)
+            1,                                 // ct_arg[26]: in_w_padded (unused by grid_sample)
+            1,                                 // ct_arg[27]: eff_kernel_h (unused by grid_sample)
+            1,                                 // ct_arg[28]: eff_kernel_w (unused by grid_sample)
+            1,                                 // ct_arg[29]: pad_l (unused by grid_sample)
+            DUMMY_CB_ID,                       // ct_arg[30]: intra_kernel_right_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[31]: intra_kernel_down_left_wrap_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[32]: compute_tmp_idx_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[33]: clear_value_cb_id (unused)
+            1,                                 // ct_arg[34]: kernel_h (unused by grid_sample)
+            1,                                 // ct_arg[35]: kernel_w (unused by grid_sample)
+            0,                                 // ct_arg[36]: indexes_32_bit (unused by grid_sample)
         };
 
         return tt::tt_metal::CreateKernel(
@@ -253,11 +258,11 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_bilinear_program_facto
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
             cores,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = compute_compile_time_args,
-                .defines = get_defines(pool::Pool2DType::AVG_POOL2D)});
+                .defines = ttnn::operations::pool::get_defines(ttnn::operations::pool::Pool2DType::AVG_POOL2D)});
     };
 
     if (is_sharded || core_group_1.num_cores() > 0) {
@@ -336,39 +341,60 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_bilinear_program_facto
         }
     }
 
-    // Runtime callback
-    return {
+    return cached_program_t{
         std::move(program),
-        [=](const void*,
-            tt::tt_metal::Program& prog,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& [input_tensor, grid_tensor] = std::tie(input_tensors[0], input_tensors[1]);
-            const auto& output_tensor = output_tensors[0];
-
-            if (is_sharded) {
-                tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, grid_cb_handle, *grid_tensor.buffer());
-                tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, output_cb_handle, *output_tensor.buffer());
-
-                for (uint32_t i = 0; i < num_cores; i++) {
-                    const CoreCoord& core = logical_cores[i];
-                    tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core)[0] = input_tensor.buffer()->address();
-                    if (enable_split_reader) {
-                        tt::tt_metal::GetRuntimeArgs(prog, reader1_kernel_id, core)[0] =
-                            input_tensor.buffer()->address();
-                    }
-                }
-            } else {
-                for (uint32_t i = 0; i < num_cores; i++) {
-                    const CoreCoord& core = logical_cores[i];
-                    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core);
-                    reader_runtime_args[0] = input_tensor.buffer()->address();  // rt_arg[0]: input_buffer_address
-                    reader_runtime_args[1] = grid_tensor.buffer()->address();   // rt_arg[1]: grid_buffer_address
-                    tt::tt_metal::GetRuntimeArgs(prog, writer_kernel_id, core)[0] =
-                        output_tensor.buffer()->address();  // rt_arg[0]: output_buffer_address
-                }
-            }
+        shared_variables_t{
+            .is_sharded = is_sharded,
+            .logical_cores = logical_cores,
+            .grid_cb_handle = grid_cb_handle,
+            .output_cb_handle = output_cb_handle,
+            .num_cores = num_cores,
+            .enable_split_reader = enable_split_reader,
+            .reader0_kernel_id = reader0_kernel_id,
+            .reader1_kernel_id = reader1_kernel_id,
+            .writer_kernel_id = writer_kernel_id,
         }};
 }
-}  // namespace ttnn::operations::grid_sample
+
+void GridSampleBilinearProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const GridSampleParams& /*operation_attributes*/,
+    const GridSampleInputs& tensor_args,
+    Tensor& output_tensor) {
+    auto& prog = cached_program.program;
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& grid_tensor = tensor_args.grid;
+    const auto& is_sharded = cached_program.shared_variables.is_sharded;
+    const auto& grid_cb_handle = cached_program.shared_variables.grid_cb_handle;
+    const auto& output_cb_handle = cached_program.shared_variables.output_cb_handle;
+    const auto& num_cores = cached_program.shared_variables.num_cores;
+    const auto& logical_cores = cached_program.shared_variables.logical_cores;
+    const auto& reader0_kernel_id = cached_program.shared_variables.reader0_kernel_id;
+    const auto& reader1_kernel_id = cached_program.shared_variables.reader1_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const auto& enable_split_reader = cached_program.shared_variables.enable_split_reader;
+
+    if (is_sharded) {
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, grid_cb_handle, *grid_tensor.buffer());
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, output_cb_handle, *output_tensor.buffer());
+
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const CoreCoord& core = logical_cores[i];
+            tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core)[0] = input_tensor.buffer()->address();
+            if (enable_split_reader) {
+                tt::tt_metal::GetRuntimeArgs(prog, reader1_kernel_id, core)[0] = input_tensor.buffer()->address();
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const CoreCoord& core = logical_cores[i];
+            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core);
+            reader_runtime_args[0] = input_tensor.buffer()->address();  // rt_arg[0]: input_buffer_address
+            reader_runtime_args[1] = grid_tensor.buffer()->address();   // rt_arg[1]: grid_buffer_address
+            tt::tt_metal::GetRuntimeArgs(prog, writer_kernel_id, core)[0] =
+                output_tensor.buffer()->address();  // rt_arg[0]: output_buffer_address
+        }
+    }
+}
+
+}  // namespace ttnn::prim

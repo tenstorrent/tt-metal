@@ -1,0 +1,478 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import fcntl
+import json
+import shutil
+from contextlib import contextmanager, nullcontext
+from pathlib import Path
+from typing import Any
+
+import torch
+from loguru import logger
+from transformers.configuration_utils import PretrainedConfig
+
+import ttnn
+from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
+from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION, emit_legacy_saved_weights
+from models.demos.deepseek_v3.utils.run_config import WeightConfig, deallocate_weight_config_tensors
+
+
+class InvalidWeightCacheError(ValueError):
+    """Raised when a requested legacy DeepSeek weight cache exists but is invalid."""
+
+
+WEIGHT_CACHE_FORMAT_VERSION = 2
+WEIGHT_CACHE_METADATA_KEY = "deepseek_weight_cache_metadata"
+WEIGHT_CACHE_VERSION_KEY = "format_version"
+WEIGHT_CACHE_PAYLOAD_KEY = "weight_config"
+
+
+@contextmanager
+def locked_file(file_path: Path, mode: str = "r", exclusive: bool = False):
+    """
+    Context manager for file operations with advisory locking.
+
+    Args:
+        file_path: Path to the file
+        mode: File open mode ('r' for read, 'w' for write, etc.)
+        exclusive: If True, use exclusive lock (LOCK_EX) for writes.
+                  If False, use shared lock (LOCK_SH) for reads.
+
+    Yields:
+        File handle with lock acquired
+    """
+    # Ensure parent directory exists for write operations
+    if mode in ("w", "a", "x") or "+" in mode:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lock_type = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+
+    with file_path.open(mode) as f:
+        try:
+            fcntl.flock(f.fileno(), lock_type)
+            yield f
+        finally:
+            # Lock is automatically released when file is closed
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+# JSON serializer for the weight config
+class WeightConfigEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, SavedWeight):
+            obj = {
+                "path": str(obj.path),
+                "memory_config": None if obj.memory_config is None else json.loads(obj.memory_config.to_json()),
+            }
+        return obj
+
+
+def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
+    path_str = obj.get("path", None)
+    if not isinstance(path_str, str):
+        return obj
+    memory_config_dict = obj.get("memory_config", None)
+    if not isinstance(memory_config_dict, dict) or not {
+        "buffer_type",
+        "memory_layout",
+        "created_with_nd_shard_spec",
+    }.issubset(memory_config_dict.keys()):
+        return obj
+    return SavedWeight(path=Path(path_str), memory_config=ttnn.MemoryConfig.from_json(json.dumps(memory_config_dict)))
+
+
+def wrap_weight_cache_payload(weight_config: WeightConfig) -> dict[str, Any]:
+    return {
+        WEIGHT_CACHE_METADATA_KEY: {
+            WEIGHT_CACHE_VERSION_KEY: WEIGHT_CACHE_FORMAT_VERSION,
+        },
+        WEIGHT_CACHE_PAYLOAD_KEY: weight_config,
+    }
+
+
+def unwrap_weight_cache_payload(
+    serialized_config: Any,
+    *,
+    require_current_format: bool,
+    config_path: Path,
+) -> WeightConfig:
+    if (
+        isinstance(serialized_config, dict)
+        and WEIGHT_CACHE_METADATA_KEY in serialized_config
+        and WEIGHT_CACHE_PAYLOAD_KEY in serialized_config
+    ):
+        metadata = serialized_config[WEIGHT_CACHE_METADATA_KEY]
+        version = metadata.get(WEIGHT_CACHE_VERSION_KEY) if isinstance(metadata, dict) else None
+        if version != WEIGHT_CACHE_FORMAT_VERSION:
+            raise InvalidWeightCacheError(
+                f"Requested DeepSeek weight cache at {config_path.parent} uses unsupported format version {version!r}. "
+                f"Expected version {WEIGHT_CACHE_FORMAT_VERSION}; regenerate the cache."
+            )
+        return serialized_config[WEIGHT_CACHE_PAYLOAD_KEY]
+
+    if require_current_format:
+        raise InvalidWeightCacheError(
+            f"Requested DeepSeek weight cache at {config_path.parent} is missing {WEIGHT_CACHE_METADATA_KEY}. "
+            "It was likely generated before the current DeepSeek SavedWeight layout; regenerate the cache."
+        )
+    return serialized_config
+
+
+def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_recalculate: bool) -> WeightConfig | None:
+    """
+    Attempt to load weight config from cache.
+
+    Args:
+        config_path: Path to the config.json file
+        weight_cache_path: Base path for resolving relative weight paths
+        force_recalculate: If True, skip cache and return None
+
+    Returns:
+        Normalized weight config if cache hit, None if cache miss
+
+    Raises:
+        InvalidWeightCacheError: if a cache exists but its saved-weight paths are invalid.
+    """
+    if force_recalculate:
+        logger.info("Forcing recalculating weights")
+        clear_weight_cache_path(weight_cache_path)
+        return None
+    if not config_path.exists():
+        logger.info("Weight configuration file does not exist, forcing recalculating weights")
+        return None
+
+    with locked_file(config_path, "r", exclusive=False) as f:
+        serialized_config = json.load(f, object_hook=try_decode_saved_weight)
+
+    weight_config = unwrap_weight_cache_payload(
+        serialized_config,
+        require_current_format=True,
+        config_path=config_path,
+    )
+
+    try:
+        validate_weight_config_paths(weight_cache_path, weight_config)
+    except ValueError as e:
+        raise InvalidWeightCacheError(f"Requested DeepSeek weight cache was invalid at {weight_cache_path}: {e}") from e
+
+    logger.info(f"Using weights cached at {weight_cache_path}")
+    return normalize_weight_config_paths(weight_cache_path, weight_config)
+
+
+def clear_weight_cache_path(weight_cache_path: Path) -> None:
+    if weight_cache_path.exists():
+        logger.info(f"Deleting existing cache directory: {weight_cache_path}")
+        try:
+            if weight_cache_path.is_dir():
+                shutil.rmtree(weight_cache_path)
+            else:
+                weight_cache_path.unlink()
+        except OSError as e:
+            logger.warning(f"Failed to remove weight cache at {weight_cache_path}: {e}")
+
+
+def get_weight_config(
+    ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
+    hf_config: PretrainedConfig,
+    state_dicts: tuple[dict[str, torch.Tensor] | None, ...] | None = None,
+    weight_cache_path: Path | None = None,
+    mesh_device: ttnn.Device | None = None,
+    force_recalculate: bool = False,
+    random_weights: bool = False,
+    model_path: str | None = None,
+    single_layer: str | None = None,
+    cache_subdir_name: str | None = None,
+    emit_weight_cache: bool = False,
+    use_weight_cache: bool = False,
+):
+    """
+    Convert HuggingFace weights directly into in-memory TTNN tensors.
+
+    Args:
+        ModuleClass: The module class to convert weights for
+        hf_config: HuggingFace model configuration
+        state_dicts: Optional pre-loaded state dicts. If None, will be loaded based on random_weights/model_path.
+        weight_cache_path: Optional base path used only to preserve the historical conversion subdirectory layout for
+            callers that key weight generation by this path. No on-disk weight cache is generated.
+        mesh_device: TTNN mesh device
+        force_recalculate: Accepted for API compatibility. Pure in-memory conversion still runs on every call,
+            but emitted legacy caches are cleared before being regenerated.
+        random_weights: If True, generate random weights from reference model
+        model_path: Path to HuggingFace model directory (required if random_weights=False and state_dicts=None)
+        single_layer: Optional single layer name (used for validation with random weights)
+        cache_subdir_name: Optional cache subdirectory name under ``weight_cache_path``.
+            Defaults to ``"{num_hidden_layers}_layers"``.
+        emit_weight_cache: If True, persist converted TTNN tensors to a legacy on-disk
+            weight cache rooted at ``weight_cache_path``. This is intended only for
+            compatibility flows such as BSPM cache export.
+        use_weight_cache: If True, require and load a legacy on-disk weight cache from
+            ``weight_cache_path`` instead of converting weights directly in memory.
+
+    Returns:
+        Weight configuration dictionary
+    """
+    if mesh_device is None:
+        raise ValueError("mesh_device must be provided")
+
+    if emit_weight_cache and use_weight_cache:
+        raise ValueError("emit_weight_cache and use_weight_cache cannot both be True")
+
+    if weight_cache_path is not None:
+        weight_cache_path = weight_cache_path.expanduser()
+        if not weight_cache_path.is_absolute():
+            weight_cache_path = weight_cache_path.resolve()
+        cache_subdir_name = cache_subdir_name or f"{hf_config.num_hidden_layers}_layers"
+        output_path = weight_cache_path / cache_subdir_name / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    else:
+        output_path = (
+            Path("generated/deepseek_v3")
+            / f"{hf_config.num_hidden_layers}_layers"
+            / (f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}")
+        )
+
+    if use_weight_cache:
+        if weight_cache_path is None:
+            raise ValueError("weight_cache_path must be provided when use_weight_cache=True")
+        if force_recalculate:
+            raise ValueError("force_recalculate cannot be used when use_weight_cache=True")
+        config_path = output_path / "config.json"
+        cached_weight_config = _try_load_cached_config(config_path, output_path, force_recalculate=False)
+        if cached_weight_config is None:
+            raise FileNotFoundError(
+                f"Requested DeepSeek weight cache was not found at {output_path}. "
+                "Generate the cache first or disable use_weight_cache."
+            )
+        return cached_weight_config
+
+    if force_recalculate:
+        if emit_weight_cache:
+            clear_weight_cache_path(output_path)
+        else:
+            logger.info("force_recalculate=True is ignored for direct in-memory DeepSeek weight conversion")
+
+    if state_dicts is None:
+        logger.info("State dict was not provided, preparing from random weights or model path")
+        from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+
+        model_state = prepare_model_state_dict(
+            hf_config=hf_config,
+            random_weights=random_weights,
+            model_path=model_path,
+            single_layer=single_layer,
+        )
+        state_dicts = (model_state,)
+
+    if emit_weight_cache:
+        logger.info(f"Converting DeepSeek weights and streaming them to a legacy weight cache at {output_path}")
+    else:
+        logger.info("Converting DeepSeek weights directly to TTNN tensors (no on-disk weight cache)")
+
+    emit_context = emit_legacy_saved_weights() if emit_weight_cache else nullcontext()
+    with emit_context:
+        weight_config = ModuleClass.convert_weights(hf_config, state_dicts, output_path, mesh_device)
+    if contains_saved_weights(weight_config):
+        if weight_cache_path is None:
+            raise ValueError(
+                "weight_cache_path must be provided when convert_weights returns legacy SavedWeight entries"
+            )
+        validate_weight_config_paths(output_path, weight_config)
+        if emit_weight_cache:
+            saved_weight_config = save_weight_config(output_path, weight_config)
+            deallocate_weight_config_tensors(weight_config)
+            return saved_weight_config
+        return normalize_weight_config_paths(output_path, weight_config)
+    if emit_weight_cache:
+        if weight_cache_path is None:
+            raise ValueError("weight_cache_path must be provided when emit_weight_cache=True")
+        saved_weight_config = save_weight_config(output_path, weight_config)
+        deallocate_weight_config_tensors(weight_config)
+        return saved_weight_config
+    return weight_config
+
+
+def contains_saved_weights(weight_config: Any) -> bool:
+    if isinstance(weight_config, SavedWeight):
+        return True
+    if isinstance(weight_config, dict):
+        return any(contains_saved_weights(value) for value in weight_config.values())
+    if isinstance(weight_config, (list, tuple)):
+        return any(contains_saved_weights(value) for value in weight_config)
+    return False
+
+
+def _tensor_cache_relpath(path_components: tuple[str, ...]) -> Path:
+    if not path_components:
+        raise ValueError("Cannot persist a TTNN tensor without a path in the weight-config tree")
+    return Path(*path_components[:-1]) / f"{path_components[-1]}{TENSOR_CACHE_EXTENSION}"
+
+
+def _save_weight_config_item(
+    root_path: Path,
+    weight_config: Any,
+    *,
+    path_components: tuple[str, ...],
+    seen_tensors: dict[int, SavedWeight],
+) -> Any:
+    if isinstance(weight_config, ttnn.Tensor):
+        tensor_id = id(weight_config)
+        if tensor_id in seen_tensors:
+            cached = seen_tensors[tensor_id]
+            return SavedWeight(path=cached.path, memory_config=cached.memory_config)
+
+        rel_path = _tensor_cache_relpath(path_components)
+        abs_path = root_path / rel_path
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        ttnn.dump_tensor(abs_path, weight_config)
+        saved_weight = SavedWeight(path=rel_path, memory_config=weight_config.memory_config())
+        seen_tensors[tensor_id] = saved_weight
+        return SavedWeight(path=rel_path, memory_config=saved_weight.memory_config)
+
+    if isinstance(weight_config, dict):
+        return {
+            key: _save_weight_config_item(
+                root_path,
+                value,
+                path_components=(*path_components, str(key)),
+                seen_tensors=seen_tensors,
+            )
+            if value is not None
+            else None
+            for key, value in weight_config.items()
+        }
+
+    if isinstance(weight_config, list):
+        return [
+            _save_weight_config_item(
+                root_path,
+                value,
+                path_components=(*path_components, str(idx)),
+                seen_tensors=seen_tensors,
+            )
+            if value is not None
+            else None
+            for idx, value in enumerate(weight_config)
+        ]
+
+    if isinstance(weight_config, tuple):
+        return tuple(
+            _save_weight_config_item(
+                root_path,
+                value,
+                path_components=(*path_components, str(idx)),
+                seen_tensors=seen_tensors,
+            )
+            if value is not None
+            else None
+            for idx, value in enumerate(weight_config)
+        )
+
+    return weight_config
+
+
+def save_weight_config(root_path: Path, weight_config: WeightConfig) -> WeightConfig:
+    """Persist a TTNN-backed weight config as a legacy ``config.json`` + ``.tensorbin`` cache."""
+    root_path.mkdir(parents=True, exist_ok=True)
+    serialized_weight_config = _save_weight_config_item(
+        root_path,
+        weight_config,
+        path_components=(),
+        seen_tensors={},
+    )
+    config_path = root_path / "config.json"
+    with locked_file(config_path, "w", exclusive=True) as f:
+        json.dump(wrap_weight_cache_payload(serialized_weight_config), f, cls=WeightConfigEncoder)
+    return normalize_weight_config_paths(root_path, serialized_weight_config)
+
+
+def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, path_prefix: str = "") -> None:
+    """
+    Validate that all SavedWeight paths in the weight config exist and have the correct suffix.
+
+    Args:
+        root_path: Base path for resolving relative SavedWeight paths
+        weight_config: Weight configuration (dict, list, tuple, or nested structures)
+        path_prefix: Prefix for error messages to indicate location in nested structure
+
+    Raises:
+        ValueError: If any SavedWeight path is invalid (missing file, wrong suffix, etc.)
+    """
+    if isinstance(weight_config, dict):
+        entries = weight_config.items()
+    elif isinstance(weight_config, (list, tuple)):
+        entries = enumerate(weight_config)
+    elif isinstance(weight_config, ttnn.Tensor):
+        return
+    else:
+        raise ValueError(f"Invalid weight config type: {type(weight_config)}")
+
+    for key, entry in entries:
+        if entry is None:
+            continue
+        current_prefix = f"{path_prefix}.{key}" if path_prefix else str(key)
+
+        if isinstance(entry, SavedWeight):
+            # Reject absolute paths - configs should only contain relative paths for portability
+            if entry.path.is_absolute():
+                raise ValueError(
+                    f"SavedWeight at '{current_prefix}' has absolute path '{entry.path}'. "
+                    f"Only relative paths are allowed in weight configs for portability."
+                )
+
+            # Resolve effective path
+            effective_path = root_path / entry.path
+
+            # Validate suffix
+            if entry.path.suffix != TENSOR_CACHE_EXTENSION:
+                raise ValueError(
+                    f"SavedWeight at '{current_prefix}' has invalid suffix '{entry.path.suffix}'. "
+                    f"Expected '{TENSOR_CACHE_EXTENSION}'. Path: {entry.path}"
+                )
+
+            # Validate file exists
+            if not effective_path.exists():
+                raise ValueError(
+                    f"SavedWeight at '{current_prefix}' references missing file. "
+                    f"Resolved path: {effective_path} (original: {entry.path})"
+                )
+        else:
+            # Recursively validate nested structures
+            validate_weight_config_paths(root_path, entry, current_prefix)
+
+
+def normalize_weight_config_paths(root_path: Path, weight_config: WeightConfig) -> WeightConfig:
+    """
+    Return a new weight config with all relative SavedWeight paths converted to absolute paths.
+
+    Args:
+        root_path: Base path for resolving relative SavedWeight paths
+        weight_config: Weight configuration (dict, list, tuple, or nested structures)
+
+    Returns:
+        New weight config with absolute paths (deep copy, no mutation of input)
+    """
+    if isinstance(weight_config, dict):
+        return {
+            key: normalize_weight_config_paths(root_path, value) if value is not None else None
+            for key, value in weight_config.items()
+        }
+    elif isinstance(weight_config, (list, tuple)):
+        normalized = [
+            normalize_weight_config_paths(root_path, item) if item is not None else None for item in weight_config
+        ]
+        # Preserve tuple type if input was a tuple
+        return tuple(normalized) if isinstance(weight_config, tuple) else normalized
+    elif isinstance(weight_config, SavedWeight):
+        # Create a new SavedWeight with absolute path
+        if weight_config.path.is_absolute():
+            normalized_path = weight_config.path
+        else:
+            normalized_path = root_path / weight_config.path
+        return SavedWeight(path=normalized_path, memory_config=weight_config.memory_config)
+    elif isinstance(weight_config, ttnn.Tensor):
+        return weight_config
+    else:
+        # For other types (None, primitives, etc.), return as-is
+        return weight_config

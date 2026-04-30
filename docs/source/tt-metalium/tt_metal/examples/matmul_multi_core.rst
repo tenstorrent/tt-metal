@@ -250,8 +250,7 @@ The compute kernel does not handle IO directly and is not concerned with how wor
 
 .. code-block:: cpp
 
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         uint32_t num_output_tiles = get_arg_val<uint32_t>(0); // Number of output tiles to produce
         uint32_t Kt = get_arg_val<uint32_t>(1); // Size of the inner dimension (K)
 
@@ -270,7 +269,7 @@ The compute kernel does not handle IO directly and is not concerned with how wor
                 cb_wait_front(cb_in0, 1);
                 cb_wait_front(cb_in1, 1);
 
-                matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false);
+                matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
 
                 cb_pop_front(cb_in0, 1);
                 cb_pop_front(cb_in1, 1);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 #include <optional>
 #include <variant>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -73,47 +72,39 @@ struct MorehAdamWDeviceOperation {
     using program_factory_t = std::variant<MultiCore>;
 
     // Mandatory methods
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& param_in,
-        const Tensor& grad,
-        const Tensor& exp_avg_in,
-        const Tensor& exp_avg_sq_in,
-
-        std::optional<float> lr,
-        std::optional<float> beta1,
-        std::optional<float> beta2,
-        std::optional<float> eps,
-        std::optional<float> weight_decay,
-        std::optional<uint32_t> step,
-        std::optional<bool> amsgrad,
-
-        const std::optional<Tensor>& max_exp_avg_sq_in,
-        const std::optional<Tensor>& param_out,
-        const std::optional<Tensor>& exp_avg_out,
-        const std::optional<Tensor>& exp_avg_sq_out,
-        const std::optional<Tensor>& max_exp_avg_sq_out,
-        const std::optional<ttnn::MemoryConfig>& memory_config,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
-
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::moreh::moreh_adamw
 
-// Register the operation with the ttnn::register_operation API to make it available to the user as
-// ttnn::prim::adamw
+// Prim function exposed as ttnn::prim::moreh_adamw
 namespace ttnn::prim {
-constexpr auto moreh_adamw = ttnn::
-    register_operation<"ttnn::prim::moreh_adamw", ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation>();
+ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation::tensor_return_value_t moreh_adamw(
+    const Tensor& param_in,
+    const Tensor& grad,
+    const Tensor& exp_avg_in,
+    const Tensor& exp_avg_sq_in,
+
+    std::optional<float> lr,
+    std::optional<float> beta1,
+    std::optional<float> beta2,
+    std::optional<float> eps,
+    std::optional<float> weight_decay,
+    std::optional<uint32_t> step,
+    std::optional<bool> amsgrad,
+
+    const std::optional<Tensor>& max_exp_avg_sq_in,
+    const std::optional<Tensor>& param_out,
+    const std::optional<Tensor>& exp_avg_out,
+    const std::optional<Tensor>& exp_avg_sq_out,
+    const std::optional<Tensor>& max_exp_avg_sq_out,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 }  // namespace ttnn::prim

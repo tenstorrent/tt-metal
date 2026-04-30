@@ -1,0 +1,1436 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Whisper generation functions using the functional whisper implementation from ttnn_optimized_functional_whisper.
+"""
+
+import time
+import zlib
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, Union
+
+import torch
+from loguru import logger
+from tqdm import tqdm
+
+import ttnn
+from models.common.generation_utils import get_logits_processor
+
+from . import ttnn_optimized_functional_whisper
+from .ttnn_optimized_functional_whisper import WHISPER_BATCH_SIZE
+
+
+@dataclass
+class GenerationParams:
+    """Dataclass for Whisper generation parameters.
+
+    Note: language, task, and prompt are batch-homogeneous and must be
+    passed as separate parameters to generate().
+    """
+
+    temperatures: Union[float, Tuple[float, ...]] = 0.0
+    compression_ratio_threshold: Optional[float] = 2.4
+    logprob_threshold: Optional[float] = -2.0
+    no_speech_threshold: Optional[float] = 0.6
+    return_timestamps: bool = False
+
+
+# Default values for quality metrics
+DEFAULT_AVG_LOGPROB = -0.5
+DEFAULT_NO_SPEECH_PROB = 0.0
+
+# Control timestamp generation via the <|notimestamps|> token
+NOTIMESTAMPS_TOKEN_ID = 50364
+# <|nospeech|> token
+NO_SPEECH_TOKEN_ID = 50363
+
+# Whisper timestamp tokens: 50365-51864 represent time intervals
+# Timestamp tokens start at 50365 and represent 0.02 second intervals
+EOS_TOKEN_ID = 50257  # <|endoftext|> token
+TIMESTAMP_TOKEN_START = 50365
+TIMESTAMP_TOKEN_END = 51864  # 1500 tokens = 30 seconds max
+
+# Prompt-related tokens
+STARTOFPREV_TOKEN_ID = 50362  # <|startofprev|> token for prompt conditioning
+STARTOFTRANSCRIPT_TOKEN_ID = 50258  # <|startoftranscript|> token
+MAX_PROMPT_TOKENS = 224  # Maximum number of tokens allowed in prompt
+
+
+class EncoderTraceState:
+    """Holds captured encoder traces keyed by ``trace_key`` (``batch_size_per_device``) for ``run_encoder_traced_or_eager``.
+
+    Whisper uses a fixed encoder sequence length (1500 frames) in this path; at most one trace per supported batch key.
+    """
+
+    def __init__(self):
+        self.trace_id_encoder = {}
+        self.trace_encoder_input = {}
+        self.trace_encoder_output = {}
+
+    def release_key(self, mesh_device, key):
+        tid = self.trace_id_encoder.pop(key, None)
+        if tid is not None:
+            ttnn.release_trace(mesh_device, tid)
+        tin = self.trace_encoder_input.pop(key, None)
+        if tin is not None:
+            ttnn.deallocate(tin, force=True)
+        tout = self.trace_encoder_output.pop(key, None)
+        if tout is not None:
+            ttnn.deallocate(tout, force=True)
+
+    def release_all(self, mesh_device):
+        for key in list(self.trace_id_encoder.keys()):
+            self.release_key(mesh_device, key)
+
+
+def encoder_input_seq_len(input_embeds):
+    """Sequence length dimension of preprocessed encoder inputs (3D ``[B,S,D]`` or 4D ``[B,1,S,D]``)."""
+    shape = input_embeds.shape
+    if len(shape) == 3:
+        return int(shape[1])
+    if len(shape) == 4:
+        return int(shape[2])
+    raise ValueError(f"Unexpected encoder input_embeds rank {len(shape)}: {shape}")
+
+
+def run_encoder_traced_or_eager(
+    mesh_device,
+    config,
+    parameters_encoder,
+    trace_key,
+    input_embeds,
+    *,
+    enable_encoder_trace: bool,
+    trace_state: Optional[EncoderTraceState] = None,
+):
+    """
+    Run the Transformer ``encoder()`` stack, optionally using capture/replay per ``trace_key``
+    (``batch_size_per_device``). Encoder sequence length is fixed for Whisper inference in this stack.
+
+    When ``enable_encoder_trace`` is True, ``trace_state`` must be provided and is mutated across calls.
+    """
+    if not enable_encoder_trace:
+        return ttnn_optimized_functional_whisper.encoder(
+            config=config,
+            inputs_embeds=input_embeds,
+            parameters=parameters_encoder,
+        )
+    if trace_state is None:
+        raise ValueError("trace_state is required when enable_encoder_trace is True")
+
+    S = encoder_input_seq_len(input_embeds)
+    key = trace_key
+
+    if key in trace_state.trace_id_encoder:
+        try:
+            ttnn.copy(input_embeds, trace_state.trace_encoder_input[key])
+            ttnn.execute_trace(mesh_device, trace_state.trace_id_encoder[key], cq_id=0, blocking=True)
+            return trace_state.trace_encoder_output[key]
+        except Exception as exc:
+            logger.warning(
+                f"execute_trace failed for bucket key={key} ({exc}); invalidating bucket and falling back to eager encoder."
+            )
+            trace_state.release_key(mesh_device, key)
+            return ttnn_optimized_functional_whisper.encoder(
+                config=config,
+                inputs_embeds=input_embeds,
+                parameters=parameters_encoder,
+            )
+
+    shape_list = list(input_embeds.shape)
+    trace_in = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape_list),
+        input_embeds.dtype,
+        input_embeds.layout,
+        mesh_device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.copy(input_embeds, trace_in)
+
+    warm_out = ttnn_optimized_functional_whisper.encoder(
+        config=config,
+        inputs_embeds=trace_in,
+        parameters=parameters_encoder,
+    )
+    ttnn.deallocate(warm_out, force=True)
+
+    try:
+        ttnn.copy(input_embeds, trace_in)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        captured_out = ttnn_optimized_functional_whisper.encoder(
+            config=config,
+            inputs_embeds=trace_in,
+            parameters=parameters_encoder,
+        )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    except Exception as exc:
+        logger.warning(f"Encoder trace capture failed for bucket key={key} ({exc}); falling back to eager encoder.")
+        ttnn.deallocate(trace_in, force=True)
+        return ttnn_optimized_functional_whisper.encoder(
+            config=config,
+            inputs_embeds=input_embeds,
+            parameters=parameters_encoder,
+        )
+
+    trace_state.trace_id_encoder[key] = trace_id
+    trace_state.trace_encoder_input[key] = trace_in
+    trace_state.trace_encoder_output[key] = captured_out
+    logger.info(f"Captured encoder trace for bucket (batch_pd={trace_key}, seq_len={S})")
+
+    return captured_out
+
+
+class WhisperGenerator:
+    """
+    Whisper generator with persistent trace support for efficient inference.
+
+    The decode trace (embedding -> decoder -> lm_head -> argmax) is captured once on the
+    first generation and reused across all subsequent generations. The first decode iteration
+    of each generation runs un-traced to populate the cross-attention cache with new encoder
+    outputs, after which the persistent trace takes over.
+
+    Encoder trace (optional): the Transformer encoder stack (`encoder()` only, after mel
+    preprocessing) can be captured per ``batch_size_per_device`` and replayed via ``execute_trace``
+    when the same batch key is seen again. Preprocessing (conv front-end) stays eager.
+
+    Pre-allocated DRAM tensors (KV cache, cross-attention cache, encoder hidden states,
+    position tensors) maintain stable addresses across generations.
+    """
+
+    def __init__(
+        self,
+        config,
+        mesh_device,
+        parameters,
+        processor,
+        feature_extractor,
+        ttnn_linear_weight,
+        generation_config,
+        input_mesh_mapper,
+        output_mesh_composer,
+        weights_mesh_mapper,
+        kv_cache_per_batch_size=None,
+        cross_attn_cache_per_batch_size=None,
+        max_batch_size=2,
+        enable_encoder_trace: bool = True,
+    ):
+        """
+        Initialize the WhisperGenerator.
+
+        Args:
+            config: Whisper model configuration
+            mesh_device: TTNN mesh device
+            parameters: Preprocessed model parameters
+            processor: Whisper processor for tokenization
+            feature_extractor: Feature extractor for audio preprocessing
+            ttnn_linear_weight: Language model head weights
+            generation_config: HuggingFace generation config
+            input_mesh_mapper: Mesh mapper for inputs
+            output_mesh_composer: Mesh composer for outputs
+            weights_mesh_mapper: Mesh mapper for weights
+            kv_cache_per_batch_size: Self-attention KV cache per ``batch_size_per_device`` (optional)
+            cross_attn_cache_per_batch_size: Cross-attention cache per ``batch_size_per_device`` (optional)
+            max_batch_size: Maximum supported global batch size for pre-allocated tensors (default 2)
+            enable_encoder_trace: If True (default), capture/replay ``encoder()`` per ``batch_size_per_device``
+                after the first occurrence; set False to always run eager encoder.
+        """
+        self.config = config
+        self.mesh_device = mesh_device
+        self.parameters = parameters
+        self.processor = processor
+        self.feature_extractor = feature_extractor
+        self.ttnn_linear_weight = ttnn_linear_weight
+        self.generation_config = generation_config
+        self.input_mesh_mapper = input_mesh_mapper
+        self.output_mesh_composer = output_mesh_composer
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.kv_cache_per_batch_size = kv_cache_per_batch_size
+        self.cross_attn_cache_per_batch_size = cross_attn_cache_per_batch_size
+        self.max_batch_size = max_batch_size
+        self.enable_encoder_trace = enable_encoder_trace
+
+        # Cross-attention cache validity flag
+        self.cross_attn_cache_valid = False
+
+        # Encoder trace: key batch_size_per_device -> captured graph for encoder() only
+        self.encoder_trace_state = EncoderTraceState()
+
+        # Decode trace (enlarged: embedding -> decoder -> lm_head -> argmax, persistent across generations)
+        self.trace_id_decode = defaultdict(lambda: None)
+        # One-time JIT warmup per trace_key before ``begin_trace_capture`` (persistent decode trace).
+        self._decode_kernels_compiled = defaultdict(bool)
+
+        # Host/device staging for token IDs (enlarged decode trace and non-traced decode steps).
+        self.token_id_host = defaultdict(lambda: None)
+        self.token_id_device = defaultdict(lambda: None)
+
+        # Pre-allocated encoder_hidden_states tensor
+        # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
+        encoder_seq_len = 1500
+        self.encoder_hidden_states_per_size = defaultdict(lambda: None)
+        for batch_size in [1, WHISPER_BATCH_SIZE]:
+            self.encoder_hidden_states_per_size[batch_size] = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([batch_size, 1, encoder_seq_len, config.d_model]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # Pre-allocated device tensor for current decode position
+        self.current_decode_pos_per_size = defaultdict(lambda: None)
+        for batch_size in [1, WHISPER_BATCH_SIZE]:
+            self.current_decode_pos_per_size[batch_size] = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([batch_size]),
+                ttnn.int32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # Separate uint32 position tensor for ttnn.embedding in the enlarged decode trace
+        # current_decode_pos_per_size stays int32 for the decoder's paged_update_cache
+        # Both are incremented via plus_one inside the trace
+        self.decode_pos_embed = defaultdict(lambda: None)
+
+        # Value must exist on all devices
+        pos_replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None
+        for batch_size in [1, WHISPER_BATCH_SIZE]:
+            pos_host = ttnn.from_torch(
+                torch.zeros((1, 1), dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=pos_replicate_mapper,
+            )
+            self.decode_pos_embed[batch_size] = pos_host.to(mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Pre-allocated DRAM staging tensors for token ID transfer (on-device sampling path)
+        for batch_size in [1, WHISPER_BATCH_SIZE]:
+            global_batch = batch_size * mesh_device.get_num_devices()
+            dummy_ids = torch.zeros((global_batch, 1), dtype=torch.long)
+            host_tensor = ttnn.from_torch(
+                dummy_ids,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=input_mesh_mapper,
+            )
+            self.token_id_device[batch_size] = host_tensor.to(mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+            self.token_id_host[batch_size] = host_tensor
+
+        # Pre-computed suppress tokens mask for on-device argmax (greedy decode)
+        # Sets suppressed token logits to -inf so argmax skips them
+        self.tt_suppress_mask = None
+        if hasattr(config, "suppress_tokens") and config.suppress_tokens:
+            vocab_size = config.vocab_size
+            suppress_mask = torch.zeros(1, 1, vocab_size, dtype=torch.bfloat16)
+            for token_id in config.suppress_tokens:
+                if 0 <= token_id < vocab_size:
+                    suppress_mask[0, 0, token_id] = float("-inf")
+            self.tt_suppress_mask = ttnn.from_torch(
+                suppress_mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=input_mesh_mapper,
+            )
+
+    def _get_batch_size_per_device(self, unpadded_batch_size):
+        if unpadded_batch_size % self.mesh_device.get_num_devices() != 0:
+            raise ValueError(
+                f"Unpadded batch size {unpadded_batch_size} must be divisible by the number of devices {self.mesh_device.get_num_devices()}"
+            )
+        return unpadded_batch_size // self.mesh_device.get_num_devices()
+
+    def _invalidate_cross_attn_cache(self):
+        """Invalidate cross-attention cache for new generation."""
+        self.cross_attn_cache_valid = False
+
+    def _release_captured_traces_before_new_generation(self):
+        """
+        Release any active decode traces before this ``generate()`` allocates for the encoder.
+
+        A decode trace left installed after a previous ``generate()`` (e.g. demo batch N) keeps a
+        hardware trace active; allocating new encoder buffers on the next ``generate()`` (batch N+1)
+        can trigger ``Allocating device buffers is unsafe due to the existence of an active trace``
+        and corrupt device state. Releasing trace IDs here restores a safe allocator state without
+        clearing per-size staging tensors (unlike ``_release_all_traces`` used for full cleanup).
+        """
+        released_any = False
+        for trace_key in list(self.trace_id_decode.keys()):
+            if self.trace_id_decode[trace_key] is not None:
+                ttnn.release_trace(self.mesh_device, self.trace_id_decode[trace_key])
+                self.trace_id_decode[trace_key] = None
+                released_any = True
+
+        if released_any:
+            ttnn.synchronize_device(self.mesh_device)
+
+    def _run_encoder_traced_or_eager(self, trace_key, input_embeds):
+        """
+        Run Transformer encoder: replay a captured trace when ``trace_key`` matches,
+        otherwise eager encoder; capture on first use of that batch key.
+        """
+        return run_encoder_traced_or_eager(
+            self.mesh_device,
+            self.config,
+            self.parameters.encoder,
+            trace_key,
+            input_embeds,
+            enable_encoder_trace=self.enable_encoder_trace,
+            trace_state=self.encoder_trace_state,
+        )
+
+    def _reset_decode_pos(self, value, global_batch_size):
+        """Reset current_decode_pos to a specific value in-place
+
+        Args:
+            value: The position value to set (integer)
+            global_batch_size: Total batch size across all devices
+        """
+        pos_host = torch.full((global_batch_size,), value, dtype=torch.int32)
+        pos_tensor_host = ttnn.from_torch(pos_host, dtype=ttnn.int32, mesh_mapper=self.input_mesh_mapper)
+        trace_key = self._get_batch_size_per_device(global_batch_size)
+        ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos_per_size[trace_key])
+        # Also reset the uint32 position embedding tensor
+        if self.decode_pos_embed[trace_key] is not None:
+            pos_replicate_mapper = (
+                ttnn.ReplicateTensorToMesh(self.mesh_device) if self.mesh_device.get_num_devices() > 1 else None
+            )
+            pos_embed_host = ttnn.from_torch(
+                torch.tensor([[value]], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=pos_replicate_mapper,
+            )
+            ttnn.copy_host_to_device_tensor(pos_embed_host, self.decode_pos_embed[trace_key])
+
+    def _release_all_traces(self):
+        """Release captured encoder and decode traces, and reset decode-side staging (token buffers)."""
+        self.encoder_trace_state.release_all(self.mesh_device)
+        for trace_key in list(self.trace_id_decode.keys()):
+            if self.trace_id_decode[trace_key] is not None:
+                ttnn.release_trace(self.mesh_device, self.trace_id_decode[trace_key])
+                self.trace_id_decode[trace_key] = None
+                logger.debug(f"Released decode trace for batch size per device {trace_key}")
+        self.token_id_host.clear()
+        self.token_id_device.clear()
+        self.decode_pos_embed.clear()
+
+    def _capture_decode_trace(self, trace_key, decode_pos, batch_size):
+        """
+        Capture enlarged decoder trace with on-device argmax feedback loop.
+
+        Args:
+            trace_key: Batch size per device key for trace lookup
+            decode_pos: Starting decode position (int) for phase resets
+            batch_size: Global batch size for phase resets
+        """
+        if self.trace_id_decode[trace_key] is not None:
+            return  # Already captured
+
+        def traced_autoregressive_step():
+            # Token embedding lookup from feedback buffer
+            inputs_embeds = ttnn.embedding(
+                self.token_id_device[trace_key],
+                self.parameters.decoder.embed_tokens.weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Position embedding lookup from uint32 position tensor (replicated on all devices)
+            positions = ttnn.embedding(
+                self.decode_pos_embed[trace_key],
+                self.parameters.decoder.embed_positions.weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Combine embeddings
+            decoder_hidden_states = inputs_embeds + positions
+
+            # Move to L1 for decoder
+            decoder_hidden_states = ttnn.to_memory_config(decoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
+
+            # Decoder forward pass (cross_attn_cache already populated)
+            decoder_output = ttnn_optimized_functional_whisper.decoder(
+                self.config,
+                decoder_hidden_states,
+                decoder_attention_mask=None,
+                encoder_hidden_states=self.encoder_hidden_states_per_size[trace_key],
+                kv_cache=self.kv_cache_per_batch_size[trace_key],
+                cross_attn_cache=self.cross_attn_cache_per_batch_size[trace_key],
+                cross_attn_cache_valid=True,
+                current_decode_pos=self.current_decode_pos_per_size[trace_key],
+                parameters=self.parameters.decoder,
+            )
+
+            # LM head projection
+            decoder_output = ttnn.squeeze(decoder_output, 1)
+            logits = decoder_output @ self.ttnn_linear_weight
+
+            # Apply suppress tokens mask (sets suppressed logits to -inf)
+            if self.tt_suppress_mask is not None:
+                logits = logits + self.tt_suppress_mask
+
+            # Convert to ROW_MAJOR for argmax
+            logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+
+            # Argmax -> separate tensor, then copy to feedback buffer
+            argmax_result = ttnn.argmax(logits_rm, dim=-1, use_multicore=True)
+            ttnn.copy(argmax_result, self.token_id_device[trace_key])
+
+            # Increment both position tensors for next iteration
+            ttnn.plus_one(self.current_decode_pos_per_size[trace_key])
+            ttnn.plus_one(self.decode_pos_embed[trace_key])
+
+        # Helper to reset state between phases
+        def _reset_state():
+            ttnn.copy_host_to_device_tensor(self.token_id_host[trace_key], self.token_id_device[trace_key])
+            self._reset_decode_pos(decode_pos, batch_size)
+            ttnn.synchronize_device(self.mesh_device)
+
+        # Warmup run to compile and warm up kernels — only needed on first capture
+        if not self._decode_kernels_compiled[trace_key]:
+            traced_autoregressive_step()
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info("On-device sampling trace warmup complete")
+            _reset_state()
+
+            self._decode_kernels_compiled[trace_key] = True
+        else:
+            logger.info("Skipping warmup phase (kernels already compiled)")
+
+        self.trace_id_decode[trace_key] = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        traced_autoregressive_step()
+        ttnn.end_trace_capture(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        _reset_state()
+
+        logger.info(f"On-device sampling trace capture complete for batch size per device {trace_key}")
+
+    def _execute_decode_trace(self, trace_key):
+        """
+        Execute the on-device sampling trace.
+
+        Args:
+            trace_key: Batch size per device key for trace lookup
+
+        Returns:
+            The sampled token as a torch tensor (read from device).
+        """
+        if self.trace_id_decode[trace_key] is None:
+            raise RuntimeError("Decode trace not captured. Call _capture_decode_trace first.")
+
+        ttnn.execute_trace(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0, blocking=True)
+
+        # Read back the tiny token tensor
+        sampled_token = ttnn.to_torch(
+            self.token_id_device[trace_key],
+            mesh_composer=self.output_mesh_composer,
+        )
+
+        return sampled_token
+
+    def generate(
+        self,
+        current_batch,
+        generation_params: Optional[Union[GenerationParams, List[GenerationParams]]] = None,
+        language: str = "en",
+        task: str = "transcribe",
+        prompt: Optional[str] = None,
+        stream_generation=False,
+        return_perf_metrics=False,
+    ):
+        """
+        Generate transcription for audio batch with persistent trace support.
+
+        Args:
+            current_batch: List of (sampling_rate, audio_array) tuples
+            generation_params: Single GenerationParams (broadcast to all) or list of per-request generation parameters
+            language: Language code for transcription (batch-homogeneous)
+            task: Task type ("transcribe" or "translate") (batch-homogeneous)
+            prompt: Optional prompt to guide style/spelling (batch-homogeneous)
+            stream_generation: Whether to stream tokens
+            return_perf_metrics: Whether to return performance metrics
+
+        Returns:
+            Generated transcription and metrics
+        """
+        if generation_params is None:
+            generation_params = [GenerationParams() for _ in range(len(current_batch))]
+        elif isinstance(generation_params, list):
+            if len(generation_params) < len(current_batch):
+                for _ in range(len(generation_params), len(current_batch)):
+                    generation_params.append(GenerationParams())
+            elif len(generation_params) > len(current_batch):
+                raise ValueError(
+                    f"Generation parameters list cannot be longer than the current batch: {len(generation_params)} > {len(current_batch)}"
+                )
+        else:
+            generation_params = [generation_params] * len(current_batch)
+
+        temperatures = []
+        compression_ratio_threshold = []
+        logprob_threshold = []
+        no_speech_threshold = []
+        return_timestamps = []
+        for params in generation_params:
+            temperatures.append(params.temperatures)
+            compression_ratio_threshold.append(params.compression_ratio_threshold)
+            logprob_threshold.append(params.logprob_threshold)
+            no_speech_threshold.append(params.no_speech_threshold)
+            return_timestamps.append(params.return_timestamps)
+
+        # Invalidate cross-attention cache for new generation
+        self._invalidate_cross_attn_cache()
+
+        # Previous generate() may have left a decode trace installed; release before
+        # encoder path allocates new buffers for this batch.
+        self._release_captured_traces_before_new_generation()
+
+        # Process input features
+        all_input_features = []
+        start_encode = time.time()
+        for sampling_rate, audio_array in current_batch:
+            inputs = self.feature_extractor(
+                audio_array,
+                sampling_rate=sampling_rate,
+                return_tensors="pt",
+            )
+            all_input_features.append(inputs.input_features)
+
+        input_features = torch.cat(all_input_features, dim=0)
+        del all_input_features
+        unpadded_batch_size = input_features.shape[0]
+        assert (
+            unpadded_batch_size <= 2 * self.mesh_device.get_num_devices()
+        ), "Only batch size (per device) 1 or 2 is supported for inference"
+
+        # Calculate audio durations for timestamp capping
+        audio_durations = self._calculate_audio_duration(current_batch) if any(return_timestamps) else None
+
+        # Compute encoder embeddings
+        input_embeds = ttnn_optimized_functional_whisper.preprocess_encoder_inputs(
+            config=self.config,
+            input_features=input_features.unsqueeze(1),
+            parameters=self.parameters.encoder,
+            device=self.mesh_device,
+            weights_mesh_mapper=self.weights_mesh_mapper,
+            input_mesh_mapper=self.input_mesh_mapper,
+        )
+
+        # Run encoder (optional trace replay per batch/seq-length bucket; see _run_encoder_traced_or_eager)
+        trace_key = self._get_batch_size_per_device(unpadded_batch_size)
+        encoder_output = self._run_encoder_traced_or_eager(trace_key, input_embeds)
+
+        # Copy encoder output to pre-allocated tensor
+        ttnn.copy(encoder_output, self.encoder_hidden_states_per_size[trace_key])
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
+
+        # Collect temperatures to try: flatten per-request temps to unique sequence
+        temps_to_try = []
+        for t in temperatures:
+            temps_to_try.extend((t,) if isinstance(t, (int, float)) else t)
+        temps_to_try = list(dict.fromkeys(temps_to_try))  # unique, preserve order
+
+        # For streaming mode, skip temperature fallback and quality checks
+        # Use only the first temperature and yield tokens immediately
+        if stream_generation:
+            temperature = temps_to_try[0] if temps_to_try else 0.0
+            logger.info(f"Streaming mode: using temperature {temperature}, skipping quality checks")
+
+            return self._generate_with_temperature(
+                temperature=temperature,
+                start_encode=start_encode,
+                input_features=input_features.unsqueeze(1),
+                unpadded_batch_size=unpadded_batch_size,
+                return_perf_metrics=return_perf_metrics,
+                return_timestamps=return_timestamps,
+                audio_durations=audio_durations,
+                language=language,
+                task=task,
+                prompt=prompt,
+                streaming=True,
+            )
+
+        # Non-streaming mode: Try generation with different temperatures
+        best_output = None
+        best_quality_score = float("inf")
+
+        for temperature in temps_to_try:
+            logger.info(f"Trying generation with temperature: {temperature}")
+
+            try:
+                output = self._generate_with_temperature(
+                    temperature=temperature,
+                    start_encode=start_encode,
+                    input_features=input_features.unsqueeze(1),
+                    unpadded_batch_size=unpadded_batch_size,
+                    return_perf_metrics=return_perf_metrics,
+                    return_timestamps=return_timestamps,
+                    audio_durations=audio_durations,
+                    language=language,
+                    task=task,
+                    prompt=prompt,
+                    streaming=False,
+                )
+
+                # Non-streaming generation - consume the generator
+                if return_perf_metrics:
+                    result_data, avg_logprobs, no_speech_probs, ttft, throughput = next(output)
+                else:
+                    result_data, avg_logprobs, no_speech_probs = next(output)
+
+                # Check quality for each result
+                all_good = True
+                for idx, data in enumerate(result_data):
+                    wants_timestamps = (
+                        return_timestamps[idx] if isinstance(return_timestamps, list) else return_timestamps
+                    )
+                    if wants_timestamps:
+                        # For timestamps, extract text from segments for quality check
+                        text = " ".join([segment["text"] for segment in data])
+                    else:
+                        text = data
+
+                    compression_ratio = self._calculate_compression_ratio(text)
+                    # Extract per-batch-item metrics
+                    avg_logprob = avg_logprobs[idx].item() if idx < len(avg_logprobs) else DEFAULT_AVG_LOGPROB
+                    no_speech_prob = (
+                        no_speech_probs[idx].item() if idx < len(no_speech_probs) else DEFAULT_NO_SPEECH_PROB
+                    )
+
+                    is_good, reason = self._check_generation_quality(
+                        text,
+                        avg_logprob,
+                        no_speech_prob,
+                        compression_ratio,
+                        logprob_threshold[idx],
+                        compression_ratio_threshold[idx],
+                        no_speech_threshold[idx],
+                    )
+
+                    if not is_good:
+                        logger.info(f"Quality check failed with temperature {temperature}: {reason}")
+                        all_good = False
+                        break
+
+                if all_good:
+                    logger.info(f"Generation successful with temperature {temperature}")
+                    if return_perf_metrics:
+                        return (result_data, avg_logprobs, no_speech_probs, ttft, throughput)
+                    else:
+                        return (result_data, avg_logprobs, no_speech_probs)
+
+                # Track best attempt
+                avg_compression = sum(
+                    self._calculate_compression_ratio(
+                        " ".join([segment["text"] for segment in data])
+                        if (return_timestamps[idx] if isinstance(return_timestamps, list) else return_timestamps)
+                        else data
+                    )
+                    for idx, data in enumerate(result_data)
+                ) / len(result_data)
+                if avg_compression < best_quality_score:
+                    best_quality_score = avg_compression
+                    if return_perf_metrics:
+                        best_output = (result_data, avg_logprobs, no_speech_probs, ttft, throughput)
+                    else:
+                        best_output = (result_data, avg_logprobs, no_speech_probs)
+
+            except Exception as e:
+                logger.warning(f"Generation failed with temperature {temperature}: {e}")
+                continue
+
+        # If all temperatures failed, return best attempt
+        logger.warning("All temperature attempts failed quality checks, returning best attempt")
+        if best_output is not None:
+            return best_output
+        else:
+            if any(return_timestamps) if isinstance(return_timestamps, list) else return_timestamps:
+                empty_segments = [[] for _ in range(unpadded_batch_size)]
+                if return_perf_metrics:
+                    return (
+                        empty_segments,
+                        torch.zeros(unpadded_batch_size),
+                        torch.zeros(unpadded_batch_size),
+                        0.0,
+                        0.0,
+                    )
+                else:
+                    return (empty_segments, torch.zeros(unpadded_batch_size), torch.zeros(unpadded_batch_size))
+            else:
+                if return_perf_metrics:
+                    return (
+                        [""] * unpadded_batch_size,
+                        torch.zeros(unpadded_batch_size),
+                        torch.zeros(unpadded_batch_size),
+                        0.0,
+                        0.0,
+                    )
+                else:
+                    return (
+                        [""] * unpadded_batch_size,
+                        torch.zeros(unpadded_batch_size),
+                        torch.zeros(unpadded_batch_size),
+                    )
+
+    def _generate_with_temperature(
+        self,
+        temperature,
+        start_encode,
+        input_features,
+        unpadded_batch_size,
+        return_perf_metrics=False,
+        return_timestamps=False,
+        audio_durations=None,
+        language="en",
+        task="transcribe",
+        prompt=None,
+        streaming=False,
+    ):
+        """
+        Generate text with a specific temperature using fully persistent traces.
+
+        Uses pre-allocated self.encoder_hidden_states instead of a passed encoder_hidden_states parameter.
+        """
+        return_timestamps_for_prefix = (
+            any(return_timestamps) if isinstance(return_timestamps, list) else return_timestamps
+        )
+
+        trace_key = self._get_batch_size_per_device(unpadded_batch_size)
+
+        # Input ids - use forced decoder IDs for translation
+        forced_decoder_ids = self.processor.get_decoder_prompt_ids(language=language, task=task)
+
+        # Keep forced_decoder_ids as tuples with positions
+        # When return_timestamps=True, remove <|notimestamps|> to allow timestamp generation
+        if return_timestamps_for_prefix:
+            # Remove notimestamps token if present
+            forced_decoder_ids = [(pos, tok) for pos, tok in forced_decoder_ids if tok != NOTIMESTAMPS_TOKEN_ID]
+        else:
+            # Add notimestamps token if not present (at the appropriate position)
+            if not any(tok == NOTIMESTAMPS_TOKEN_ID for _, tok in forced_decoder_ids):
+                # Find the last position and add notimestamps after it
+                max_pos = max((pos for pos, _ in forced_decoder_ids), default=0)
+                forced_decoder_ids.append((max_pos + 1, NOTIMESTAMPS_TOKEN_ID))
+
+        # When prompt is provided, the sequence becomes:
+        # <|startofprev|> -> [prompt tokens] -> <|startoftranscript|> -> <|language|> -> <|task|> -> ...
+        prompt_offset = 0
+        if prompt is not None:
+            # Tokenize the prompt
+            prompt_tokens = self.processor.tokenizer.encode(prompt, add_special_tokens=False)
+
+            # Truncate prompt to MAX_PROMPT_TOKENS if needed
+            if len(prompt_tokens) > MAX_PROMPT_TOKENS:
+                logger.warning(f"Prompt has {len(prompt_tokens)} tokens, truncating to {MAX_PROMPT_TOKENS} tokens")
+                prompt_tokens = prompt_tokens[:MAX_PROMPT_TOKENS]
+
+            # Build forced tokens dict
+            forced_tokens_dict = {0: STARTOFPREV_TOKEN_ID}
+            for i, token in enumerate(prompt_tokens):
+                forced_tokens_dict[i + 1] = token
+            # Add <|startoftranscript|> after prompt
+            forced_tokens_dict[len(prompt_tokens) + 1] = STARTOFTRANSCRIPT_TOKEN_ID
+            # Offset for the rest of the forced decoder ids
+            prompt_offset = len(prompt_tokens) + 1  # +1 for <|startofprev|>
+
+            # Shift forced_decoder_ids positions to account for prompt prefix
+            for pos, tok in forced_decoder_ids:
+                forced_tokens_dict[pos + prompt_offset] = tok
+
+        else:
+            # Create a position-to-token mapping
+            forced_tokens_dict = {pos: token_id for pos, token_id in forced_decoder_ids}
+            # Add decoder_start_token at position 0
+            forced_tokens_dict[0] = self.config.decoder_start_token_id
+
+        # Calculate where actual transcription starts (after all forced tokens including prompt)
+        # This is the first position that is NOT a forced token
+        transcription_start_pos = max(forced_tokens_dict.keys()) + 1 if forced_tokens_dict else 0
+
+        # Build the full prefix sequence from forced_tokens_dict
+        prefix_sequence = [forced_tokens_dict[pos] for pos in sorted(forced_tokens_dict.keys())]
+        prefix_len = len(prefix_sequence)
+
+        # Initialize input_ids with the full prefix sequence for proper conditioning
+        input_ids = torch.tensor([prefix_sequence]).repeat(input_features.shape[0], 1).to(torch.long)
+        logits_processor = get_logits_processor(input_ids, self.config)
+
+        if not self.kv_cache_per_batch_size[trace_key]:
+            input_ids = self._pad_input_32(input_ids, self.config.pad_token_id).to(torch.long)
+            decoder_start_values = self.generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
+
+        MAX_GEN_LEN = self.config.max_length
+        output_ids = []
+        total_decode_time = 0
+        prompt_is_done = [False for _ in range(unpadded_batch_size)]
+        log_probs = []  # Track log probabilities
+        no_speech_probs = None  # Will be extracted from first frame logits
+
+        # Track full token sequences for timestamp extraction
+        full_token_sequences = [[] for _ in range(unpadded_batch_size)] if return_timestamps_for_prefix else None
+
+        # Non-streaming mode: collect all results in a list
+        if not streaming:
+            output = [[] for _ in range(input_features.shape[0])]
+        ttft = 0.0
+        avg_decode_throughput = 0.0
+
+        # Run prefill pass for KV cache mode to populate cache with the full forced prefix (with or without text prompt)
+        # Batched path: one preprocess over full prefix (decode_pos=None) + one decoder(decoder_prefill=True).
+        if self.kv_cache_per_batch_size[trace_key] and prefix_len > 1:
+            logger.debug(f"Running prefill pass for {prefix_len} prefix tokens")
+            first_transcription_token = None
+
+            # Full-prefix hidden states: same embedding path as multi-token decode_pos=None.
+            self._reset_decode_pos(0, unpadded_batch_size)
+            prefill_ids = input_ids[:, :prefix_len]
+            (
+                decoder_hidden_states,
+                decoder_attention_mask,
+            ) = ttnn_optimized_functional_whisper.preprocess_decoder_inputs(
+                config=self.config,
+                input_ids=prefill_ids,
+                attention_mask=None,
+                parameters=self.parameters.decoder,
+                device=self.mesh_device,
+                decode_pos=None,
+                create_attention_mask=False,
+                input_mesh_mapper=self.input_mesh_mapper,
+            )
+            decoder_output = ttnn_optimized_functional_whisper.decoder(
+                self.config,
+                decoder_hidden_states,
+                decoder_attention_mask=decoder_attention_mask,
+                encoder_hidden_states=self.encoder_hidden_states_per_size[trace_key],
+                kv_cache=self.kv_cache_per_batch_size[trace_key],
+                cross_attn_cache=self.cross_attn_cache_per_batch_size[trace_key],
+                cross_attn_cache_valid=self.cross_attn_cache_valid,
+                current_decode_pos=self.current_decode_pos_per_size[trace_key],
+                parameters=self.parameters.decoder,
+            )
+            self.cross_attn_cache_valid = True
+
+            decoder_output = ttnn.squeeze(decoder_output, 1)
+            decoder_output = decoder_output @ self.ttnn_linear_weight
+            logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=self.output_mesh_composer)
+            next_token_logits = logits_to_torch[:, prefix_len - 1, :]
+            next_tokens_scores = logits_processor(input_ids, next_token_logits)
+            first_transcription_token = self._sample_token(next_tokens_scores, temperature)
+
+            ttft = time.time() - start_encode
+
+            with torch.no_grad():
+                probs = torch.softmax(next_token_logits, dim=-1)
+                no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]
+
+                log_probs.append(
+                    torch.log_softmax(next_tokens_scores, dim=-1)
+                    .gather(1, first_transcription_token.unsqueeze(1))
+                    .squeeze(1)
+                )
+
+            output_ids.append(first_transcription_token)
+
+            if return_timestamps_for_prefix:
+                for batch_idx in range(unpadded_batch_size):
+                    full_token_sequences[batch_idx].append(first_transcription_token[batch_idx].item())
+
+            for user_id, user_decode_id in enumerate(first_transcription_token[:unpadded_batch_size]):
+                if user_decode_id == self.config.eos_token_id:
+                    prompt_is_done[user_id] = True
+
+            if streaming:
+                ttnn_transcription = self.processor.batch_decode(
+                    first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
+                )
+                current_avg_logprob = log_probs[0].unsqueeze(0) if log_probs else torch.zeros(input_features.shape[0])
+                if len(log_probs) > 1:
+                    current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
+
+                if return_perf_metrics:
+                    yield ttnn_transcription, current_avg_logprob, no_speech_probs, ttft, 0.0, False
+                else:
+                    yield ttnn_transcription, current_avg_logprob, no_speech_probs, False
+            else:
+                ttnn_transcription = self.processor.batch_decode(
+                    first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
+                )
+                for idx in range(input_features.shape[0]):
+                    output[idx].append(ttnn_transcription[idx])
+
+            # Set decode position to prefix_len for generation to continue
+            self._reset_decode_pos(prefix_len, unpadded_batch_size)
+            # Set input_ids to the first transcription token (sampled during prefill)
+            input_ids = first_transcription_token[:, None]
+        else:
+            # For KV cache mode without prefill: reset decode position to 0 and set input_ids to the first transcription token
+            if self.kv_cache_per_batch_size[trace_key]:
+                self._reset_decode_pos(0, unpadded_batch_size)
+                # For KV cache mode without prefill, start with just the first token
+                input_ids = input_ids[:, :1]
+
+        # Generation loop start: set to transcription_start_pos so the first iteration always runs
+        # un-traced (the trace condition below guards on i > generation_start). This guarantees:
+        #   1. decode_pos == current_decode_pos == transcription_start_pos on the first step (no
+        #      position-embedding desync).
+        #   2. On generation 2+, the forced un-traced step advances current_decode_pos from
+        #      transcription_start_pos (set by prefill reset) to transcription_start_pos + 1,
+        #      which is exactly the position the decode trace was captured at. Without this,
+        #      the trace would start one position behind its capture point and corrupt the KV
+        #      cache on every generation after the first.
+        # After multi-token KV prefill, decode_pos is prefix_len; first decode iter must use i == transcription_start_pos
+        if self.kv_cache_per_batch_size[trace_key] and prefix_len > 1:
+            generation_start = transcription_start_pos
+        else:
+            generation_start = 0
+
+        # Skip decode loop if all prompts finished during prefill (e.g., first token was EOS)
+        if all(prompt_is_done):
+            generation_start = MAX_GEN_LEN
+
+        # If persistent decode trace exists, write current token to device buffer
+        # so the trace reads the correct token on its first execution this generation
+        if self.trace_id_decode[trace_key] is not None:
+            token_host = ttnn.from_torch(
+                input_ids.reshape(-1, input_ids.shape[-1]),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.input_mesh_mapper,
+            )
+            ttnn.copy_host_to_device_tensor(token_host, self.token_id_device[trace_key])
+
+        for i in tqdm(range(generation_start, MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
+            start_iter = time.time()
+
+            if (
+                self.kv_cache_per_batch_size[trace_key]
+                and self.trace_id_decode[trace_key]
+                and self.cross_attn_cache_valid
+                and i > generation_start
+            ):
+                sampled_tokens_torch = self._execute_decode_trace(trace_key)
+
+                # Handle forced tokens: overwrite on-device argmax result if needed
+                if i in forced_tokens_dict:
+                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
+                    forced_host = ttnn.from_torch(
+                        next_tokens[:, None].int(),
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=self.input_mesh_mapper,
+                    )
+                    ttnn.copy_host_to_device_tensor(forced_host, self.token_id_device[trace_key])
+                else:
+                    next_tokens = sampled_tokens_torch.reshape(-1).long()
+
+                # Note: decode_pos already incremented inside trace (plus_one)
+                input_ids = next_tokens[:, None]
+                next_token_logits = None  # Not available on traced path
+
+            else:
+                (
+                    decoder_hidden_states,
+                    decoder_attention_mask,
+                ) = ttnn_optimized_functional_whisper.preprocess_decoder_inputs(
+                    config=self.config,
+                    input_ids=input_ids,
+                    attention_mask=None,
+                    parameters=self.parameters.decoder,
+                    device=self.mesh_device,
+                    decode_pos=i if self.kv_cache_per_batch_size[trace_key] else None,
+                    create_attention_mask=(not self.kv_cache_per_batch_size[trace_key]),
+                    input_mesh_mapper=self.input_mesh_mapper,
+                )
+
+                decoder_output = ttnn_optimized_functional_whisper.decoder(
+                    self.config,
+                    decoder_hidden_states,
+                    decoder_attention_mask=decoder_attention_mask,
+                    encoder_hidden_states=self.encoder_hidden_states_per_size[trace_key],
+                    kv_cache=self.kv_cache_per_batch_size[trace_key],
+                    current_decode_pos=self.current_decode_pos_per_size[trace_key],
+                    cross_attn_cache=self.cross_attn_cache_per_batch_size[trace_key],
+                    cross_attn_cache_valid=self.cross_attn_cache_valid,
+                    parameters=self.parameters.decoder,
+                )
+
+                # After first iteration, cross_attn_cache is populated with valid K/V
+                if i == generation_start:
+                    self.cross_attn_cache_valid = True
+
+                # LM head on host (un-traced path)
+                if not self.kv_cache_per_batch_size[trace_key]:
+                    last_tile_start_idx = i // 32 * 32
+                    output_idx = i % 32
+                    decoder_output = decoder_output[:, last_tile_start_idx : last_tile_start_idx + 32, :]
+                else:
+                    output_idx = 0
+
+                decoder_output = ttnn.squeeze(decoder_output, 1)
+                decoder_output = decoder_output @ self.ttnn_linear_weight
+                logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=self.output_mesh_composer)
+                next_token_logits = logits_to_torch[:, output_idx, :]
+                next_tokens_scores = logits_processor(input_ids, next_token_logits)
+
+                if i in forced_tokens_dict:
+                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
+                else:
+                    next_tokens = self._sample_token(next_tokens_scores, temperature)
+
+                # Update input_ids and current_decode_pos (un-traced path)
+                if not self.kv_cache_per_batch_size[trace_key]:
+                    if (i + 1) % 32 == 0:
+                        input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
+                    input_ids[:, i + 1] = next_tokens[:, None]
+                else:
+                    input_ids = next_tokens[:, None]
+                    ttnn.plus_one(self.current_decode_pos_per_size[trace_key])
+                    # Keep decode_pos_embed in sync for correct position embedding
+                    # when transitioning from untraced to traced decode
+                    if self.decode_pos_embed[trace_key] is not None:
+                        ttnn.plus_one(self.decode_pos_embed[trace_key])
+                    # On generation 2+, the forced un-traced first step (i == generation_start)
+                    # produces next_tokens that the trace must read on its first execution.
+                    # The trace reads from token_id_device, which was pre-staged with the first
+                    # transcription token before the loop. Update it now so the trace sees the
+                    # correct token. On generation 1 this branch is skipped (trace doesn't exist
+                    # yet); the trace capture block below handles token staging instead.
+                    if self.trace_id_decode[trace_key] and i == generation_start:
+                        next_token_host = ttnn.from_torch(
+                            input_ids.reshape(-1, input_ids.shape[-1]),
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=self.input_mesh_mapper,
+                        )
+                        ttnn.copy_host_to_device_tensor(next_token_host, self.token_id_device[trace_key])
+
+                # Capture enlarged decode trace after sampling and position update
+                if (
+                    self.kv_cache_per_batch_size[trace_key]
+                    and i == generation_start
+                    and not self.trace_id_decode[trace_key]
+                ):
+                    if temperature == 0:
+                        logger.info(f"Capturing on-device sampling trace for batch size per device {trace_key}")
+                        # Write the per-device sampled tokens to device buffer
+                        token_host = ttnn.from_torch(
+                            input_ids.reshape(-1, input_ids.shape[-1]),
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=self.input_mesh_mapper,
+                        )
+                        ttnn.copy_host_to_device_tensor(token_host, self.token_id_device[trace_key])
+                        self.token_id_host[trace_key] = token_host
+                        ttnn.synchronize_device(self.mesh_device)
+                        # decode_pos=i+1: position was already incremented by plus_one above
+                        self._capture_decode_trace(trace_key, decode_pos=i + 1, batch_size=unpadded_batch_size)
+                    else:
+                        logger.info(f"Skipping trace capture for temp={temperature} (host-side sampling)")
+
+            # Track log probabilities (only available on un-traced path)
+            if i >= transcription_start_pos:
+                if next_token_logits is not None:
+                    with torch.no_grad():
+                        log_probs.append(
+                            torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
+                        )
+
+                output_ids.append(next_tokens)
+
+                if return_timestamps_for_prefix:
+                    for batch_idx in range(unpadded_batch_size):
+                        full_token_sequences[batch_idx].append(next_tokens[batch_idx].item())
+
+            # Record TTFT on first decode iteration (only if not already set by prefill)
+            if i == generation_start and ttft == 0.0:
+                first_token_time = time.time()
+                ttft = first_token_time - start_encode
+                # Extract no_speech probability from first frame logits (un-traced path only)
+                if next_token_logits is not None:
+                    with torch.no_grad():
+                        probs = torch.softmax(next_token_logits, dim=-1)
+                        no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]
+
+            total_decode_time += time.time() - start_iter
+            # Calculate throughput based on tokens generated (not including prefix)
+            tokens_generated = i - generation_start + 1
+            avg_decode_throughput = tokens_generated / total_decode_time
+
+            for user_id, user_decode_id in enumerate(next_tokens[:unpadded_batch_size]):
+                if user_decode_id == self.config.eos_token_id:
+                    prompt_is_done[user_id] = True
+                if prompt_is_done[user_id]:
+                    next_tokens[user_id] = self.config.eos_token_id
+
+            # Only output transcription tokens (skip prompt and forced prefix tokens)
+            if i >= transcription_start_pos:
+                ttnn_transcription = self.processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
+
+                # Streaming mode: yield incremental results
+                if streaming:
+                    # Calculate current average log probability for each batch item
+                    if log_probs:
+                        current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
+                    else:
+                        current_avg_logprob = torch.zeros(input_features.shape[0])
+
+                    # Use zeros for no_speech_probs if not yet calculated
+                    if no_speech_probs is None:
+                        current_no_speech_probs = torch.zeros(input_features.shape[0])
+                    else:
+                        current_no_speech_probs = no_speech_probs
+
+                    # For streaming, we yield the current transcription without timestamps
+                    # Timestamps will be processed at the end if return_timestamps=True
+                    # is_final=False indicates this is an intermediate token, not the final result
+                    if return_perf_metrics:
+                        yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput, False
+                    else:
+                        yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, False
+                else:
+                    # Non-streaming mode: collect results
+                    for idx in range(input_features.shape[0]):
+                        output[idx].append(ttnn_transcription[idx])
+
+            if all(prompt_is_done):
+                break
+
+        total_generate_time = time.time() - start_encode
+        logger.info(f"Time to first token: {(ttft*1000):.3f}ms")
+        logger.info(f"Total decode time: {total_decode_time:.3f}s")
+        logger.info(f"Total generate time: {total_generate_time:.3f}s")
+        logger.info(f"Average decode throughput (per user): {avg_decode_throughput:.3f} t/s/u")
+        logger.info(f"Average decode throughput (total batch): {(avg_decode_throughput * unpadded_batch_size):.3f} t/s")
+
+        # Calculate average log probability for each batch item
+        if log_probs:
+            avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
+        else:
+            avg_logprob = torch.zeros(input_features.shape[0])
+
+        # Use zeros for no_speech_probs if not calculated
+        if no_speech_probs is None:
+            no_speech_probs = torch.zeros(input_features.shape[0])
+
+        # Process timestamps if requested
+        if return_timestamps_for_prefix and full_token_sequences:
+            # Extract timestamps for each batch item
+            segments_with_timestamps = []
+            for batch_idx in range(unpadded_batch_size):
+                if full_token_sequences[batch_idx]:
+                    token_sequence = torch.tensor(full_token_sequences[batch_idx])
+                    audio_duration = audio_durations[batch_idx] if audio_durations else None
+                    segments = self._extract_timestamps_from_tokens(token_sequence, self.processor, audio_duration)
+                    segments_with_timestamps.append(segments)
+                else:
+                    segments_with_timestamps.append([])
+
+            # Per-item format: segments for items that want timestamps, plain text for others
+            return_timestamps_per_item = (
+                return_timestamps if isinstance(return_timestamps, list) else [return_timestamps] * unpadded_batch_size
+            )
+            final_result = []
+            for batch_idx in range(unpadded_batch_size):
+                if return_timestamps_per_item[batch_idx]:
+                    final_result.append(segments_with_timestamps[batch_idx])
+                else:
+                    final_result.append(" ".join(seg["text"] for seg in segments_with_timestamps[batch_idx]).strip())
+
+            # Yield final result (works for both streaming and non-streaming)
+            # For streaming mode, include is_final=True to mark this as the final result
+            if return_perf_metrics:
+                if streaming:
+                    yield final_result, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
+                else:
+                    yield final_result, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
+            else:
+                if streaming:
+                    yield final_result, avg_logprob, no_speech_probs, True
+                else:
+                    yield final_result, avg_logprob, no_speech_probs
+        else:
+            if streaming:
+                # For streaming without timestamps, yield final accumulated result
+                # Accumulate all tokens from output_ids
+                final_output = []
+                for batch_idx in range(unpadded_batch_size):
+                    # Collect all tokens for this batch item
+                    batch_tokens = [output_ids[i][batch_idx] for i in range(len(output_ids))]
+                    # Decode the full sequence
+                    decoded_text = self.processor.batch_decode(
+                        torch.tensor(batch_tokens).unsqueeze(0), skip_special_tokens=True
+                    )[0]
+                    final_output.append(decoded_text.strip())
+
+                # is_final=True indicates this is the final batch-decoded result
+                if return_perf_metrics:
+                    yield final_output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
+                else:
+                    yield final_output, avg_logprob, no_speech_probs, True
+            else:
+                # Join the collected tokens into final text and strip leading/trailing whitespace
+                output = ["".join(tokens).strip() for tokens in output]
+                if return_perf_metrics:
+                    yield (output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
+                else:
+                    yield (output, avg_logprob, no_speech_probs)
+
+    def cleanup(self):
+        """Release trace resources."""
+        if any(tid is not None for tid in self.trace_id_decode.values()) or self.encoder_trace_state.trace_id_encoder:
+            self._release_all_traces()
+            logger.info("Released trace resources")
+
+    def __del__(self):
+        """Cleanup on destruction."""
+        try:
+            self.cleanup()
+        except Exception:
+            pass  # Ignore errors during cleanup
+
+    @staticmethod
+    def _pad_input_32(tensor, value):
+        """Pad input to multiple of 32."""
+        len_tensor = tensor.shape[1]
+        if len_tensor % 32 == 0:
+            return tensor
+        padded_len = ((len_tensor // 32) + 1) * 32
+        pad_tensor = (value * torch.ones(tensor.shape[0], padded_len - len_tensor)).to(torch.long)
+        tensor = torch.cat([tensor, pad_tensor], dim=1)
+        return tensor
+
+    @staticmethod
+    def _sample_token(logits: torch.Tensor, temperature: float) -> torch.Tensor:
+        """
+        Sample token from logits with temperature.
+        """
+        if temperature == 0.0:
+            return torch.argmax(logits, dim=-1)
+        else:
+            # Apply temperature scaling before softmax
+            scaled_logits = logits / temperature
+            probs = torch.softmax(scaled_logits, dim=-1)
+            return torch.multinomial(probs, num_samples=1).squeeze(-1)
+
+    @staticmethod
+    def _calculate_compression_ratio(text: str) -> float:
+        """
+        Calculate compression ratio of text using zlib.
+        """
+        if not text:
+            return 0.0
+        text_bytes = text.encode("utf-8")
+        compressed_bytes = zlib.compress(text_bytes)
+        return len(text_bytes) / len(compressed_bytes)
+
+    @staticmethod
+    def _check_generation_quality(
+        text: str,
+        avg_logprob: float,
+        no_speech_prob: float,
+        compression_ratio: float,
+        logprob_threshold: Optional[float],
+        compression_ratio_threshold: Optional[float],
+        no_speech_threshold: Optional[float],
+    ) -> Tuple[bool, str]:
+        """
+        Check if generation passes quality thresholds.
+        """
+        # Check for silence
+        if no_speech_threshold is not None and logprob_threshold is not None:
+            if no_speech_prob > no_speech_threshold and avg_logprob < logprob_threshold:
+                return False, "silence_detected"
+
+        # Check compression ratio (high ratio indicates repetitive text)
+        if compression_ratio_threshold is not None:
+            if compression_ratio > compression_ratio_threshold:
+                return False, "high_compression_ratio"
+
+        return True, "quality_good"
+
+    @staticmethod
+    def _extract_timestamps_from_tokens(token_ids: torch.Tensor, processor, audio_duration: float = None) -> List[dict]:
+        """
+        Extract timestamps from generated token IDs and segment the text.
+        """
+        # Convert to list for easier processing
+        tokens = token_ids.tolist()
+        segments = []
+        current_text_tokens = []
+        current_start_time = 0.0
+
+        for i, token in enumerate(tokens):
+            # Stop processing at EOS token to avoid repetitive tokens
+            if token == EOS_TOKEN_ID:
+                break
+
+            if TIMESTAMP_TOKEN_START <= token <= TIMESTAMP_TOKEN_END:
+                # This is a timestamp token
+                timestamp_seconds = (token - TIMESTAMP_TOKEN_START) * 0.02
+
+                # If we have accumulated text tokens, create a segment
+                if current_text_tokens:
+                    # Decode the text tokens
+                    text_tokens_tensor = torch.tensor([current_text_tokens])
+                    segment_text = processor.batch_decode(text_tokens_tensor, skip_special_tokens=True)[0]
+
+                    # Only add non-empty segments
+                    if segment_text.strip():
+                        segments.append(
+                            {"text": segment_text.strip(), "start": current_start_time, "end": timestamp_seconds}
+                        )
+
+                # Start new segment
+                current_text_tokens = []
+                current_start_time = timestamp_seconds
+            else:
+                # Regular text token
+                current_text_tokens.append(token)
+
+        # Handle any remaining text tokens (final segment)
+        if current_text_tokens:
+            # Skip creating segment if it starts beyond the audio duration
+            if audio_duration is not None and current_start_time >= audio_duration:
+                # This segment is beyond the audio duration, likely repetitive tokens
+                return segments
+
+            text_tokens_tensor = torch.tensor([current_text_tokens])
+            segment_text = processor.batch_decode(text_tokens_tensor, skip_special_tokens=True)[0]
+            if segment_text.strip():
+                # For the final segment, we don't have an end timestamp, so we'll use a reasonable estimate
+                # Use audio duration to cap the estimation if available
+                if audio_duration is not None:
+                    estimated_duration = min(
+                        max(0.5, len(segment_text) * 0.1),  # Current estimation
+                        audio_duration - current_start_time,  # Don't exceed audio length
+                    )
+                else:
+                    estimated_duration = max(0.5, len(segment_text) * 0.1)  # Fallback to original logic
+
+                segments.append(
+                    {
+                        "text": segment_text.strip(),
+                        "start": current_start_time,
+                        "end": current_start_time + estimated_duration,
+                    }
+                )
+
+        return segments
+
+    @staticmethod
+    def _calculate_audio_duration(current_batch) -> List[float]:
+        """
+        Calculate audio duration for each item in the batch.
+        """
+        durations = []
+        for sampling_rate, audio_array in current_batch:
+            duration = len(audio_array) / sampling_rate
+            durations.append(duration)
+        return durations

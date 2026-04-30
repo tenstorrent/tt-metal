@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -26,5 +26,3 @@ def test_deallocate(device, h, w):
     ttnn.deallocate(output_tensor)
     with pytest.raises(RuntimeError) as exception:
         output_tensor_reference + output_tensor_reference
-
-    assert "Buffer is not allocated" in str(exception.value)

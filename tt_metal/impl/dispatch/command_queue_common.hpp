@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,8 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     DISPATCH_S_SYNC_SEM = 6,
     FABRIC_HEADER_RB = 7,
     FABRIC_SYNC_STATUS = 8,
-    UNRESERVED = 9,
+    DISPATCH_PROGRESS = 9,
+    UNRESERVED = 10,
 };
 
 // likely only used in impl
@@ -55,7 +56,7 @@ uint16_t get_umd_channel(uint16_t channel);
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t absolute offset
-uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size);
+uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t base = 0);
 
 // mostly used in debug_tools
 template <bool addr_16B>
@@ -70,6 +71,8 @@ uint32_t get_cq_completion_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_siz
 
 template <bool addr_16B>
 uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+
+uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
 
 // Return the expected number of workers to be in the finished state
 uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type);

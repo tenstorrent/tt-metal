@@ -1,39 +1,38 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation.hpp"
 
-namespace ttnn {
-namespace operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+std::vector<Tensor> all_gather_matmul_async(
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const CoreCoord all_gather_core_grid_offset,
     const std::optional<const Tensor>& bias,
     const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config_ag,
+    const std::optional<MemoryConfig>& memory_config_ag,
     const ttnn::ccl::Topology topology,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<ttnn::MemoryConfig>& memory_config_mm,
+    const std::optional<MemoryConfig>& memory_config_mm,
     const bool transpose_a,
     const bool transpose_b,
     const std::optional<const DataType> dtype,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreGrid> core_grid,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
-    return ttnn::operations::experimental::ccl::all_gather_matmul_async(
+    return ttnn::prim::all_gather_matmul_async(
         input_tensor,
         weight_tensor,
         persistent_output_buffer,
@@ -60,5 +59,4 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
         num_buffers_per_channel);
 }
 
-}  // namespace operations::experimental::ccl
-}  // namespace ttnn
+}  // namespace ttnn::experimental

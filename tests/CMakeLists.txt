@@ -1,5 +1,10 @@
 enable_testing()
 include(GoogleTest)
+
+# Suppress narrowing warnings for tests (being cleaned up in tt_metal first)
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>")
+add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
+
 add_library(test_common_libs INTERFACE)
 target_include_directories(test_common_libs INTERFACE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 target_link_libraries(
@@ -24,3 +29,7 @@ if(TTNN_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_eager) # this should go away and be replaced with link to ttnn
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ttnn)
 endif(TTNN_BUILD_TESTS)
+
+if(TT_METAL_USE_EMULE)
+    add_subdirectory(emule)
+endif()

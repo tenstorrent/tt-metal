@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,23 +11,19 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(2) == 1;
 
     constexpr uint32_t onetile = 1;
 
@@ -38,14 +34,9 @@ void MAIN {
 
     constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
 
-    cb_wait_front(cb_reduce, 1);  // comes from the reader
-
     binary_op_init_common(cb_inp, cb_reduce, cb_x2);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        constexpr int onetile = 1;
-        constexpr int dst0 = 0;
-
         /*
          * x**2
          */
@@ -63,45 +54,24 @@ void MAIN {
             REL();
             cb_push_back(cb_x2, blk);
         }
-
         /*
          * sum(x**2)
          */
-        reconfig_data_format(cb_x2, cb_reduce);
-        pack_reconfig_data_format(cb_out);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
-        cb_wait_front(cb_x2, Wt);
-        cb_reserve_back(cb_out, onetile);
-        ACQ();
-        for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, wtr, 0, dst0);
-        }
-        pack_tile(dst0, cb_out, 0);
-        REL();
-        cb_push_back(cb_out, onetile);
-        cb_pop_front(cb_x2, Wt);
 
-        reduce_uninit();
+        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
+        // Bulk mode for optimal performance
+        compute_kernel_lib::
+            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+                cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         /*
          * sum(x)
          */
-        reconfig_data_format(cb_inp, cb_reduce);
-        pack_reconfig_data_format(cb_out);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inp, cb_reduce, cb_out);
-        cb_reserve_back(cb_out, onetile);
-        ACQ();
-        for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inp, cb_reduce, wtr, 0, dst0);
-        }
-        pack_tile(dst0, cb_out, 1);
-        REL();
-        cb_push_back(cb_out, onetile);
-
-        reduce_uninit();
-
-        cb_pop_front(cb_inp, Wt);
+        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
+        // Bulk mode for optimal performance
+        compute_kernel_lib::
+            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+                cb_inp, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
     }
     cb_pop_front(cb_reduce, 1);
 }
-}  // namespace NAMESPACE

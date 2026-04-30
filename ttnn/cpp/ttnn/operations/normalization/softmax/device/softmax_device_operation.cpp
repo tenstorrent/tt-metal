@@ -1,20 +1,22 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <utility>
 
+#include "ttnn/device_operation.hpp"
 #include "softmax_operation_types.hpp"
-#include "softmax_program_factory.hpp"
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization::softmax {
+namespace ttnn::prim {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 /**
@@ -37,24 +39,28 @@ namespace CMAKE_UNIQUE_NAMESPACE {
  */
 bool is_softmax_general_w_small_available(
     const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
+    const uint32_t tile_width = tensor.tensor_spec().tile().get_width();
     auto w = tensor.logical_shape()[-1];
-    int32_t Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    int32_t Wt = (w + tile_width - 1) / tile_width;
 
     auto arch = tensor.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // Must match the format logic in softmax_program_factory_general_w_small
+    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
+    auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
     // Calculate total circular buffer memory requirements
-    int32_t cb_usage = 0;        // bytes
-    cb_usage += Wt * tile_size;  // input buffer
-    cb_usage += 1 * tile_size;   // mask buffer
-    cb_usage += 1 * tile_size;   // scaler buffer
+    int32_t cb_usage = 0;                   // bytes
+    cb_usage += Wt * tile_size;             // input buffer
+    cb_usage += 1 * mask_scaler_tile_size;  // mask buffer
+    cb_usage += 1 * mask_scaler_tile_size;  // scaler buffer
 
     cb_usage += Wt * tile_size;  // output buffer
 
@@ -74,23 +80,27 @@ bool is_softmax_general_w_small_available(
  */
 bool is_softmax_general_h_small_available(
     const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
+    const uint32_t tile_height = tensor.tensor_spec().tile().get_height();
     auto h = tensor.logical_shape()[-2];
-    int32_t Ht = (h + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+    int32_t Ht = (h + tile_height - 1) / tile_height;
 
     auto arch = tensor.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // Must match the format logic in softmax_program_factory_general_h_small
+    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
+    auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
-    int32_t cb_usage = 0;        // bytes
-    cb_usage += Ht * tile_size;  // input;
-    cb_usage += 1 * tile_size;   // mask;
-    cb_usage += 1 * tile_size;   // scaler;
+    int32_t cb_usage = 0;                   // bytes
+    cb_usage += Ht * tile_size;             // input;
+    cb_usage += 1 * mask_scaler_tile_size;  // mask;
+    cb_usage += 1 * mask_scaler_tile_size;  // scaler;
 
     cb_usage += Ht * tile_size;  // output;
 
@@ -105,6 +115,7 @@ bool is_softmax_general_h_small_available(
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
 SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Determine if we should use sharded multi-core program factory
@@ -119,48 +130,43 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
             [&](const auto& program_config) -> program_factory_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                    return program::SoftmaxShardedProgramFactoryAttentionOptimized{};
+                    return SoftmaxShardedProgramFactoryAttentionOptimized{};
                 } else {
-                    return program::SoftmaxProgramFactoryAttentionOptimized{};
+                    return SoftmaxProgramFactoryAttentionOptimized{};
                 }
             },
             operation_attributes.program_config);
-        return program::SoftmaxProgramFactoryAttentionOptimized{};
-    } else if (
-        operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
+        return SoftmaxProgramFactoryAttentionOptimized{};
+    }
+    if (operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
         rank == 4) {
         return std::visit(
             [&](const auto& program_config) -> program_factory_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                    return program::SoftmaxShardedProgramFactoryAttentionOptimized{};
+                    return SoftmaxShardedProgramFactoryAttentionOptimized{};
                 } else {
-                    return program::SoftmaxProgramFactoryAttentionOptimized{};
+                    return SoftmaxProgramFactoryAttentionOptimized{};
                 }
             },
             operation_attributes.program_config);
-        return program::SoftmaxProgramFactoryAttentionOptimized{};
+        return SoftmaxProgramFactoryAttentionOptimized{};
     }
     if (rank - 1 == operation_attributes.dim) {
         if (CMAKE_UNIQUE_NAMESPACE::is_softmax_general_w_small_available(
                 tensor_args.input_tensor, operation_attributes.compute_kernel_config)) {
-            return program::SoftmaxProgramFactoryGeneralWSmall{};
+            return SoftmaxProgramFactoryGeneralWSmall{};
         }
-        return program::SoftmaxProgramFactoryGeneralWLarge{};
+        return SoftmaxProgramFactoryGeneralWLarge{};
     }
     if (rank - 2 == operation_attributes.dim) {
         if (CMAKE_UNIQUE_NAMESPACE::is_softmax_general_h_small_available(
                 tensor_args.input_tensor, operation_attributes.compute_kernel_config)) {
-            return program::SoftmaxProgramFactoryGeneralHSmall{};
+            return SoftmaxProgramFactoryGeneralHSmall{};
         }
-        return program::SoftmaxProgramFactoryGeneralHLarge{};
+        return SoftmaxProgramFactoryGeneralHLarge{};
     }
-    return program::SoftmaxProgramFactoryGeneralCLarge{};
-}
-
-void SoftmaxDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
+    return SoftmaxProgramFactoryGeneralCLarge{};
 }
 
 void SoftmaxDeviceOperation::validate_on_program_cache_miss(
@@ -178,7 +184,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
         tensors_args.input_tensor.dtype());
     if (tensors_args.mask.has_value()) {
-        auto& mask = tensors_args.mask.value();
+        const auto& mask = tensors_args.mask.value();
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
         TT_FATAL(
             tensors_args.input_tensor.device() == mask.device(), "Input tensor and mask must be on the same device");
@@ -214,6 +220,11 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             !attributes.is_scale_causal_mask_hw_dims_softmax,
                             "Scale causal mask HW dims softmax not supported in default program config");
                     } else if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                        // Ensure input tensor is sharded when using sharded program config
+                        TT_FATAL(
+                            tensors_args.input_tensor.is_sharded() &&
+                                tensors_args.input_tensor.shard_spec().has_value(),
+                            "Input tensor must be sharded when using SoftmaxShardedMultiCoreProgramConfig");
                         const auto& shape = tensors_args.input_tensor.padded_shape();
                         uint32_t M = tensors_args.input_tensor.physical_volume() / shape[-1];
                         uint32_t K = shape[-1];
@@ -231,6 +242,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             program_config.block_w * tensors_args.input_tensor.tensor_spec().tile().get_width() ==
                                 shape[3],
                             "shard width must equal to input tensor shape[3]!");
+
                         TT_FATAL(attributes.inplace, "Operation must be inplace for sharded multi-core program config");
                         if (!attributes.is_scale_causal_mask_hw_dims_softmax) {
                             // grid
@@ -280,6 +292,42 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(not attributes.scale.has_value(), "Scale value must not be set when mask is not present");
     }
+
+    // Validate SoftmaxShardedMultiCoreProgramConfig parameters regardless of mask presence
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                // Validate block_h and block_w match the actual shard dimensions in tiles
+                TT_FATAL(
+                    attributes.output_mem_config.shard_spec().has_value(),
+                    "output_mem_config must have a shard_spec when using SoftmaxShardedMultiCoreProgramConfig");
+                const auto& shard_shape = attributes.output_mem_config.shard_spec().value().shape;
+                uint32_t shard_height_in_tiles =
+                    shard_shape[0] / tensors_args.input_tensor.tensor_spec().tile().get_height();
+                uint32_t shard_width_in_tiles =
+                    shard_shape[1] / tensors_args.input_tensor.tensor_spec().tile().get_width();
+                TT_FATAL(
+                    program_config.block_h == shard_height_in_tiles,
+                    "block_h ({}) must match the shard height in tiles ({}). Shard shape is [{}, {}] with tile "
+                    "height {}.",
+                    program_config.block_h,
+                    shard_height_in_tiles,
+                    shard_shape[0],
+                    shard_shape[1],
+                    tensors_args.input_tensor.tensor_spec().tile().get_height());
+                TT_FATAL(
+                    program_config.block_w == shard_width_in_tiles,
+                    "block_w ({}) must match the shard width in tiles ({}). Shard shape is [{}, {}] with tile "
+                    "width {}.",
+                    program_config.block_w,
+                    shard_width_in_tiles,
+                    shard_shape[0],
+                    shard_shape[1],
+                    tensors_args.input_tensor.tensor_spec().tile().get_width());
+            }
+        },
+        attributes.program_config);
 }
 
 SoftmaxDeviceOperation::spec_return_value_t SoftmaxDeviceOperation::compute_output_specs(
@@ -313,6 +361,22 @@ SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_out
 
 tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // When a mask is present, its dtype and memory_config influence the compiled program:
+    //   - mask dtype        → mask_cb_data_format → CB c_in4/c_in5 data format (compile-time)
+    //   - mask memory_config → TensorAccessorArgs IsDram flag (compile-time arg)
+    //
+    // mask padded_shape is NOT included, even though num_tiles_causal_mask (compile-time arg,
+    // is_causal_mask=True only) is derived from it. It is provably redundant: scale_mask_softmax
+    // enforces mask.padded_shape()[-1] == input.padded_shape()[-1] and mask.padded_shape()[-2]
+    // is always the tile height at the device op level (either already equal to the tile height or
+    // padded to it by tilize_with_val_padding). Therefore, using tile_height and tile_width from
+    // input_tensor.tensor_spec().tile():
+    //   num_tiles_causal_mask = input.padded_shape()[-1] * tile_height / (tile_height * tile_width) = Wt_of_input
+    // which is fully determined by input.logical_shape()[-1] already present in the hash.
+    std::optional<MemoryConfig> default_memory_config =
+        !tensor_args.mask.has_value() ? std::make_optional<MemoryConfig>() : std::nullopt;
+    const auto& mask_memory_config =
+        tensor_args.mask.has_value() ? tensor_args.mask->memory_config() : *default_memory_config;
     return operation::hash_operation<SoftmaxDeviceOperation>(
         select_program_factory(attributes, tensor_args).index(),
         attributes.softmax_type,
@@ -328,52 +392,35 @@ tt::tt_metal::operation::Hash SoftmaxDeviceOperation::compute_program_hash(
         tensor_args.input_tensor.logical_shape(),
         tensor_args.input_tensor.dtype(),
         tensor_args.input_tensor.memory_config(),
-        tensor_args.input_tensor.layout());
+        tensor_args.input_tensor.layout(),
+        tensor_args.mask.has_value() ? tensor_args.mask->dtype() : DataType::INVALID,
+        mask_memory_config);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SoftmaxDeviceOperation::tensor_return_value_t>
 SoftmaxDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, const Tensor& output_tensor) {
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args, const Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
-    int ideal_dev_clock_cycles = data_movement::common_tm_bw_model(input_tensor, output_tensor);
+    int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
     return result;
 }
 
-std::tuple<SoftmaxDeviceOperation::operation_attributes_t, SoftmaxDeviceOperation::tensor_args_t>
-SoftmaxDeviceOperation::invoke(
-    SoftmaxOperationType softmax_type,
-    const Tensor& input_tensor,
-    int8_t dim,
-    const std::optional<const Tensor>& mask,
-    std::optional<float> scale,
-    bool inplace,
-    tt::tt_metal::MemoryConfig output_mem_config,
-    SoftmaxProgramConfig program_config,
-    bool is_causal_mask,
-    DeviceComputeKernelConfig compute_kernel_config,
-    bool is_scale_causal_mask_hw_dims_softmax,
-    bool numeric_stable) {
-    return {
-        operation_attributes_t{
-            softmax_type,
-            dim,
-            scale,
-            inplace,
-            std::move(output_mem_config),
-            program_config,
-            is_causal_mask,
-            compute_kernel_config,
-            is_scale_causal_mask_hw_dims_softmax,
-            numeric_stable},
-        tensor_args_t{input_tensor, mask}};
+// hw bug (#38306): on Wormhole B0, HiFi4 with fp32 accumulation can produce less accurate
+// results than HiFi3 for some inputs. Use HiFi3 as the safe default when fp32 acc is enabled.
+static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
+    tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config, bool is_fp32) {
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    const auto default_fidelity = (is_wormhole && is_fp32) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    verify_numerical_configuration(arch, compute_kernel_config);
+    return init_device_compute_kernel_config(arch, compute_kernel_config, default_fidelity, true, is_fp32, false);
 }
 
 Tensor softmax(
     const Tensor& input_tensor,
     int8_t dim,
-    tt::tt_metal::MemoryConfig output_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
     // Constants
@@ -381,8 +428,10 @@ Tensor softmax(
     TT_FATAL(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
+
     const auto rank = input_tensor.logical_shape().size();
     const auto dim_calculated = dim < 0 ? rank + dim : dim;
     if (rank > 4) {
@@ -407,17 +456,15 @@ Tensor softmax(
     if (dim_adjusted == rank - 1) {
         // Input tensor formatting
         const ttnn::Shape input_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor_4D.padded_shape());
-        const ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-            .pad_shape = input_pad_shape,
-            .pad_value = -std::numeric_limits<float>::infinity(),
-            .target_layout = tt::tt_metal::Layout::TILE};
-        auto formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-            input_tensor_4D,
-            input_tensor_4D.device(),
-            input_format_params.pad_shape,
-            input_format_params.pad_value,
-            input_format_params.target_layout);
+            ttnn::operations::data_movement::pad_to_tile_shape(input_tensor_4D.padded_shape());
+        auto formatted_input_tensor = input_tensor_4D;
+        if (formatted_input_tensor.layout() != Layout::TILE) {
+            formatted_input_tensor = ttnn::tilize_with_val_padding(
+                input_tensor_4D,
+                input_pad_shape,
+                -std::numeric_limits<float>::infinity(),
+                input_tensor_4D.memory_config());
+        }
 
         // Attention optimized softmax
         return ttnn::prim::softmax(
@@ -454,28 +501,22 @@ Tensor scale_mask_softmax(
     const Tensor& input_tensor,
     std::optional<float> scale,
     const std::optional<const Tensor>& mask,
-    tt::tt_metal::MemoryConfig output_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
 
     // Input tensor formatting
-    const ttnn::Shape input_pad_shape =
-        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
-    const ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-        .pad_shape = input_pad_shape,
-        .pad_value = -std::numeric_limits<float>::infinity(),
-        .target_layout = tt::tt_metal::Layout::TILE};
-    auto formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-        input_tensor,
-        input_tensor.device(),
-        input_format_params.pad_shape,
-        input_format_params.pad_value,
-        input_format_params.target_layout);
+    const ttnn::Shape input_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+    auto formatted_input_tensor = input_tensor;
+    if (formatted_input_tensor.layout() != Layout::TILE) {
+        formatted_input_tensor = ttnn::tilize_with_val_padding(
+            input_tensor, input_pad_shape, -std::numeric_limits<float>::infinity(), input_tensor.memory_config());
+    }
     const auto rank = formatted_input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
@@ -503,17 +544,12 @@ Tensor scale_mask_softmax(
                 mask.value().padded_shape()[i]);
         }
         const ttnn::Shape mask_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(mask.value().padded_shape());
-        const ttnn::operations::experimental::auto_format::FormatParams mask_format_params = {
-            .pad_shape = mask_pad_shape,
-            .pad_value = -std::numeric_limits<float>::infinity(),
-            .target_layout = tt::tt_metal::Layout::TILE};
-        auto formatted_mask = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-            mask.value(),
-            mask.value().device(),
-            mask_format_params.pad_shape,
-            mask_format_params.pad_value,
-            mask_format_params.target_layout);
+            ttnn::operations::data_movement::pad_to_tile_shape(mask.value().padded_shape());
+        auto formatted_mask = mask.value();
+        if (formatted_mask.layout() != Layout::TILE) {
+            formatted_mask = ttnn::tilize_with_val_padding(
+                formatted_mask, mask_pad_shape, -std::numeric_limits<float>::infinity(), mask.value().memory_config());
+        }
 
         // Operation
         return ttnn::prim::softmax(
@@ -555,8 +591,8 @@ Tensor softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
 
     // Operation specific checks
     TT_FATAL(
@@ -594,8 +630,8 @@ Tensor scale_mask_softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
@@ -624,8 +660,8 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
@@ -644,4 +680,32 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
         /*is_scale_causal_mask_hw_dims_softmax=*/true,
         /*numeric_stable=*/numeric_stable);
 }
-}  // namespace ttnn::operations::normalization::softmax
+
+Tensor softmax(
+    SoftmaxOperationType softmax_type,
+    const Tensor& input_tensor,
+    int8_t dim,
+    const std::optional<const Tensor>& mask,
+    std::optional<float> scale,
+    bool inplace,
+    tt::tt_metal::MemoryConfig output_mem_config,
+    SoftmaxProgramConfig program_config,
+    bool is_causal_mask,
+    DeviceComputeKernelConfig compute_kernel_config,
+    bool is_scale_causal_mask_hw_dims_softmax,
+    bool numeric_stable) {
+    return ttnn::device_operation::launch<SoftmaxDeviceOperation>(
+        SoftmaxParams{
+            softmax_type,
+            dim,
+            scale,
+            inplace,
+            std::move(output_mem_config),
+            program_config,
+            is_causal_mask,
+            compute_kernel_config,
+            is_scale_causal_mask_hw_dims_softmax,
+            numeric_stable},
+        SoftmaxInputs{input_tensor, mask});
+}
+}  // namespace ttnn::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
+#include <functional>
+#include <numeric>
 #include <ostream>
 
 #include <tt_stl/assert.hpp>
@@ -24,11 +26,7 @@ std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
 TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
 
 std::uint32_t TensAddr::numel() const {
-    std::uint32_t prod = 1;
-    for (int j = 0; j < sh.size(); j++) {
-        prod *= sh[j];
-    }
-    return prod;
+    return std::accumulate(sh.begin(), sh.end(), std::uint32_t{1}, std::multiplies<>{});
 }
 
 int TensAddr::offs(int n, int c, int h, int w) {
@@ -45,7 +43,7 @@ std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val -
 
 // Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
 template <typename T>
-std::vector<T> convert_layout_row_major_to_tile_swizzled(
+std::vector<T> to_tile_major_layout_swizzled(
     tt::stl::Span<const T> in_row_major, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     ZoneScoped;
     std::vector<T> tilized_result;
@@ -255,7 +253,7 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
 }
 
 template <typename T>
-std::vector<T> convert_layout_row_major_to_tile_nfaces(
+std::vector<T> to_tile_major_layout_nfaces(
     tt::stl::Span<const T> in_row_major,
     const PhysicalSize& shape,
     std::optional<PhysicalSize> tile_shape,
@@ -453,9 +451,9 @@ std::vector<T> convert_layout(
             break;
         case TensorLayoutType::LIN_ROW_MAJOR:
             if (outL == TensorLayoutType::TILED_SWIZZLED) {
-                return convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
+                return to_tile_major_layout_swizzled<T>(inp, shape, tile_shape);
             } else if (outL == TensorLayoutType::TILED_NFACES) {
-                return convert_layout_row_major_to_tile_nfaces(
+                return to_tile_major_layout_nfaces(
                     inp, shape, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");
@@ -488,8 +486,8 @@ std::vector<T> convert_layout(
     const bool transpose_within_face,
     const bool transpose_of_faces) {
     TT_ASSERT(shape.size() >= 2, "Shape size {} must be at least rank 2!", shape.size());
-    size_t H = shape[shape.size() - 2];
-    size_t W = shape[shape.size() - 1];
+    uint32_t H = shape[shape.size() - 2];
+    uint32_t W = shape[shape.size() - 1];
     for (size_t i = 0; i < shape.size() - 2; i++) {
         H *= shape[i];
     }

@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // Runtime arguments to write data back into the output buffer.
@@ -16,10 +16,9 @@ void kernel_main() {
     // configuration parameters (e.g. same data type and same page size) in the host code, we can grab
     // the same parameters from the circular buffer as we would from the DRAM buffer.
     constexpr uint32_t onetile = 1;  // single-tile ublocks
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
     constexpr auto c_args = TensorAccessorArgs<0>();
-    const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
+    const auto c = TensorAccessor(c_args, dst_addr);
 
     // Loop through the tile indices and write each tile to DRAM in order.
     uint32_t end_id = start_id + num_tiles;

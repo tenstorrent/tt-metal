@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ from tests.nightly.t3000.ccl.test_mesh_partition import (
     "device_params",
     [
         {
-            "trace_region_size": 18432,
+            "trace_region_size": 22000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
         }
     ],

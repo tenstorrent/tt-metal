@@ -1,1 +1,1 @@
-../../../../models/demos/vanilla_unet/tests/test_unet_model.py
+../../../../models/demos/vision/segmentation/vanilla_unet/tests/test_unet_model.py

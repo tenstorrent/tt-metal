@@ -1,10 +1,15 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 """Factory for creating transformer models from configuration."""
 import ttml
-from ttml.common.config import DeviceConfig, TransformerConfig, MultiHostConfig
+from ttml.common.config import (
+    load_config,
+    DeviceConfig,
+    TransformerConfig,
+    MultiHostConfig,
+)
 from ttml.common.utils import round_up_to_tile
 
 
@@ -49,10 +54,16 @@ class TransformerModelFactory:
             yaml_config: Dictionary containing configuration
         """
         self.device_config = DeviceConfig(yaml_config)
-        self.multihost_config = MultiHostConfig(yaml_config)
-        training_config = yaml_config.get("training_config", {})
-        self.model_type = training_config.get("model_type", "gpt2")
-        self.transformer_config = TransformerConfig(training_config.get("transformer_config", {}))
+
+        tc = yaml_config["training_config"]
+
+        self.transformer_config = TransformerConfig(load_config(tc["model_config"]))
+
+        if "multihost_config" in tc:
+            self.multihost_config = MultiHostConfig(load_config(tc["multihost_config"]))
+        else:
+            self.multihost_config = MultiHostConfig({})
+        self.model_type = self.transformer_config.model_type
 
     def _create_gpt2(self):
         """Create GPT-2 model from configuration.
@@ -87,8 +98,7 @@ class TransformerModelFactory:
         Returns:
             Llama model instance
         """
-        lcfg = ttml.models.llama.LlamaConfig()
-        tc = self.transformer_config
+        lcfg = ttml.models.llama.CppLlamaConfig()
 
         # Core fields with sensible defaults
         lcfg.num_heads = self.transformer_config.num_heads
@@ -101,9 +111,9 @@ class TransformerModelFactory:
         lcfg.dropout_prob = self.transformer_config.dropout_prob
 
         # Optional fields
-        if self.transformer_config.intermediate_dim:
+        if self.transformer_config.intermediate_dim is not None:
             lcfg.intermediate_dim = self.transformer_config.intermediate_dim
-        if self.transformer_config.theta:
+        if self.transformer_config.theta is not None:
             lcfg.theta = self.transformer_config.theta
 
         # Runner type (simple mapping like GPT2)
@@ -141,7 +151,7 @@ class TransformerModelFactory:
 
         if self.device_config.enable_tp:
             return ttml.models.distributed.llama.create_llama_model(lcfg)
-        return ttml.models.llama.create_llama_model(lcfg)
+        return ttml.models.llama.create_cpp_llama_model(lcfg)
 
     def create_model(self):
         """Create model based on model_type configuration.

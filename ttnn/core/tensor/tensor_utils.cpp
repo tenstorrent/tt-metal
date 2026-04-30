@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,108 +6,74 @@
 
 #include <tt_stl/overloaded.hpp>
 
-#include "tt-metalium/distributed_host_buffer.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/types.hpp"
 
 #include <tracy/Tracy.hpp>
 
-namespace tt {
-namespace tt_metal {
-
-tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
-    int64_t old_volume = tensor.logical_volume();
-    int64_t new_volume = 1;
-    int64_t index_of_negative_1 = -1;
-    bool has_zero = false;
-    for (auto index = 0; index < shape.size(); ++index) {
-        if (shape[index] == -1) {
-            if (index_of_negative_1 != -1) {
-                std::string error_msg = "Shape cannot have more than 1 elements that is set to -1! Shape used: (";
-                for (auto& s : shape) {
-                    error_msg += std::to_string(s) + ",";
-                }
-                error_msg += ")";
-                TT_THROW("{}", error_msg);
-            }
-            index_of_negative_1 = index;
-        } else {
-            if (shape[index] == 0) {
-                has_zero = true;
-            }
-            new_volume *= shape[index];
-        }
-    }
-    if (has_zero && index_of_negative_1 != -1) {
-        std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
-        for (auto& s : shape) {
-            error_msg += std::to_string(s) + ",";
-        }
-        error_msg += ") because the unspecified dimension size -1 can be any value and is ambiguous";
-        TT_THROW("{}", error_msg);
-    }
-
-    ttsl::SmallVector<uint32_t> new_shape(shape.size());
-    std::copy(shape.begin(), shape.end(), new_shape.begin());
-    if (index_of_negative_1 == -1) {
-        TT_FATAL(new_volume == old_volume, "Invalid arguments to reshape");
-    } else {
-        TT_FATAL(old_volume % new_volume == 0, "Invalid arguments to reshape");
-        new_shape[index_of_negative_1] = old_volume / new_volume;
-    }
-
-    return tt::tt_metal::Shape(std::move(new_shape));
-}
-
-int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint64_t> strides) {
-    int flat_index = 0;
-    for (auto i = 0; i < indices.size(); i++) {
-        flat_index += indices[i] * strides[i];
-    }
-    return flat_index;
-};
-
-std::size_t compute_buffer_size(const tt::tt_metal::Shape& shape, DataType data_type, const Tile& tile) {
-    const size_t volume = shape.volume();
-    auto tile_hw = tile.get_tile_hw();
-    if (data_type == DataType::BFLOAT8_B) {
-        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp8_b);
-        TT_ASSERT(volume % tile_hw == 0);
-        const auto bfloat8_b_volume = volume / tile_hw * tile_size_bytes;
-        TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
-        return bfloat8_b_volume / sizeof(std::uint32_t);
-    }
-    if (data_type == DataType::BFLOAT4_B) {
-        auto tile_size_bytes = tile.get_tile_size(DataFormat::Bfp4_b);
-        TT_ASSERT(volume % tile_hw == 0);
-        const auto bfloat4_b_volume = volume / tile_hw * tile_size_bytes;
-        TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
-        return bfloat4_b_volume / sizeof(std::uint32_t);
-    }
-    return volume;
-}
-
-bool is_arch_gs(const tt::ARCH& arch) { return arch == tt::ARCH::GRAYSKULL; }
-
-bool is_arch_whb0(const tt::ARCH& arch) { return arch == tt::ARCH::WORMHOLE_B0; }
+namespace tt::tt_metal {
 
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
-ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
-    const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
-    const auto last_shard_height =
-        shape.height() % shard_shape.height() > 0 ? shape.height() % shard_shape.height() : shard_shape.height();
-    const auto num_shards_width = tt::div_up(shape.width(), shard_shape.width());
-    const auto last_shard_width =
-        shape.width() % shard_shape.width() > 0 ? shape.width() % shard_shape.width() : shard_shape.width();
+CBDescriptor cb_descriptor_from_sharded_tensor(
+    uint8_t cb_index,
+    const Tensor& tensor,
+    uint32_t address_offset,
+    uint32_t total_size,
+    const std::optional<CoreRangeSet>& core_ranges) {
+    TT_FATAL(tensor.is_sharded(), "Tensor must be sharded to automatically create a CBDescriptor");
+    TT_FATAL(
+        (address_offset + total_size) <= tensor.buffer()->aligned_size_per_bank(),
+        "Address offset + total size exceeds buffer size");
 
-    return ShardDivisionSpec{num_shards_height, last_shard_height, num_shards_width, last_shard_width};
-};
+    uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
 
-}  // namespace tt_metal
+    return CBDescriptor{
+        .total_size = effective_total_size,
+        .core_ranges = core_ranges.value_or(tensor.shard_spec()->grid),
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = cb_index,
+            .data_format = datatype_to_dataformat_converter(tensor.tensor_spec().tensor_layout().get_data_type()),
+            .page_size = tensor.buffer()->aligned_page_size(),
+            .tile = TileDescriptor(tensor.tensor_spec().tile())}},
+        .buffer = tensor.buffer(),
+        .address_offset = address_offset,
+        .global_circular_buffer = nullptr};
+}
 
-}  // namespace tt
+std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor& tensor, NOC noc) {
+    /**
+    This function takes in a sharded device tensor (can be legacy 2D sharded or ND sharded) and returns the optimal
+    worker cores to launch programs on for the tensor.
+
+    If the tensor is L1 sharded, the function returns a vector of CoreCoords of all the cores that have shards on them
+    in order (based on if the shard orientation is in row or column major order).
+
+    If the tensor is DRAM sharded, the function returns a vector of CoreCoords in order (based on shard orientation) of
+    the optimal worker core for each DRAM bank with shards.
+
+    The intended use for this API is inside sharded program factories to get the optimal worker cores to launch the
+    program and kernels on. Since the core grid provided in the shard_spec and nd_shard_spec may be larger than the
+    number of shards that exist, not all cores in the core grid will have shards on them. This API returns the cores
+    that have shards on them in order (based on shard orientation) so that the program and kernels will not be launched
+    on cores with no data on them (this can cause failures).
+    **/
+    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Tensor must be on device to compute optimal worker cores.");
+    TT_FATAL(tensor.is_sharded(), "Tensor must be sharded to compute optimal worker cores.");
+    if (!tensor.memory_config().is_dram()) {
+        return tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    }
+    TT_FATAL(tensor.device() != nullptr, "Device pointer must be valid when selecting optimal DRAM worker cores");
+    auto all_dram_workers = tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto dram_banks = tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    std::vector<CoreCoord> ordered_worker_cores_with_data;
+    ordered_worker_cores_with_data.reserve(dram_banks.size());
+    for (const auto& dram_core : dram_banks) {
+        const uint32_t dram_channel = tensor.device()->dram_channel_from_logical_core(dram_core);
+        ordered_worker_cores_with_data.push_back(all_dram_workers[dram_channel]);
+    }
+    return ordered_worker_cores_with_data;
+}
+
+}  // namespace tt::tt_metal

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,11 +36,7 @@ inline size_t num_segerated_classes(size_t max_size_bytes, size_t size_segregate
     return std::clamp(count, ssize_t{2}, max_count);
 }
 
-namespace tt {
-
-namespace tt_metal {
-
-namespace allocator {
+namespace tt::tt_metal::allocator {
 
 FreeListOpt::FreeListOpt(
     DeviceAddr max_size_bytes,
@@ -125,8 +121,8 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
                     break;
-                } else if (
-                    block_size_[block_index] >= alloc_size &&
+                }
+                if (block_size_[block_index] >= alloc_size &&
                     (target_block_index == -1 || block_size_[block_index] < block_size_[target_block_index])) {
                     target_block_index = block_index;
                     segregated_list = &free_blocks;
@@ -338,8 +334,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
     std::vector<std::pair<DeviceAddr, DeviceAddr>> addresses;
 
     for (size_t i = size_segregated_index; i < size_segregated_count; i++) {
-        for (size_t j = 0; j < free_blocks_segregated_by_size_[i].size(); j++) {
-            size_t block_index = free_blocks_segregated_by_size_[i][j];
+        for (size_t block_index : free_blocks_segregated_by_size_[i]) {
             if (block_size_[block_index] >= alloc_size) {
                 addresses.push_back(
                     {block_address_[block_index] + offset_bytes_,
@@ -362,6 +357,15 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::allocated_addresses(
     }
 
     return allocated_addresses;
+}
+
+std::optional<DeviceAddr> FreeListOpt::get_allocation_size(DeviceAddr absolute_address) const {
+    DeviceAddr addr = absolute_address - offset_bytes_;
+    auto block_index_opt = get_block_index_from_alloc_table(addr);
+    if (!block_index_opt.has_value()) {
+        return std::nullopt;
+    }
+    return block_size_[*block_index_opt];
 }
 
 size_t FreeListOpt::alloc_meta_block(
@@ -400,7 +404,6 @@ Statistics FreeListOpt::get_statistics() const {
     size_t total_allocated_bytes = 0;
     size_t total_free_bytes = 0;
     size_t largest_free_block_bytes = 0;
-    std::vector<uint32_t> largest_free_block_addrs;
 
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
@@ -410,11 +413,7 @@ Statistics FreeListOpt::get_statistics() const {
             total_allocated_bytes += block_size_[i];
         } else {
             total_free_bytes += block_size_[i];
-            if (block_size_[i] >= largest_free_block_bytes) {
-                largest_free_block_bytes = block_size_[i];
-                // XXX: This is going to overflow
-                largest_free_block_addrs.push_back(block_address_[i] + offset_bytes_);
-            }
+            largest_free_block_bytes = std::max(block_size_[i], largest_free_block_bytes);
         }
     }
 
@@ -428,9 +427,6 @@ Statistics FreeListOpt::get_statistics() const {
         .total_allocated_bytes = total_allocated_bytes,
         .total_free_bytes = total_free_bytes,
         .largest_free_block_bytes = largest_free_block_bytes,
-        // Why do we need largest_free_block_addrs? Without it the entire loop can be removed
-        // and statistics can be tracked during allocation and deallocation
-        .largest_free_block_addrs = std::move(largest_free_block_addrs),
     };
 }
 
@@ -445,16 +441,16 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
             out << "  Size class " << i << ": (" << size_t(size_segregated_base * (size_t{1} << i))
                 << " - inf) blocks: ";
         }
-        for (size_t j = 0; j < free_blocks_segregated_by_size_[i].size(); j++) {
-            out << free_blocks_segregated_by_size_[i][j] << " ";
+        for (size_t block_id : free_blocks_segregated_by_size_[i]) {
+            out << block_id << " ";
         }
 
         out << std::endl;
     }
 
     out << "Free slots in block table: ";
-    for (size_t i = 0; i < free_meta_block_indices_.size(); i++) {
-        out << free_meta_block_indices_[i] << " ";
+    for (unsigned long free_meta_block_index : free_meta_block_indices_) {
+        out << free_meta_block_index << " ";
     }
     out << std::endl;
 
@@ -529,7 +525,8 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
             continue;
-        } else if (block_is_allocated_[i]) {
+        }
+        if (block_is_allocated_[i]) {
             TT_FATAL(
                 block_address_[i] >= shrunk_address,
                 "Shrink size {} cuts into allocated block at address {}",
@@ -651,6 +648,15 @@ bool FreeListOpt::is_address_in_alloc_table(DeviceAddr address) const {
     }
     return false;
 }
+std::optional<size_t> FreeListOpt::get_block_index_from_alloc_table(DeviceAddr address) const {
+    size_t bucket = hash_device_address(address);
+    for (const auto& [addr, block_index] : allocated_block_table_[bucket]) {
+        if (addr == address) {
+            return block_index;
+        }
+    }
+    return std::nullopt;
+}
 std::optional<size_t> FreeListOpt::get_and_remove_from_alloc_table(DeviceAddr address) {
     size_t bucket = hash_device_address(address);
     // It's common to deallocate the last allocated block, so search from the back
@@ -670,6 +676,4 @@ void FreeListOpt::update_lowest_occupied_address(DeviceAddr address) {
     }
 }
 
-}  // namespace allocator
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal::allocator

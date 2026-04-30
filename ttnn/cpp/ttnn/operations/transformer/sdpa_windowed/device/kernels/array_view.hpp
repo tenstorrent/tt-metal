@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/assert.h"
-#include "debug/dprint_tile.h"
-#include "debug/dprint.h"
+#pragma once
+
+#include "api/debug/assert.h"
+#include "api/debug/dprint_tile.h"
+#include "api/debug/dprint.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
@@ -98,16 +100,20 @@ struct ArrayView {
         auto ptr = _ptr;
         for (uint32_t i = 0; i < _size; ++i) {
             DPRINT << DEC() << ptr[i] << " ";
+            DEVICE_PRINT("{} ", ptr[i]);
         }
         DPRINT << ENDL();
+        DEVICE_PRINT("\n");
     }
 
     void print_hex() const {
         auto ptr = _ptr;
         for (uint32_t i = 0; i < _size; ++i) {
             DPRINT << HEX() << ptr[i] << " ";
+            DEVICE_PRINT("{:X} ", ptr[i]);
         }
         DPRINT << ENDL();
+        DEVICE_PRINT("\n");
     }
 #endif
 

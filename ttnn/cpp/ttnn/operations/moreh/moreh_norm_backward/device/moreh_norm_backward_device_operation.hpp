@@ -1,11 +1,12 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 #define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
     struct FactoryName {                                                                    \
@@ -58,28 +59,22 @@ struct MorehNormBackwardOperation {
     using program_factory_t = std::variant<ProgramFactory>;
 
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const Tensor& output,
-        const Tensor& output_grad,
-        float p,
-        const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
-        bool keepdim,
-        const std::optional<Tensor>& input_grad,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_norm_backward
 
 namespace ttnn::prim {
-constexpr auto moreh_norm_backward = ttnn::register_operation<
-    "ttnn::prim::moreh_norm_backward",
-    ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation>();
+ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation::tensor_return_value_t moreh_norm_backward(
+    const Tensor& input,
+    const Tensor& output,
+    const Tensor& output_grad,
+    float p,
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
+    bool keepdim,
+    const std::optional<Tensor>& input_grad,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }

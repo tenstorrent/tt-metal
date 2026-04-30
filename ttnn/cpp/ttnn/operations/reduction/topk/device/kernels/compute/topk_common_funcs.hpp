@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-namespace NAMESPACE {
+#pragma once
+
 void process_and_sort_tiles(
     uint32_t input_cb_index,
     uint32_t index_cb_index,
@@ -19,34 +20,39 @@ void process_and_sort_tiles(
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         acquire_dst();
         // local sort into k groups
-        cb_wait_front(input_cb_index, 2);
-        cb_wait_front(index_cb_index, 2);
+        // for the last iteration, we only need to wait for 1 tile if Wt is odd, otherwise we wait for 2 tiles
+        uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
+        cb_wait_front(input_cb_index, tiles_to_wait);
+        cb_wait_front(index_cb_index, tiles_to_wait);
 
         reconfig_data_format_srca(input_cb_index);
         transpose_wh_init_short(input_cb_index);
         transpose_wh_tile(input_cb_index, 0, 0);
-        transpose_wh_tile(input_cb_index, 1, 1);
-
+        if (tiles_to_wait == 2) {
+            transpose_wh_tile(input_cb_index, 1, 1);
+        }
         reconfig_data_format_srca(index_cb_index);
         transpose_wh_init_short(index_cb_index);
         transpose_wh_tile(index_cb_index, 0, 2);
-        transpose_wh_tile(index_cb_index, 1, 3);
-
+        if (tiles_to_wait == 2) {
+            transpose_wh_tile(index_cb_index, 1, 3);
+        }
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
-
         // pack value tiles into cb_intermed0
         pack_reconfig_data_format(input_transposed_cb_index);
         pack_tile(0, input_transposed_cb_index);
-        pack_tile(1, input_transposed_cb_index);
-
+        if (tiles_to_wait == 2) {
+            pack_tile(1, input_transposed_cb_index);
+        }
         // pack index tiles into cb_intermed1
         pack_reconfig_data_format(index_transposed_cb_index);
         pack_tile(2, index_transposed_cb_index);
-        pack_tile(3, index_transposed_cb_index);
-
-        cb_pop_front(input_cb_index, 2);
-        cb_pop_front(index_cb_index, 2);
+        if (tiles_to_wait == 2) {
+            pack_tile(3, index_transposed_cb_index);
+        }
+        cb_pop_front(input_cb_index, tiles_to_wait);
+        cb_pop_front(index_cb_index, tiles_to_wait);
         release_dst();
         ascending = switch_dir ? !ascending : ascending;
     }
@@ -267,7 +273,9 @@ void process_iteration(
 void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, uint32_t Kt, uint32_t Wt) {
     reconfig_data_format_srca(transposed_cb_index);
     transpose_wh_init_short(transposed_cb_index);
-    pack_reconfig_data_format(transposed_cb_index);
+    // Pack using the DESTINATION CB format: transposed_cb may be bf16 (higher-precision
+    // intermediate) while dest_cb is the original bfp8/bfp4 output format.
+    pack_reconfig_data_format(dest_cb_index);
 
     cb_wait_front(transposed_cb_index, Kt);
     for (uint32_t i = 0; i < Kt; ++i) {
@@ -281,4 +289,3 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
     cb_wait_front(transposed_cb_index, Wt);
     cb_pop_front(transposed_cb_index, Wt);
 }
-}  // namespace NAMESPACE

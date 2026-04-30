@@ -1,11 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_norm_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
 
@@ -20,7 +22,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 }
 
 inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
-    const auto input_rank = input.padded_shape().rank();
+    const auto input_rank = input.logical_shape().rank();
     TT_FATAL(
         (dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
         "dim must be between 0 and {}.",
@@ -110,22 +112,17 @@ void MorehNormOperation::validate_inputs(
 MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto dim = operation_attributes.dim;
-    const auto input_rank = tensor_args.input.padded_shape().rank();
+    const auto input_rank = tensor_args.input.logical_shape().rank();
     if (dim == input_rank - 1) {
         return ProgramFactoryWOther{};
-    } else if (dim == input_rank - 2) {
-        return ProgramFactoryHOther{};
-    } else {
-        return ProgramFactoryNCOther{};
     }
+    if (dim == input_rank - 2) {
+        return ProgramFactoryHOther{};
+    }
+    return ProgramFactoryNCOther{};
 }
 
 void MorehNormOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehNormOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
@@ -172,7 +169,11 @@ MorehNormOperation::tensor_return_value_t MorehNormOperation::create_output_tens
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), input.device());
 }
 
-std::tuple<MorehNormOperation::operation_attributes_t, MorehNormOperation::tensor_args_t> MorehNormOperation::invoke(
+}  // namespace ttnn::operations::moreh::moreh_norm
+
+namespace ttnn::prim {
+
+ttnn::operations::moreh::moreh_norm::MorehNormOperation::tensor_return_value_t moreh_norm(
     const Tensor& input,
     float p,
     int64_t dim,
@@ -180,18 +181,18 @@ std::tuple<MorehNormOperation::operation_attributes_t, MorehNormOperation::tenso
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            p,
-            dim,
-            keepdim,
-            memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
-        },
-        tensor_args_t{
-            input,
-            output,
-        },
+    using OperationType = ttnn::operations::moreh::moreh_norm::MorehNormOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        p,
+        dim,
+        keepdim,
+        memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
     };
+    auto tensor_args = OperationType::tensor_args_t{input, output};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
-}  // namespace ttnn::operations::moreh::moreh_norm
+
+}  // namespace ttnn::prim

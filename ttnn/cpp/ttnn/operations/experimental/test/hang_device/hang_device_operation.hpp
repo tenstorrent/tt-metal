@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
@@ -36,8 +36,6 @@ struct ExecuteTestHangDeviceOperation {
     };
 
     using program_factory_t = std::variant<SingleCore>;
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -49,6 +47,10 @@ struct ExecuteTestHangDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(const Tensor& input_tensor);
 };
 
-constexpr auto hang_device_operation =
-    ttnn::register_operation<"ttnn::prim::test_hang_device_operation", ttnn::prim::ExecuteTestHangDeviceOperation>();
 }  // namespace ttnn::prim
+
+namespace ttnn::operations::experimental::test {
+
+Tensor test_hang_device_operation(const Tensor& input_tensor);
+
+}  // namespace ttnn::operations::experimental::test

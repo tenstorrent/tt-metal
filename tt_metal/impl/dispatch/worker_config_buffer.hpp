@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,7 @@
 #include <vector>
 #include <tt-metalium/hal_types.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct ConfigBufferEntry {
     uint32_t addr;
@@ -58,5 +56,4 @@ private:
     std::vector<ConfigBufferEntry> reservation_;
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

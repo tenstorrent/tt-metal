@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,7 +65,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
 
     const uint32_t in0_t{2};        // input
     const uint32_t in1_t{1};        // mask
-    const uint32_t intermed0_t{1};  // accumalated sum
+    const uint32_t intermed0_t{1};  // accumulated sum
     const uint32_t out0_t{2};       // output
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
@@ -89,7 +89,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
         {
             {tt::CBIndex::c_0, in0_t},         // input
             {tt::CBIndex::c_1, in1_t},         // mask
-            {tt::CBIndex::c_24, intermed0_t},  // accumalated sum
+            {tt::CBIndex::c_24, intermed0_t},  // accumulated sum
             {tt::CBIndex::c_16, out0_t},       // output
         });
     ////////////////////////////////////////////////////////////////////////////
@@ -104,9 +104,9 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     }
     std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-    const auto reader_kernel_file{
+    const auto* const reader_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/reader_moreh_int_sum_h.cpp"};
-    const auto writer_kernel_file{
+    const auto* const writer_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/writer_moreh_int_sum_h.cpp"};
     const auto reader_kernel_id{
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
@@ -124,7 +124,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file{
+    const auto* const compute_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_int_sum_h.cpp"};
     CreateComputeKernel(
         program,
@@ -190,7 +190,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
 
 void MorehSumOperation::MorehSumHIntFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
@@ -200,8 +200,8 @@ void MorehSumOperation::MorehSumHIntFactory::override_runtime_arguments(
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
     log_debug(tt::LogOp, "{}:{} args_callback ", __func__, __LINE__);
-    auto src_dram_buffer = tensor_args.input.buffer();
-    auto dst_dram_buffer = tensor_return_value.buffer();
+    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* dst_dram_buffer = tensor_return_value.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

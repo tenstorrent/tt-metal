@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "dev_mem_map.h"
-#include "dev_msgs.h"
+#include "hostdev/dev_msgs.h"
 #include "noc/noc_parameters.h"
 
 // Validate assumptions on mailbox layout on host compile

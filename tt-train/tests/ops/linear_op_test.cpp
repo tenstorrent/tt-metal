@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,16 +56,20 @@ bool compare_tensors_for_broken(const ttnn::Tensor& t1, const ttnn::Tensor& t2, 
 TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
     auto tensor = ttml::autograd::create_tensor();
     ttml::init::uniform_init(tensor, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    tensor->set_requires_grad(true);
 
     auto weight = ttml::autograd::create_tensor();
     ttml::init::uniform_init(weight, ttnn::Shape({1, 1, 64, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    weight->set_requires_grad(true);
 
     auto bias = ttml::autograd::create_tensor();
     ttml::init::uniform_init(bias, ttnn::Shape({1, 1, 1, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
+    bias->set_requires_grad(true);
 
     auto out = ttml::autograd::create_tensor();
     ttml::init::uniform_init(out, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
     out->set_grad(out->get_value());
+    out->set_requires_grad(true);
 
     ttml::ops::ttnn_linear_backward(tensor, weight, bias, out);
     auto ttnn_tensor_grad = tensor->get_grad();
@@ -80,7 +84,7 @@ TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
     auto moreh_weight_grad = weight->get_grad();
     auto moreh_bias_grad = bias->get_grad();
 
-    const float eps = 2e-2F;
+    const float eps = 3125e-5F;
     compare_tensors(ttnn_tensor_grad, moreh_tensor_grad, eps);
     compare_tensors(ttnn_weight_grad, moreh_weight_grad, eps);
     compare_tensors(ttnn_bias_grad, moreh_bias_grad, eps);

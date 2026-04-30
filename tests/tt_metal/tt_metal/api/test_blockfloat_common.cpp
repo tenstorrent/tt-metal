@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <stdint.h>
-#include <tt-metalium/blockfloat_common.hpp>
+#include <cstdint>
+#include "impl/data_format/blockfloat_common.hpp"
 #include <bit>
 #include <memory>
 

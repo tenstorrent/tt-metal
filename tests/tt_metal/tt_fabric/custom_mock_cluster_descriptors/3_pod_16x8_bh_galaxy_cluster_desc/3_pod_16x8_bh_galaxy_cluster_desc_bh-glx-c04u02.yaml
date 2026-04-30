@@ -1,0 +1,1225 @@
+arch:
+  0: blackhole
+  1: blackhole
+  2: blackhole
+  3: blackhole
+  4: blackhole
+  5: blackhole
+  6: blackhole
+  7: blackhole
+  8: blackhole
+  9: blackhole
+  10: blackhole
+  11: blackhole
+  12: blackhole
+  13: blackhole
+  14: blackhole
+  15: blackhole
+  16: blackhole
+  17: blackhole
+  18: blackhole
+  19: blackhole
+  20: blackhole
+  21: blackhole
+  22: blackhole
+  23: blackhole
+  24: blackhole
+  25: blackhole
+  26: blackhole
+  27: blackhole
+  28: blackhole
+  29: blackhole
+  30: blackhole
+  31: blackhole
+chips:
+  {}
+chip_unique_ids:
+  31: 18391595455951996786
+  30: 18320394748582072270
+  29: 18310182031185011076
+  12: 10095172113388660835
+  11: 10042136791703405459
+  10: 8302446841931276281
+  9: 7171865758709596460
+  8: 7073414691673652206
+  7: 6420485460673818575
+  6: 5741783371909634490
+  5: 3817099108781386161
+  4: 3510087693624309599
+  3: 2693832278998372397
+  2: 2094490898890378824
+  1: 973934847842590062
+  0: 578180088283839820
+  13: 10497665035898465044
+  14: 11781066872327625121
+  15: 11902215238512041434
+  16: 12124560775785456531
+  17: 12252003250930570168
+  18: 12817718021806082243
+  19: 13795149434032068290
+  20: 14756090105321737480
+  21: 15105780741813263091
+  22: 15282946231094097956
+  23: 15980807628334330559
+  24: 16421467553976953250
+  25: 16842549737647286036
+  26: 17104837770358497479
+  27: 17193611600350203365
+  28: 18009140269052656996
+ethernet_connections:
+  -
+    - chip: 0
+      chan: 0
+    - chip: 13
+      chan: 6
+  -
+    - chip: 0
+      chan: 1
+    - chip: 13
+      chan: 7
+  -
+    - chip: 0
+      chan: 2
+    - chip: 14
+      chan: 4
+  -
+    - chip: 0
+      chan: 3
+    - chip: 14
+      chan: 5
+  -
+    - chip: 0
+      chan: 4
+    - chip: 26
+      chan: 2
+  -
+    - chip: 0
+      chan: 5
+    - chip: 26
+      chan: 3
+  -
+    - chip: 0
+      chan: 6
+    - chip: 5
+      chan: 6
+  -
+    - chip: 0
+      chan: 7
+    - chip: 5
+      chan: 7
+  -
+    - chip: 1
+      chan: 2
+    - chip: 4
+      chan: 4
+  -
+    - chip: 1
+      chan: 3
+    - chip: 4
+      chan: 5
+  -
+    - chip: 1
+      chan: 4
+    - chip: 16
+      chan: 4
+  -
+    - chip: 1
+      chan: 5
+    - chip: 16
+      chan: 5
+  -
+    - chip: 1
+      chan: 6
+    - chip: 23
+      chan: 0
+  -
+    - chip: 1
+      chan: 7
+    - chip: 23
+      chan: 1
+  -
+    - chip: 2
+      chan: 0
+    - chip: 16
+      chan: 6
+  -
+    - chip: 2
+      chan: 1
+    - chip: 16
+      chan: 7
+  -
+    - chip: 2
+      chan: 2
+    - chip: 15
+      chan: 4
+  -
+    - chip: 2
+      chan: 3
+    - chip: 15
+      chan: 5
+  -
+    - chip: 2
+      chan: 4
+    - chip: 23
+      chan: 4
+  -
+    - chip: 2
+      chan: 5
+    - chip: 23
+      chan: 5
+  -
+    - chip: 2
+      chan: 6
+    - chip: 24
+      chan: 6
+  -
+    - chip: 2
+      chan: 7
+    - chip: 24
+      chan: 7
+  -
+    - chip: 3
+      chan: 2
+    - chip: 6
+      chan: 4
+  -
+    - chip: 3
+      chan: 3
+    - chip: 6
+      chan: 5
+  -
+    - chip: 3
+      chan: 4
+    - chip: 16
+      chan: 2
+  -
+    - chip: 3
+      chan: 5
+    - chip: 16
+      chan: 3
+  -
+    - chip: 3
+      chan: 6
+    - chip: 15
+      chan: 0
+  -
+    - chip: 3
+      chan: 7
+    - chip: 15
+      chan: 1
+  -
+    - chip: 4
+      chan: 2
+    - chip: 28
+      chan: 4
+  -
+    - chip: 4
+      chan: 3
+    - chip: 28
+      chan: 5
+  -
+    - chip: 4
+      chan: 6
+    - chip: 10
+      chan: 0
+  -
+    - chip: 4
+      chan: 7
+    - chip: 10
+      chan: 1
+  -
+    - chip: 5
+      chan: 0
+    - chip: 28
+      chan: 6
+  -
+    - chip: 5
+      chan: 1
+    - chip: 28
+      chan: 7
+  -
+    - chip: 5
+      chan: 2
+    - chip: 31
+      chan: 4
+  -
+    - chip: 5
+      chan: 3
+    - chip: 31
+      chan: 5
+  -
+    - chip: 5
+      chan: 4
+    - chip: 10
+      chan: 2
+  -
+    - chip: 5
+      chan: 5
+    - chip: 10
+      chan: 3
+  -
+    - chip: 6
+      chan: 2
+    - chip: 22
+      chan: 4
+  -
+    - chip: 6
+      chan: 3
+    - chip: 22
+      chan: 5
+  -
+    - chip: 6
+      chan: 6
+    - chip: 30
+      chan: 0
+  -
+    - chip: 6
+      chan: 7
+    - chip: 30
+      chan: 1
+  -
+    - chip: 7
+      chan: 0
+    - chip: 20
+      chan: 6
+  -
+    - chip: 7
+      chan: 1
+    - chip: 20
+      chan: 7
+  -
+    - chip: 7
+      chan: 4
+    - chip: 27
+      chan: 2
+  -
+    - chip: 7
+      chan: 5
+    - chip: 27
+      chan: 3
+  -
+    - chip: 7
+      chan: 6
+    - chip: 12
+      chan: 6
+  -
+    - chip: 7
+      chan: 7
+    - chip: 12
+      chan: 7
+  -
+    - chip: 8
+      chan: 2
+    - chip: 29
+      chan: 4
+  -
+    - chip: 8
+      chan: 3
+    - chip: 29
+      chan: 5
+  -
+    - chip: 8
+      chan: 4
+    - chip: 18
+      chan: 4
+  -
+    - chip: 8
+      chan: 5
+    - chip: 18
+      chan: 5
+  -
+    - chip: 8
+      chan: 6
+    - chip: 24
+      chan: 0
+  -
+    - chip: 8
+      chan: 7
+    - chip: 24
+      chan: 1
+  -
+    - chip: 9
+      chan: 4
+    - chip: 13
+      chan: 2
+  -
+    - chip: 9
+      chan: 5
+    - chip: 13
+      chan: 3
+  -
+    - chip: 9
+      chan: 6
+    - chip: 14
+      chan: 0
+  -
+    - chip: 9
+      chan: 7
+    - chip: 14
+      chan: 1
+  -
+    - chip: 10
+      chan: 4
+    - chip: 23
+      chan: 2
+  -
+    - chip: 10
+      chan: 5
+    - chip: 23
+      chan: 3
+  -
+    - chip: 10
+      chan: 6
+    - chip: 26
+      chan: 6
+  -
+    - chip: 10
+      chan: 7
+    - chip: 26
+      chan: 7
+  -
+    - chip: 11
+      chan: 2
+    - chip: 20
+      chan: 4
+  -
+    - chip: 11
+      chan: 3
+    - chip: 20
+      chan: 5
+  -
+    - chip: 11
+      chan: 4
+    - chip: 29
+      chan: 2
+  -
+    - chip: 11
+      chan: 5
+    - chip: 29
+      chan: 3
+  -
+    - chip: 11
+      chan: 6
+    - chip: 27
+      chan: 0
+  -
+    - chip: 11
+      chan: 7
+    - chip: 27
+      chan: 1
+  -
+    - chip: 12
+      chan: 0
+    - chip: 22
+      chan: 6
+  -
+    - chip: 12
+      chan: 1
+    - chip: 22
+      chan: 7
+  -
+    - chip: 12
+      chan: 4
+    - chip: 30
+      chan: 2
+  -
+    - chip: 12
+      chan: 5
+    - chip: 30
+      chan: 3
+  -
+    - chip: 13
+      chan: 4
+    - chip: 25
+      chan: 2
+  -
+    - chip: 13
+      chan: 5
+    - chip: 25
+      chan: 3
+  -
+    - chip: 14
+      chan: 6
+    - chip: 31
+      chan: 6
+  -
+    - chip: 14
+      chan: 7
+    - chip: 31
+      chan: 7
+  -
+    - chip: 15
+      chan: 2
+    - chip: 30
+      chan: 4
+  -
+    - chip: 15
+      chan: 3
+    - chip: 30
+      chan: 5
+  -
+    - chip: 15
+      chan: 6
+    - chip: 19
+      chan: 6
+  -
+    - chip: 15
+      chan: 7
+    - chip: 19
+      chan: 7
+  -
+    - chip: 17
+      chan: 4
+    - chip: 28
+      chan: 2
+  -
+    - chip: 17
+      chan: 5
+    - chip: 28
+      chan: 3
+  -
+    - chip: 17
+      chan: 6
+    - chip: 31
+      chan: 0
+  -
+    - chip: 17
+      chan: 7
+    - chip: 31
+      chan: 1
+  -
+    - chip: 18
+      chan: 2
+    - chip: 25
+      chan: 4
+  -
+    - chip: 18
+      chan: 3
+    - chip: 25
+      chan: 5
+  -
+    - chip: 18
+      chan: 6
+    - chip: 21
+      chan: 0
+  -
+    - chip: 18
+      chan: 7
+    - chip: 21
+      chan: 1
+  -
+    - chip: 19
+      chan: 0
+    - chip: 29
+      chan: 6
+  -
+    - chip: 19
+      chan: 1
+    - chip: 29
+      chan: 7
+  -
+    - chip: 19
+      chan: 2
+    - chip: 27
+      chan: 4
+  -
+    - chip: 19
+      chan: 3
+    - chip: 27
+      chan: 5
+  -
+    - chip: 19
+      chan: 4
+    - chip: 24
+      chan: 2
+  -
+    - chip: 19
+      chan: 5
+    - chip: 24
+      chan: 3
+  -
+    - chip: 21
+      chan: 2
+    - chip: 26
+      chan: 4
+  -
+    - chip: 21
+      chan: 3
+    - chip: 26
+      chan: 5
+  -
+    - chip: 21
+      chan: 4
+    - chip: 24
+      chan: 4
+  -
+    - chip: 21
+      chan: 5
+    - chip: 24
+      chan: 5
+  -
+    - chip: 21
+      chan: 6
+    - chip: 23
+      chan: 6
+  -
+    - chip: 21
+      chan: 7
+    - chip: 23
+      chan: 7
+  -
+    - chip: 25
+      chan: 6
+    - chip: 26
+      chan: 0
+  -
+    - chip: 25
+      chan: 7
+    - chip: 26
+      chan: 1
+  -
+    - chip: 27
+      chan: 6
+    - chip: 30
+      chan: 6
+  -
+    - chip: 27
+      chan: 7
+    - chip: 30
+      chan: 7
+ethernet_connections_to_remote_devices:
+  -
+    - chip: 31
+      chan: 3
+    - remote_chip_id: 5396612779849417785
+      chan: 3
+  -
+    - chip: 31
+      chan: 2
+    - remote_chip_id: 5396612779849417785
+      chan: 2
+  -
+    - chip: 29
+      chan: 1
+    - remote_chip_id: 11500930930067800976
+      chan: 1
+  -
+    - chip: 29
+      chan: 0
+    - remote_chip_id: 11500930930067800976
+      chan: 0
+  -
+    - chip: 28
+      chan: 1
+    - remote_chip_id: 17410296414713393941
+      chan: 1
+  -
+    - chip: 28
+      chan: 0
+    - remote_chip_id: 17410296414713393941
+      chan: 0
+  -
+    - chip: 25
+      chan: 1
+    - remote_chip_id: 9625191651702293063
+      chan: 1
+  -
+    - chip: 25
+      chan: 0
+    - remote_chip_id: 9625191651702293063
+      chan: 0
+  -
+    - chip: 22
+      chan: 3
+    - remote_chip_id: 10892030964929647059
+      chan: 3
+  -
+    - chip: 22
+      chan: 2
+    - remote_chip_id: 10892030964929647059
+      chan: 2
+  -
+    - chip: 22
+      chan: 1
+    - remote_chip_id: 5264446625777485851
+      chan: 1
+  -
+    - chip: 22
+      chan: 0
+    - remote_chip_id: 5264446625777485851
+      chan: 0
+  -
+    - chip: 20
+      chan: 3
+    - remote_chip_id: 7614216125286117671
+      chan: 3
+  -
+    - chip: 20
+      chan: 2
+    - remote_chip_id: 7614216125286117671
+      chan: 2
+  -
+    - chip: 20
+      chan: 1
+    - remote_chip_id: 7508561814123170667
+      chan: 1
+  -
+    - chip: 20
+      chan: 0
+    - remote_chip_id: 7508561814123170667
+      chan: 0
+  -
+    - chip: 18
+      chan: 1
+    - remote_chip_id: 11473033243036009873
+      chan: 1
+  -
+    - chip: 18
+      chan: 0
+    - remote_chip_id: 11473033243036009873
+      chan: 0
+  -
+    - chip: 1
+      chan: 1
+    - remote_chip_id: 17822864117224555192
+      chan: 1
+  -
+    - chip: 1
+      chan: 0
+    - remote_chip_id: 17822864117224555192
+      chan: 0
+  -
+    - chip: 14
+      chan: 3
+    - remote_chip_id: 11335935854867059367
+      chan: 3
+  -
+    - chip: 14
+      chan: 2
+    - remote_chip_id: 11335935854867059367
+      chan: 2
+  -
+    - chip: 3
+      chan: 1
+    - remote_chip_id: 4838533818926680467
+      chan: 1
+  -
+    - chip: 3
+      chan: 0
+    - remote_chip_id: 4838533818926680467
+      chan: 0
+  -
+    - chip: 16
+      chan: 1
+    - remote_chip_id: 9360428833305773002
+      chan: 1
+  -
+    - chip: 16
+      chan: 0
+    - remote_chip_id: 9360428833305773002
+      chan: 0
+  -
+    - chip: 4
+      chan: 1
+    - remote_chip_id: 13360783224297821802
+      chan: 1
+  -
+    - chip: 4
+      chan: 0
+    - remote_chip_id: 13360783224297821802
+      chan: 0
+  -
+    - chip: 17
+      chan: 3
+    - remote_chip_id: 14186346346173114096
+      chan: 3
+  -
+    - chip: 17
+      chan: 2
+    - remote_chip_id: 14186346346173114096
+      chan: 2
+  -
+    - chip: 17
+      chan: 1
+    - remote_chip_id: 11605828821780544692
+      chan: 1
+  -
+    - chip: 17
+      chan: 0
+    - remote_chip_id: 11605828821780544692
+      chan: 0
+  -
+    - chip: 6
+      chan: 1
+    - remote_chip_id: 4966356698531596143
+      chan: 1
+  -
+    - chip: 6
+      chan: 0
+    - remote_chip_id: 4966356698531596143
+      chan: 0
+  -
+    - chip: 7
+      chan: 3
+    - remote_chip_id: 11270124907340464509
+      chan: 3
+  -
+    - chip: 7
+      chan: 2
+    - remote_chip_id: 11270124907340464509
+      chan: 2
+  -
+    - chip: 8
+      chan: 1
+    - remote_chip_id: 11120670045347445391
+      chan: 1
+  -
+    - chip: 8
+      chan: 0
+    - remote_chip_id: 11120670045347445391
+      chan: 0
+  -
+    - chip: 9
+      chan: 3
+    - remote_chip_id: 2175909528330382450
+      chan: 3
+  -
+    - chip: 9
+      chan: 2
+    - remote_chip_id: 2175909528330382450
+      chan: 2
+  -
+    - chip: 9
+      chan: 1
+    - remote_chip_id: 15995117458266020616
+      chan: 1
+  -
+    - chip: 9
+      chan: 0
+    - remote_chip_id: 15995117458266020616
+      chan: 0
+  -
+    - chip: 11
+      chan: 1
+    - remote_chip_id: 16019296790506217048
+      chan: 1
+  -
+    - chip: 11
+      chan: 0
+    - remote_chip_id: 16019296790506217048
+      chan: 0
+  -
+    - chip: 12
+      chan: 3
+    - remote_chip_id: 9215320793489933881
+      chan: 3
+  -
+    - chip: 12
+      chan: 2
+    - remote_chip_id: 9215320793489933881
+      chan: 2
+  -
+    - chip: 13
+      chan: 1
+    - remote_chip_id: 15435561102387906628
+      chan: 1
+  -
+    - chip: 13
+      chan: 0
+    - remote_chip_id: 15435561102387906628
+      chan: 0
+chips_with_mmio:
+  - 0: 3
+  - 1: 16
+  - 2: 25
+  - 3: 4
+  - 4: 6
+  - 5: 2
+  - 6: 18
+  - 7: 5
+  - 8: 8
+  - 9: 12
+  - 10: 22
+  - 11: 30
+  - 12: 14
+  - 13: 13
+  - 14: 11
+  - 15: 9
+  - 16: 7
+  - 17: 10
+  - 18: 23
+  - 19: 15
+  - 20: 27
+  - 21: 24
+  - 22: 28
+  - 23: 17
+  - 24: 26
+  - 25: 31
+  - 26: 29
+  - 27: 1
+  - 28: 19
+  - 29: 20
+  - 30: 0
+  - 31: 21
+io_device_type: PCIe
+harvesting:
+  0:
+    noc_translation: true
+    harvest_mask: 2
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  1:
+    noc_translation: true
+    harvest_mask: 256
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  2:
+    noc_translation: true
+    harvest_mask: 32
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  3:
+    noc_translation: true
+    harvest_mask: 1
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  4:
+    noc_translation: true
+    harvest_mask: 2
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  5:
+    noc_translation: true
+    harvest_mask: 128
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 160
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  6:
+    noc_translation: true
+    harvest_mask: 4
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  7:
+    noc_translation: true
+    harvest_mask: 256
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  8:
+    noc_translation: true
+    harvest_mask: 64
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  9:
+    noc_translation: true
+    harvest_mask: 8192
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  10:
+    noc_translation: true
+    harvest_mask: 256
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  11:
+    noc_translation: true
+    harvest_mask: 4096
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  12:
+    noc_translation: true
+    harvest_mask: 4
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  13:
+    noc_translation: true
+    harvest_mask: 1024
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  14:
+    noc_translation: true
+    harvest_mask: 16
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  15:
+    noc_translation: true
+    harvest_mask: 256
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  16:
+    noc_translation: true
+    harvest_mask: 4096
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  17:
+    noc_translation: true
+    harvest_mask: 128
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  18:
+    noc_translation: true
+    harvest_mask: 1
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  19:
+    noc_translation: true
+    harvest_mask: 32
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  20:
+    noc_translation: true
+    harvest_mask: 4
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  21:
+    noc_translation: true
+    harvest_mask: 64
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  22:
+    noc_translation: true
+    harvest_mask: 4
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  23:
+    noc_translation: true
+    harvest_mask: 128
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  24:
+    noc_translation: true
+    harvest_mask: 2048
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  25:
+    noc_translation: true
+    harvest_mask: 2
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  26:
+    noc_translation: true
+    harvest_mask: 8192
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  27:
+    noc_translation: true
+    harvest_mask: 4096
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  28:
+    noc_translation: true
+    harvest_mask: 2048
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  29:
+    noc_translation: true
+    harvest_mask: 4
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  30:
+    noc_translation: true
+    harvest_mask: 2048
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  31:
+    noc_translation: true
+    harvest_mask: 2048
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+chip_to_boardtype:
+  0: ubb_blackhole
+  1: ubb_blackhole
+  2: ubb_blackhole
+  3: ubb_blackhole
+  4: ubb_blackhole
+  5: ubb_blackhole
+  6: ubb_blackhole
+  7: ubb_blackhole
+  8: ubb_blackhole
+  9: ubb_blackhole
+  10: ubb_blackhole
+  11: ubb_blackhole
+  12: ubb_blackhole
+  13: ubb_blackhole
+  14: ubb_blackhole
+  15: ubb_blackhole
+  16: ubb_blackhole
+  17: ubb_blackhole
+  18: ubb_blackhole
+  19: ubb_blackhole
+  20: ubb_blackhole
+  21: ubb_blackhole
+  22: ubb_blackhole
+  23: ubb_blackhole
+  24: ubb_blackhole
+  25: ubb_blackhole
+  26: ubb_blackhole
+  27: ubb_blackhole
+  28: ubb_blackhole
+  29: ubb_blackhole
+  30: ubb_blackhole
+  31: ubb_blackhole
+chip_to_bus_id:
+  0: 0x00c6
+  1: 0x0004
+  2: 0x0048
+  3: 0x0043
+  4: 0x0003
+  5: 0x0006
+  6: 0x0042
+  7: 0x0085
+  8: 0x0084
+  9: 0x00c1
+  10: 0x0007
+  11: 0x0082
+  12: 0x0045
+  13: 0x00c2
+  14: 0x00c5
+  15: 0x0047
+  16: 0x0044
+  17: 0x0001
+  18: 0x00c4
+  19: 0x0087
+  20: 0x0081
+  21: 0x00c8
+  22: 0x0041
+  23: 0x0008
+  24: 0x0088
+  25: 0x00c3
+  26: 0x00c7
+  27: 0x0086
+  28: 0x0002
+  29: 0x0083
+  30: 0x0046
+  31: 0x0005
+boards:
+  -
+    - board_id: 4884208488465
+    - board_type: ubb_blackhole
+    - chips:
+        - 31
+        - 30
+        - 29
+        - 12
+        - 11
+        - 10
+        - 9
+        - 8
+        - 7
+        - 6
+        - 5
+        - 4
+        - 3
+        - 2
+        - 1
+        - 0
+        - 13
+        - 14
+        - 15
+        - 16
+        - 17
+        - 18
+        - 19
+        - 20
+        - 21
+        - 22
+        - 23
+        - 24
+        - 25
+        - 26
+        - 27
+        - 28
+asic_locations:
+  0: 6
+  1: 4
+  2: 8
+  3: 3
+  4: 3
+  5: 6
+  6: 2
+  7: 5
+  8: 4
+  9: 1
+  10: 7
+  11: 2
+  12: 5
+  13: 2
+  14: 5
+  15: 7
+  16: 4
+  17: 1
+  18: 4
+  19: 7
+  20: 1
+  21: 8
+  22: 1
+  23: 8
+  24: 8
+  25: 3
+  26: 7
+  27: 6
+  28: 2
+  29: 3
+  30: 6
+  31: 5

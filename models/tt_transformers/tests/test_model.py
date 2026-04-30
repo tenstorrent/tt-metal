@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -9,14 +9,16 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("use_prefetcher", ([False]))
 @pytest.mark.parametrize(
     "weights, layers",
     [
@@ -78,6 +80,7 @@ def test_model_inference(
     reset_seeds,
     ensure_gc,
     request,
+    use_prefetcher,
 ):
     model_name_env = os.getenv("HF_MODEL")
     if model_name_env:
@@ -95,6 +98,9 @@ def test_model_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
 
+    use_hf_rope = request.config.getoption("--use_hf_rope")
+    if use_hf_rope:
+        logger.info("Using HF style rope")
     test_id = request.node.callspec.id
     mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
@@ -104,6 +110,13 @@ def test_model_inference(
     # Also avoid comparing PCC for dummy weights
     cache_pcc = layers == 1 and not dummy_weights
 
+    # Setup prefetcher
+    # num_tensors is 5 because we are prefetching qkv + do + ff1 + ff3 + ff2
+    num_tensors = 5 if use_prefetcher else 0
+    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
+    if use_prefetcher:
+        prefetcher.init(mode=Mode.DECODE)
+
     model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
@@ -112,6 +125,8 @@ def test_model_inference(
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
         cache_hf=True,
+        prefetcher=prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     # Define minimum PCC for each iteration
@@ -121,29 +136,17 @@ def test_model_inference(
         pcc = 0.94 if mode_accuracy else 0.86
 
     model_name = model_args.base_model_name
+
+    # Set num_layers for prefetcher if it is not None
+    if prefetcher is not None:
+        prefetcher.num_layers = model_args.n_layers
+
     if layers == 1:  # quick mode has tight PCC checks for known models
-        if model_args.checkpoint_type == CheckpointType.HuggingFace:
-            model_name = model_args.base_model_name
-        else:
-            model_name = {
-                (16, False): "llama32_1b",
-                (28, False): "llama32_3b",
-                (32, False): "llama31_8b",
-                (32, True): "llama32_11b",
-                (80, False): "llama31_70b",
-                (80, True): "llama32_90b",
-            }[(model_args.n_layers, model_args.is_llama_vision())]
+        model_name = model_args.base_model_name
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {
-            "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
-            "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
-            "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
-            "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
-            "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
-            "llama32_90b": 0.9759,
-            # TODO: Investigate HF_MODEL PCC drop compared to LLAMA_DIR (especially 3.2-3B)
-            "Llama-3.1-8B": 0.965 if mode_accuracy else 0.954,
+            "Llama-3.1-8B": (0.9649 if model_args.device_name == "N150" else 0.965) if mode_accuracy else 0.954,
             "Llama-3.1-70B": 0.973,
             "Llama-3.2-1B": 0.999 if mode_accuracy else 0.991,
             "Llama-3.2-3B": 0.954 if mode_accuracy else 0.945,
@@ -153,12 +156,6 @@ def test_model_inference(
         }[model_name]
 
         final_k_cache_pcc = {
-            "llama32_1b": 0.9998,
-            "llama32_3b": 0.9998,
-            "llama31_8b": 0.9997,
-            "llama32_11b": 0.9995,
-            "llama31_70b": 0.9997,
-            "llama32_90b": 0.9995,
             "Llama-3.1-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
             "Llama-3.2-1B": 0.9998,
@@ -168,12 +165,6 @@ def test_model_inference(
             "Mistral-7B": 0.68,
         }[model_name]
         final_v_cache_pcc = {
-            "llama32_1b": 0.9996,
-            "llama32_3b": 0.9998,
-            "llama31_8b": 0.9997,
-            "llama32_11b": 0.9996,
-            "llama31_70b": 0.9997,
-            "llama32_90b": 0.9996,
             "Llama-3.1-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
             "Llama-3.2-1B": 0.9996,
@@ -184,12 +175,6 @@ def test_model_inference(
         }[model_name]
 
         quick_iterations = {
-            "llama32_1b": 2,
-            "llama32_3b": 4,
-            "llama31_8b": 6,
-            "llama32_11b": 6,
-            "llama31_70b": 6,
-            "llama32_90b": 6,
             "Llama-3.1-8B": 6,
             "Llama-3.1-70B": 6,
             "Llama-3.2-1B": 2,
@@ -207,19 +192,26 @@ def test_model_inference(
         model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
-    reference_state_dict = {
-        k[len(state_dict_prefix) :]: v
-        for k, v in state_dict.items()
-        if (
-            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-            or any(
-                [
-                    f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-                ]
+    reference_state_dict = None
+    if dummy_weights:
+        reference_state_dict = {
+            k[len(state_dict_prefix) :]: v
+            for k, v in state_dict.items()
+            if (
+                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
+                or any(
+                    [
+                        f"{state_dict_prefix}{name}" in k
+                        for name in [
+                            "tok_embeddings.weight",
+                            "learnable_embedding.weight",
+                            "norm.weight",
+                            "output.weight",
+                        ]
+                    ]
+                )
             )
-        )
-    }
+        }
 
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
@@ -238,12 +230,23 @@ def test_model_inference(
 
     reference_model = None
     if run_ref_pt:
-        reference_model = model_args.reference_transformer()
-        reference_model.load_state_dict(reference_state_dict)
+        reference_model = model_args.reference_transformer(load_checkpoint=not dummy_weights)
+        if dummy_weights:
+            reference_model.load_state_dict(reference_state_dict)
 
     # Embedding on host
     embd = model_args.reference_embedding(reference_model)
-    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+    if model_args.is_llama_vision():
+        weight = torch.cat(
+            [
+                state_dict[f"{state_dict_prefix}tok_embeddings.weight"],
+                state_dict[f"{state_dict_prefix}learnable_embedding.weight"],
+            ],
+            dim=0,
+        )
+    else:
+        weight = state_dict[f"{state_dict_prefix}tok_embeddings.weight"]
+    embd.load_state_dict({"emb.weight": weight})
 
     generation_start_pos = 0
     generation_length = iterations
@@ -284,7 +287,11 @@ def test_model_inference(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher if use_prefetcher else None,
     )
+    if use_prefetcher:
+        tt_model.prefetcher.prefetch()
+
     logger.info("Model and caches loaded.")
 
     if run_ref_pt:
@@ -323,18 +330,18 @@ def test_model_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            model_args.get_residual_mem_config(Mode.DECODE, prefetcher),
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
+        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos, prefetcher)
 
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
-            mode="decode",
+            mode=Mode.DECODE,
             page_table=page_table_tt,
         )
 
@@ -416,20 +423,10 @@ def test_model_inference(
             # Compare KV caches
             if cache_pcc:
                 for l in range(model_args.n_layers):
-                    if model_args.checkpoint_type == CheckpointType.HuggingFace:
-                        pytorch_layer_present = [
-                            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        ]
-                    else:
-                        pytorch_layer_present = [
-                            reference_model.layers[l]
-                            .attention.cache_k.clone()
-                            .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                            reference_model.layers[l]
-                            .attention.cache_v.clone()
-                            .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        ]
+                    pytorch_layer_present = [
+                        reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                    ]
                     tt_layer_present = []
                     if paged_attention:
                         for layer_past in tt_model.layers[l].attention.layer_past:

@@ -1,0 +1,23 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::unary_backward::tanh_bw {
+
+struct TanhBwParams {
+    const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
+    const tt::tt_metal::MemoryConfig output_memory_config;
+};
+
+struct TanhBwInputs {
+    const Tensor& grad_output;
+    const Tensor& input;
+    std::optional<Tensor> preallocated_input_grad;
+};
+
+}  // namespace ttnn::operations::unary_backward::tanh_bw

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -16,7 +15,6 @@ namespace tt::tt_fabric {
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
-    const tt::tt_metal::IDevice* device,
     const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     tt::tt_metal::DataMovementProcessor risc_id,

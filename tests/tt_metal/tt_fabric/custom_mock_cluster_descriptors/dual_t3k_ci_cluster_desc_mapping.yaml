@@ -1,0 +1,3 @@
+rank_to_cluster_mock_cluster_desc:
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_t3k_ci_cluster_desc/dual_t3k_ci_cluster_desc_f10cs03_rank_0.yaml"
+  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_t3k_ci_cluster_desc/dual_t3k_ci_cluster_desc_f10cs04_rank_1.yaml"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto& input = tensor_args.input;
+    const auto& input = tensor_args.input;
 
     auto output_size = operation_attributes.output_size;
     auto kernel_size = operation_attributes.kernel_size;
@@ -82,7 +82,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
 
     uint32_t input_cb_index = tt::CBIndex::c_0;    // input
     uint32_t scratch_cb_index = tt::CBIndex::c_1;  // scratch for DRAM alignment
-    uint32_t output_cb_index = tt::CBIndex::c_16;  // ouput
+    uint32_t output_cb_index = tt::CBIndex::c_16;  // output
 
     CircularBufferConfig input_cb_config =
         CircularBufferConfig(aligned_input_cb_page_size * 2, {{input_cb_index, data_format}})
@@ -130,8 +130,10 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     };
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/writer_fold_rm.cpp";
+    const auto* const reader_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";
+    const auto* const writer_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/writer_fold_rm.cpp";
 
     const auto reader_kernel_id =
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
@@ -189,7 +191,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
 
 void MorehFoldOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;

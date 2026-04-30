@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,24 +8,26 @@
 
 #include <cstdint>
 #include <optional>
-#include "ttnn/decorators.hpp"
+#include <string>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
-namespace operations::data_movement {
+Tensor scatter(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config = std::nullopt,
+    const std::optional<std::string>& opt_reduction_string = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
-struct ScatterOperation {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const int32_t& dim,
-        const Tensor& index_tensor,
-        const Tensor& source_tensor,
-        const std::optional<MemoryConfig>& opt_out_memory_config,
-        const std::optional<scatter::ScatterReductionType>& opt_reduction);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto scatter = ttnn::register_operation<"ttnn::scatter", ttnn::operations::data_movement::ScatterOperation>();
+Tensor scatter_add(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 }  // namespace ttnn

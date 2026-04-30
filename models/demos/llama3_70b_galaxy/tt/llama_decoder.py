@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
@@ -47,6 +47,7 @@ class TtTransformerBlock(LightweightModule):
 
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
+        self.unfuse_res_add = args.unfuse_res_add
 
         self.attention = TtLlamaAttention(
             mesh_device=mesh_device,
@@ -87,7 +88,6 @@ class TtTransformerBlock(LightweightModule):
                 output_mem_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
             ),
             args,
-            TG=args.is_galaxy,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
@@ -106,7 +106,6 @@ class TtTransformerBlock(LightweightModule):
                 output_mem_config=self.model_config["SHARDED_FF12_RING_MEMCFG"],
             ),
             args,
-            TG=args.is_galaxy,
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
@@ -130,10 +129,10 @@ class TtTransformerBlock(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
-        TG = self.args.is_galaxy
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
@@ -151,7 +150,12 @@ class TtTransformerBlock(LightweightModule):
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
-            attn_in_sharded, _ = self.attention_norm(x, h, mode)
+            if self.unfuse_res_add:
+                h = ttnn.add(x, h)
+                attn_in_sharded, _ = self.attention_norm(h, None, mode)
+            else:
+                attn_in_sharded, _ = self.attention_norm(x, h, mode)
+
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
@@ -161,20 +165,24 @@ class TtTransformerBlock(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
         if mode == "prefill":
-            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # bfloat8_b
             x.deallocate(True)
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
-
         if mode == "decode":
-            ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
+            if self.unfuse_res_add:
+                h = ttnn.add(attn_out, h)
+                ff_in_sharded, _ = self.ff_norm(h, None, mode)
+            else:
+                ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in_sharded, mode)
+        ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             if mode == "decode":

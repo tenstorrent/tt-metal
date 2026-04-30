@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cq_shared_state.hpp"
+
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
 void CQOwnerState::take_ownership(SubDeviceId id, uint32_t cq_id) {

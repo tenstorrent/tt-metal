@@ -1,0 +1,114 @@
+---
+description: Validate that a sweep trace JSON matches its source model trace JSON by comparing configuration arguments. Use when asked to validate, compare, or match two ttnn_operations_master*.json files from model_tracer/traced_operations/.
+alwaysApply: false
+---
+
+# Sweep Trace Validation Against Model Trace
+
+Compare a **model trace** JSON (traced from a real model run via `generic_ops_tracer.py`) with a **sweep trace** JSON (traced from a sweep test that executed configs derived from the model trace). Both files share the same schema.
+
+## Schema Structure
+
+```
+{
+  "operations": {
+    "<op_name>": {
+      "configurations": [
+        {
+          "config_id": <int>,
+          "config_hash": "<sha256>",
+          "arguments": { ... },
+          "executions": [{ "source": "...", "machine_info": {...}, "count": N }]
+        }
+      ]
+    }
+  },
+  "metadata": { "models": [...], "unique_operations": N, "total_configurations": N, ... }
+}
+```
+
+## Matching Rules
+
+**Config hashes will NOT match** between the two files because they incorporate hardware/machine context that differs between the model run and the sweep run. All matching must use the `arguments` values.
+
+### Keys to IGNORE when comparing arguments
+
+These keys are non-deterministic or environment-dependent and must be excluded from comparison:
+
+- `hash` inside any `memory_config` dict (device-specific hash)
+- `device_ids` inside `machine_info` or `executions` (machine-dependent ordering)
+- `value` inside objects with `"type": "global_semaphore"` (runtime pointer addresses)
+- `value` inside objects with `"type": "set"` containing `MeshCoordinate` (runtime-specific)
+- `executions` (source/machine metadata, not operation parameters)
+- `config_hash` and `config_id` (computed differently per environment)
+
+### Keys to USE for matching
+
+All remaining keys in `arguments`, especially:
+
+- Tensor arguments (`arg0`, `arg1`, etc.): `original_shape`, `original_dtype`, `layout`, `storage_type`, `memory_config` (excluding `hash`), `tensor_placement`
+- Named arguments: `dim`, `cluster_axis`, `num_links`, `topology`, `persistent_output_buffer`, `chunks_per_sync`, `num_workers_per_link`, `num_buffers_per_channel`, scalar values
+- Memory config kwargs: `memory_layout`, `buffer_type`, `shard_spec` (structural comparison), `is_sharded`
+
+### Shard spec comparison
+
+`shard_spec` may appear as the string `"None"` or as a structured dict with `grid`, `shape`, `orientation`. Compare structurally; treat string `"None"` and JSON `null` as equivalent.
+
+## Matching Procedure
+
+The mapping is **one-to-one from sweep configs to model configs**. Each sweep config maps to at most one model config, and each model config is consumed by at most one sweep config (no duplicates on either side).
+
+1. **Group by operation name**: For each operation in the sweep trace, find the same operation in the model trace.
+2. **Exact match first**: For each sweep config, normalize its arguments (strip ignored keys), serialize with `json.dumps(obj, sort_keys=True)`, and compare against all **not-yet-matched** model configs of the same operation. The first exact match is taken; that model config is then marked as consumed and cannot be matched again.
+3. **Closest match fallback**: After the exact-match pass, for each still-unmatched sweep config compute a similarity score against all **not-yet-matched** model configs:
+   - Compare each top-level argument key. If the values match exactly (after normalization), score += 1.
+   - For tensor arguments, give partial credit: match shape (+1), dtype (+1), layout (+1), memory_config.memory_layout (+1), memory_config.buffer_type (+1), tensor_placement (+1).
+   - Take the best-scoring model config (must be >= 80% similarity). Mark both as consumed.
+4. **Report unmatched**: After both passes, list any sweep configs with no model match and any model configs with no sweep match.
+
+## Output Format
+
+Produce a summary report. The mapping list goes from **sweep config_id to model config_id** (one-to-one, no duplicates).
+
+```
+=== Sweep Trace Validation Report ===
+Model trace: <filename>  (N operations, M total configs)
+Sweep trace: <filename>  (N operations, M total configs)
+
+--- Operation: ttnn.experimental.all_gather_async ---
+  Model configs: 28 | Sweep configs: 26
+  Exact matches: 24/26
+  Close matches: 1/26 (>=80% similarity)
+  Unmatched sweep configs: 1
+  Unmatched model configs: 3
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1  -> model config_id 212
+      sweep config_id 3  -> model config_id 12
+      sweep config_id 5  -> model config_id 24
+      ...
+    Close matches:
+      sweep config_id 14 -> model config_id 18 (85.7% similarity)
+    Unmatched sweep configs:
+      sweep config_id 22: no model match (best candidate: model config_id 9 at 62.0%) — shape [1,1,32,224] + dim=3
+    Unmatched model configs:
+      model config_id 68: no sweep match — shape [1,1,32,128] + dim=3
+      model config_id 82: no sweep match — shape [1,1,32,128] + dim=3
+      model config_id 84: no sweep match — shape [1,1,32,128] + dim=3
+
+--- Operation: ttnn.linear ---
+  ...
+
+=== Summary ===
+Total sweep configs: S | Matched: X exact + Y close | Unmatched sweep: Z | Unmatched model: W
+Coverage: XX.X%  (of sweep configs matched)
+```
+
+## Important Notes
+
+- The model trace is the **source of truth**. Every model config should ideally have a matching sweep config.
+- The mapping is **one-to-one**: each sweep config maps to exactly one model config. When multiple model configs have identical normalized arguments, only one is consumed per sweep config; the rest appear as unmatched model configs (this is expected for duplicated model invocations).
+- The sweep trace may have FEWER configs (if some weren't tested) or different `execution_count` values.
+- When asked to validate, always load both files, iterate all operations, and produce the full report.
+- If the user provides file paths, use those. Otherwise look in `model_tracer/traced_operations/` for the two most recent JSONs.

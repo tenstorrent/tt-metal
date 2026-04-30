@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,15 +7,14 @@
 #include <cstdint>
 #include <optional>
 
-#include "conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::conv {
-namespace conv2d {
+namespace ttnn::prim {
 
 // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
 constexpr static uint32_t kInvalidCBIndex = 32;
@@ -60,6 +59,9 @@ struct CBInfo {
 // Returns a vector of CBInfo objects for the Conv2d operation.
 // The vector will contain information about all circular buffers used in the Conv2d operation.
 // CBInfo::index and CBInfo::handle won't be valid until allocate_cbs() is called.
+// When the program factory has the real reader indices DRAM buffer, it can pass its actual page
+// size so the predicted READER_INDICES CB footprint matches the CB the factory creates. Auto-shard
+// L1 estimation passes std::nullopt and falls back to the worst case (1 uint16 index per output row).
 std::vector<CBInfo> get_cb_info(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
@@ -76,7 +78,8 @@ std::vector<CBInfo> get_cb_info(
     bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create,
-    uint32_t input_channels_padded);
+    uint32_t input_channels_padded,
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
 
 // Allocates circular buffers for the Conv2d operation.
 // This function will populate index and handle fields of each CBInfo in the cb_info vector,
@@ -110,5 +113,16 @@ bool is_split_reader_viable(
     bool fp32_dest_acc,
     DataType output_datatype,
     bool act_reuse_enabled);
-}  // namespace conv2d
-}  // namespace ttnn::operations::conv
+
+// reader_indices_actual_page_size lets the factory communicate the in-DRAM config tensor's true
+// per-core page size so the post-build CB-size equality check matches what was allocated. When
+// std::nullopt, the worst-case READER_INDICES CB size is used (matches the factory's previous
+// behaviour for the in-DRAM path).
+void post_conv2d_op_memory_checks(
+    tt::tt_metal::Program& program,
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    Tensor& output_tensor,
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+
+}  // namespace ttnn::prim

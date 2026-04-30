@@ -1,0 +1,2 @@
+put -r generated/job_failure_cluster/*.json
+ls -hal

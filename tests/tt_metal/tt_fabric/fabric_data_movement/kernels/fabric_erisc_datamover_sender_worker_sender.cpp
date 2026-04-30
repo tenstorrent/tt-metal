@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -43,6 +43,14 @@ void kernel_main() {
            //    << "\n\tnum_buffers_per_channel=" << num_buffers_per_channel
            << "\n\tdest_is_dram=" << (dest_is_dram ? "T" : "F") << "\n\tmcast_mode=" << (mcast_mode ? "T" : "F")
            << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
+    DEVICE_PRINT(
+        "sws: args "
+        "\n\tnum_pages_to_send={}\n\tpage_size={}\n\tdest_is_dram={}\n\tmcast_mode={}\n\twrite_scatter_mode={}\n",
+        total_pages_to_send,
+        page_size,
+        dest_is_dram,
+        mcast_mode,
+        write_scatter_mode);
 
     size_t arg_idx = 0;
     size_t dest_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -69,7 +77,7 @@ void kernel_main() {
     const uint32_t receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr auto dst_args = TensorAccessorArgs<5>();
-    const auto dest_addr_gen = TensorAccessor(dst_args, dest_addr, page_size);
+    const auto dest_addr_gen = TensorAccessor(dst_args, dest_addr);
 
     sender.open<true>();
 
@@ -106,8 +114,8 @@ void kernel_main() {
                 uint64_t dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
                 fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, config.unicast.distance);
                 packet_header->to_noc_unicast_scatter_write(
-                    tt::tt_fabric::NocUnicastScatterCommandHeader{
-                        {dest_noc_address, dest_noc_address2}, (uint16_t)page_size},
+                    tt::tt_fabric::NocUnicastScatterCommandHeader(
+                        {dest_noc_address, dest_noc_address2}, {static_cast<uint16_t>(page_size)}),
                     (pages_to_send * page_size));
             } else {
                 fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, config.unicast.distance);

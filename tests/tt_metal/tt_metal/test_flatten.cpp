@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -139,7 +139,8 @@ int main(int argc, char** argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
-            num_tiles * 32  // per_core_tile_cnt
+            num_tiles * 32,  // per_core_tile_cnt
+            false            // use_dfbs
         };
 
         auto eltwise_unary_kernel = tt_metal::CreateKernel(

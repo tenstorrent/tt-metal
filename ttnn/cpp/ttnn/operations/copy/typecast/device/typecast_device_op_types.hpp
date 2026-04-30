@@ -1,18 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <functional>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::copy {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct TypecastParams {
     const tt::tt_metal::DataType input_dtype;
     const tt::tt_metal::DataType output_dtype;
     const tt::tt_metal::MemoryConfig output_memory_config;
@@ -22,12 +21,9 @@ struct operation_attributes_t {
     const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
-struct tensor_args_t {
-    const Tensor& input;
+struct TypecastInputs {
+    Tensor input;
     std::optional<Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::copy
+}  // namespace ttnn::prim

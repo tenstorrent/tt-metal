@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     using namespace tt;
     using namespace tt::tt_metal;
 
-    auto& output_grad = tensor_args.output_grad;
+    const auto& output_grad = tensor_args.output_grad;
 
     const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
@@ -80,15 +80,13 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
+    std::vector<uint32_t> reader_compile_time_args = TensorAccessorArgs(output_grad.buffer()).get_compile_time_args();
+    std::vector<uint32_t> writer_compile_time_args = TensorAccessorArgs(bias_grad.buffer()).get_compile_time_args();
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp";
 
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
@@ -105,7 +103,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp";
 
     const auto compute_kernel_id = CreateComputeKernel(
@@ -133,15 +131,15 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
 
 void MorehBiasAddBackwardOperation::SingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
-    auto output_grad_buffer = tensor_args.output_grad.buffer();
-    auto bias_grad_buffer = tensor_return_value.buffer();
+    auto* output_grad_buffer = tensor_args.output_grad.buffer();
+    auto* bias_grad_buffer = tensor_return_value.buffer();
     CoreCoord core = {0, 0};
     {
         auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);

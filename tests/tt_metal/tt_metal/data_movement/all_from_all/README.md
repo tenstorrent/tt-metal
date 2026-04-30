@@ -22,9 +22,9 @@ By the end of the test, every master core should have received the same data fro
 
 Test attributes such as pages per transaction and number of transactions per subordinate core, and latency measures such as kernel and pre-determined scope cycles are recorded by the profiler.
 
-A pcc check is performed by cross-checking the data of all the subordinate cores pieced-together against the data received by each master core. This ensures that the data integrity is maintained throughout the data movement process.
+An equality check is performed by cross-checking the data of all the subordinate cores pieced-together against the data received by each master core. This ensures that the data integrity is maintained throughout the data movement process.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:
@@ -62,3 +62,16 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
    - 1x1 From 2x2: 1x1 master grid receiving from 2x2 subordinate grid
    - 1x1 From 4x4: 1x1 master grid receiving from 4x4 subordinate grid
    - 2x2 From 2x2: 2x2 master grid receiving from 2x2 subordinate grid
+
+## Device 2.0 API Tests
+This test suite now includes tests using the new device 2.0 experimental NOC API. These tests provide the same functionality as the original tests but use an updated API design:
+
+### Key Features of Device 2.0 API Tests:
+- **Experimental NOC API**: Uses `experimental::Noc` and `experimental::UnicastEndpoint` for structured NOC operations
+- **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
+
+### Device 2.0 Kernels:
+- `requestor_2_0.cpp`: Implements the requestor functionality using the experimental NOC API
+- `requestor.cpp`: Original requestor kernel for comparison
+
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new experimental API.

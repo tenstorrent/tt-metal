@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,10 @@
 
 #include "mesh_command_queue.hpp"
 
-#include "tt_metal/common/thread_pool.hpp"
+#include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
+
+#include "tt_metal/impl/threading/thread_pool.hpp"
+#include "tt_target_device.hpp"
 
 #include <mutex>
 #include <functional>
@@ -20,22 +23,31 @@ protected:
     std::function<std::lock_guard<std::mutex>()> lock_api_function_;
 
     // Helper functions for reading and writing individual shards
-    virtual void write_shard_to_device(
+    // Returns true if pinned memory was used for the transfer
+    virtual bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) = 0;
     virtual void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         void* dst,
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) = 0;
     // Must be called with lock_api_function_() held.
     virtual void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+    virtual MeshEvent enqueue_record_event_to_host_nolock(
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
+
+    tt::TargetDevice get_target_device_type() const;
 
 private:
     // Helper functions for read and write entire Sharded-MeshBuffers
@@ -44,14 +56,28 @@ private:
 
     // Must be called with lock_api_function_() held.
     void enqueue_read_shards_nolock(
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking);
     // Must be called with lock_api_function_() held.
     void enqueue_write_shards_nolock(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
-        bool blocking);
+        MeshBuffer& mesh_buffer,
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        bool blocking,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr);
+
+    void enqueue_write_with_core_filter(
+        MeshBuffer& mesh_buffer,
+        const DistributedHostBuffer& host_buffer,
+        bool blocking,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter);
+
+    friend void tt::tt_metal::experimental::core_subset_write::enqueue_write(
+        tt::tt_metal::distributed::MeshCommandQueue& cq,
+        tt::tt_metal::distributed::MeshBuffer& mesh_buffer,
+        const tt::tt_metal::DistributedHostBuffer& host_buffer,
+        bool blocking,
+        const tt::tt_metal::CoreRangeSet& logical_core_filter);
 
 public:
     MeshCommandQueueBase(
@@ -73,7 +99,7 @@ public:
         const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) override;
     void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         bool blocking) override;
     void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
@@ -83,7 +109,7 @@ public:
     // MeshBuffer Read APIs
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) override;
     void enqueue_read_shards(
-        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking) override;
     void enqueue_read(
@@ -91,6 +117,9 @@ public:
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) override;
+
+    // Returns true if the CQ is in use (has had commands enqueued).
+    virtual bool in_use() { return false; }
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,6 @@ FABRIC_CONFIGS_1D = [
 
 FABRIC_CONFIGS_2D = [
     ttnn.FabricConfig.FABRIC_2D,
-    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
 FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D

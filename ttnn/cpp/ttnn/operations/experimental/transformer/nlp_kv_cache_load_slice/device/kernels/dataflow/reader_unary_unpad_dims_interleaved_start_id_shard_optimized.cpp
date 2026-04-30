@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
 
     constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     uint32_t src_tile_id = start_id;
     cb_reserve_back(cb_id_in0, num_tiles);

@@ -1,12 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gather_common.hpp"
 
-#include "dataflow_api.h"
-#include <tt-metalium/constants.hpp>
-
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include <cstdint>
 
 /*
@@ -40,11 +41,11 @@ the input_index_tensor.
     - Wt_input represents the number of tiles in the last dimension of the input tensor.
     - Wt_index represents the number of tiles in the last dimension of the input index tensor.
     - A full row of tiles of input tensor (size `Wt_input`) is read from DRAM into L1 memory.
-    - One tile in the ouput buffer is reserved for each tile in the input index tensor.
+    - One tile in the output buffer is reserved for each tile in the input index tensor.
 
 2. **Computation mechanism**:
     - Tiles from Wt_index are read from L1 memory one by one.
-    - For each index tile the one ouput tile is reserved in the output buffer.
+    - For each index tile the one output tile is reserved in the output buffer.
     - Algorithm iterates over the values in the index tile (`global_index`) - these values represents the indexes of the
 values in the input tensor that should be gathered.
     - The values are read regardless of the datatype. The datatype of the tile determines read/write mechanism
@@ -113,6 +114,7 @@ void kernel_main() {
     const uint32_t core_loop_count = get_arg_val<uint32_t>(1);
     const uint32_t tile_width = get_arg_val<uint32_t>(2);
     const uint32_t tile_height = get_arg_val<uint32_t>(3);
+    const uint32_t core_id = get_arg_val<uint32_t>(4);
 
     // Compile time args
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
@@ -133,8 +135,7 @@ void kernel_main() {
     // Index tensor config
     constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
     constexpr DataFormat input_index_tensor_data_format = get_dataformat(input_index_tensor_cb_index);
-    const auto input_index_tensor_dram =
-        TensorAccessor(input_index_tensor_args, input_index_tensor_buffer_addr, input_index_tensor_tile_size_bytes);
+    const auto input_index_tensor_dram = TensorAccessor(input_index_tensor_args, input_index_tensor_buffer_addr);
 
     // Dataformats size
     constexpr uint32_t input_tensor_data_format_size =
@@ -144,26 +145,34 @@ void kernel_main() {
     constexpr uint32_t output_tensor_data_format_size =
         get_tile_size(output_tensor_cb_index) / get_tile_hw(input_tensor_cb_index);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer input_index_cb(input_index_tensor_cb_index);
+    experimental::CircularBuffer input_cb(input_tensor_cb_index);
+    experimental::CircularBuffer output_cb(output_tensor_cb_index);
+
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         // Calculate tile h coordinate
-        const uint32_t h = core_loop * total_number_of_cores +
-                           get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+        const uint32_t h = core_loop * total_number_of_cores + core_id;
 
         for (uint32_t w = 0; w < Wt_index; w++) {
             // Read index data
-            cb_reserve_back(input_index_tensor_cb_index, one_tile);
-            const uint32_t l1_write_addr_index = get_write_ptr(input_index_tensor_cb_index);
-            noc_async_read_tile(h * Wt_index + w, input_index_tensor_dram, l1_write_addr_index);
-            noc_async_read_barrier();
-            cb_push_back(input_index_tensor_cb_index, one_tile);
+            input_index_cb.reserve_back(one_tile);
+            noc.async_read(
+                input_index_tensor_dram,
+                input_index_cb,
+                input_index_tensor_tile_size_bytes,
+                {.page_id = h * Wt_index + w},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            input_index_cb.push_back(one_tile);
 
-            cb_wait_front(input_tensor_cb_index, Wt_input);
-            cb_wait_front(input_index_tensor_cb_index, one_tile);
-            cb_reserve_back(output_tensor_cb_index, one_tile);
+            input_cb.wait_front(Wt_input);
+            input_index_cb.wait_front(one_tile);
+            output_cb.reserve_back(one_tile);
 
-            const uint32_t input_tensor_l1_read_addr = get_read_ptr(input_tensor_cb_index);
-            const uint32_t input_index_tensor_l1_read_addr = get_read_ptr(input_index_tensor_cb_index);
-            const uint32_t output_tensor_l1_read_addr = get_read_ptr(output_tensor_cb_index);
+            const uint32_t input_tensor_l1_read_addr = input_cb.get_read_ptr();
+            const uint32_t input_index_tensor_l1_read_addr = input_index_cb.get_read_ptr();
+            const uint32_t output_tensor_l1_write_addr = output_cb.get_write_ptr();
 
             uint32_t count = 0;
             constexpr uint32_t tile_faces = 2;
@@ -201,15 +210,15 @@ void kernel_main() {
 
                             // Write value to output
                             write_value_to_tile(
-                                output_tensor_l1_read_addr, count, output_tensor_data_format_size, value);
+                                output_tensor_l1_write_addr, count, output_tensor_data_format_size, value);
                             count++;
                         }  // l loop
                     }  // k loop
                 }  // j loop
             }  // i loop
-            cb_push_back(output_tensor_cb_index, one_tile);
-            cb_pop_front(input_index_tensor_cb_index, one_tile);
+            output_cb.push_back(one_tile);
+            input_index_cb.pop_front(one_tile);
         }  // Wt loop
-        cb_pop_front(input_tensor_cb_index, Wt_input);
+        input_cb.pop_front(Wt_input);
     }  // core_loop_count loop
 }

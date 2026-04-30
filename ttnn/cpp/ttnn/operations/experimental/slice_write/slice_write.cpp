@@ -1,23 +1,22 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "slice_write.hpp"
-#include "device/slice_write_op.hpp"
+#include "device/slice_write_device_operation.hpp"
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn::experimental {
 
-ttnn::Tensor SliceWriteOperation::invoke(
+ttnn::Tensor slice_write(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& output_tensor,
     const ttnn::SmallVector<uint32_t>& begins,
@@ -107,7 +106,7 @@ ttnn::Tensor SliceWriteOperation::invoke(
                                       tt::div_up(padded_output_shape[2], input.shard_spec().value().shape[0]);
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_output_shape[3];
             if (in_place_unpad) {
-                log_info(tt::LogOp, "In-place unpad optimization via copy");
+                log_debug(tt::LogOp, "In-place unpad optimization via copy");
                 ttnn::copy(input_tensor, output_tensor);
                 return output_tensor;
             }
@@ -119,11 +118,8 @@ ttnn::Tensor SliceWriteOperation::invoke(
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, Layout::ROW_MAJOR);
         }
-        (void)tt::tt_metal::operation::run(
-            SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},
-            {input},
-            {},
-            {output_tensor})[0];
+        (void)ttnn::prim::slice_write(
+            input, output_tensor, ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step));
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, original_output_layout);
         }
@@ -134,4 +130,4 @@ ttnn::Tensor SliceWriteOperation::invoke(
     return output_tensor;
 }
 
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::experimental

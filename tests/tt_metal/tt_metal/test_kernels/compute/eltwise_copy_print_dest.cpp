@@ -1,17 +1,16 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "debug/dprint.h"
-#include "debug/dprint_tensix.h"
-namespace NAMESPACE {
+#include "api/compute/common.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tensix.h"
 
-void MAIN {
+void kernel_main() {
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     bool remap = get_compile_time_arg_val(1) != 0;
     bool swizzle = get_compile_time_arg_val(2) != 0;
@@ -38,4 +37,3 @@ void MAIN {
 
     release_dst();
 }
-}  // namespace NAMESPACE

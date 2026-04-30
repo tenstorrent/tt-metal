@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,8 @@ import torch
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 import math
 import pytest
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize("val_a, val_b", [(0.5, 0.0), (-0.5, 0.0), (0.0, 0.0)])

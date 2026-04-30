@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,10 @@ namespace ttml::optimizers {
 
 class NoOp : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "NoOp";
+    }
+
     explicit NoOp(ttml::serialization::NamedParameters parameters);
 
     void zero_grad() override;

@@ -1,14 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/padded_slice_op.hpp"
+#include "device/padded_slice_device_operation.hpp"
 #include <array>
 #include <cstdint>
-#include <tt-logger/tt-logger.hpp>
-#include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -16,17 +14,17 @@
 #include "ttnn/tensor/types.hpp"
 #include "padded_slice.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn::experimental {
 
 template <typename T>
-ttnn::Tensor PaddedSliceOperation::invoke(
+ttnn::Tensor padded_slice(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const T> begins,
-    tt::stl::Span<const T> ends,
-    tt::stl::Span<const T> step,
+    ttsl::Span<const T> begins,
+    ttsl::Span<const T> ends,
+    ttsl::Span<const T> step,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value) {
+    const std::optional<float>& /*pad_value*/) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
     const auto& input_shape = input_tensor.logical_shape();
@@ -82,8 +80,8 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     // Wrap indices and adjust begins, ends, and step
     for (size_t i = 0; i < begins.size(); ++i) {
         if constexpr (std::is_signed_v<T>) {
-            modified_begins[i] = data_movement::wrap_index(begins[i], input_shape[i]);
-            modified_ends[i] = data_movement::wrap_index(ends[i], input_shape[i]);
+            modified_begins[i] = operations::data_movement::wrap_index(begins[i], input_shape[i]);
+            modified_ends[i] = operations::data_movement::wrap_index(ends[i], input_shape[i]);
             modified_step[i] = static_cast<uint32_t>(step[i]);
         } else {
             modified_begins[i] = begins[i];
@@ -128,14 +126,13 @@ ttnn::Tensor PaddedSliceOperation::invoke(
             actual_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), memory_config);
     }
 
-    auto res =
-        tt::tt_metal::operation::run(
-            PaddedSliceDeviceOperation{
-                ttnn::Shape(modified_begins), ttnn::Shape(padded_ends), ttnn::Shape(modified_step), memory_config},
-            {input_tensor},
-            {},
-            {optional_output_tensor})
-            .at(0);
+    auto res = ttnn::prim::padded_slice(
+        input_tensor,
+        ttnn::Shape(modified_begins),
+        ttnn::Shape(padded_ends),
+        ttnn::Shape(modified_step),
+        memory_config,
+        optional_output_tensor);
 
     // If padded_slice should return a sharded tensor, then the op must created the sharded tensor in the requested
     // memory config
@@ -153,22 +150,22 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     return res;
 }
 
-template ttnn::Tensor PaddedSliceOperation::invoke<int>(
+template ttnn::Tensor padded_slice<int>(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int> begins,
-    tt::stl::Span<const int> ends,
-    tt::stl::Span<const int> step,
+    ttsl::Span<const int> begins,
+    ttsl::Span<const int> ends,
+    ttsl::Span<const int> step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t>(
+template ttnn::Tensor padded_slice<uint32_t>(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const uint32_t> begins,
-    tt::stl::Span<const uint32_t> ends,
-    tt::stl::Span<const uint32_t> step,
+    ttsl::Span<const uint32_t> begins,
+    ttsl::Span<const uint32_t> ends,
+    ttsl::Span<const uint32_t> step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::experimental

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,11 @@ from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     standardize_hf_keys,
 )
 
+# Performance tuning:
+# Chunk size for flexible chunked SDPA (prefix caching). chunk_start_idx must be
+# a multiple of this; generator aligns num_cached_tokens DOWN to this boundary.
+# (That means some tokens, even full pages, can be recomputed.)
+SDPA_CHUNK_ALIGN = 128
 
 PREFETCHER_NOC1_GRID = [
     (6, 6),
@@ -465,6 +470,10 @@ class TtModelArgs:
         self.use_prefetcher = False
         self.max_top_k = 32
 
+        self.qk_norm = False
+        self.is_qwen = False
+        self.unfuse_res_add = False
+
         if self.num_devices == 32:
             self.use_prefetcher = True
 
@@ -725,12 +734,35 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Chunk values based on what works best empirically
-            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
+            # Chunk values based on what works best empirically,
+            # while sticking to sdpa limitations
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
-                q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=512 if seqlen >= 2048 else 64,
+                q_chunk_size=256
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seqlen >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx),
+                k_chunk_size=512
+                if seqlen >= 2048 and chunk_start_idx == 0
+                else 64
+                if seqlen < 2048 and chunk_start_idx == 0
+                else min(512, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx))
+                if seqlen >= 2048
+                else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
+            )
+
+            # For flexible chunked SDPA (chunk_start_idx_tensor): fixed program config so one trace
+            # works for any block-aligned chunk_start at replay.
+            # Chunk sizes must match SDPA_CHUNK_ALIGN; generator aligns num_cached_tokens to it.
+            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                exp_approx_mode=False,
+                q_chunk_size=SDPA_CHUNK_ALIGN,
+                k_chunk_size=SDPA_CHUNK_ALIGN,
             )
 
             def find_largest_divisor(n, max_divisor=8):
@@ -789,7 +821,7 @@ class TtModelArgs:
 
             def w1_w3_prg_config(seq_len, use_interleaved):
                 if seq_len == 128:
-                    return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
+                    return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=4)
                 if not use_interleaved:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
@@ -843,11 +875,80 @@ class TtModelArgs:
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
 
+            #  Only used when seq_len >= 4096
+            def prefill_ff1_ff3_minimal_matmul_config(seq_len):
+                """
+                Returns the best minimal matmul config for prefill FF1/FF3 based on sequence length.
+                Configurations are optimized based on sweep results.
+                """
+                # Best configurations from sweep results for each M value
+                if seq_len <= 4096:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                    )
+                elif seq_len <= 8192:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=8,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                    )
+                else:  # For seq_len >= 16384, use the best config from sweep results
+                    # This covers 16384, 32768, 65536, 131072
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+
+            self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = prefill_ff1_ff3_minimal_matmul_config
+
+            # Only used when seq_len >= 4096
+            # Best configs found through sweep (sweep_llama70b_agmm_block_sizes.py)
+            def prefill_ff2_minimal_matmul_config(seq_len):
+                if seq_len <= 16384:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=7,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=4,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                    )
+                elif seq_len <= 65536:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=16,
+                        K_block_size=7,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=4,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                    )
+                else:  # 128k+
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=16,
+                        K_block_size=7,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=4,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 9),
+                    )
+
+            self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
+
             def w2_prg_config(seq_len):
                 if seq_len == 128:
-                    return self.matmul_1d_config(
-                        128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
-                    )
+                    return self.matmul_1d_config(128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=2)
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
                 if seq_len < 4096:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -948,7 +1049,7 @@ class TtModelArgs:
 
             self.model_config["WO_PREFILL_PROGCFG"] = (
                 lambda seq_len: self.matmul_1d_config(
-                    seq_len, 1024, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=16
+                    seq_len, 1024, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=8
                 )
                 if seq_len == 128
                 else (
@@ -965,6 +1066,28 @@ class TtModelArgs:
                     )
                 )
             )
+
+            def prefill_wo_minimal_matmul_config(seq_len):
+                if seq_len <= 128:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=8,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                    )
+                else:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+
+            self.model_config["WO_PREFILL_MINIMAL_PROGCFG"] = prefill_wo_minimal_matmul_config
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * 8) == 0
             if self.num_devices == 32:
@@ -994,7 +1117,7 @@ class TtModelArgs:
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = (
                 lambda seq_len: self.matmul_1d_config(
-                    seq_len, 2048, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=16
+                    seq_len, 2048, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=8
                 )
                 if seq_len == 128
                 else (
@@ -1014,6 +1137,38 @@ class TtModelArgs:
                 )
             )
 
+            # Configs determined by manual sweep the optimal configs for the different seqlen ranges
+            def prefill_xqkv_minimal_matmul_config(seq_len):
+                if seq_len <= 128:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                    )
+                elif seq_len <= 1024:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+                else:  # seqlen > 1024
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=8,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+
+            self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"] = prefill_xqkv_minimal_matmul_config
+
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
@@ -1024,9 +1179,9 @@ class TtModelArgs:
             )
 
             self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                compute_with_storage_grid_size=(8, 6),
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    self.start_core, 32, self.sub_core_grids, row_wise=True
+                    self.start_core, 48, self.sub_core_grids, row_wise=True
                 ),
                 exp_approx_mode=False,
                 q_chunk_size=0,
@@ -1430,6 +1585,14 @@ class TtModelArgs:
                 # overwrite_subblock_w=1,
                 # overwrite_subblock_h=1,
             )
+            # self.model_config["LM_HEAD_PREFILL_PROGCFG"] = ttnn.MinimalMatmulConfig(
+            #     M_block_size=8,
+            #     K_block_size=8,
+            #     N_block_size=8,
+            #     subblock_h=1,
+            #     subblock_w=1,
+            #     compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
+            # )
 
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             attn_input_sub_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(

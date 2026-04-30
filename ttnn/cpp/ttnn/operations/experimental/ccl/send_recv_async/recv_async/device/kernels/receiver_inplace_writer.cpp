@@ -1,14 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
 #include <cstdint>
 
-#include "dataflow_api.h"
-#include "socket_api.h"
-#include "tt_metal/hw/inc/accessor/tensor_accessor.h"
-
+#include "api/dataflow/dataflow_api.h"
+#include "api/socket_api.h"
+#include "api/tensor/tensor_accessor.h"
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -49,7 +48,7 @@ void kernel_main() {
     set_receiver_socket_page_size(receiver_socket, socket_block_size);
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
-    auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
+    auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr);
 
     // Small pages. We write multiple pages from a single packet.
     uint32_t page_index = page_start_offset;

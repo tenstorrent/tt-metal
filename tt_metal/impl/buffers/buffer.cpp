@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
+#include <core_coord.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
@@ -20,11 +21,12 @@
 #include <string>
 #include <string_view>
 #include <utility>
-
+#include "context/context_types.hpp"
 #include "fmt/base.h"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
@@ -40,7 +42,7 @@ std::mutex global_mempool_names_mutex;
 const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
     std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
     int name_combo = (int)buffer_type * 1000 + device_id;
-    if (global_mempool_names.find(name_combo) == global_mempool_names.end()) {
+    if (!global_mempool_names.contains(name_combo)) {
         std::string global_mempool_name = fmt::format("Device {} {}", device_id, enchantum::to_string(buffer_type));
         global_mempool_names.emplace(name_combo, global_mempool_name);
     }
@@ -74,7 +76,7 @@ void validate_buffer_parameters(
     TT_FATAL(
         size % page_size == 0,
         "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers, "
-        "buffer size should be divisble by the page size",
+        "buffer size should be divisible by the page size",
         page_size,
         size);
 }
@@ -104,9 +106,9 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
                 if (pages_per_shard > rem_pages) {
                     ret_shard_shape[i] = {rem_pages / ret_shard_shape[i][1], ret_shard_shape[i][1]};
                 }
-                ret_vec[i] = std::vector<uint32_t>(num_cols);
+                ret_vec[i].reserve(num_cols);
                 for (uint32_t j = 0; j < num_cols; j++) {
-                    ret_vec[i][j] = page_id++;
+                    ret_vec[i].push_back(page_id++);
                 }
                 rem_pages -= num_cols;
             }
@@ -180,14 +182,40 @@ void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device
 std::atomic<size_t> Buffer::next_unique_id = 0;
 
 std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
-    tt::stl::reflection::operator<<(os, spec);
+    os << "ShardSpec{";
+    os << "grid=[";
+
+    // Format grid as proper JSON array of ranges
+    const auto& ranges = spec.grid.ranges();
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        const auto& range = ranges[i];
+        os << "{";
+        os << R"("start":{"x":)" << range.start_coord.x << R"(,"y":)" << range.start_coord.y << R"(},)";
+        os << R"("end":{"x":)" << range.end_coord.x << R"(,"y":)" << range.end_coord.y << R"()";
+        os << "}";
+        if (i < ranges.size() - 1) {
+            os << ", ";
+        }
+    }
+    os << "], ";
+
+    os << "shape=[" << spec.shape[0] << ", " << spec.shape[1] << "], ";
+
+    // Serialize orientation
+    os << "orientation=";
+    switch (spec.orientation) {
+        case ShardOrientation::ROW_MAJOR: os << "ShardOrientation::ROW_MAJOR"; break;
+        case ShardOrientation::COL_MAJOR: os << "ShardOrientation::COL_MAJOR"; break;
+    }
+
+    os << "}";
     return os;
 }
 
 bool is_sharded(const TensorMemoryLayout& layout) {
     return (
         layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED ||
-        layout == TensorMemoryLayout::BLOCK_SHARDED);
+        layout == TensorMemoryLayout::BLOCK_SHARDED || layout == TensorMemoryLayout::ND_SHARDED);
 }
 
 UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
@@ -263,14 +291,15 @@ Buffer::Buffer(
     owns_data_(owns_data),
     page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
-    buffer_distribution_spec_(sharding_args.buffer_distribution_spec()) {
+    buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
+    per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        this->allocator_ = device->allocator(*this->sub_device_id_).get();
+        this->allocator_ = device->allocator_impl(*this->sub_device_id_).get();
     } else {
-        this->allocator_ = device->allocator().get();
+        this->allocator_ = device->allocator_impl().get();
     }
     validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
@@ -359,6 +388,8 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         return shared_from_this();
     }
 
+    TT_FATAL(!per_core_allocation_, "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
+
     auto buffer = Buffer::create(
         device_,
         address_,
@@ -382,6 +413,8 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
     return buffer;
 }
 
+Allocator* Buffer::allocator() const { return allocator_->view().get(); }
+
 void Buffer::allocate_impl() {
     if (GraphTracker::instance().hook_allocate(this)) {
         address_ = 0;
@@ -396,7 +429,9 @@ void Buffer::allocate_impl() {
         TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
 
 #if defined(TRACY_ENABLE)
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
+        if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
+                .rtoptions()
+                .get_profiler_buffer_usage_enabled()) {
             TracyAllocN(
                 reinterpret_cast<const void*>(address_), size_, get_buffer_location_name(buffer_type_, device_->id()));
         }
@@ -428,7 +463,9 @@ void Buffer::deallocate_impl() {
         GraphTracker::instance().track_deallocate(this);
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
 #if defined(TRACY_ENABLE)
-            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
+            if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
+                    .rtoptions()
+                    .get_profiler_buffer_usage_enabled()) {
                 TracyFreeN(
                     reinterpret_cast<const void*>(address()), get_buffer_location_name(buffer_type_, device_->id()));
             }
@@ -486,11 +523,11 @@ uint32_t Buffer::num_dev_pages() const {
 HalMemType Buffer::memory_type() const {
     if (this->is_dram()) {
         return HalMemType::DRAM;
-    } else if (this->is_l1()) {
-        return HalMemType::L1;
-    } else {
-        TT_THROW("Unknown HAL memory type for {} buffer type", this->buffer_type());
     }
+    if (this->is_l1()) {
+        return HalMemType::L1;
+    }
+    TT_THROW("Unknown HAL memory type for {} buffer type", this->buffer_type());
 }
 
 CoreType Buffer::core_type() const {
@@ -530,6 +567,10 @@ DeviceAddr Buffer::aligned_size_per_bank() const {
         is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
     return tt::tt_metal::detail::calculate_bank_size_spread(
         this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
+}
+
+void Buffer::set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs) {
+    per_core_addresses_ = std::move(addrs);
 }
 
 ShardSpecBuffer Buffer::shard_spec() const {

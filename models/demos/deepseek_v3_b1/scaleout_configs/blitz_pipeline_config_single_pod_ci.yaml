@@ -1,0 +1,57 @@
+# Maps each pipeline stage to a (host, slice) pair.
+# Uses placeholder host names (host-0..host-3); actual hosts come from --hostfile
+# when running generate_blitz_decode_pipeline_configs.py in CI.
+
+stage_to_slice_mapping:
+  0:
+    host: host-0
+    slice: 0
+  1:
+    host: host-0
+    slice: 1
+  2:
+    host: host-0
+    slice: 2
+  3:
+    host: host-0
+    slice: 3
+  4:
+    host: host-1
+    slice: 0
+  5:
+    host: host-1
+    slice: 1
+  6:
+    host: host-1
+    slice: 2
+  7:
+    host: host-1
+    slice: 3
+  8:
+    host: host-2
+    slice: 0
+  9:
+    host: host-2
+    slice: 1
+  10:
+    host: host-2
+    slice: 2
+  11:
+    host: host-2
+    slice: 3
+  12:
+    host: host-3
+    slice: 0
+  13:
+    host: host-3
+    slice: 1
+  14:
+    host: host-3
+    slice: 2
+  15:
+    host: host-3
+    slice: 3
+
+mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+rank_binding_file: blitz_decode_pipeline_rank_binding_single_pod_ci.yaml
+rank_file: blitz_decode_pipeline_rank_file_single_pod_ci

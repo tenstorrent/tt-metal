@@ -5,7 +5,7 @@ Achieving FP32 Accuracy for Computation
 
 Tensix provides two main compute engines: the matrix engine (FPU) and the vector engine (SFPU). Each has distinct strengths and limitations that affect numerical accuracy and throughput. For a detailed overview of these engines, see :ref:`Compute Engines and Data Flow within Tensix <compute_engines_and_dataflow_within_tensix>`.
 
-The matrix engine is built for speed and scale, handling large matrix operations efficiently. Its design favors throughput, but this comes with a trade-off: most operations use bfloat16 or TF32 formats, which offer less precision than standard IEEE 754 FP32. Additionally, the matrix engine does not handle special values (inf, NaN, ...) properly. For many machine learning tasks, this is sufficient, but it may not meet the needs of workloads that demand high numerical accuracy. For detailed information about FPU and SFPU numerical accuracy characteristics, please review the follwoing documentations:
+The matrix engine is built for speed and scale, handling large matrix operations efficiently. Its design favors throughput, but this comes with a trade-off: most operations use bfloat16 or TF32 formats, which offer less precision than standard IEEE 754 FP32. Additionally, the matrix engine does not handle special values (inf, NaN, ...) properly. For many machine learning tasks, this is sufficient, but it may not meet the needs of workloads that demand high numerical accuracy. For detailed information about FPU and SFPU numerical accuracy characteristics, please review the following documentations:
 
 * `SFPU FMA Numerical Accuracy <https://github.com/tenstorrent/tt-isa-documentation/blob/main/Miscellaneous/FMA/README.md#correctness-of-fma_model_ieee>`_
 * `Floaring Point Bit Patterns <https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/FloatBitPatterns.md>`_
@@ -70,8 +70,7 @@ The following example demonstrates a typical compute kernel structure for achiev
     #include "compute_kernel_api/tile_move_copy.h"
     #include "compute_kernel_api/binary.h"
 
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         constexpr auto cb_in0 = tt::CBIndex::c_in0;
         constexpr auto cb_in1 = tt::CBIndex::c_in1;
         constexpr auto cb_out0 = tt::CBIndex::c_out0;
@@ -125,7 +124,6 @@ The following example demonstrates a typical compute kernel structure for achiev
             cb_pop_front(cb_in1, 1);
         }
     }
-    } // NAMESPACE
 
 .. warning::
     Failing to call ``copy_tile_init()`` and ``pack_reconfig_data_format()`` will result in data being treated as 16-bit, leading to a loss of precision, even if ``fp32_dest_acc_en`` is enabled.

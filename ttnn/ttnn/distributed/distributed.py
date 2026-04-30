@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,7 @@ from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Un
 import ttnn
 
 
-def get_mesh_device_core_grid(mesh_device):
-    compute_with_storage_grid_size = mesh_device.compute_with_storage_grid_size()
-    return ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
-
-
 MeshDevice = ttnn._ttnn.multi_device.MeshDevice
-MeshDevice.core_grid = property(get_mesh_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 
 
@@ -135,7 +129,10 @@ class TensorShardingInfo:
         mapping = {}
         try:
             mesh_device = self.tensor.device()
+            view = mesh_device.get_view()
             for i, mesh_coord in enumerate(self.mesh_coords):
+                if not view.is_local(mesh_coord):
+                    continue
                 dev_id = mesh_device.get_device_id(mesh_coord)
                 mapping[dev_id] = i
 
@@ -266,6 +263,9 @@ def _compute_global_slice_ranges(device_coord, sharding_info):
 
 def _create_shard_annotation_text(device_id, device_coord, sharding_info):
     """Create annotation text showing shard information for a device."""
+    if device_id is None:
+        return ""
+
     shard_index = sharding_info.device_to_shard_map.get(device_id)
     if shard_index is None:
         if sharding_info.tensor.storage_type() == ttnn.StorageType.HOST:
@@ -312,11 +312,14 @@ def _create_replication_color_mapping(sharding_info):
             device_to_group[device_id] = slice_key_to_group[slice_key]
     else:
         mesh_device = sharding_info.tensor.device()
+        view = mesh_device.get_view()
 
         # Only assign colors to devices that actually have tensor shards
         for device_id in sharding_info.device_to_shard_map.keys():
             coord = None
             for test_coord in ttnn.MeshCoordinateRange(mesh_device.shape):
+                if not view.is_local(test_coord):
+                    continue
                 if mesh_device.get_device_id(test_coord) == device_id:
                     coord = test_coord
                     break
@@ -398,12 +401,15 @@ def _get_rich_table(
         for col_idx in range(cols):
             try:
                 coord = ttnn.MeshCoordinate(row_idx, col_idx)
+                is_local = (
+                    view.is_local(coord) if storage_type == ttnn.StorageType.DEVICE else host_buffer.is_local(coord)
+                )
                 if storage_type == ttnn.StorageType.DEVICE:
-                    locality = "Local\n" if view.is_local(coord) else "Remote\n"
-                    device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
-                    device_id_str = f"Dev. ID: {device_id}\n" if view.is_local(coord) else "Unknown\n"
+                    locality = "Local\n" if is_local else "Remote\n"
+                    device_id = mesh_device.get_device_id(coord) if is_local else None
+                    device_id_str = f"Dev. ID: {device_id}\n" if is_local else "Unknown ID\n"
                 else:
-                    locality = "Local\n" if host_buffer.is_local(coord) else "Remote\n"
+                    locality = "Local\n" if is_local else "Remote\n"
                     device_id = row_idx * cols + col_idx
                     device_id_str = ""
 
@@ -558,7 +564,7 @@ def create_system_mesh_table():
     try:
         system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
 
-        # TODO: Remove shape indexing workaround after exposing subscripts in pybind11
+        # TODO: Remove shape indexing workaround after exposing subscripts in nanobind
         global_shape = tuple(system_mesh_desc.shape())
         local_shape = tuple(system_mesh_desc.local_shape())
         rows, cols = global_shape[0], global_shape[1]

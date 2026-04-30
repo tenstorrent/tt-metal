@@ -14,6 +14,20 @@ Kernel print is the debug tool for printing tiles, scalers, and strings from dev
 .. toctree::
     :maxdepth: 1
 
+    checkpoint
+
+Debug checkpoints provide synchronized inspection points for fused kernels, where all RISCs on a core halt together and dump circular buffer state.
+
+.. toctree::
+    :maxdepth: 1
+
+    device_print
+
+Device print is the debug tool for printing formatted messages from device to host. It is currently experimental feature and it expected to replace dprint in the future.
+
+.. toctree::
+    :maxdepth: 1
+
     watcher
 
 The Watcher is a thread that monitors the status of the TT device to help with
@@ -36,6 +50,20 @@ Device program profiler brings visibility to execution of device side programs b
 .. toctree::
     :maxdepth: 1
 
+    lightweight_kernel_asserts
+
+Lightweight kernel asserts provide a mechanism for assertion checks within the kernel.
+
+.. toctree::
+    :maxdepth: 1
+
+    llk_asserts
+
+LLK asserts provide validation checks within the low-level kernel library infrastructure code.
+
+.. toctree::
+    :maxdepth: 1
+
     inspector
 
 The Inspector is a tool that provides insights into Metal host runtime.
@@ -46,3 +74,14 @@ The Inspector is a tool that provides insights into Metal host runtime.
     triage
 
 The tt-triage is a collection of Python scripts for analyzing and debugging Metal workload.
+
+.. toctree::
+    :maxdepth: 1
+
+    noc_debug_dump
+
+NOC debug dump collects NOC traces from the device to identify potential kernel programming issues.
+
+* `tt-smi <https://github.com/tenstorrent/tt-smi>`_
+
+TT-SMI is a command line utility to interact with all Tenstorrent devices on host.
