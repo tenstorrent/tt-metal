@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -663,12 +664,14 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::DataFormat::UInt32);
 
     // CB for passing total_chunks from writer to compute kernel
-    // Single page holding one uint32_t value
+    // Single page holding one uint32_t value. Page size floored at l1_alignment /
+    // CIRCULAR_BUFFER_COMPUTE_WORD_SIZE so the unpack LLK fifo_* fields (16 B words) are non-zero
+    // when tilize_compute pops this CB.
     tt::tt_metal::create_cb(
         total_chunks_cb_id,
         program,
         tilize_core_range_set,
-        sizeof(uint32_t),
+        std::max({static_cast<uint32_t>(sizeof(uint32_t)), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE}),
         1,  // single page
         tt::DataFormat::UInt32);
 
@@ -682,12 +685,14 @@ MoEComputeMeshWorkloadFactory::create_at(
         |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
         ------------------------------------------------------------------------------------
         | cb_s2c_in      | CBIndex::c_0  | Float16_b  | true  |    224*2 |      917504     |
-        | cb_r2c_w0      | CBIndex::c_1  | Bfp4_b     | true  |    14*6  |      48384      |
-        | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
-        | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
-        | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |    6*12  |      147456     |
-        | cb_w2c_md      | CBIndex::c_5  | UInt32     | false |    2     |      8          |
+        | cb_r2c_w0      | CBIndex::c_3  | Bfp4_b     | true  |    14*6  |      48384      |
+        | cb_c2w_rdy     | CBIndex::c_4  | Float32    | false |    1     | see below       |
+        | cb_w2c_rdy     | CBIndex::c_5  | Float32    | false |    1     | see below       |
+        | cb_s2c_in2     | CBIndex::c_6  | Float16_b  | true  |    6*12  |      147456     |
+        | cb_w2c_md      | CBIndex::c_7  | UInt32     | false |    2     | see below       |
         ------------------------------------------------------------------------------------
+        Non-tile CBs use page_size >= max(datum_size, l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE)
+        so LLK fifo_* fields (16 B words; circular_buffer_constants.h) are non-zero on compute push/pop.
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
@@ -704,15 +709,15 @@ MoEComputeMeshWorkloadFactory::create_at(
         matmul_cb_specs0.emplace_back("cb_c2c_ones_tile", tt::CBIndex::c_8, tt::DataFormat::Float16_b, true, 1);
     }
 
-    std::map<std::string, tt::tt_metal::CBHandle> matmul_cb_handles;
-
     // Create CBs
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : matmul_cb_specs0) {
-        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
+        const uint32_t bytes_per_tile =
+            is_tile ? tt::tile_size(data_format)
+                    : std::max({tt::datum_size(data_format), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE});
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile);
 
-        matmul_cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, matmul_core_range_set, cb_config);
+        tt::tt_metal::CreateCircularBuffer(program, matmul_core_range_set, cb_config);
     }
 
     //-------------------------------------------------------------------------
