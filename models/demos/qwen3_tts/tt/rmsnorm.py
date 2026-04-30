@@ -63,23 +63,34 @@ class RMSNorm(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        program_config=None,
+        memory_config=None,
+    ) -> ttnn.Tensor:
         """
         Apply RMSNorm to input tensor.
 
         Args:
             x: Input tensor of shape [batch, 1, seq_len, hidden_size]
+            program_config: Optional override (e.g. LayerNormShardedMultiCoreProgramConfig
+                for a sharded multi-core RMSNorm path).
+            memory_config: Optional override for the output memory config. Defaults to
+                ttnn.L1_MEMORY_CONFIG.
 
         Returns:
             Normalized tensor of same shape
         """
-        return ttnn.rms_norm(
-            x,
-            epsilon=self.eps,
-            weight=self.weight,
-            compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        kwargs = {
+            "epsilon": self.eps,
+            "weight": self.weight,
+            "compute_kernel_config": self.compute_kernel_config,
+            "memory_config": memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG,
+        }
+        if program_config is not None:
+            kwargs["program_config"] = program_config
+        return ttnn.rms_norm(x, **kwargs)
 
 
 class QKNorm(LightweightModule):
