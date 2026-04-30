@@ -215,7 +215,7 @@ class ModelArgs:
             return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
     @staticmethod
-    def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True):
+    def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True, num_layers=None):
         """Load model state dict compatible with tt_transformers
 
         Args:
@@ -223,6 +223,9 @@ class ModelArgs:
             dummy_weights (bool): If True, returns a dummy state dict for testing purposes.
             convert_to_meta_format (bool): If True, convert HF QKV weights to Meta format for RoPE.
                 Set to False when loading for HuggingFace reference models.
+            num_layers (int, optional): If set, override `num_hidden_layers` so HF only
+                materializes that many decoder blocks. Avoids ~250 GB host RSS during
+                MXFP4->bf16 dequant when only a few layers are needed (e.g. quick test runs).
         """
         if dummy_weights:
             # Return dummy state dict for testing
@@ -230,9 +233,17 @@ class ModelArgs:
         else:
             # Load actual GPT-OSS weights directly from safetensors files
             # Check if we have a cached torch_state_dict.pt file
+            from_pretrained_kwargs = {"torch_dtype": "auto"}
+            if num_layers is not None:
+                hf_config = AutoConfig.from_pretrained(weights_path)
+                logger.info(
+                    f"load_state_dict: overriding num_hidden_layers {hf_config.num_hidden_layers} -> {num_layers}"
+                )
+                hf_config.num_hidden_layers = num_layers
+                from_pretrained_kwargs["config"] = hf_config
             model = AutoModelForCausalLM.from_pretrained(
                 weights_path,
-                torch_dtype="auto"
+                **from_pretrained_kwargs,
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
