@@ -366,16 +366,14 @@ void Cluster::assign_mem_channels_to_devices(
 }
 
 void Cluster::get_metal_desc_from_tt_desc() {
-    std::string silicon_dram_metadata_yaml;
-    if (this->target_type_ == TargetDevice::Silicon) {
-        // UMD uses arch-default soc descriptors without sdesc_path; device_descriptor_file_path is empty until we set
-        // it on a copy (public field on tt::umd::SocDescriptor) for metal_SocDescriptor's dram_views YAML load.
-        silicon_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
-    }
+    // UMD's arch-default SocDescriptor ctor (used for Silicon and TTSim) leaves device_descriptor_file_path empty.
+    // metal_SocDescriptor's dram_views YAML load needs a path, so fill in a fallback when UMD didn't set one.
+    const std::string fallback_dram_metadata_yaml =
+        get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     for (const auto& id : this->driver_->get_target_device_ids()) {
         tt::umd::SocDescriptor umd_soc = this->driver_->get_soc_descriptor(id);
-        if (this->target_type_ == TargetDevice::Silicon) {
-            umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
+        if (umd_soc.device_descriptor_file_path.empty()) {
+            umd_soc.device_descriptor_file_path = fallback_dram_metadata_yaml;
         }
         this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(umd_soc, this->cluster_desc_->get_board_type(id)));
     }
@@ -415,11 +413,13 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
         } else {
+            std::cout << "here" << std::endl;
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .target_devices = {0},
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
+            std::cout << "opened driver" << std::endl;
         }
     } else if (this->target_type_ == TargetDevice::Mock) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
