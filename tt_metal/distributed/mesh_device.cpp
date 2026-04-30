@@ -424,7 +424,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     ctx.device_manager()->initialize_profiler();
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
 
-    mesh_device->init_realtime_profiler_socket();
+    mesh_device->pimpl_->init_realtime_profiler_socket(mesh_device);
 
     return mesh_device;
 }
@@ -536,7 +536,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
 
     for (auto& [device_id, submesh] : result) {
-        submesh->init_realtime_profiler_socket();
+        submesh->pimpl_->init_realtime_profiler_socket(submesh);
     }
 
     return result;
@@ -1658,8 +1658,6 @@ bool MeshDevice::initialize(
     return pimpl_->initialize_impl(
         this, num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
-void MeshDevice::init_realtime_profiler_socket() { pimpl_->init_realtime_profiler_socket(shared_from_this()); }
-D2HSocket* MeshDevice::get_realtime_profiler_socket() const { return pimpl_->get_realtime_profiler_socket(); }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }
