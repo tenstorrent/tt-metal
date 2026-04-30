@@ -1,27 +1,20 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Molmo2 text decoder SwiGLU MLP — column-parallel (TP) layout.
+"""Molmo2 text decoder SwiGLU MLP with fused ff_proj (reversed gate/value order).
 
-Mirrors the text-attention AllGather pattern for trace compatibility:
-  w1/w3 (gate/value): column-parallel — each device [4096, intermediate/8] columns.
-  w2 (down):          replicated      — each device holds the full [intermediate, 4096].
-
-After SwiGLU: ttnn.all_gather combines partial [S, intermediate/8] outputs
-into [S, intermediate] on each device, then replicated w2 produces [S, 4096].
-
-This is the same pattern as attention column-parallel QKV + AllGather + replicated wo.
-It is trace-safe (AllGather works in decode-trace replay; AllReduce does not).
-
-Memory: AllGather intermediate [S, intermediate] bfloat16 is ≤201 MB at S=8192.
-For S > 8192 (e.g. 384-frame videos), Phase 2 should use AllReduce in the
-non-traced prefill path with row-parallel w2.
+Phase 1 T3K layout (correctness-first):
+  All weights REPLICATED across devices — each device computes the full MLP independently.
+  Input/output: [1, 1, S, 4096] replicated on all devices.
 
 Key difference from standard LLaMA SwiGLU:
   ff_proj [24576, 4096] stores value (up) in the FIRST half and gate in the SECOND half.
-    w1 (gate)  = ff_proj[12288:, :]  (second half → passed through silu)
-    w3 (value) = ff_proj[:12288, :]  (first half  → multiplied with silu output)
+  At load time:
+    w1 (gate) = ff_proj[12288:, :]  (second half → passed through silu)
+    w3 (value) = ff_proj[:12288, :] (first half → multiplied with silu output)
   This maps to the standard SwiGLU formula: silu(w1(x)) * w3(x).
+
+Adapted from models/tt_transformers/tt/mlp.py (forward structure).
 """
 
 
@@ -31,12 +24,12 @@ from models.tt_transformers.tt.common import Mode
 
 
 class TtMolmo2TextMLP(LightweightModule):
-    """Text decoder SwiGLU MLP — column-parallel w1/w3 + AllGather + replicated w2."""
+    """Text decoder SwiGLU MLP for Molmo2-8B (Phase 1: replicated weights)."""
 
     def __init__(
         self,
         mesh_device,
-        tt_ccl,
+        tt_ccl,  # kept for API compatibility, not used in Phase 1
         state_dict,
         weight_cache_path,
         layer_num,
@@ -46,68 +39,61 @@ class TtMolmo2TextMLP(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self.num_devices = configuration.num_devices
-        self.intermediate_size = configuration.intermediate_size  # 12288
+        self.intermediate_size = configuration.intermediate_size
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
+        self.tile_size = configuration.tile_size
 
         layer_name = f"model.transformer.blocks.{layer_num}.mlp"
-        cache_name = (
-            (lambda n: weight_cache_path / f"{layer_name}.tp8ag.{n}")
-            if weight_cache_path and not configuration.dummy_weights
-            else (lambda _: None)
-        )
+        if configuration.dummy_weights or weight_cache_path is None:
+            cache_name = lambda _: None
+        else:
+            cache_name = lambda name: weight_cache_path / f"{layer_name}.{name}"
 
         # ------------------------------------------------------------------ #
         # Split fused ff_proj [24576, 4096]:
         #   first half  [:12288] = value (up) → w3
         #   second half [12288:] = gate      → w1
-        # Standard SwiGLU: silu(w1(x)) * w3(x)
+        # Standard SwiGLU: silu(w1(x)) * w3(x) — w1=gate, w3=value.
         # ------------------------------------------------------------------ #
         ff_proj = state_dict[f"{layer_name}.ff_proj.weight"]  # [24576, 4096]
         w_value = ff_proj[: self.intermediate_size]  # [12288, 4096]
         w_gate = ff_proj[self.intermediate_size :]  # [12288, 4096]
 
-        # Column-parallel: shard output (intermediate) dim across devices
-        col_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+        # Use bfloat8_b for MLP weights to halve memory footprint.
+        # Replicated bf16 MLP weights (3 × 12288 × 4096 × 36 layers) = ~10.9 GB/device,
+        # exceeding the 12 GB device DRAM when combined with other weights.
+        # bfloat8_b cuts this to ~5.4 GB/device; total fits comfortably.
+        mlp_dtype = ttnn.bfloat8_b
 
-        def _col(w, name):
-            # bfloat16 for sharded w1/w3: each device holds [4096, 1536] = 12 MB.
-            # Total across 36 layers × 2 weights: 36×2×4096×1536×2B = 901 MB/device —
-            # less than bfloat8_b replicated (5.4 GB/device) and eliminates the 4%
-            # accuracy regression from per-shard bfloat8_b quantization noise.
+        def _tt(weight, name):
             return ttnn.as_tensor(
-                w.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 4096, 12288] → each device [4096, 1536]
-                dtype=ttnn.bfloat16,
+                weight.T.unsqueeze(0).unsqueeze(0),
+                dtype=mlp_dtype,
                 layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
+                device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=col_mapper,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=cache_name(name),
             )
 
-        self.w1 = _col(w_gate, "w1_gate_col")
-        self.w3 = _col(w_value, "w3_value_col")
+        self.w1 = _tt(w_gate, "w1_gate_replicated")  # gate → silu
+        self.w3 = _tt(w_value, "w3_value_replicated")  # value/up
 
-        # w2 replicated: each device holds the full [12288, 4096] weight.
-        # After AllGather the SwiGLU output is [S, 12288] on each device,
-        # so replicated w2 computes the full [S, 4096] output independently.
         ff_out = state_dict[f"{layer_name}.ff_out.weight"]  # [4096, 12288]
-        self.w2 = ttnn.as_tensor(
-            ff_out.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 12288, 4096]
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            cache_file_name=cache_name("w2_down_replicated"),
-        )
+        self.w2 = _tt(ff_out, "w2_down_replicated")  # down projection
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
-        """Column-parallel SwiGLU + AllGather + replicated w2.
+        """Standard SwiGLU: silu(w1(x)) * w3(x) → w2(result).
 
-        Same AllGather pattern as attention (column-parallel QKV → AllGather → replicated wo).
-        Trace-safe: AllGather replays correctly; AllReduce does not.
+        With the swapped assignment (w1=gate, w3=value), this equals
+        silu(gate) * value — which is the Molmo2 formula.
         """
+        seq_len = x.shape[-2]
+        prefill_chunk = 1024
+        chunked = mode == Mode.PREFILL and seq_len >= prefill_chunk and seq_len % prefill_chunk == 0
+        if chunked:
+            x = ttnn.reshape(x, [1, seq_len // prefill_chunk, prefill_chunk, -1])
+
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -124,7 +110,7 @@ class TtMolmo2TextMLP(LightweightModule):
         )
         ttnn.deallocate(x)
 
-        # silu(gate) * value  — each device: [S, intermediate/num_devices]
+        # silu(gate) * value
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
@@ -135,24 +121,20 @@ class TtMolmo2TextMLP(LightweightModule):
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
-        # AllGather: [S, intermediate/num_devices] → [S, intermediate] on each device.
-        # Equivalent to attention's AllGather after per-head computation.
-        # Trace-safe (unlike AllReduce).
-        w2_in_full = ttnn.all_gather(
+        w2_out = ttnn.linear(
             w2_in,
-            dim=3,
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(w2_in)
-
-        # Replicated w2 projects [S, intermediate] → [S, dim] independently on each device
-        out = ttnn.linear(
-            w2_in_full,
             self.w2,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(w2_in_full)
-        return out
+        ttnn.deallocate(w2_in)
+
+        # Restore [1, 1, S, dim] shape only if we chunked
+        if chunked:
+            original_shape = w2_out.shape
+            w2_out = ttnn.reshape(
+                w2_out,
+                (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1]),
+            )
+        return w2_out
