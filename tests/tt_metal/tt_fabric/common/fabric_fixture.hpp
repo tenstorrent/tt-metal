@@ -320,18 +320,35 @@ protected:
 
 class CustomMeshGraphFabric2DFixture : public BaseFabricFixture {
 public:
+    // FIX TC (#42429): prevents double-init when T3kCustomMeshGraphFabric2DFixture::SetUp()
+    // (GTest hook) calls SetUp(desc, mapping) early so GTEST_SKIP() fires in the right context,
+    // and the test body then calls SetUp(desc, mapping) again.
+    inline static bool custom_setup_initialized_ = false;
+
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
 
     void SetUp(
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        // FIX TC (#42429): If T3kCustomMeshGraphFabric2DFixture::SetUp() (the GTest hook) already
+        // called us, the fabric mesh is set up and the degraded check already ran.  Calling again
+        // from the test body would double-init; bail out early.
+        if (custom_setup_initialized_) {
+            return;
+        }
+        custom_setup_initialized_ = true;
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
         // FIX SA (#42429): skip fabric unicast tests on degraded cluster — non-MMIO devices
         // with broken relay paths will throw TT_THROW in read_completion_queue_event (FIX Z),
         // turning a data-path race condition test into an uninformative crash.
+        // NOTE: GTEST_SKIP() only stops the test when called in a GTest hook (SetUp/TearDown).
+        // When called from the test body (or helpers called from the test body) it just returns.
+        // T3kCustomMeshGraphFabric2DFixture::SetUp() calls us from the hook, so the skip below
+        // will be honoured by GTest.  Other callers (e.g. Galaxy1x32Fabric1DFixture) invoke us
+        // from SetUpTestSuite which is also a hook, so they are fine too.
         for (const auto& mesh_dev : devices_) {
             for (auto* dev : mesh_dev->get_devices()) {
                 if (dev->is_fabric_relay_path_broken() || dev->is_fabric_channels_not_ready_for_traffic()) {
@@ -347,6 +364,7 @@ private:
     void SetUp() override {}
 
     void TearDown() override {
+        custom_setup_initialized_ = false;  // FIX TC: reset for next test
         BaseFabricFixture::DoTearDownTestSuite();
         tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     }
@@ -408,6 +426,40 @@ class T3kCustomMeshGraphFabric2DFixture
         // FIX TB (#42429): run the base-class guard (e.g. < 2 devices) so the fixture
         // is correctly skipped on under-provisioned systems without entering fabric init.
         BaseFabricFixture::SetUp();
+
+        // FIX TC (#42429): initialize the fabric mesh from within the GTest SetUp() hook so
+        // that GTEST_SKIP() in the degraded-cluster check inside
+        // CustomMeshGraphFabric2DFixture::SetUp(desc, mapping) actually stops test execution.
+        //
+        // Root cause: GTEST_SKIP() expands to "return GTEST_MESSAGE_(..., kSkip)".  When called
+        // from a helper that is invoked from the *test body* (not from SetUp), the "return" only
+        // exits the helper — the test body keeps running regardless of the kSkip result.  GTest
+        // only checks IsSkipped() after SetUp() returns, not mid-test-body.
+        //
+        // By calling CustomMeshGraphFabric2DFixture::SetUp(desc, mapping) here (from the GTest
+        // hook), any GTEST_SKIP() inside propagates "return" back to this function, which then
+        // returns to GTest.  GTest sees IsSkipped()==true and skips the test body entirely.
+        //
+        // CustomMeshGraphFabric2DFixture::SetUp(desc, mapping) is idempotent: the
+        // custom_setup_initialized_ flag prevents re-init when the test body calls it again.
+        const auto& [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
+        for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {
+            for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
+                const auto& eth_coord = mesh_graph_eth_coords[mesh_id][chip_id];
+                auto maybe_chip_id = cluster.try_get_physical_chip_id_from_eth_coord(eth_coord);
+                if (!maybe_chip_id.has_value()) {
+                    GTEST_SKIP()
+                        << "T3kCustomMeshGraphFabric2DFixture: EthCoord ("
+                        << eth_coord.rack << "," << eth_coord.shelf << "," << eth_coord.x << "," << eth_coord.y
+                        << ") not found in cluster — skipping on incompatible topology";
+                }
+                physical_chip_ids_mapping.insert(
+                    {FabricNodeId(MeshId{mesh_id}, chip_id), *maybe_chip_id});
+            }
+        }
+        CustomMeshGraphFabric2DFixture::SetUp(mesh_graph_desc_path, physical_chip_ids_mapping);
     }
 };
 
