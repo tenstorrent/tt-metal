@@ -21,12 +21,14 @@ def run_with_trace(
     output_mem_config,
     num_iter=20,
     subdevice_id=None,
+    cluster_axis=None,
 ):
     # Compile Run
     logger.info("Compiling model")
     tt_out_tensor = ttnn.all_broadcast(
         input_tensor_mesh,
         num_links=num_links,
+        cluster_axis=cluster_axis,
         memory_config=output_mem_config,
         topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
@@ -40,6 +42,7 @@ def run_with_trace(
         tt_out_tensor = ttnn.all_broadcast(
             input_tensor_mesh,
             num_links=num_links,
+            cluster_axis=cluster_axis,
             memory_config=output_mem_config,
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
@@ -208,24 +211,28 @@ def run_all_broadcast_impl(
                 output_mem_config,
                 num_iter=num_iters,
                 subdevice_id=worker_sub_device_id,
+                cluster_axis=cluster_axis,
             )
             tt_out_tensor_list.append(tt_out_tensor)
         else:
             logger.info("Running all broadcast")
             # breakpoint()
             for i in range(num_iters):
+                logger.info(f"Running all broadcast for iter {i}")
                 tt_out_tensors = ttnn.all_broadcast(
                     input_tensor_mesh_list[i],
                     num_links=num_links,
+                    cluster_axis=cluster_axis,
                     memory_config=output_mem_config,
                     topology=all_broadcast_topology,
                     subdevice_id=worker_sub_device_id,
                 )
+                logger.info(f"Appending result for iter {i}")
                 tt_out_tensor_list.append(tt_out_tensors)
 
             logger.info(f"Waiting for op")
             # breakpoint()
-            ttnn.synchronize_device(mesh_device)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done op")
 
     logger.info(f"Done op for real")

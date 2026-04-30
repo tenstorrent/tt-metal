@@ -50,4 +50,5 @@ def test_all_broadcast_2d_fabric(
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
+        cluster_axis=cluster_axis,
     )

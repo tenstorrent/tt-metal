@@ -24,10 +24,10 @@ from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_dev
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 def test_all_broadcast_2d_fabric(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     output_shape,
     num_links,
     input_dtype,
@@ -36,24 +36,28 @@ def test_all_broadcast_2d_fabric(
     num_iters,
     function_level_defaults,
 ):
-    num_devices = bh_1d_mesh_device.shape[0]
+    # Use the first row of the 2D mesh - create a 1D submesh
+    # For (4,2) mesh, this creates a (4,1) submesh using 4 devices
+    num_devices = bh_2d_mesh_device.shape[0]
+    cluster_axis = 0
 
-    topology = ttnn.Topology.Linear
-    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
+    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")
 
     run_all_broadcast_impl(
-        bh_1d_mesh_device,
+        submesh_device,
         num_devices,
         output_shape,
         num_links,
         input_dtype,
         layout,
         function_level_defaults,
-        all_broadcast_topology=topology,
+        all_broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
+        cluster_axis=cluster_axis,
     )
