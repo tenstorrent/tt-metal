@@ -385,13 +385,42 @@ class TtMolmo2TextAttention(LightweightModule):
         ttnn.deallocate(k_8b)
         ttnn.deallocate(v_8b)
 
+        # Pad Q/K/V seq dim to next multiple of q_chunk_size (256) before SDPA.
+        # TTNN SDPA has a partial-tile bug: when S % chunk ≠ 0 and the last tile is
+        # small (e.g. S=4778, last tile=170 tokens), the kernel enters an infinite loop.
+        # Padding makes every Q-tile full; we slice the output back to seq_len after.
+        # Causal masking ensures real positions (0..S-1) see only valid K/V entries.
+        q_chunk = 256
+        S_padded = ((seq_len + q_chunk - 1) // q_chunk) * q_chunk
+        if S_padded > seq_len:
+            pad_len = S_padded - seq_len
+
+            def _pad_seq(t, n_heads):
+                pad = ttnn.zeros(
+                    [1, n_heads, pad_len, self.padded_head_dim],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                out = ttnn.concat([t, pad], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(pad)
+                return out
+
+            q_sdpa = _pad_seq(q, self.n_local_heads)
+            k_sdpa = _pad_seq(k, self.n_local_kv_heads)
+            v_sdpa = _pad_seq(v, self.n_local_kv_heads)
+        else:
+            q_sdpa, k_sdpa, v_sdpa = q, k, v
+
         # SDPA: is_causal and attn_mask are mutually exclusive in TTNN SDPA.
         # When a custom mask is provided (image-bidir override), it already encodes
         # the causal structure, so is_causal must be False.
-        attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
+        attn_out_padded = ttnn.transformer.scaled_dot_product_attention(
+            q_sdpa,
+            k_sdpa,
+            v_sdpa,
             is_causal=(mask is None),
             attn_mask=mask,
             scale=self.scale,
@@ -401,6 +430,17 @@ class TtMolmo2TextAttention(LightweightModule):
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
+        if S_padded > seq_len:
+            ttnn.deallocate(q_sdpa)
+            ttnn.deallocate(k_sdpa)
+            ttnn.deallocate(v_sdpa)
+            # Slice back to real seq_len; reshape requires ROW_MAJOR for non-tile-aligned slice
+            attn_out_padded = ttnn.to_layout(attn_out_padded, ttnn.ROW_MAJOR_LAYOUT)
+            attn_out = attn_out_padded[:, :, :seq_len, :]
+            ttnn.deallocate(attn_out_padded)
+            attn_out = ttnn.to_layout(attn_out, ttnn.TILE_LAYOUT)
+        else:
+            attn_out = attn_out_padded
 
         attn_out = ttnn.reshape(attn_out, [1, self.n_local_heads, -1, self.padded_head_dim])
         attn_11SH = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
