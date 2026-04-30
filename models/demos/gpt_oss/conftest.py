@@ -20,8 +20,9 @@ def state_dict(request):
     model_path = os.getenv("HF_MODEL", None)
     if model_path is None or not load_model:
         return {}
-    else:
-        return ModelArgs.load_state_dict(model_path, dummy_weights=False)
+    num_layers_env = os.getenv("GPT_OSS_NUM_LAYERS")
+    num_layers = int(num_layers_env) if num_layers_env else None
+    return ModelArgs.load_state_dict(model_path, dummy_weights=False, num_layers=num_layers)
 
 
 @pytest.fixture
