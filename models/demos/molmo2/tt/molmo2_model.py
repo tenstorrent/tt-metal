@@ -671,15 +671,25 @@ class Molmo2Model(LightweightModule):
             vit_output = self.vision_backbone.encode_image(embedded)
             ttnn.deallocate(embedded)
 
+            # Defensive sync before collectives.
+            #
+            # We observed eval hangs on the 2nd video when decode tracing is enabled. In that setup,
+            # decode-trace replay and other async work can leave the device/queue in a state that
+            # wedges the next fabric collective. A conservative synchronize here ensures all devices
+            # are at a consistent point before entering all_gather.
+            ttnn.synchronize_device(self.mesh_device)
+
             # Gather on device: all_gather concatenates shards along dim 2
             # Input per device: [1, 1, frames_per_device * num_patches, pool_dim]
             # Output per device: [1, 1, num_devices * frames_per_device * num_patches, pool_dim]
+            logger.info("embed_image_data_parallel: entering all_gather (ViT features)")
             gathered = ttnn.all_gather(
                 vit_output,
                 dim=2,
                 num_links=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            logger.info("embed_image_data_parallel: all_gather complete")
             ttnn.deallocate(vit_output)
 
             # Trim padding if we padded earlier (device-side slice)

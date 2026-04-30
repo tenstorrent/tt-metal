@@ -32,10 +32,13 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.ccl import TT_CCL
 
 # Chunk size along batch_seq for TP all_reduce: full-sequence all_gather peak-allocates (~GB);
 # lower if OOM on long video. Override with MOLMO2_IMAGE_POOLING_AR_CHUNK.
 _DEFAULT_IMAGE_POOLING_AR_CHUNK = 512
+_POOLING_VERBOSE_LOGS = os.environ.get("MOLMO2_IMAGE_POOLING_VERBOSE_LOGS", "0") == "1"
+_POOLING_REDUCE_LOGS = os.environ.get("MOLMO2_IMAGE_POOLING_REDUCE_LOGS", "1") != "0"
 
 
 class ImagePooling(LightweightModule):
@@ -89,6 +92,9 @@ class ImagePooling(LightweightModule):
         # TP=8 configuration
         self.is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
         self.num_devices = mesh_device.get_num_devices() if self.is_mesh_device else 1
+        # Use TT_CCL-managed collectives for repeated multi-request runs to avoid
+        # fabric deadlocks seen with back-to-back ttnn.all_reduce when decode tracing is enabled.
+        self.tt_ccl = TT_CCL(mesh_device) if (self.is_mesh_device and self.num_devices > 1) else None
 
         # Calculate local heads per device for TP
         assert (
@@ -279,7 +285,7 @@ class ImagePooling(LightweightModule):
         query: ttnn.Tensor,
         key_value: ttnn.Tensor,
         attn_mask: ttnn.Tensor = None,
-        debug_stats: bool = True,
+        debug_stats: bool = False,
     ) -> ttnn.Tensor:
         """
         Forward pass through cross-attention pooling.
@@ -319,30 +325,42 @@ class ImagePooling(LightweightModule):
             logger.info(_get_stats(key_value, "ImagePooling kv input"))
 
         # Q projection (column-parallel: each device computes local heads)
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: entering wq linear")
         q = ttnn.linear(
             query,
             self.wq,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: wq linear complete")
         q = q + self.bq
 
         # K projection (column-parallel)
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: entering wk linear")
         k = ttnn.linear(
             key_value,
             self.wk,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: wk linear complete")
         k = k + self.bk
 
         # V projection (column-parallel)
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: entering wv linear")
         v = ttnn.linear(
             key_value,
             self.wv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: wv linear complete")
         v = v + self.bv
 
         if debug_stats:
@@ -379,12 +397,16 @@ class ImagePooling(LightweightModule):
 
         # Q @ K^T -> [batch_seq, n_local_heads, num_queries, pool_size]
         k_t = ttnn.permute(k, (0, 1, 3, 2))  # [batch_seq, n_local_heads, head_dim, pool_size]
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: entering q@k^T matmul")
         attn_weights = ttnn.matmul(
             q,
             k_t,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: q@k^T matmul complete")
         ttnn.deallocate(k_t)
 
         # Scale
@@ -397,19 +419,31 @@ class ImagePooling(LightweightModule):
         if attn_mask is not None:
             # Expand mask from [batch_seq, 1, 1, pool_size] to [batch_seq, n_local_heads, num_queries, pool_size]
             # Broadcasting should handle this automatically
+            if _POOLING_VERBOSE_LOGS:
+                logger.info("ImagePooling: entering attn_mask add")
             attn_weights = ttnn.add(attn_weights, attn_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if _POOLING_VERBOSE_LOGS:
+                logger.info("ImagePooling: attn_mask add complete")
 
         # Softmax
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: entering softmax")
         attn_probs = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: softmax complete")
         ttnn.deallocate(attn_weights)
 
         # Attention output: attn_probs @ V -> [batch_seq, n_local_heads, num_queries, head_dim]
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: entering attn_probs@v matmul")
         attn_output = ttnn.matmul(
             attn_probs,
             v,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: attn_probs@v matmul complete")
         ttnn.deallocate(attn_probs)
 
         ttnn.deallocate(q)
@@ -421,54 +455,50 @@ class ImagePooling(LightweightModule):
         attn_output = ttnn.reshape(attn_output, [1, batch_seq, num_queries, self.n_local_heads * self.padded_head_dim])
 
         # Output projection (row-parallel: each device has partial weights)
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: entering wo linear")
         output = ttnn.linear(
             attn_output,
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if _POOLING_VERBOSE_LOGS:
+            logger.info("ImagePooling: wo linear complete")
 
         ttnn.deallocate(attn_output)
 
-        # TP: All-reduce combines row-parallel partials. all_reduce uses concat/all_gather internally
-        # and can allocate multi-GB for long batch_seq (video); chunk along dim 1 to bound peak DRAM.
+        # TP: All-reduce combines row-parallel partials.
+        #
+        # When using TT_CCL-managed collectives, avoid issuing multiple back-to-back
+        # reduce_scatter/all_gather launches from one forward. We observed hangs on the
+        # 2nd chunk in sequential-request eval_video runs. For pooling, b1 is typically
+        # small (e.g. 1296), so a single all-reduce is safe and more robust.
         if self.is_mesh_device and self.num_devices > 1:
-            ar_chunk = int(os.environ.get("MOLMO2_IMAGE_POOLING_AR_CHUNK", str(_DEFAULT_IMAGE_POOLING_AR_CHUNK)))
-            ar_chunk = max(1, ar_chunk)
             b1 = int(output.shape[1])
-            nq = int(output.shape[2])
-            ld = int(output.shape[3])
-            if b1 <= ar_chunk:
-                output = ttnn.all_reduce(
-                    output,
-                    cluster_axis=1,
-                    num_links=1,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            else:
-                reduced_parts = []
-                for s in range(0, b1, ar_chunk):
-                    e = min(s + ar_chunk, b1)
-                    chunk_out = ttnn.to_memory_config(
-                        ttnn.slice(output, (0, s, 0, 0), (1, e, nq, ld)),
-                        ttnn.DRAM_MEMORY_CONFIG,
-                    )
-                    reduced_parts.append(
-                        ttnn.all_reduce(
-                            chunk_out,
-                            cluster_axis=1,
-                            num_links=1,
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        )
-                    )
-                    ttnn.deallocate(chunk_out)
-                ttnn.deallocate(output)
-                output = ttnn.concat(reduced_parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                for p in reduced_parts:
-                    ttnn.deallocate(p)
+            if _POOLING_REDUCE_LOGS:
+                logger.info("ImagePooling: entering ttnn.all_reduce (pooling output)")
+
+            # Use the conservative built-in collective here (not TT_CCL async reduce_scatter/all_gather).
+            # The TT_CCL path has been observed to wedge on repeated requests in eval_video.
+            mesh_shape = list(self.mesh_device.shape)
+            # Pick the axis that actually spans devices on 1D meshes.
+            cluster_axis = 0 if mesh_shape[0] > 1 else 1
+            output = ttnn.all_reduce(
+                output,
+                cluster_axis=cluster_axis,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if _POOLING_REDUCE_LOGS:
+                logger.info("ImagePooling: all_reduce complete")
 
         # Add output bias (replicated, added after all_reduce)
+        if _POOLING_REDUCE_LOGS:
+            logger.info("ImagePooling: adding output bias")
         output = output + self.bo
+        if _POOLING_REDUCE_LOGS:
+            logger.info("ImagePooling: output bias add complete")
 
         if debug_stats:
             logger.info(_get_stats(output, "ImagePooling final output"))

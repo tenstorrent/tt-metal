@@ -893,6 +893,7 @@ class VisionBackbone(LightweightModule):
             query=query,
             key_value=to_pool,
             attn_mask=attn_mask_ttnn,
+            debug_stats=False,
         )
         ttnn.deallocate(attn_mask_ttnn)
         if not trace_capture:
@@ -996,6 +997,7 @@ class VisionBackbone(LightweightModule):
             query=query,
             key_value=to_pool,
             attn_mask=attn_mask_ttnn,
+            debug_stats=False,
         )
         ttnn.deallocate(attn_mask_ttnn)
         ttnn.deallocate(query)
@@ -1059,7 +1061,9 @@ class VisionBackbone(LightweightModule):
         ttnn.deallocate(query_sum)
 
         attn_mask_ttnn = self._pooling_attn_mask_from_valid_ttnn(valid_mask_ttnn, batch_size, n_out, k_pool)
-        pooled_features = self.image_pooling_2d(query=query, key_value=to_pool, attn_mask=attn_mask_ttnn)
+        pooled_features = self.image_pooling_2d(
+            query=query, key_value=to_pool, attn_mask=attn_mask_ttnn, debug_stats=False
+        )
         ttnn.deallocate(attn_mask_ttnn)
         ttnn.deallocate(query)
         ttnn.deallocate(to_pool)
@@ -1115,7 +1119,7 @@ class VisionBackbone(LightweightModule):
         ttnn.deallocate(query_sum)
 
         attn_mask = self._pooling_attn_mask_from_valid_ttnn(valid_mask_chunk, chunk_frames, n_out, k_pool)
-        pooled = self.image_pooling_2d(query=query, key_value=to_pool, attn_mask=attn_mask)
+        pooled = self.image_pooling_2d(query=query, key_value=to_pool, attn_mask=attn_mask, debug_stats=False)
         ttnn.deallocate(attn_mask)
         ttnn.deallocate(query)
         ttnn.deallocate(to_pool)
@@ -1167,26 +1171,95 @@ class VisionBackbone(LightweightModule):
         # Deallocate original 4D tensor now
         ttnn.deallocate(image_features)
 
+        # Preprocess ALL indices once on CPU and upload once to device.
+        # Avoid per-chunk from_torch transfers, which can wedge on the 2nd chunk in
+        # sequential-request eval runs when decode tracing is enabled.
+        # Also pad frame count to a fixed chunk multiple so the pooling attention path
+        # sees stable shapes across chunks (last chunk often has fewer frames, which
+        # has been observed to hang on some mesh setups during repeated requests).
+        padded_batch_size = (
+            (batch_size + max_frames_per_pool_chunk - 1) // max_frames_per_pool_chunk
+        ) * max_frames_per_pool_chunk
+        pad_frames = padded_batch_size - batch_size
+
+        idx_flat_all = pooled_patches_idx.reshape(-1)
+        valid_mask_cpu_all = (idx_flat_all >= 0).float()
+        clipped_idx_cpu_all = torch.clamp(idx_flat_all, min=0).to(torch.int32)
+
+        if pad_frames > 0:
+            pad_elems = int(pad_frames * n_out * k_pool)
+            clipped_idx_cpu_all = torch.cat([clipped_idx_cpu_all, torch.zeros(pad_elems, dtype=torch.int32)], dim=0)
+            valid_mask_cpu_all = torch.cat([valid_mask_cpu_all, torch.zeros(pad_elems, dtype=torch.float32)], dim=0)
+
+        clipped_idx_cpu_all = clipped_idx_cpu_all.reshape(1, -1)  # [1, total_elements_all]
+        valid_mask_cpu_all = valid_mask_cpu_all.reshape(1, 1, -1, 1)  # [1, 1, total_elements_all, 1]
+
+        idx_all_ttnn = ttnn.from_torch(
+            clipped_idx_cpu_all,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        valid_all_ttnn = ttnn.from_torch(
+            valid_mask_cpu_all,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+
         # Process pooling in chunks of frames
         all_embeddings = []
 
-        for chunk_start in range(0, batch_size, max_frames_per_pool_chunk):
-            chunk_end = min(chunk_start + max_frames_per_pool_chunk, batch_size)
-            chunk_frames = chunk_end - chunk_start
+        for chunk_start in range(0, padded_batch_size, max_frames_per_pool_chunk):
+            chunk_end = chunk_start + max_frames_per_pool_chunk
+            chunk_frames = max_frames_per_pool_chunk
+            logger.info(
+                f"pool_and_project_chunked: chunk frames {chunk_start}-{chunk_end} (chunk_frames={chunk_frames})"
+            )
 
-            # Extract chunk of indices (indices are still GLOBAL)
-            chunk_idx = pooled_patches_idx[chunk_start:chunk_end]  # [chunk_frames, n_out, k_pool]
+            # Slice the pre-uploaded flat index/mask buffers for this chunk.
+            # Flat layout: frame-major, then n_out, then k_pool.
+            elem_start = int(chunk_start * n_out * k_pool)
+            elem_end = int(chunk_end * n_out * k_pool)
+            logger.info(f"pool_and_project_chunked: slicing idx/mask [{elem_start}:{elem_end}]")
+            # NOTE: ttnn.slice may return a view that aliases the backing storage.
+            # We need a *real* per-chunk copy so we can safely deallocate it without
+            # impacting the shared backing buffers.
+            idx_view = ttnn.slice(idx_all_ttnn, [0, elem_start], [1, elem_end])
+            valid_view = ttnn.slice(valid_all_ttnn, [0, 0, elem_start, 0], [1, 1, elem_end, 1])
 
-            # Preprocess indices (CPU-side to avoid bfloat16 precision loss)
-            idx_ttnn, valid_ttnn = preprocess_pooling_indices_chunk_device(chunk_idx, self.mesh_device, mesh_mapper)
+            idx_ttnn = ttnn.zeros(
+                shape=list(idx_view.shape),
+                dtype=idx_view.dtype,
+                layout=idx_view.layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            valid_ttnn = ttnn.zeros(
+                shape=list(valid_view.shape),
+                dtype=valid_view.dtype,
+                layout=valid_view.layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.copy(idx_view, idx_ttnn)
+            ttnn.copy(valid_view, valid_ttnn)
+            ttnn.deallocate(idx_view)
+            ttnn.deallocate(valid_view)
 
             # Gather using GLOBAL indices from full feature table
+            logger.info("pool_and_project_chunked: entering ttnn.embedding gather")
             gathered = ttnn.embedding(
                 idx_ttnn,
                 image_features_2d,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            logger.info("pool_and_project_chunked: embedding gather complete")
             ttnn.deallocate(idx_ttnn)
 
             # Reshape and mask
@@ -1204,7 +1277,9 @@ class VisionBackbone(LightweightModule):
 
             attn_mask_ttnn = self._pooling_attn_mask_from_valid_ttnn(valid_ttnn, chunk_frames, n_out, k_pool)
             ttnn.deallocate(valid_ttnn)
-            pooled = self.image_pooling_2d(query=query, key_value=to_pool, attn_mask=attn_mask_ttnn)
+            logger.info("pool_and_project_chunked: entering image_pooling_2d")
+            pooled = self.image_pooling_2d(query=query, key_value=to_pool, attn_mask=attn_mask_ttnn, debug_stats=False)
+            logger.info("pool_and_project_chunked: image_pooling_2d complete")
             ttnn.deallocate(attn_mask_ttnn)
 
             ttnn.deallocate(query)
@@ -1217,6 +1292,9 @@ class VisionBackbone(LightweightModule):
             logger.debug(f"  Chunk {chunk_start//max_frames_per_pool_chunk} pooled (on device): shape={pooled.shape}")
             all_embeddings.append(pooled)
             # Note: Don't deallocate pooled here - needed for concat
+
+        ttnn.deallocate(idx_all_ttnn)
+        ttnn.deallocate(valid_all_ttnn)
 
         # Deallocate embedding table
         ttnn.deallocate(image_features_2d)
@@ -1231,6 +1309,14 @@ class VisionBackbone(LightweightModule):
                 ttnn.deallocate(emb)
 
         logger.debug(f"pool_and_project_chunked: Combined pooled shape: {combined_ttnn.shape}")
+
+        # Slice off any padded frames so downstream sees the real batch_size.
+        if pad_frames > 0:
+            combined_ttnn = ttnn.slice(
+                combined_ttnn,
+                [0, 0, 0, 0],
+                [1, 1, batch_size * n_out, combined_ttnn.shape[-1]],
+            )
 
         visual_embeddings = self.image_projector(combined_ttnn)
         ttnn.deallocate(combined_ttnn)

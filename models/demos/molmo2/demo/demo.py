@@ -376,6 +376,40 @@ class Molmo2Generator:
         # Reset VisionAttention counters to prevent unbounded growth
         VisionAttention.reset_counters()
 
+        # Reset TT_CCL semaphore indices for any TT_CCL-managed collectives.
+        # Without this, repeated sequential requests can wedge in later collectives
+        # (e.g. vision pooling all-reduce) even though the first request succeeds.
+        def _reset_tt_ccl_indices(tt_ccl_obj) -> bool:
+            if tt_ccl_obj is None:
+                return False
+            changed = False
+            for name in ("barrier_semaphore_idx", "ag_semaphores_idx", "rs_semaphores_idx"):
+                if hasattr(tt_ccl_obj, name):
+                    try:
+                        setattr(tt_ccl_obj, name, [0, 0, 0])
+                        changed = True
+                    except Exception:
+                        pass
+            return changed
+
+        ccl_reset = False
+        # Text path TT_CCL (passed through Molmo2Model -> TextModel -> Attention blocks)
+        if hasattr(self, "model") and getattr(self.model, "tt_ccl", None) is not None:
+            ccl_reset |= _reset_tt_ccl_indices(self.model.tt_ccl)
+        # Vision pooling TT_CCL (created inside ImagePooling)
+        try:
+            pooling = self.model.vision_backbone.image_pooling_2d
+            ccl_reset |= _reset_tt_ccl_indices(getattr(pooling, "tt_ccl", None))
+        except Exception:
+            pass
+        if ccl_reset:
+            logger.debug("Molmo2Generator: TT_CCL semaphore index reset (molmo2) after request reset")
+
+        # Release decode trace between sequential requests. Keeping an active decode trace
+        # alive across videos + DP vision collectives has been observed to deadlock on later
+        # requests when `--use-decode-trace` is enabled.
+        self._release_decode_trace()
+
         # Synchronize device to ensure all pending operations complete
         ttnn.synchronize_device(self.mesh_device)
 
@@ -2627,12 +2661,90 @@ class Molmo2Generator:
         logger.info(f"Decode compile completed in {compile_time:.2f}ms")
         return compile_time
 
+    def _release_decode_trace(self):
+        """Release captured decode trace buffers from device-side trace pool.
+
+        Keeping ``decode_trace_tensors`` / ``decode_trace_output`` alive across sequential
+        requests has been observed to wedge subsequent mesh collectives during vision
+        processing when decode tracing is enabled. Releasing the trace id clears trace
+        bookkeeping without necessarily freeing the persistent IO tensors allocated during
+        warmup.
+        """
+        if self.decode_trace_id is None:
+            return
+        try:
+            ttnn.release_trace(self.mesh_device, self.decode_trace_id)
+            logger.debug(f"Molmo2Generator: released decode trace id={self.decode_trace_id}")
+        except Exception as e:
+            logger.warning(f"Molmo2Generator: failed to release decode trace ({e})")
+        finally:
+            self.decode_trace_id = None
+
+    def _ensure_decode_trace_ready(self, page_table: Optional[ttnn.Tensor] = None):
+        """Recapture decode trace after ``release_trace`` (multi-request eval_video stability).
+
+        This mirrors patterns used elsewhere in-repo (e.g. Molmo2 vLLM generator): traces can be
+        unsafe to reuse across unrelated sequential requests on the same mesh/CQs.
+        """
+        if self.decode_trace_id is not None:
+            return
+
+        import torch
+
+        hidden_dim = 4096
+        max_num_blocks = (self.max_seq_len + self.block_size - 1) // self.block_size
+
+        self.init_kv_cache()
+        self.reset_kv_cache(0)
+
+        if self.decode_trace_tensors is None:
+            self.decode_trace_tensors = self._allocate_decode_trace_tensors(
+                hidden_dim=hidden_dim,
+                max_num_blocks=max_num_blocks,
+            )
+
+        if "page_table" in self.decode_trace_tensors:
+            decode_page_table_torch = (
+                torch.arange(max_num_blocks, dtype=torch.int32).unsqueeze(0).expand(self.batch_size, -1).contiguous()
+            )
+            decode_page_table = ttnn.from_torch(
+                decode_page_table_torch,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.mesh_mapper,
+            )
+            ttnn.copy(decode_page_table, self.decode_trace_tensors["page_table"])
+            ttnn.deallocate(decode_page_table)
+
+        dummy_decode = torch.zeros(1, self.batch_size, hidden_dim, dtype=torch.bfloat16)
+        decode_hidden = ttnn.from_torch(
+            dummy_decode.unsqueeze(0),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+
+        pt = page_table if self.use_paged_attention else None
+        self.warmup_decode(decode_hidden, page_table=pt)
+
+        trace_id, trace_output = self._capture_decode_trace(self.decode_trace_tensors, decode_hidden, page_table=pt)
+        self.decode_trace_id = trace_id
+        self.decode_trace_output = trace_output
+
+        ttnn.deallocate(decode_hidden)
+        logger.info(f"Molmo2Generator: decode trace recaptured (new trace id={self.decode_trace_id})")
+
     def run_prefill(
         self,
         input_ids: torch.Tensor,
         pixel_values: torch.Tensor,
         pooled_patches_idx: torch.Tensor,
         use_trace: bool = False,
+        use_decode_trace: bool = False,
         use_vision_trace: bool = False,
         use_unified_trace: bool = False,
         use_dp_vision_trace: bool = False,
@@ -2651,6 +2763,7 @@ class Molmo2Generator:
             pixel_values: Image tensor
             pooled_patches_idx: Patch pooling indices
             use_trace: Whether to trace text model prefill
+            use_decode_trace: Whether decode will use tracing (recapture after trace release, post-vision)
             use_vision_trace: Whether to trace vision backbone (ViT + pooling)
             use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
             use_dp_vision_trace: Use pre-captured DP=8 ViT + pool traces (video path)
@@ -2842,6 +2955,14 @@ class Molmo2Generator:
             )
             timing["vision_ms"] = (time.perf_counter() - vision_start) * 1000
             logger.info(f"Vision processing completed in {timing['vision_ms']:.2f}ms")
+
+        # Recapture decode trace after vision+fusion, before text prefill.
+        # Capturing while an active trace exists has been observed to wedge DP vision pooling
+        # (mesh trace + fabric/CQs); releasing between requests fixes that only if we do not
+        # immediately recapture before vision. Warmup still runs at current_pos=0; prefill then
+        # overwrites KV slot 0 on the first prompt token.
+        if use_decode_trace and self.decode_trace_id is None:
+            self._ensure_decode_trace_ready(page_table=effective_page_table)
 
         if use_trace:
             # Prefill traces must be captured upfront (warmup_all_buckets / warmup_video_traces).
@@ -3065,8 +3186,8 @@ class Molmo2Generator:
             if self.decode_trace_id is None:
                 raise RuntimeError(
                     "Decode trace not captured (decode_trace_id is None). "
-                    "Call warmup_all_buckets(..., use_decode_trace=True) or warmup_video_traces(...) "
-                    "before run_decode_step with use_trace=True."
+                    "After releasing the trace between requests, run_prefill(..., use_decode_trace=True) "
+                    "recaptures it before vision/prefill; ensure that flag is set when using decode tracing."
                 )
 
             start_time = time.perf_counter()
@@ -3262,6 +3383,7 @@ class Molmo2Generator:
             pixel_values=pixel_values,
             pooled_patches_idx=pooled_patches_idx,
             use_trace=use_trace,
+            use_decode_trace=use_decode_trace,
             use_vision_trace=use_vision_trace,
             use_unified_trace=use_unified_trace,
             token_type_ids=hf_token_type_ids,
@@ -3457,6 +3579,7 @@ class Molmo2Generator:
             pixel_values=pixel_values,
             pooled_patches_idx=pooled_patches_idx,
             use_trace=use_trace,
+            use_decode_trace=use_decode_trace,
             use_vision_trace=use_vision_trace,
             use_unified_trace=use_unified_trace,
             use_dp_vision_trace=_use_dp_vision_trace,
@@ -3718,6 +3841,7 @@ class Molmo2Generator:
                 pixel_values=pixel_values,
                 pooled_patches_idx=pooled_patches_idx,
                 use_trace=use_trace,
+                use_decode_trace=use_decode_trace,
                 use_vision_trace=use_vision_trace,
                 use_unified_trace=False,  # Batched mode doesn't support unified trace
                 user_id=user_id,
