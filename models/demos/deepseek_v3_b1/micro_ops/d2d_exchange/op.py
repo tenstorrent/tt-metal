@@ -405,10 +405,11 @@ class SocketInterface:
         num_whole_fabric_packets_per_link = 0
         partial_packet_size = 0
 
+        downstream_header_ring_size = 2 if use_fabric_on_sender else 0
         brisc_num_upstream_headers = len(brisc_socket_addrs) if use_fabric_on_receiver else 0
         ncrisc_num_upstream_headers = len(ncrisc_socket_addrs) if use_fabric_on_receiver else 0
-        brisc_num_headers = (1 if use_fabric_on_sender else 0) + brisc_num_upstream_headers
-        ncrisc_num_headers = (1 if use_fabric_on_sender else 0) + ncrisc_num_upstream_headers
+        brisc_num_headers = downstream_header_ring_size + brisc_num_upstream_headers
+        ncrisc_num_headers = downstream_header_ring_size + ncrisc_num_upstream_headers
 
         packet_header_cb_desc = None
         if use_fabric_on_receiver or use_fabric_on_sender:
@@ -461,7 +462,7 @@ class SocketInterface:
         # BRISC (Writer/NOC0) gets ceil(N/2) sockets; NCRISC (Reader/NOC1) gets floor(N/2).
         # Giving the odd-one-out to BRISC ensures local NOC writes use NOC0 addresses.
         # Packet-header storage is partitioned per RISC:
-        # - optional downstream header first
+        # - optional downstream header ring first
         # - then one upstream-ack header per handled socket
         brisc_pkt_hdr_slot_start = 0
         brisc_kernel = ttnn.KernelDescriptor(
