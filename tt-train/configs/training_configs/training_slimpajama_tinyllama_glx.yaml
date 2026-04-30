@@ -1,7 +1,8 @@
 training_config:
   project_name: "tt_train_tinyllama_slimpajama-6B"
   seed: 5489
-  model_save_interval: 1000
+  # model_save_interval: 1000
+  model_save_interval: 10
   # Per-chip micro batch = 5, no gradient accumulation.
   # -> global batch = 5 * 1 * 32 chips = 160 sequences.
   # Per-chip activation (e.g. SwiGLU [B, T, intermediate_dim] = [5, 2048, 5632]
@@ -12,7 +13,8 @@ training_config:
   # ~1 epoch through SlimPajama-6B-tokenized train split (6,405,226,567 tokens
   # per train/meta.json). Tokens / opt step = 5 * 1 * 32 * 2048 = 327,680.
   # 6.41B / 327,680 ~= 19,547 opt steps; rounded to 19,550.
-  max_steps: 19550
+  # max_steps: 19550
+  max_steps: 20
   scheduler_type: warmup_linear
   use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
@@ -28,8 +30,10 @@ training_config:
 
   # Periodic validation loss eval (matches TinyLlama paper:
   # eval_step_interval=5000 / eval_iters=100). Scaled to this 3000-step run.
-  eval_interval: 500
-  eval_iters: 100
+  # eval_interval: 500
+  # eval_iters: 100
+  eval_interval: 1
+  eval_iters: 10
 
   # Optimizer hyperparameters lifted from the TinyLlama paper (arxiv 2401.02385,
   # pretrain/tinyllama.py): lr=4e-4, beta1=0.9, beta2=0.95, weight_decay=0.1.

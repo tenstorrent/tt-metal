@@ -1227,7 +1227,9 @@ def _tensor_to_numpy_entry(tensor: "ttml.autograd.Tensor") -> dict:
     # surface through this code path; both are accepted here.
     inner = tensor.get_value() if hasattr(tensor, "get_value") else tensor
     layout = inner.get_layout()
-    numpy_array = tensor.to_numpy(ttnn.DataType.FLOAT32)
+    # prefer_half=True reads bf16 storage directly, avoiding a device-side float32 typecast
+    # (and its persistent cache in AutocastTensor); the cast to float32 is done on the host.
+    numpy_array = tensor.to_numpy(prefer_half=True).astype(np.float32)
     return {
         "data": numpy_array,
         "layout": layout.value if hasattr(layout, "value") else str(layout),
@@ -1346,8 +1348,10 @@ def save_checkpoint(
         model_state[name] = _tensor_to_numpy_entry(param.tensor)
 
     optimizer_state = None
+    optimizer_lr = None
     if optimizer is not None:
         optimizer_state = _serialize_optimizer_state(optimizer.get_state_dict())
+        optimizer_lr = optimizer.get_lr()
 
     checkpoint = {
         "step": step,
@@ -1356,6 +1360,7 @@ def save_checkpoint(
         "model_config": model_config,
         "training_config": training_config,
         "optimizer_state": optimizer_state,
+        "optimizer_lr": optimizer_lr,  ### In the future, we will be storing the LR scheduler's state_dict too, and the lr_scheduler state is used to calculate the lr
         "train_iter_state": train_iter_state,
     }
 
@@ -1406,7 +1411,7 @@ def find_latest_checkpoint(base_path: str) -> Optional[str]:
 
 def load_model_from_checkpoint(
     checkpoint_path: str,
-) -> Tuple[Model, CharTokenizer, ModelConfig, TrainingConfig, int, Optional[dict], Optional[dict]]:
+) -> Tuple[Model, CharTokenizer, ModelConfig, TrainingConfig, int, Optional[dict], Optional[float], Optional[dict]]:
     """Load model from checkpoint file.
 
     Args:
@@ -1414,9 +1419,8 @@ def load_model_from_checkpoint(
 
     Returns:
         Tuple of (model, tokenizer, model_config, training_config, step,
-        optimizer_state, train_iter_state). The last two are ``None`` when the
-        checkpoint predates optimizer/iterator persistence; in that case resume
-        falls back to a fresh optimizer and a from-scratch data iterator.
+        optimizer_state, optimizer_lr, train_iter_state). optimizer_state and
+        optimizer_lr are ``None`` when the checkpoint predates their persistence.
     """
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
@@ -1433,6 +1437,7 @@ def load_model_from_checkpoint(
     training_config = checkpoint.get("training_config", None)
     step = checkpoint.get("step", 0)
     optimizer_state = checkpoint.get("optimizer_state", None)
+    optimizer_lr = checkpoint.get("optimizer_lr", None)
     train_iter_state = checkpoint.get("train_iter_state", None)
 
     # Create model from config
@@ -1452,7 +1457,7 @@ def load_model_from_checkpoint(
         model_params[name].assign(restored_tensor)
     print(f"  Checkpoint loaded from step {step}")
 
-    return model, tokenizer, model_config, training_config, step, optimizer_state, train_iter_state
+    return model, tokenizer, model_config, training_config, step, optimizer_state, optimizer_lr, train_iter_state
 
 
 def main():
@@ -1894,6 +1899,7 @@ def main():
         start_step = 0
         resume_path = None
         resume_optimizer_state: Optional[dict] = None
+        resume_optimizer_lr: Optional[float] = None
         resume_train_iter_state: Optional[dict] = None
 
         if not args.fresh:
@@ -1917,6 +1923,7 @@ def main():
                     _,  # training_config from checkpoint (we use CLI config instead)
                     start_step,
                     resume_optimizer_state,
+                    resume_optimizer_lr,
                     resume_train_iter_state,
                 ) = load_model_from_checkpoint(resume_path)
                 # Use tokenizer from checkpoint to ensure vocab consistency
@@ -1941,11 +1948,7 @@ def main():
                     f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
                 )
             except Exception as e:
-                print(f"Error loading checkpoint: {e}")
-                print("Starting fresh training instead...")
-                resume_path = None  # Fall through to create new model
-                resume_optimizer_state = None
-                resume_train_iter_state = None
+                raise RuntimeError(f"Failed to load checkpoint from {resume_path}") from e
 
         if not resume_path:
             print("\n2. Creating model...")
@@ -2008,6 +2011,14 @@ def main():
                 print("   - Restored optimizer state from checkpoint")
             except Exception as e:
                 print(f"   - WARNING: failed to restore optimizer state ({e}); continuing with fresh moments")
+
+        # Restore the LR saved at checkpoint time so the first optimizer.step()
+        # on resume uses the same LR as the interrupted run would have.
+        if (
+            resume_optimizer_lr is not None
+        ):  ### In the future, we will be storing the LR scheduler's state_dict too, and the lr_scheduler state is used to calculate the lr
+            optimizer.set_lr(resume_optimizer_lr)
+            print(f"   - Restored LR to {resume_optimizer_lr:.6e} from checkpoint")
 
         # Memory snapshot after optimizer creation
         if args.track_memory:
