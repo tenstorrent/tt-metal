@@ -246,7 +246,7 @@
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox:
-      timeout: 10
+      timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
