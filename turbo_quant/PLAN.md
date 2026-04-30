@@ -97,22 +97,36 @@ Real per-token decode at 128 K would be 32× this (32 layers), but with
 program-cache warm and trace capture the 2 s first-call dominates only
 once.
 
-### T3K validation: blocked on disk
+### T3K validation (`run_t3k_w_sweep.sh`, 1024-tok eval, TT_NUM_DEVICES=8)
 
-`run_t3k_w_sweep.sh` ran with TT_NUM_DEVICES=8 but failed:
-`TT_FATAL: Failed to write tensor data... No space left on device` while
-sharding Llama-3.1-8B for T3K (ran out at layer 20/32 of `feed_forward.w1`).
-`/localdev` is at 100% (3.3 T / 3.5 T). Big space hogs:
+| Config | Top-1 | Top-5 | Latency |
+|---|---:|---:|---:|
+| Track A K=1 | 86.1% | 96.3% | 56.8 ms/tok |
+| Track A K=14 | **0.0%** ⚠️ | 0.0% | 28.9 ms/tok |
+| Hybrid W=64 | 87.7% | 97.7% | 61.3 ms/tok |
+| **Hybrid W=128** | **89.5%** | **97.7%** | **61.4 ms/tok** |
 
-- 91 GB — `hf/ttnn_cache/meta-llama/Llama-3.3-70B-Instruct/`
-- 17 GB — `hf/ttnn_cache/{N150,T3K}/` (orphan top-level, not used by current
-  TT_CACHE_PATH)
-- 16 GB — `hf/ttnn_cache/meta-llama/Llama-3.1-8B-Instruct/N150/` (the cache
-  we used for the W-sweep)
+**Hybrid W=128 wins on T3K** with +3.4 pp top-1 over Track A K=1. The
+combine path costs ~8% latency over K=1 and is essentially free vs running
+Track A and the recent-window SDPA serially.
 
-T3K 8B cache needs ~25 GB. **Resolution requires user input** — either free
-70B or orphan caches. Once unblocked, just re-run
-`turbo_quant/run_t3k_w_sweep.sh`.
+Two T3K-specific findings worth flagging:
+
+1. **Track A K=14 produces 0% accuracy.** The Tier 2A K-split path is
+   broken under multi-device sharding. K=1 works, hybrid (which forces K=1
+   internally for the combine) works. Out of scope for this PR — flag for
+   a separate fix.
+
+2. **Optimal W on T3K is 128, not 64 (the N150 winner).** Sharding-induced
+   numerical drift in the chunked online softmax appears to be partially
+   masked by a wider recent window. Apples-to-apples top-1 vs N150:
+
+   - N150 K=1: 88.9% → T3K K=1: 86.1% (-2.8 pp drift baseline)
+   - N150 W=64 (best): 94.1% → T3K W=64: 87.7% (-6.4 pp)
+   - N150 W=128: ~92% → T3K W=128: 89.5% (-2.5 pp, smallest gap)
+
+   The relative *improvement* of hybrid over Track A holds on both
+   platforms; the optimal W is platform-dependent.
 
 ## 🚀 RESUME HERE — TurboQuant 128K plan complete (2026-04-29)
 
