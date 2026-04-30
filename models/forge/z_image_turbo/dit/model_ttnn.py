@@ -956,7 +956,6 @@ class ZImageTransformerTTNN(LightweightModule):
 
         for i in range(2):
             x = self._block_with_adaLN(x, adaln_input, IMG_PATCHES, f"noise_refiner.{i}")
-        for i in range(2):
             cap = self._block_no_adaLN(cap, CAP_TOKENS, f"context_refiner.{i}", is_caption=True)
 
         concat_xc = ttnn.concat([x, cap], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
