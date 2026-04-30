@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-Decode-mode PCC test for Attention QKV / O projections via DRAM-sharded path.
+Decode-mode and prefill-ISL=128 PCC test for Attention.
 
-Run with all DRAM-shard flags enabled:
-    QWEN3_TTS_ATTN_DRAM_SHARD_QKV=1 QWEN3_TTS_ATTN_DRAM_SHARD_O=1 \\
     python -m pytest -q models/demos/qwen3_tts/tests/test_attention_decode_pcc.py
 """
 import pytest
