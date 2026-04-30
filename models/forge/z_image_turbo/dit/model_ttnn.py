@@ -46,8 +46,7 @@ _spec = importlib.util.spec_from_file_location("tt_dit_matmul", _matmul_path)
 _mm_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mm_mod)
 _get_matmul_config = _mm_mod.get_matmul_config
-_mm_mod_ref = _mm_mod
-del _spec
+del _spec, _mm_mod
 
 # ── Architecture constants ─────────────────────────────────────────────────────
 
@@ -355,9 +354,12 @@ class ZImageTransformerTTNN(LightweightModule):
         attn_out = ttnn.reshape(old_attn, [seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(old_attn, False)
 
-        # ── to_out projection (row_par) + fused reduce ──────────────────────
+        # ── to_out projection (row_par) ───────────────────────────────────────
         out_wT = self.weights[f"{block_prefix}.attention.to_out.0.weight_mmT"]
-        return self._mm_reduce(attn_out, out_wT, seq_len, N, HIDDEN_DIM)
+        old_attn = attn_out
+        attn_out = self._mm(old_attn, out_wT, seq_len, N, HIDDEN_DIM)
+        ttnn.deallocate(old_attn, False)
+        return self._all_reduce(attn_out, seq_len)
 
     # ── Optimized MLP ──────────────────────────────────────────────────────────
 
@@ -375,7 +377,9 @@ class ZImageTransformerTTNN(LightweightModule):
         h = ttnn.multiply(gate, up, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate, False)
         ttnn.deallocate(up, False)
-        return self._mm_reduce(h, w2T, seq_len, MLP_PER_DEV, HIDDEN_DIM)
+        out = self._mm(h, w2T, seq_len, MLP_PER_DEV, HIDDEN_DIM)
+        ttnn.deallocate(h, False)
+        return self._all_reduce(out, seq_len)
 
     # ── Async all-reduce ───────────────────────────────────────────────────────
 
@@ -394,40 +398,6 @@ class ZImageTransformerTTNN(LightweightModule):
         x = ttnn.reshape(old_x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(old_x, False)
         return x
-
-    def _mm_reduce(self, x, weight, seq_len, K, N):
-        """Fused matmul + reduce_scatter + all_gather."""
-        x_4d = ttnn.reshape(x, [1, 1, seq_len, K], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x, False)
-
-        rs_sems = self._ccl.get_rs_ping_pong_semaphore_fused(1)
-        barrier_sem = self._ccl.get_barrier_semaphore(1)
-        fused_config = _mm_mod_ref.get_fused_mmrs_config(seq_len, K, N, self._core_grid, self._ccl.num_links)
-
-        mm_out, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
-            x_4d,
-            weight,
-            3,
-            rs_sems,
-            fused_config["reduce_scatter_core_grid_offset"],
-            num_links=self._ccl.num_links,
-            memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
-            rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
-            cluster_axis=1,
-            config=fused_config["config"],
-            compute_kernel_config=REDUCE_KERNEL,
-            barrier_semaphore=barrier_sem,
-            chunk_width_in_mm_blocks=fused_config["chunk_width_in_mm_blocks"],
-        )
-        ttnn.deallocate(x_4d, False)
-        ttnn.deallocate(mm_out, False)
-
-        ag_out = self._ccl.all_gather(rs_out, dim=3, mesh_axis=1, use_hyperparams=True, use_persistent_buffer=True)
-        ttnn.deallocate(rs_out, False)
-        result = ttnn.reshape(ag_out, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(ag_out, False)
-        return result
 
     # ── Optimized final layer ──────────────────────────────────────────────────
 
