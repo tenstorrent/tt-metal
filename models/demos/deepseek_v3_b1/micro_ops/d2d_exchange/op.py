@@ -144,7 +144,7 @@ def _build_exchange_program(
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
         compile_time_args=kernel_ct_args,
-        config=ReaderConfigDescriptor() if use_reader_config else ttnn.WriterConfigDescriptor(),
+        config=ttnn.ReaderConfigDescriptor() if use_reader_config else ttnn.WriterConfigDescriptor(),
     )
     if base_program is not None:
         existing_cb_ids = {fd.buffer_index for cb in base_program.cbs for fd in cb.format_descriptors}
@@ -221,6 +221,7 @@ class SocketInterface:
         forward_metadata_size_bytes=0,
         receiver_use_reader_config=False,
     ):
+        self.receiver_use_reader_config = receiver_use_reader_config
         assert (
             sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
         ), "Either sender or receiver mesh device must be set"
@@ -389,6 +390,7 @@ class SocketInterface:
         my_upstream_sockets,
         my_downstream_socket,
         packet_header_cb_index,
+        base_program=None,
     ):
         for s in my_upstream_sockets:
             assert s.get_active_cores()[0] == my_core_coord
@@ -916,6 +918,7 @@ class ParallelSocketInterface:
                     device_program_entries.append((self.send_core_coords[i].device_coord, prog))
                 else:
                     assert self._downstream_sockets[i] is not None, f"Channel {i}: no upstream or downstream socket"
+                    dc = self.send_core_coords[i].device_coord
                     prog = _build_exchange_program(
                         self.page_size,
                         self.termination_semaphore,

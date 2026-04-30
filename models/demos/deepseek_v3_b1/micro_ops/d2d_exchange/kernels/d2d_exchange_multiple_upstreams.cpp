@@ -260,8 +260,10 @@ void kernel_main() {
         DPRINT << "D2D_MU iter\n";
         if (!terminated) {
             socket_push_pages(sender_socket, 1);
+            DPRINT << "pushed page to sender socket\n";
             if constexpr (!use_fabric_on_sender) {
                 socket_notify_receiver(sender_socket);
+                DPRINT << "notified receiver\n";
             }
         }
     }
@@ -270,6 +272,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_upstream_sockets; i++) {
         update_socket_config(receiver_sockets[i]);
     }
+    DPRINT << "update socket config done\n";
 
     if constexpr (use_fabric_on_sender) {
         if (fabric_sender_opened) {
@@ -277,5 +280,5 @@ void kernel_main() {
             downstream_fabric_connection_2.close();
         }
     }
-    DPRINT << "D2D_MU done\n";
+    DPRINT << "end of D2D_MU\n";
 }

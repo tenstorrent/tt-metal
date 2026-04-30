@@ -712,20 +712,18 @@ struct ReduceToAllB1 {
 
                     cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 }
-                DPRINT << "WDN\n";
             }
 
             if constexpr (SkipLocalCbPush) {
                 cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
             }
+            DPRINT << "WDN\n";
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC — 3-round add_tiles (same as reduce_to_one_b1)
             // ================================================================
-            DPRINT << "TR start\n";
             if constexpr (CTArgs::is_fabric_core) {
-                DPRINT << "TRd\n";
                 return;
             }
 
@@ -752,7 +750,6 @@ struct ReduceToAllB1 {
             }
             tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-            DPRINT << "TR R1 done\n";
             // R2: reload(R1 sum) + received_R2
             add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
             cb_wait_front(CTArgs::reload_cb, CTArgs::num_tiles);
@@ -773,7 +770,6 @@ struct ReduceToAllB1 {
             }
             tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-            DPRINT << "TR R2 done\n";
             if constexpr (CTArgs::is_exit_column) {
                 // R3: reload(column sum) + received_R3
                 add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
@@ -796,7 +792,6 @@ struct ReduceToAllB1 {
                 tile_regs_release();
                 cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
             }
-            DPRINT << "TRd\n";
 #endif
         }
     };

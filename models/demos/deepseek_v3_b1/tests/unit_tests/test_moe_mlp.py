@@ -23,12 +23,16 @@ from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
+from models.demos.deepseek_v3_b1.weights.overlap import OverlappedTensor
 from models.demos.deepseek_v3_b1.weights.prepare import (
     create_gate_bias_tensor,
     create_gate_indices_tensor,
     prepare_attention_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
+)
+from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
 )
 
 
@@ -92,7 +96,7 @@ class SDPA:
     KV_CACHE_SHARD_HEIGHT = 256
     KVPE_DIM = 576
     OUT_INTERM_SHARD_HEIGHT = 40
-    OUT_INTERM_SHARD_WIDTH = 544
+    OUT_INTERM_SHARD_WIDTH = 1024
 
 
 class Tiles:
@@ -105,7 +109,7 @@ class Tiles:
 class TestConfig:
     NUM_ITERATIONS = 100
     NUM_DEVICES_4x2 = 8  # for 4x2 mesh tests
-    REDUCE_ROOT_COORD = (1, 1)
+    REDUCE_ROOT_COORD = (1, 0)
     REDUCE_NUM_ROUNDS = 3
     REDUCE_NUM_SEMAPHORES = 4
 
@@ -122,7 +126,16 @@ DENSE_INTERMEDIATE_SIZE = 18432  # Full dense MLP intermediate size (gate/up row
 # Helper: create all shared-expert tensors
 # ============================================================================
 def create_shared_expert_tensors(
-    device, M, K_gate, mcast_grid, mesh_mapper=None, *, state_dict, is_moe=True, layer_idx=None
+    device,
+    M,
+    K_gate,
+    mcast_grid,
+    mesh_mapper=None,
+    *,
+    state_dict,
+    is_moe=True,
+    layer_idx=None,
+    create_device_tensors=True,
 ):
     """
     Create all tensors needed by SharedExpertOp.
@@ -208,14 +221,21 @@ def create_shared_expert_tensors(
     torch_activation = torch.randn((M, K_gate), dtype=torch.bfloat16)
     torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
 
-    shared_weights = prepare_shared_expert_weights(
-        device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
-    )
+    shared_gate_proj = None
+    shared_up_proj = None
+    shared_down_proj = None
+    if create_device_tensors:
+        shared_weights = prepare_shared_expert_weights(
+            device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
+        )
+        shared_gate_proj = shared_weights.shared_gate_proj
+        shared_up_proj = shared_weights.shared_up_proj
+        shared_down_proj = shared_weights.shared_down_proj
 
     return SharedExpertTensors(
-        shared_gate_weights_overlapped=shared_weights.shared_gate_proj,
-        shared_up_weights_overlapped=shared_weights.shared_up_proj,
-        ttnn_down_weights=shared_weights.shared_down_proj,
+        shared_gate_weights_overlapped=shared_gate_proj,
+        shared_up_weights_overlapped=shared_up_proj,
+        ttnn_down_weights=shared_down_proj,
         k_parallel=k_parallel,
         n_parallel=n_parallel,
         moe_tp=moe_tp,
@@ -227,6 +247,80 @@ def create_shared_expert_tensors(
         torch_bias=torch_bias,
         N=N,
     )
+
+
+def _create_standalone_gate_mm_and_ffn_norm(device, state_dict, layer_idx, is_moe, from_torch_kwargs):
+    """Create gate_mm and ffn_norm as standalone L1 tensors.
+    Avoids allocating the full o_proj_gate_mm_norms overlapped buffer (557 KB/core
+    across 122 cores) plus the q_ab_kv_a and kv_b12 overlaps. Instead, only the
+    gate_mm (458 KB across 8 cores) and ffn_norm (14 KB on 1 core) are placed in L1.
+    """
+    cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+    mesh_shape = (1, 1)
+    layer_key = f"model.layers.{layer_idx}"
+
+    gate_mm_ot = None
+    if is_moe:
+        gm = cfg.gate_mm
+        gate_mm_raw = state_dict[f"{layer_key}.mlp.gate.weight"].T.contiguous()
+        g_num_cores = gm.core_range_set.num_cores()
+        g_shard_w = gm.raw_tensor_shape[1] // g_num_cores
+        gate_mm_shard_spec = ttnn.ShardSpec(
+            gm.core_range_set,
+            (gm.raw_tensor_shape[0], g_shard_w),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        gate_mm_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, gate_mm_shard_spec)
+        gate_mm_tensor = ttnn.from_torch(
+            gate_mm_raw.reshape(1, 1, gm.raw_tensor_shape[0], gm.raw_tensor_shape[1]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=gate_mm_mem,
+            **from_torch_kwargs,
+        )
+        gate_mm_ot = OverlappedTensor(
+            fused_tensor=gate_mm_tensor,
+            tensor_shape=gm.raw_tensor_shape,
+            shard_shape=(gm.raw_tensor_shape[0], g_shard_w),
+            core_range_set=gm.core_range_set,
+            dtype=ttnn.bfloat16,
+            tile_shape=(gm.tile_h, gm.tile_w),
+            byte_offset=0,
+            total_size=gm.shard_bytes(mesh_shape),
+        )
+
+    fn = cfg.ffn_norm
+    ffn_norm_key = f"{layer_key}.post_attention_layernorm.weight"
+    ffn_norm_raw = state_dict[ffn_norm_key].reshape(1, fn.raw_tensor_shape[1]).to(torch.bfloat16)
+    gamma_core_crs = fn.core_range_set
+    ffn_norm_shard_spec = ttnn.ShardSpec(
+        gamma_core_crs,
+        fn.raw_tensor_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    ffn_norm_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ffn_norm_shard_spec)
+    ffn_norm_tensor = ttnn.from_torch(
+        ffn_norm_raw,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ffn_norm_mem,
+        tile=Tiles.TILE_1x32,
+        **from_torch_kwargs,
+    )
+    ffn_norm_ot = OverlappedTensor(
+        fused_tensor=ffn_norm_tensor,
+        tensor_shape=fn.raw_tensor_shape,
+        shard_shape=fn.raw_tensor_shape,
+        core_range_set=gamma_core_crs,
+        dtype=ttnn.bfloat16,
+        tile_shape=(fn.tile_h, fn.tile_w),
+        byte_offset=0,
+        total_size=fn.shard_bytes(mesh_shape),
+    )
+
+    return gate_mm_ot, ffn_norm_ot
 
 
 # ============================================================================
@@ -242,6 +336,8 @@ def create_routed_expert_tensors(
     state_dict,
     is_moe=True,
     layer_idx=None,
+    skip_attention_weights=False,
+    create_device_tensors=True,
 ):
     """
     Create all tensors needed for MoE routed expert test.
@@ -311,19 +407,21 @@ def create_routed_expert_tensors(
     from_torch_kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
 
     # ── Residual mcast source tensor (raw input on sender core, RMSNorm input) ──
-    residual_mcast_src_shard = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
-    residual_mcast_src_mem = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, residual_mcast_src_shard
-    )
-    ttnn_residual_mcast_src = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=residual_mcast_src_mem,
-        tile=Tiles.TILE_1x32,
-        **from_torch_kwargs,
-    )
+    ttnn_residual_mcast_src = None
+    if create_device_tensors:
+        residual_mcast_src_shard = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
+        residual_mcast_src_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, residual_mcast_src_shard
+        )
+        ttnn_residual_mcast_src = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=residual_mcast_src_mem,
+            tile=Tiles.TILE_1x32,
+            **from_torch_kwargs,
+        )
 
     # ── RMSNorm gamma weights [1, K] from state dict (post_attention_layernorm) ──
     ffn_norm_key = f"{layer_key}.post_attention_layernorm.weight"
@@ -336,9 +434,19 @@ def create_routed_expert_tensors(
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
     # Build attention-side overlapped tensors from state dict via prepare_weights.
-    attn = prepare_attention_weights(device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
-    ttnn_gate_mm_weights = attn.gate_mm
-    ttnn_rmsnorm_gamma = attn.ffn_norm
+    ttnn_gate_mm_weights = None
+    ttnn_rmsnorm_gamma = None
+    if create_device_tensors:
+        if skip_attention_weights:
+            ttnn_gate_mm_weights, ttnn_rmsnorm_gamma = _create_standalone_gate_mm_and_ffn_norm(
+                device, state_dict, layer_idx, is_moe, from_torch_kwargs
+            )
+        else:
+            attn = prepare_attention_weights(
+                device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
+            )
+            ttnn_gate_mm_weights = attn.gate_mm
+            ttnn_rmsnorm_gamma = attn.ffn_norm
     if ttnn_gate_mm_weights is not None:
         compute_core_grid = ttnn_gate_mm_weights.core_range_set
 
@@ -384,20 +492,27 @@ def create_routed_expert_tensors(
             w_d = state_dict[f"{layer_key}.mlp.experts.{e}.down_proj.weight"].T.contiguous()
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
-        routed_weights = prepare_routed_expert_weights(
-            device,
-            state_dict,
-            layer_idx=layer_idx,
-            is_moe=True,
-            num_routed_experts=num_experts,
-            move_to_device=True,
-        )
-        gate_proj_expert_tensors = routed_weights.routed_gate_proj
-        up_proj_expert_tensors = routed_weights.routed_up_proj
-        down_proj_expert_tensors = routed_weights.routed_down_proj
-        gate_proj_weights = gate_proj_expert_tensors[0]
-        up_proj_weights = up_proj_expert_tensors[0]
-        down_proj_weights = down_proj_expert_tensors[0]
+        gate_proj_weights = None
+        up_proj_weights = None
+        down_proj_weights = None
+        gate_proj_expert_tensors = None
+        up_proj_expert_tensors = None
+        down_proj_expert_tensors = None
+        if create_device_tensors:
+            routed_weights = prepare_routed_expert_weights(
+                device,
+                state_dict,
+                layer_idx=layer_idx,
+                is_moe=True,
+                num_routed_experts=num_experts,
+                move_to_device=True,
+            )
+            gate_proj_expert_tensors = routed_weights.routed_gate_proj
+            up_proj_expert_tensors = routed_weights.routed_up_proj
+            down_proj_expert_tensors = routed_weights.routed_down_proj
+            gate_proj_weights = gate_proj_expert_tensors[0]
+            up_proj_weights = up_proj_expert_tensors[0]
+            down_proj_weights = down_proj_expert_tensors[0]
     else:
         # Dense MLP: slice gate/up (7168, 18432) and down (18432, 7168) into 8 experts of 2048 each
         gate_key = f"{layer_key}.mlp.gate_proj.weight"
@@ -416,23 +531,26 @@ def create_routed_expert_tensors(
             w_d = down_full[start:end, :].contiguous()
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
-        routed_weights = prepare_routed_expert_weights(
-            device,
-            state_dict,
-            layer_idx=layer_idx,
-            is_moe=False,
-            num_routed_experts=8,
-            move_to_device=True,
-        )
-        # DenseRoutedExpertWeights: single tensor per projection (mesh-shaped), no list
-        gate_proj_weights = routed_weights.routed_gate_proj
-        up_proj_weights = routed_weights.routed_up_proj
-        down_proj_weights = routed_weights.routed_down_proj
-        gate_proj_expert_tensors = None  # unused when is_moe=False
+        gate_proj_weights = None
+        up_proj_weights = None
+        down_proj_weights = None
+        gate_proj_expert_tensors = None
         up_proj_expert_tensors = None
         down_proj_expert_tensors = None
+        if create_device_tensors:
+            routed_weights = prepare_routed_expert_weights(
+                device,
+                state_dict,
+                layer_idx=layer_idx,
+                is_moe=False,
+                num_routed_experts=8,
+                move_to_device=True,
+            )
+            gate_proj_weights = routed_weights.routed_gate_proj
+            up_proj_weights = routed_weights.routed_up_proj
+            down_proj_weights = routed_weights.routed_down_proj
 
-    if enable_routing:
+    if enable_routing and create_device_tensors:
         assert is_moe, "enable_routing=True is only supported with MoE weights"
         # Gate bias/indices from prepare_weights helpers.
         raw_bias = state_dict[f"{layer_key}.mlp.gate.e_score_correction_bias"]
@@ -483,7 +601,7 @@ def create_routed_expert_tensors(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
     )
     final_output_tensor = None
-    if create_final_output:
+    if create_final_output and create_device_tensors:
         final_output_tensor = ttnn.from_torch(
             torch.zeros([1, 1, 1, final_output_total_width]).bfloat16().float(),
             dtype=ttnn.bfloat16,

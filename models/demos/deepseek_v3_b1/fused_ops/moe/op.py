@@ -4114,9 +4114,10 @@ class MoeOp:
             ]
             routed_ctx.reduce_packet_cb_descriptor = reduce_cb_packet_desc
             reduce_offset += reduce_packet_size
+            reduce_params = routed_ctx.reduce_params
 
             # reduce_reload_cb: num_tiles * compute_tile_size
-            reduce_reload_size = rp["compute_tile_size"] * rp["num_tiles"]
+            reduce_reload_size = reduce_params["compute_tile_size"] * reduce_params["num_tiles"]
             reduce_cb_reload_desc = ttnn.cb_descriptor_from_sharded_tensor(
                 routed_ctx.reduce_reload_cb,
                 out_buf,
@@ -4128,7 +4129,7 @@ class MoeOp:
                 ttnn.CBFormatDescriptor(
                     buffer_index=routed_ctx.reduce_reload_cb,
                     data_format=ttnn.bfloat16,
-                    page_size=rp["compute_tile_size"],
+                    page_size=reduce_params["compute_tile_size"],
                     tile=reduce_tile_desc,
                 )
             ]
@@ -4225,15 +4226,17 @@ class MoeOp:
 
         # Socket page size for downstream sending (only exit column sends downstream).
         # Use the unpadded per-shard size so that N_workers * socket_page_size == K * element_size.
-        socket_page_size = rp["downstream_socket_page_size"] if (self.downstream_sockets and is_exit_col) else 0
+        socket_page_size = (
+            reduce_params["downstream_socket_page_size"] if (self.downstream_sockets and is_exit_col) else 0
+        )
         if is_exit_col and self.downstream_sockets:
             print(
                 f"[MoE DIAG] chip_id={chip_id} row={row} col={col} "
                 f"reduce_socket_page_size={socket_page_size} "
-                f"reduce_payload_size_bytes(padded)={rp['payload_size_bytes']} "
-                f"downstream_socket_page_size(unpadded)={rp['downstream_socket_page_size']} "
-                f"num_workers={rp['num_workers']} "
-                f"total_socket_bytes={rp['num_workers']}*{socket_page_size}={rp['num_workers']*socket_page_size}",
+                f"reduce_payload_size_bytes(padded)={reduce_params['payload_size_bytes']} "
+                f"downstream_socket_page_size(unpadded)={reduce_params['downstream_socket_page_size']} "
+                f"num_workers={reduce_params['num_workers']} "
+                f"total_socket_bytes={reduce_params['num_workers']}*{socket_page_size}={reduce_params['num_workers']*socket_page_size}",
                 flush=True,
             )
 
@@ -4364,44 +4367,44 @@ class MoeOp:
             persistent_fc_wait_sem_addr = persistent_fabric_signal_sem_addr
             self._persistent_fabric_core = persistent_fabric_core
 
-        # Determine entry partner for the cross-chip (or local) signal.
-        # Entry devices are those at exit_column (they have forward sockets).
-        entry_partner_col = self.exit_column
-        entry_partner_coord = ttnn.MeshCoordinate(row, entry_partner_col)
-        self._persistent_target_node = mesh_device.get_fabric_node_id(entry_partner_coord)
+            # Determine entry partner for the cross-chip (or local) signal.
+            # Entry devices are those at exit_column (they have forward sockets).
+            entry_partner_col = self.exit_column
+            entry_partner_coord = ttnn.MeshCoordinate(row, entry_partner_col)
+            self._persistent_target_node = mesh_device.get_fabric_node_id(entry_partner_coord)
 
-        is_same_chip = entry_partner_col == col
-        if not is_same_chip:
-            # Cross-chip mode: fabric atomic_inc to entry device's sender,
-            # plus local release for this chip's own sender.
-            self._persistent_bcast_dst_noc_x = sender_core_physical.x
-            self._persistent_bcast_dst_noc_y = sender_core_physical.y
-            self._persistent_bcast_dst_mesh_id = int(self._persistent_target_node.mesh_id)
-            self._persistent_bcast_dst_chip_id = int(self._persistent_target_node.chip_id)
-            self._persistent_bcast_dst_sem_addr = self.persistent_next_iter_sem_addr
-            self._persistent_local_dst_noc_x = sender_core_physical.x
-            self._persistent_local_dst_noc_y = sender_core_physical.y
-            self._persistent_local_dst_sem_addr = self.persistent_next_iter_sem_addr
-        else:
-            # Local-only mode: entry == exit on same chip. Set dst_sem_addr=0
-            # so the kernel skips the fabric path and uses local_dst instead.
-            self._persistent_bcast_dst_noc_x = 0
-            self._persistent_bcast_dst_noc_y = 0
-            self._persistent_bcast_dst_mesh_id = 0
-            self._persistent_bcast_dst_chip_id = 0
-            self._persistent_bcast_dst_sem_addr = 0
-            self._persistent_local_dst_noc_x = sender_core_physical.x
-            self._persistent_local_dst_noc_y = sender_core_physical.y
-            self._persistent_local_dst_sem_addr = self.persistent_next_iter_sem_addr
-        for i, desc in enumerate(self.device_unified_core_descs):
-            if desc.named_compile_time_arg == "reduce_persistent_fabric_signal_enable":
-                self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="reduce_persistent_fabric_signal_enable",
-                    core_range=ttnn.CoreRangeSet([ttnn.CoreRange(persistent_fabric_core, persistent_fabric_core)]),
-                    value=1,
-                    other_value=0,
-                )
-                break
+            is_same_chip = entry_partner_col == col
+            if not is_same_chip:
+                # Cross-chip mode: fabric atomic_inc to entry device's sender,
+                # plus local release for this chip's own sender.
+                self._persistent_bcast_dst_noc_x = sender_core_physical.x
+                self._persistent_bcast_dst_noc_y = sender_core_physical.y
+                self._persistent_bcast_dst_mesh_id = int(self._persistent_target_node.mesh_id)
+                self._persistent_bcast_dst_chip_id = int(self._persistent_target_node.chip_id)
+                self._persistent_bcast_dst_sem_addr = self.persistent_next_iter_sem_addr
+                self._persistent_local_dst_noc_x = sender_core_physical.x
+                self._persistent_local_dst_noc_y = sender_core_physical.y
+                self._persistent_local_dst_sem_addr = self.persistent_next_iter_sem_addr
+            else:
+                # Local-only mode: entry == exit on same chip. Set dst_sem_addr=0
+                # so the kernel skips the fabric path and uses local_dst instead.
+                self._persistent_bcast_dst_noc_x = 0
+                self._persistent_bcast_dst_noc_y = 0
+                self._persistent_bcast_dst_mesh_id = 0
+                self._persistent_bcast_dst_chip_id = 0
+                self._persistent_bcast_dst_sem_addr = 0
+                self._persistent_local_dst_noc_x = sender_core_physical.x
+                self._persistent_local_dst_noc_y = sender_core_physical.y
+                self._persistent_local_dst_sem_addr = self.persistent_next_iter_sem_addr
+            for i, desc in enumerate(self.device_unified_core_descs):
+                if desc.named_compile_time_arg == "reduce_persistent_fabric_signal_enable":
+                    self.device_unified_core_descs[i] = UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="reduce_persistent_fabric_signal_enable",
+                        core_range=ttnn.CoreRangeSet([ttnn.CoreRange(persistent_fabric_core, persistent_fabric_core)]),
+                        value=1,
+                        other_value=0,
+                    )
+                    break
         fwd_r1_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_FWD_R1]
         fwd_r2_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_FWD_R2]
         bwd_r1_sem_addr = self.sem_addrs[MoeSem.REDUCE_FC_BWD_R1]
@@ -4415,19 +4418,19 @@ class MoeOp:
         slot_size_bytes = reduce_params["slot_size_bytes"]
 
         # Build per-link info: group cores by column → link
-        sorted_columns = sorted(rp["column_to_fabric_core"].keys())
+        sorted_columns = sorted(reduce_params["column_to_fabric_core"].keys())
 
         reduce_brisc_per_core_args = []
         reduce_ncrisc_per_core_args = []
 
         for link_idx, x in enumerate(sorted_columns):
             col_cores = []
-            for core in rp["worker_cores_list"]:
+            for core in reduce_params["worker_cores_list"]:
                 if core.x == x:
                     col_cores.append(core)
             col_cores.sort(key=lambda c: c.y)
 
-            fc = rp["column_to_fabric_core"][x]
+            fc = reduce_params["column_to_fabric_core"][x]
             fc_phys = routed_ctx.device.worker_core_from_logical_core(fc)
 
             # Direction configs for A/B split
@@ -4463,7 +4466,7 @@ class MoeOp:
                 r3_slot_off = r3_buf_offset + worker_idx * slot_size_bytes
                 r3_slot_b = 1 << worker_idx
 
-                shard_idx = rp["core_to_shard_idx"][(core.x, core.y)]
+                shard_idx = reduce_params["core_to_shard_idx"][(core.x, core.y)]
                 socket_config_addr = 0
                 if self.downstream_sockets is not None and is_exit_col:
                     device_sockets = self.downstream_sockets[chip_id]
@@ -4495,11 +4498,11 @@ class MoeOp:
                     r2_slot_bit,  # 7
                     r2_sem,  # 8 (L1 addr)
                     r1_recv_l1,  # 9
-                    rp["sem_round1_addr"],  # 10
+                    reduce_params["sem_round1_addr"],  # 10
                     r2_recv_l1,  # 11
-                    rp["sem_round2_addr"],  # 12
+                    reduce_params["sem_round2_addr"],  # 12
                     r3_recv_l1,  # 13
-                    rp["sem_round3_addr"],  # 14
+                    reduce_params["sem_round3_addr"],  # 14
                     out_tensor.buffer_address(),  # 15
                     r3_slot_off,  # 16
                     r3_slot_b,  # 17
@@ -5580,6 +5583,9 @@ class MoeOp:
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         # Execute
+        print(
+            f"[MoeOp.op] per-device loop done, dispatching generic_op with {len(moe.io_tensors)} IO tensors", flush=True
+        )
         ttnn.generic_op(moe.io_tensors, mesh_program_descriptor)
 
         # Return appropriate output based on reduce mode

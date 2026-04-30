@@ -240,7 +240,6 @@ void kernel_main() {
 #ifdef ENABLE_REDUCE_TO_ALL
             // ReduceToAllB1 (reader — FC BWD forwarding or worker receive R1/R2/R3)
             using ReduceToAllCTArgs = deepseek_b1_ops::ReduceToAllB1::ReaderCTArgs<
-                get_named_compile_time_arg_val("reduce_device_role"),
                 get_named_compile_time_arg_val("reduce_num_tiles"),
                 get_named_compile_time_arg_val("reduce_local_cb"),
                 get_named_compile_time_arg_val("reduce_received_cb"),
@@ -558,7 +557,6 @@ void kernel_main() {
 #ifdef ENABLE_REDUCE_TO_ALL
             // ReduceToAllB1 (writer — FC FWD+R3 forwarding or worker R1/R2/R3 via FC)
             using ReduceToAllCTArgs = deepseek_b1_ops::ReduceToAllB1::WriterCTArgs<
-                get_named_compile_time_arg_val("reduce_device_role"),
                 get_named_compile_time_arg_val("reduce_num_tiles"),
                 get_named_compile_time_arg_val("reduce_payload_size_bytes"),
                 get_named_compile_time_arg_val("reduce_local_cb"),
@@ -579,10 +577,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_ncrisc_buffer_offset"),
                 get_named_compile_time_arg_val("reduce_r3_buffer_offset"),
                 get_named_compile_time_arg_val("reduce_socket_page_size"),
-                get_named_compile_time_arg_val("reduce_enable_downstream_socket"),
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
-                get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base"),
                 get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
                 get_named_compile_time_arg_val("reduce_is_exit_column"),
                 1,  // useRawSemAddrs
@@ -883,7 +878,6 @@ void kernel_main() {
 #ifdef ENABLE_REDUCE_TO_ALL
             // ReduceToAllB1 (compute — 3-round add_tiles)
             using ReduceToAllCTArgs = deepseek_b1_ops::ReduceToAllB1::ComputeCTArgs<
-                get_named_compile_time_arg_val("reduce_device_role"),
                 get_named_compile_time_arg_val("reduce_num_tiles"),
                 get_named_compile_time_arg_val("reduce_local_cb"),
                 get_named_compile_time_arg_val("reduce_received_cb"),

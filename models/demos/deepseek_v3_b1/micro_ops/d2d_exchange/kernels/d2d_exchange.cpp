@@ -131,6 +131,8 @@ void kernel_main() {
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(receiver_socket_config_addr);
+    DPRINT << "socket sender page size: " << (uint32_t)page_size << "\n";
+    DPRINT << "socket receiver page size: " << (uint32_t)page_size << "\n";
     set_sender_socket_page_size(sender_socket, page_size);
     set_receiver_socket_page_size(receiver_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
@@ -169,16 +171,16 @@ void kernel_main() {
         upstream_socket_packet_header_addr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             get_write_ptr(fabric_packet_header_cb_id) + 2 * sizeof(PACKET_HEADER_TYPE));
 
-        upstream_fabric_connection.open();
-
         fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_socket);
     }
 
     while (true) {
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << "reserved page\n";
         if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << "page available\n";
 
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
@@ -192,13 +194,16 @@ void kernel_main() {
             downstream_bytes_sent_noc_addr,
             l1_read_addr,
             dst_addr);
+        DPRINT << "sent page over socket\n";
         socket_pop_pages(receiver_socket, 1);
         if constexpr (use_fabric_on_receiver) {
+            upstream_fabric_connection.open();
             fabric_socket_notify_sender_stateful(
                 receiver_socket,
                 upstream_fabric_connection,
                 upstream_socket_packet_header_addr,
                 upstream_bytes_acked_noc_addr);
+            upstream_fabric_connection.close();
         } else {
             socket_notify_sender(receiver_socket);
         }
@@ -207,12 +212,9 @@ void kernel_main() {
     update_socket_config(sender_socket);
     update_socket_config(receiver_socket);
 
-    if constexpr (use_fabric_on_receiver) {
-        upstream_fabric_connection.close();
-    }
-
     if constexpr (use_fabric_on_sender) {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
+    DPRINT << "end of d2d exchange\n";
 }

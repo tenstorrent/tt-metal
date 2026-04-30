@@ -338,6 +338,8 @@ class PipelineBlock:
                     entry_downstream_core=entry_downstream_core,
                     exit_upstream_cores=exit_upstream_cores,
                     exit_upstream_page_size=exit_upstream_page_size,
+                    entry_device_coords=entry_device_coords,
+                    exit_device_coords=exit_device_coords,
                 )
             else:
                 self._init_forwarding_stage(
@@ -740,7 +742,7 @@ class PipelineBlock:
 
         effective_downstream_core = entry_downstream_core if entry_downstream_core else core_exit
 
-        for dc in pipeline_device_coords:
+        for dc in actual_entry_coords:
             entry_use_reader = (core_entry == core_exit) and not use_multi_upstream
             entry_si = SocketInterface(
                 upstream_d2d_socket_page_size,
@@ -755,7 +757,12 @@ class PipelineBlock:
             )
             self.entry_socket_interface.append(entry_si)
 
-        for i, dc in enumerate(pipeline_device_coords):
+        assert len(actual_exit_coords) == len(actual_entry_coords), (
+            f"entry ({len(actual_entry_coords)}) and exit ({len(actual_exit_coords)}) "
+            f"device coords must have the same length"
+        )
+
+        for i, dc in enumerate(actual_exit_coords):
             entry_si = self.entry_socket_interface[i]
 
             if use_multi_upstream and len(exit_upstream_cores) > 0:

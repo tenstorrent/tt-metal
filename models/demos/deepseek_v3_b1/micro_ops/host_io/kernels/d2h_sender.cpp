@@ -64,12 +64,14 @@ void kernel_main() {
     while (true) {
         // Wait for space in D2H socket
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << "reserved page\n";
         if constexpr (loopback_mode) {
             // Wait for data in CB with termination checks
             if (!deepseek_b1_ops::cb_wait_for_pages_with_termination(
                     upstream_interface_index, 1, termination_semaphore)) {
                 break;
             }
+            DPRINT << "page available in CB\n";
             uint32_t read_addr = get_read_ptr(upstream_interface_index);
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
@@ -78,6 +80,7 @@ void kernel_main() {
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,
                 page_size);
+            DPRINT << "issued NOC write\n";
             noc_async_writes_flushed();
             cb_pop_front(upstream_interface_index, 1);
         } else {
@@ -86,6 +89,7 @@ void kernel_main() {
                 break;
             }
             uint32_t read_addr = receiver_socket.read_ptr;
+            DPRINT << "page available in socket\n";
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
                 read_addr,
@@ -95,15 +99,20 @@ void kernel_main() {
                 page_size);
             socket_pop_pages(receiver_socket, 1);
             noc_async_writes_flushed();
+            DPRINT << "issued NOC write and popped socket\n";
 
             if constexpr (use_fabric) {
+                DPRINT << "notifying sender via fabric with ack\n";
                 fabric_socket_notify_sender_stateful(
                     receiver_socket,
                     upstream_fabric_connection,
                     upstream_socket_packet_header_addr,
                     upstream_bytes_acked_noc_addr);
+                DPRINT << "notification sent\n";
             } else {
+                DPRINT << "notifying sender via socket\n";
                 socket_notify_sender(receiver_socket);
+                DPRINT << "notification sent\n";
             }
         }
 
@@ -121,4 +130,5 @@ void kernel_main() {
     if constexpr (use_fabric) {
         upstream_fabric_connection.close();
     }
+    DPRINT << "Exiting d2h sender kernel" << ENDL();
 }

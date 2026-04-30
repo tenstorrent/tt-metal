@@ -33,7 +33,7 @@ from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
 )
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
@@ -184,6 +184,7 @@ def test_bcast_moe_reduce_pipeline(
 
     entry_column = 0
     reduce_exit_column = 0
+    loopback_entry_column = 0
     pipeline_idx = my_mesh_id if my_mesh_id > 0 else 1
     if len(pipeline_config) > 1:
         try:
@@ -194,12 +195,23 @@ def test_bcast_moe_reduce_pipeline(
             reduce_exit_column = int(pipeline_config[pipeline_idx].exit_node_coord[1])
         except Exception:
             reduce_exit_column = 0
+        # Stage N-1 sends loopback data back to stage 0 using its own exit column.
+        # Stage 0 must receive on the same column that stage N-1 sends from.
+        try:
+            loopback_entry_column = int(pipeline_config[num_procs - 1].exit_node_coord[1])
+        except Exception:
+            loopback_entry_column = reduce_exit_column
     exit_column = entry_column
     entry_column_coords = [ttnn.MeshCoordinate(r, entry_column) for r in range(int(mesh_rows))]
     exit_column_coords = [ttnn.MeshCoordinate(r, reduce_exit_column) for r in range(int(mesh_rows))]
+    loopback_entry_coords = [ttnn.MeshCoordinate(r, loopback_entry_column) for r in range(int(mesh_rows))]
     pipeline_column_coords = exit_column_coords
+    # Stages >=2 must pass entry_column_coords vs exit_column_coords separately to PipelineBlock:
+    # blitz pipeline_config can use different columns for entry_node_coord and exit_node_coord
+    # on the same mesh (e.g. stage 15 entry col 0, exit col 1).
     logger.info(
         f"entry_column={entry_column}, reduce_exit_column={reduce_exit_column}, "
+        f"loopback_entry_column={loopback_entry_column}, "
         f"entry_devices={len(entry_column_coords)}, exit_devices={len(exit_column_coords)}"
     )
 
@@ -302,14 +314,14 @@ def test_bcast_moe_reduce_pipeline(
         print(f"[TEST] stage0: generate_blitz_decode_pipeline done", flush=True)
 
         fwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in entry_column_coords]
-        bwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in exit_column_coords]
+        bwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in loopback_entry_coords]
         print(
             f"[TEST] stage0: fwd_d2d_cores(col {entry_column})="
             f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_d2d_cores]}",
             flush=True,
         )
         print(
-            f"[TEST] stage0: bwd_d2d_cores(col {reduce_exit_column})="
+            f"[TEST] stage0: bwd_d2d_cores(col {loopback_entry_column})="
             f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_d2d_cores]}",
             flush=True,
         )
@@ -339,13 +351,13 @@ def test_bcast_moe_reduce_pipeline(
         )
         print(f"[TEST] stage0: entry_socket_interface done in {_time.time()-_t0:.3f}s", flush=True)
 
-        print(f"[TEST] stage0: creating H2D/D2H/HostInterface for {len(exit_column_coords)} devices...")
+        print(f"[TEST] stage0: creating H2D/D2H/HostInterface for {len(loopback_entry_coords)} devices...")
         _t0 = _time.time()
         h2d_sockets = []
         d2h_sockets = []
         host_ios = []
 
-        for dc_idx, dc in enumerate(exit_column_coords):
+        for dc_idx, dc in enumerate(loopback_entry_coords):
             _t_dc = _time.time()
             h2d = ttnn.H2DSocket(
                 mesh_device,
@@ -404,6 +416,7 @@ def test_bcast_moe_reduce_pipeline(
 
         _t0_total = _time.time()
         print(f"[TEST] stage1: creating PipelineBlock, my_mesh_id={my_mesh_id} num_procs={num_procs}", flush=True)
+        fabric_loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core))
         pipeline_block = PipelineBlock(
             mesh_device,
             pipeline_core,
@@ -418,6 +431,7 @@ def test_bcast_moe_reduce_pipeline(
             exit_upstream_page_size=reduce_payload_per_shard,
             entry_device_coords=entry_column_coords,
             exit_device_coords=exit_column_coords,
+            loopback=fabric_loopback,
         )
         print(f"[TEST] stage1: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
         logger.info(
@@ -433,6 +447,7 @@ def test_bcast_moe_reduce_pipeline(
 
         _t0_total = _time.time()
         print(f"[TEST] stage{my_mesh_id}: creating PipelineBlock", flush=True)
+        fabric_loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core))
         pipeline_block = PipelineBlock(
             mesh_device,
             pipeline_core,
@@ -444,6 +459,7 @@ def test_bcast_moe_reduce_pipeline(
             pipeline_exit_core_coord=pipeline_core,
             entry_device_coords=exit_column_coords,
             exit_device_coords=exit_column_coords,
+            loopback=fabric_loopback,
         )
         print(f"[TEST] stage{my_mesh_id}: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
 
@@ -1166,6 +1182,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
 
         _t0_total = _time.time()
         print(f"[TEST] stage1: creating PipelineBlock, my_mesh_id={my_mesh_id} num_procs={num_procs}", flush=True)
+        fabric_loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core))
         pipeline_block = PipelineBlock(
             mesh_device,
             pipeline_core,
@@ -1180,6 +1197,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             exit_upstream_page_size=reduce_payload_per_shard,
             entry_device_coords=entry_column_coords,
             exit_device_coords=exit_column_coords,
+            loopback=fabric_loopback,
         )
         print(f"[TEST] stage1: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
         logger.info(
@@ -1195,6 +1213,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
 
         _t0_total = _time.time()
         print(f"[TEST] stage{my_mesh_id}: creating PipelineBlock", flush=True)
+        fabric_loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core))
         pipeline_block = PipelineBlock(
             mesh_device,
             pipeline_core,
@@ -1206,6 +1225,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
             pipeline_exit_core_coord=pipeline_core,
             entry_device_coords=exit_column_coords,
             exit_device_coords=exit_column_coords,
+            loopback=fabric_loopback,
         )
         print(f"[TEST] stage{my_mesh_id}: PipelineBlock done in {_time.time()-_t0_total:.3f}s", flush=True)
 
