@@ -63,6 +63,7 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
     TT_FATAL(num_cores_y != 0, "Compute grid y-dimension must be non-zero");
+    TT_FATAL(grid.x != 0, "Compute grid x-dimension must be non-zero for accumulation (cumsum/cumprod)");
 
     const int32_t dim{
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
@@ -80,6 +81,68 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(grid, num_rows_total);
+
+    TT_FATAL(
+        num_cores > 0,
+        "Accumulation (cumsum/cumprod) requires at least one worker core; num_rows_total={}",
+        num_rows_total);
+    TT_FATAL(
+        all_cores.num_cores() == num_cores,
+        "Accumulation core split mismatch: num_cores={} vs all_cores.num_cores()={}",
+        num_cores,
+        all_cores.num_cores());
+    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+    TT_FATAL(
+        cores.size() == num_cores,
+        "Accumulation resolved core list size {} must match split num_cores {}",
+        cores.size(),
+        num_cores);
+    {
+        const uint32_t workload_g1 = core_group_1.num_cores() * num_cols_per_core_group_1;
+        const uint32_t workload_g2 = core_group_2.num_cores() * num_cols_per_core_group_2;
+        TT_FATAL(
+            workload_g1 + workload_g2 == num_rows_total,
+            "Accumulation workload mismatch: group1_tiles={} + group2_tiles={} must equal num_rows_total={} ",
+            workload_g1,
+            workload_g2,
+            num_rows_total);
+    }
+    {
+        using namespace tt::tt_metal;
+        const CoreRangeSet device_grid = num_cores_to_corerangeset(grid.x * grid.y, grid, false);
+        TT_FATAL(
+            device_grid.contains(all_cores),
+            "Accumulation program core grid {} must be contained in device compute grid {}",
+            all_cores,
+            device_grid);
+        const auto& output_memory_config = output_tensor.memory_config();
+        if (output_memory_config.shard_spec().has_value()) {
+            const auto& output_shard_grid = output_memory_config.shard_spec().value().grid;
+            TT_FATAL(
+                all_cores.contains(output_shard_grid),
+                "Accumulation output shard grid {} must be contained in program core grid {}",
+                output_shard_grid,
+                all_cores);
+            TT_FATAL(
+                device_grid.contains(output_shard_grid),
+                "Accumulation output shard grid {} must be contained in device grid {}",
+                output_shard_grid,
+                device_grid);
+        }
+        if (output_memory_config.nd_shard_spec().has_value()) {
+            const auto& output_nd_shard_grid = output_memory_config.nd_shard_spec().value().grid;
+            TT_FATAL(
+                all_cores.contains(output_nd_shard_grid),
+                "Accumulation output ND shard grid {} must be contained in program core grid {}",
+                output_nd_shard_grid,
+                all_cores);
+            TT_FATAL(
+                device_grid.contains(output_nd_shard_grid),
+                "Accumulation output ND shard grid {} must be contained in device grid {}",
+                output_nd_shard_grid,
+                device_grid);
+        }
+    }
 
     constexpr uint32_t in_tiles = 4;
     constexpr uint32_t acc_tiles = 1;
@@ -255,6 +318,13 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
         }
 
         tile_offset += num_tiles_per_core;
+        if (i == num_cores - 1) {
+            TT_FATAL(
+                tile_offset == num_rows_total,
+                "Accumulation assigned {} work tiles across cores, expected {}",
+                tile_offset,
+                num_rows_total);
+        }
     }
 
     desc.kernels.push_back(std::move(reader_desc));

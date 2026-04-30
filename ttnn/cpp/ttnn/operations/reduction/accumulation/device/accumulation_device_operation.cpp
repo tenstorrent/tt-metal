@@ -7,6 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include <enchantum/enchantum.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
 
@@ -53,6 +54,134 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         "ttnn accumulation operations (cumprod, cumsum) require the memory layout of the input tensor to be "
         "interleaved. Instead, it is {}.",
         enchantum::to_string(input_tensor.memory_config().memory_layout()));
+    {
+        const uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
+        const uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
+        const auto& padded_shape = input_tensor.padded_shape();
+        TT_FATAL(
+            padded_shape.rank() >= 2,
+            "Accumulation input padded_shape rank {} must be at least 2 for spatial H/W checks",
+            padded_shape.rank());
+        TT_FATAL(
+            padded_shape[-2] > 0 && padded_shape[-1] > 0,
+            "Accumulation input padded spatial dims must be positive: height={}, width={}",
+            padded_shape[-2],
+            padded_shape[-1]);
+        TT_FATAL(
+            padded_shape[-2] % input_tile_height == 0,
+            "Accumulation input padded_height={} must be tile-height-aligned ({})",
+            padded_shape[-2],
+            input_tile_height);
+        TT_FATAL(
+            padded_shape[-1] % input_tile_width == 0,
+            "Accumulation input padded_width={} must be tile-width-aligned ({})",
+            padded_shape[-1],
+            input_tile_width);
+        if (out_memory_config.shard_spec().has_value()) {
+            const auto& output_shard_spec = out_memory_config.shard_spec().value();
+            TT_FATAL(
+                output_shard_spec.shape[0] > 0 && output_shard_spec.shape[1] > 0,
+                "Accumulation output shard face must be positive, got shard_shape[0]={}, [1]={}",
+                output_shard_spec.shape[0],
+                output_shard_spec.shape[1]);
+            TT_FATAL(
+                output_shard_spec.shape[0] % input_tile_height == 0,
+                "Accumulation output shard_shape[0]={} must be tile-height-aligned ({})",
+                output_shard_spec.shape[0],
+                input_tile_height);
+            TT_FATAL(
+                output_shard_spec.shape[1] % input_tile_width == 0,
+                "Accumulation output shard_shape[1]={} must be tile-width-aligned ({})",
+                output_shard_spec.shape[1],
+                input_tile_width);
+        }
+        if (out_memory_config.nd_shard_spec().has_value()) {
+            const auto& output_nd_shard_spec = out_memory_config.nd_shard_spec().value();
+            if (output_nd_shard_spec.shard_shape.rank() >= 2) {
+                TT_FATAL(
+                    output_nd_shard_spec.shard_shape[-2] > 0 && output_nd_shard_spec.shard_shape[-1] > 0,
+                    "Accumulation output ND shard last-2 dims must be positive, got [..., {}, {}]",
+                    output_nd_shard_spec.shard_shape[-2],
+                    output_nd_shard_spec.shard_shape[-1]);
+                TT_FATAL(
+                    output_nd_shard_spec.shard_shape[-2] % input_tile_height == 0,
+                    "Accumulation output shard_shape[-2]={} must be tile-height-aligned ({})",
+                    output_nd_shard_spec.shard_shape[-2],
+                    input_tile_height);
+                TT_FATAL(
+                    output_nd_shard_spec.shard_shape[-1] % input_tile_width == 0,
+                    "Accumulation output shard_shape[-1]={} must be tile-width-aligned ({})",
+                    output_nd_shard_spec.shard_shape[-1],
+                    input_tile_width);
+            }
+        }
+        if (optional_out.has_value()) {
+            const auto& preallocated_output = optional_out.value();
+            const uint32_t preallocated_output_tile_height = preallocated_output.tensor_spec().tile().get_height();
+            const uint32_t preallocated_output_tile_width = preallocated_output.tensor_spec().tile().get_width();
+            const auto& preallocated_output_padded_shape = preallocated_output.padded_shape();
+            TT_FATAL(
+                preallocated_output_padded_shape.rank() >= 2,
+                "Accumulation preallocated output padded_shape rank {} must be at least 2",
+                preallocated_output_padded_shape.rank());
+            TT_FATAL(
+                preallocated_output_padded_shape[-2] > 0 && preallocated_output_padded_shape[-1] > 0,
+                "Accumulation preallocated output padded spatial dims must be positive: height={}, width={}",
+                preallocated_output_padded_shape[-2],
+                preallocated_output_padded_shape[-1]);
+            TT_FATAL(
+                preallocated_output_padded_shape[-2] % preallocated_output_tile_height == 0,
+                "Accumulation preallocated output padded_height={} must be tile-height-aligned ({})",
+                preallocated_output_padded_shape[-2],
+                preallocated_output_tile_height);
+            TT_FATAL(
+                preallocated_output_padded_shape[-1] % preallocated_output_tile_width == 0,
+                "Accumulation preallocated output padded_width={} must be tile-width-aligned ({})",
+                preallocated_output_padded_shape[-1],
+                preallocated_output_tile_width);
+        }
+    }
+
+    {
+        const int32_t logical_rank = input_tensor.logical_shape().rank();
+        const int32_t acc_dim = attributes.dim;
+        TT_FATAL(acc_dim >= 0, "Accumulation (cumsum/cumprod) expects non-negative normalized dim, got {}", acc_dim);
+        TT_FATAL(
+            logical_rank > 0,
+            "Accumulation (cumsum/cumprod) requires positive logical rank for axis {}, got rank {}",
+            acc_dim,
+            logical_rank);
+        TT_FATAL(
+            acc_dim < logical_rank, "Accumulation dim {} must be less than logical rank {}", acc_dim, logical_rank);
+    }
+
+    {
+        using namespace tt::tt_metal;
+        const auto device_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+        TT_FATAL(
+            device_grid_size.x > 0 && device_grid_size.y > 0,
+            "Device compute grid must be non-empty for accumulation (cumsum/cumprod), got ({}, {})",
+            device_grid_size.x,
+            device_grid_size.y);
+        const CoreRangeSet device_grid =
+            num_cores_to_corerangeset(device_grid_size.x * device_grid_size.y, device_grid_size, false);
+        if (out_memory_config.shard_spec().has_value()) {
+            const auto& output_shard_grid = out_memory_config.shard_spec().value().grid;
+            TT_FATAL(
+                device_grid.contains(output_shard_grid),
+                "Accumulation output shard grid {} must be contained in device grid {}",
+                output_shard_grid,
+                device_grid);
+        }
+        if (out_memory_config.nd_shard_spec().has_value()) {
+            const auto& output_nd_shard_grid = out_memory_config.nd_shard_spec().value().grid;
+            TT_FATAL(
+                device_grid.contains(output_nd_shard_grid),
+                "Accumulation output ND shard grid {} must be contained in device grid {}",
+                output_nd_shard_grid,
+                device_grid);
+        }
+    }
 }
 
 AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::compute_output_specs(
