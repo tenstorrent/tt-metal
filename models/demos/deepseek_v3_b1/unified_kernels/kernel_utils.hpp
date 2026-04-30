@@ -170,43 +170,41 @@ FORCE_INLINE void override_cb_rd_ptr(uint32_t cb_id, uint32_t byte_address) {
 //   TRISC0/unpack: read=true,  write=false
 //   TRISC2/pack:   read=false, write=true
 template <bool do_read, bool do_write, bool do_write_tile_ptr, bool do_reset_stream_regs>
-FORCE_INLINE void reconfig_cbs_for_mask(uint32_t tt_l1_ptr* cb_config, uint32_t mask, uint32_t start_cb) {
-    uint32_t cb = start_cb;
+FORCE_INLINE void reconfig_cbs_for_mask(uint32_t tt_l1_ptr* __restrict__ cb_config, uint32_t mask, uint32_t start_cb) {
     while (mask) {
-        if (mask & 1) {
-            uint32_t base = cb * 4;
-            uint32_t fifo_addr = cb_config[base + 0] >> cb_addr_shift;
-            uint32_t fifo_size = cb_config[base + 1] >> cb_addr_shift;
-            uint32_t fifo_num_pages = cb_config[base + 2];
-            uint32_t fifo_page_size = cb_config[base + 3] >> cb_addr_shift;
+        uint32_t bit = __builtin_ctz(mask);
+        uint32_t cb = start_cb + bit;
+        uint32_t base = cb * 4;
+        uint32_t fifo_addr = cb_config[base + 0] >> cb_addr_shift;
+        uint32_t fifo_size = cb_config[base + 1] >> cb_addr_shift;
+        uint32_t fifo_num_pages = cb_config[base + 2];
+        uint32_t fifo_page_size = cb_config[base + 3] >> cb_addr_shift;
 
-            LocalCBInterface& iface = get_local_cb_interface(cb);
-            if constexpr (do_read) {
-                iface.fifo_rd_ptr = fifo_addr;
-            }
-            if constexpr (do_write) {
-                iface.fifo_wr_ptr = fifo_addr;
-                iface.fifo_num_pages = fifo_num_pages;
-            }
-            if constexpr (do_write_tile_ptr) {
-                iface.fifo_wr_tile_ptr = 0;
-            }
-            iface.fifo_size = fifo_size;
-            iface.fifo_limit = fifo_addr + fifo_size;
-            iface.fifo_page_size = fifo_page_size;
-            iface.tiles_acked_received_init = 0;
-
-            if constexpr (do_reset_stream_regs) {
-                *get_cb_tiles_received_ptr(cb) = 0;
-                *get_cb_tiles_acked_ptr(cb) = 0;
-            }
+        LocalCBInterface& iface = get_local_cb_interface(cb);
+        if constexpr (do_read) {
+            iface.fifo_rd_ptr = fifo_addr;
         }
-        mask >>= 1;
-        cb++;
+        if constexpr (do_write) {
+            iface.fifo_wr_ptr = fifo_addr;
+            iface.fifo_num_pages = fifo_num_pages;
+        }
+        if constexpr (do_write_tile_ptr) {
+            iface.fifo_wr_tile_ptr = 0;
+        }
+        iface.fifo_size = fifo_size;
+        iface.fifo_limit = fifo_addr + fifo_size;
+        iface.fifo_page_size = fifo_page_size;
+        iface.tiles_acked_received_init = 0;
+
+        if constexpr (do_reset_stream_regs) {
+            *get_cb_tiles_received_ptr(cb) = 0;
+            *get_cb_tiles_acked_ptr(cb) = 0;
+        }
+        mask &= mask - 1;
     }
 }
 
-FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
+FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* __restrict__ cb_config) {
 #if defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_BRISC) or defined(UCK_CHLKC_UNPACK) or defined(UCK_CHLKC_PACK)
 #if defined(COMPILE_FOR_NCRISC)
     constexpr bool do_read = true;

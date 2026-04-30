@@ -9,9 +9,11 @@
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
 #include "mcast.hpp"
+#include "dataflow_utils.hpp"
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #include "mcast.hpp"
+#include "dataflow_utils.hpp"
 #include "api/debug/assert.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
@@ -307,6 +309,15 @@ struct FlashMLADecode {
             // Only the core handling the last chunk needs to wait for the KV cache cur pos ready
             bool wait_for_kv_cache_ready = k_chunk_end == k_num_chunks;
             uint32_t loop_iter = 0;
+            if (is_mcast_sender && BRISC_MCAST_LOOPS > 0) {
+                noc_semaphore_set(mcast_semaphore_ptr, MCAST_VALID);
+            } else if (!is_mcast_sender) {
+                uint32_t num_k_chunk_iters =
+                    (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
+                unified_kernels::unicast_atomic_inc_increment_counters<false>(num_k_chunk_iters, ATOMIC_NOC_INDEX);
+                unified_kernels::unicast_atomic_inc_set_state<false, true, true, false, write_at_cmd_buf>(
+                    sender_receiver_ready_noc_addr, 1, 31, ATOMIC_NOC_INDEX);
+            }
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
                     DeviceZoneScopedN("reader-k-read");
@@ -345,7 +356,6 @@ struct FlashMLADecode {
                                 false,
                                 MCAST_NOC_INDEX);
 
-                            noc_semaphore_set(mcast_semaphore_ptr, MCAST_VALID);
                             noc_semaphore_set_multicast(
                                 args.mcast_semaphore_addr,
                                 brisc_mcast_sem_addr,
@@ -413,7 +423,9 @@ struct FlashMLADecode {
                         std::swap(k_write_curr_ptr_shared, k_write_next_ptr_shared);
                     } else {
                         DeviceZoneScopedN("mcast-receiver-signal-ready");
-                        noc_semaphore_inc(sender_receiver_ready_noc_addr, 1, ATOMIC_NOC_INDEX);
+                        unified_kernels::
+                            unicast_atomic_inc_with_state<false, false, false, true, false, write_at_cmd_buf>(
+                                0, 0, 31, ATOMIC_NOC_INDEX);
 
                         noc_semaphore_wait(mcast_semaphore_ptr, MCAST_VALID);
                         noc_semaphore_set(mcast_semaphore_ptr, MCAST_INVALID);
@@ -423,7 +435,11 @@ struct FlashMLADecode {
                 }
                 loop_iter++;
             }
-            noc_async_write_barrier(MCAST_NOC_INDEX);
+            if (is_mcast_sender && BRISC_MCAST_LOOPS > 0) {
+                noc_async_write_barrier(MCAST_NOC_INDEX);
+            } else if (!is_mcast_sender) {
+                noc_async_atomic_barrier(ATOMIC_NOC_INDEX);
+            }
 // ====================================================================
 // NCRISC (Writer)
 // ====================================================================
@@ -439,6 +455,8 @@ struct FlashMLADecode {
             constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_out_o);
             constexpr uint32_t o_write_size = out_chunk_tiles * tile_bytes_intermed;
             constexpr uint32_t ms_write_size = tile_bytes_intermed;
+            static_assert(ms_write_size <= NOC_MAX_BURST_SIZE);
+            static_assert(o_write_size <= NOC_MAX_BURST_SIZE);
             constexpr uint32_t q_mcast_vc =
                 CTArgs::use_alt_mcast_vc ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_MULTICAST_WRITE_VC;
 
@@ -490,10 +508,13 @@ struct FlashMLADecode {
                     // wait for 8 q heads
                     uint64_t q_noc_addr = get_noc_addr(
                         args.output_core_noc_x, args.output_core_noc_y, get_read_ptr(args.cb_q_in), READ_NOC_INDEX);
-                    cb_reserve_back(args.cb_q_in, q_chunk_tiles);
-                    noc_semaphore_wait(q_input_mcast_semaphore_ptr, 1);
-                    noc_async_read(q_noc_addr, get_write_ptr(args.cb_q_in), args.q_chunk_size_bytes, READ_NOC_INDEX);
                     mask_last_chunk(args.cb_mask, args.k_chunk_size, cur_pos, k_chunk_end, k_num_chunks);
+                    cb_reserve_back(args.cb_q_in, q_chunk_tiles);
+                    uint32_t q_write_addr = get_write_ptr(args.cb_q_in);
+                    unified_kernels::noc_async_read_preprogram_all_state(
+                        q_noc_addr, q_write_addr, args.q_chunk_size_bytes, READ_NOC_INDEX);
+                    noc_semaphore_wait(q_input_mcast_semaphore_ptr, 1);
+                    unified_kernels::noc_async_read_issue_txn(READ_NOC_INDEX);
                     noc_async_read_barrier(READ_NOC_INDEX);
                     cb_push_back(args.cb_q_in, q_chunk_tiles);
                 }
@@ -537,28 +558,51 @@ struct FlashMLADecode {
                      k_chunk += args.num_cores_per_head) {
                     DeviceZoneScopedN("mcast-sender-multicast");
 
+                    // TODO: Make compile time
+                    mcast_increment_counters_runtime<false>(
+                        args.num_mcast_dests, args.k_num_pages + 1, MCAST_NOC_INDEX);
+                    mcast_send_set_state_runtime<false, false, true, false, true, false, write_cmd_buf>(
+                        0, mcast_noc_addr, k_page_size, args.num_mcast_dests, MCAST_NOC_INDEX);
+                    if constexpr (!mcast_is_shared_write_cmd_buf) {
+                        mcast_send_set_state_runtime<false, false, true, true, true, false, write_reg_cmd_buf>(
+                            args.mcast_semaphore_addr,
+                            mcast_sem_addr,
+                            sizeof(uint32_t),
+                            args.num_mcast_dests,
+                            MCAST_NOC_INDEX);
+                    }
+
                     noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, 1);
                     invalidate_l1_cache();
                     uint32_t page_addr = *k_write_curr_ptr_shared;
 
                     uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
+                    mcast_send_set_state_runtime<false, false, false, true, false, false, write_cmd_buf>(
+                        page_addr, mcast_dest_addr, 0, args.num_mcast_dests, MCAST_NOC_INDEX);
 
                     noc_semaphore_wait(receiver_ready_semaphore_ptr, args.num_mcast_dests);
                     noc_semaphore_set(receiver_ready_semaphore_ptr, 0);
 
-                    noc_async_write_multicast<k_page_size>(
-                        page_addr, mcast_dest_addr, k_page_size, args.num_mcast_dests, false, MCAST_NOC_INDEX);
+                    mcast_send_issue_txn<write_cmd_buf>(MCAST_NOC_INDEX);
 
                     for (uint32_t page = 1; page < args.k_num_pages; ++page) {
                         page_addr += k_page_size;
                         mcast_dest_addr = mcast_noc_addr | page_addr;
+                        mcast_send_set_state_runtime<false, false, false, true, false, false, write_cmd_buf>(
+                            page_addr, mcast_dest_addr, 0, args.num_mcast_dests, MCAST_NOC_INDEX);
                         noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, page + 1);
-                        noc_async_write_multicast<k_page_size>(
-                            page_addr, mcast_dest_addr, k_page_size, args.num_mcast_dests, false, MCAST_NOC_INDEX);
+                        mcast_send_issue_txn<write_cmd_buf>(MCAST_NOC_INDEX);
                     }
 
-                    noc_semaphore_set_multicast(
-                        args.mcast_semaphore_addr, mcast_sem_addr, args.num_mcast_dests, false, MCAST_NOC_INDEX);
+                    if constexpr (mcast_is_shared_write_cmd_buf) {
+                        mcast_send_set_state_runtime<false, false, false, true, true, false, write_reg_cmd_buf>(
+                            args.mcast_semaphore_addr,
+                            mcast_sem_addr,
+                            sizeof(uint32_t),
+                            args.num_mcast_dests,
+                            MCAST_NOC_INDEX);
+                    }
+                    mcast_send_issue_txn<write_reg_cmd_buf>(MCAST_NOC_INDEX);
                     noc_async_writes_flushed(MCAST_NOC_INDEX);
                     *ncrisc_brisc_sync_curr_ptr = 0;
                     std::swap(ncrisc_brisc_sync_curr_ptr, ncrisc_brisc_sync_next_ptr);
@@ -600,17 +644,25 @@ struct FlashMLADecode {
                         uint32_t inc_value = step_semaphore_inc<bits_per_step>(step, ms_sub_bit);
                         uint64_t output_write_coord = get_noc_addr(partner_x, partner_y, 0, WRITE_NOC_INDEX);
                         uint64_t partner_semaphore_addr = output_write_coord | args.reducer_semaphore_addr;
+                        unified_kernels::unicast_write_increment_counters<true>(2, WRITE_NOC_INDEX);
+                        unified_kernels::unicast_atomic_inc_increment_counters<false>(2, WRITE_NOC_INDEX);
                         uint64_t output_write_addr = output_write_coord | (cb_ms_in_base_addr + step * ms_write_size);
-                        cb_wait_front(args.cb_out_ms, 1);
-                        noc_async_write<ms_write_size, false, /*posted=*/true>(
+                        unified_kernels::unicast_write_set_state<true, true, true, true, false, write_cmd_buf>(
                             get_read_ptr(args.cb_out_ms), output_write_addr, ms_write_size, WRITE_NOC_INDEX);
-                        noc_semaphore_inc(partner_semaphore_addr, inc_value, WRITE_NOC_INDEX);
+                        unified_kernels::unicast_atomic_inc_set_state<false, true, true, false, write_at_cmd_buf>(
+                            partner_semaphore_addr, inc_value, 31, WRITE_NOC_INDEX);
+                        cb_wait_front(args.cb_out_ms, 1);
+                        unified_kernels::noc_async_write_issue_txn(WRITE_NOC_INDEX);
+                        unified_kernels::noc_async_atomic_inc_issue_txn(WRITE_NOC_INDEX);
                         inc_value = step_semaphore_inc<bits_per_step>(step, o_sub_bit);
                         output_write_addr = output_write_coord | (cb_out_in_base_addr + step * o_write_size);
-                        cb_wait_front(cb_out_o, out_chunk_tiles);
-                        noc_async_write<o_write_size, false, /*posted=*/true>(
+                        unified_kernels::unicast_write_set_state<true, false, true, true, false, write_cmd_buf>(
                             get_read_ptr(cb_out_o), output_write_addr, o_write_size, WRITE_NOC_INDEX);
-                        noc_semaphore_inc(partner_semaphore_addr, inc_value, WRITE_NOC_INDEX);
+                        unified_kernels::unicast_atomic_inc_set_state<false, false, true, false, write_at_cmd_buf>(
+                            partner_semaphore_addr, inc_value, 31, WRITE_NOC_INDEX);
+                        cb_wait_front(cb_out_o, out_chunk_tiles);
+                        unified_kernels::noc_async_write_issue_txn(WRITE_NOC_INDEX);
+                        unified_kernels::noc_async_atomic_inc_issue_txn(WRITE_NOC_INDEX);
 
                         noc_async_posted_writes_flushed(WRITE_NOC_INDEX);
                         cb_pop_front(args.cb_out_ms, 1);

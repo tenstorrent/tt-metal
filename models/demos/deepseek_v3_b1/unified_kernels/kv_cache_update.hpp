@@ -5,6 +5,7 @@
 
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
+#include "dataflow_utils.hpp"
 #include "mcast.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
@@ -252,6 +253,10 @@ struct KVCacheUpdate {
                 uint32_t write_addr_offset = offset_in_page * num_bytes_per_chunk;
 
                 for (uint32_t chunk = 0; chunk < NUM_CHUNKS; chunk++) {
+                    uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + write_addr_offset;
+                    unified_kernels::noc_async_write_preprogram_all_state<true>(
+                        src_addr, get_noc_addr(write_addr), num_bytes_per_chunk);
+
                     {
                         DeviceZoneScopedN("WAIT_UNTILIZE");
                         cb_reserve_back(kv_cache_intermed_sync_cb, CHUNK_SIZE);
@@ -260,8 +265,7 @@ struct KVCacheUpdate {
 
                     {
                         DeviceZoneScopedN("UPDATE_NEW_CACHE");
-                        uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + write_addr_offset;
-                        noc_async_write(src_addr, get_noc_addr(write_addr), num_bytes_per_chunk);
+                        unified_kernels::noc_async_write_issue_txn();
                         noc_async_write_barrier();
                     }
 
