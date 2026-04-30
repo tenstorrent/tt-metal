@@ -152,6 +152,18 @@ struct NoPostBias {
  *       OutputLayout::SubblockMajor,
  *       SFPUPostBias>(partials_buf, bias_buf, out_buf,
  *                      BiasAddShape::of(...), SFPUPostBias{});
+ *
+ * @example
+ *   // conv2d pattern: writer pushes the entire per-core bias slice once at startup;
+ *   // compute walks through it via bias_block_offset advancing by in1_block_w per outer
+ *   // w-block iteration. Caller waits bias once and never pops; helper reads at offset
+ *   // bias_block_offset + per-subblock index.
+ *   cb_bias.wait_front(bias_ntiles_w);  // caller-managed, fronted across all outer iters
+ *   add_bias_bcast_rows<>(partials_buf, bias_buf, out_buf,
+ *                          BiasAddShape::of(in0_num_subblocks, in1_num_subblocks,
+ *                                            out_subblock_h, out_subblock_w),
+ *                          {},                  // post_bias (NoPostBias)
+ *                          bias_block_offset);  // walk-base into the once-pushed bias
  */
 template <
     BiasBroadcast broadcast = BiasBroadcast::RowBroadcast,

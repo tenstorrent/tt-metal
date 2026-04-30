@@ -268,6 +268,24 @@ struct NoPreKBlock {
  *       PostFn{}, PreFn{},
  *       in1_block_w,      // in1_per_core_w  (DRAM-sharded shard width)
  *       out_block_w);     // out_row_width   (DRAM-sharded padded pack width)
+ *
+ * @example
+ *   // conv2d pattern: per-K-block tilize (PreKBlockFn) + interm_buf pinned to a captured
+ *   // base across the K-loop because matmul_partials_cb is allocated to alias out_cb in
+ *   // L1 (partials_cb_uses_output=true). init_mode=None because the kernel-entry
+ *   // mm_block_init covers initial state and ConvTilizePreKBlock issues
+ *   // mm_block_init_short_with_both_dt after each tilize. Template slot order: transpose,
+ *   // packer_l1_acc, last_block_target, layout, init_mode, retain_in0, retain_in1,
+ *   // PostComputeFn, PreKBlockFn, pin_interm_to_captured_base.
+ *   matmul_block<false, packer_l1_acc, LastBlockTarget::Interm,
+ *                OutputLayout::SubblockMajor, matmul_config::InitMode::None,
+ *                false, false, ConvSFPUPostCompute, ConvTilizePreKBlock,
+ *                true>(  // pin_interm_to_captured_base
+ *       cb_mm_in0, cb_in1, cb_matmul_partials, cb_matmul_partials,  // out==interm
+ *       MatmulBlockShape::of(in0_num_subblocks, in1_num_subblocks,
+ *                             out_subblock_h, out_subblock_w,
+ *                             in0_block_w, in0_num_blocks_w),
+ *       ConvSFPUPostCompute{}, conv_pre_k_block);
  */
 template <
     bool transpose = false,

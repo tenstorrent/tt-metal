@@ -305,11 +305,12 @@ void kernel_main() {
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
         get_compile_time_arg_val(2);  // out_subblock_h*in0_block_w*in0_num_subblocks;
-    constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
+    [[maybe_unused]] constexpr uint32_t in0_subblock_num_tiles =
+        get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
     constexpr uint32_t reader_num_h_subblocks = get_compile_time_arg_val(4);
     constexpr uint32_t in1_num_subblocks =
         get_compile_time_arg_val(5);  // outer column block size (in inner column blocks)
-    constexpr uint32_t in1_block_num_tiles =
+    [[maybe_unused]] constexpr uint32_t in1_block_num_tiles =
         get_compile_time_arg_val(6);                               // out_subblock_w*in0_block_w* in1_num_subblocks;
     constexpr uint32_t in1_block_w = get_compile_time_arg_val(7);  // out_subblock_w*in1_num_subblocks
     // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
@@ -344,16 +345,13 @@ void kernel_main() {
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(38);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(39) == 1;
 
-    constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
-    constexpr bool spill = in0_num_blocks_w > 1;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
     uint32_t bias_block_offset = 0;
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t mm_out_cb_id = fuse_bias ? matmul_partials_cb : untilize_mode_out_cb_id;
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
@@ -386,7 +384,6 @@ void kernel_main() {
     experimental::CB cb_mm_in0(mm_in0_cb_id);
     experimental::CB cb_in1(in1_cb_id);
     experimental::CB cb_matmul_partials(matmul_partials_cb);
-    experimental::CB cb_mm_out(mm_out_cb_id);
     experimental::CB cb_out(out_cb_id);
     experimental::CB cb_bias(bias_cb_id);
     experimental::CB cb_untilize_mode_out(untilize_mode_out_cb_id);
@@ -463,11 +460,10 @@ void kernel_main() {
                 UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
                 PACK(partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
             } else {
-                // Force matmul_partials_cb back to the kernel-entry base so the helper's per-K-block
-                // pin operates on the same fixed L1 cell every outer iter. Mirrors the original
-                // kernel's path A reset (line 478-483: every-iter reset for !partials_cb_uses_output)
-                // — moved here as a per-outer-iter reset since the helper's pin handles the
-                // per-K-block reset internally once entered.
+                // !partials_cb_uses_output: matmul_partials_cb has its own L1 region. Force its
+                // rd/wr ptrs back to the kernel-entry base each outer iter so the helper's
+                // per-K-block pin operates on the same fixed L1 cell. The helper's pin keeps
+                // ptrs steady within a K-loop; this reset keeps them steady across outer iters.
                 UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
                 PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
             }
@@ -487,9 +483,9 @@ void kernel_main() {
                 }
             }
 
-            // ── Phase 1: K-loop matmul ─────────────────────────────────────
+            // ── K-loop matmul ──────────────────────────────────────────────
             // Pick the buffer the last K-block packs to. Mirrors last_block_target above.
-            auto& phase1_out_buf = fuse_bias ? cb_matmul_partials : cb_untilize_mode_out;
+            auto& matmul_out_buf = fuse_bias ? cb_matmul_partials : cb_untilize_mode_out;
 
             const auto shape = compute_kernel_lib::MatmulBlockShape::of(
                 in0_num_subblocks,
@@ -500,18 +496,19 @@ void kernel_main() {
                 in0_num_blocks_w,
                 /*batch=*/1);
 
-            // init_mode=None: caller's mm_block_init at kernel entry covers initial state.
-            // Each helper call issues mm_block_init_short to refresh matmul unpack state — needed
-            // because intervening bias-add and untilize phases reconfig srcA/srcB to non-matmul
-            // operands. ConvTilizePreKBlock additionally issues mm_block_init_short_with_both_dt
-            // after the per-K-block tilize.
+            // init_mode=None: the kernel-entry mm_block_init at the top of kernel_main covers
+            // initial state, and ConvTilizePreKBlock issues mm_block_init_short_with_both_dt
+            // after each per-K-block tilize to refresh srcA/srcB. The downstream bias-add and
+            // untilize phases reconfig data formats but the per-iter ConvTilizePreKBlock
+            // restores them on the next helper call.
             //
-            // pin_interm_to_captured_base=true: conv2d always treats matmul_partials_cb as a
-            // pinned scratch buffer across K-blocks (original kernel: lines 478-510). The two
-            // partials_cb_uses_output paths feed differently captured bases — re-captured per
-            // outer iter when aliased to out_cb (so the pinned position advances with out_cb's
-            // wr_ptr), or kernel-entry base when on its own L1 region (so the pinned position
-            // is fixed). The branch right above this helper call materializes that distinction.
+            // pin_interm_to_captured_base=true: conv2d treats matmul_partials_cb as a pinned
+            // scratch buffer across K-blocks. The two partials_cb_uses_output paths feed
+            // differently captured bases — re-captured per outer iter when partials aliases
+            // out_cb (so the pinned position advances with out_cb's wr_ptr), or restored to
+            // kernel-entry base when partials lives in its own L1 region (so the pinned
+            // position is fixed). The branch above this helper call materializes that
+            // distinction.
             compute_kernel_lib::matmul_block<
                 /*transpose=*/false,
                 packer_l1_acc,
@@ -523,17 +520,15 @@ void kernel_main() {
                 MatmulPostFn,
                 PreKBlockFn,
                 /*pin_interm_to_captured_base=*/true>(
-                cb_mm_in0, cb_in1, phase1_out_buf, cb_matmul_partials, shape, MatmulPostFn{}, pre_k_block);
+                cb_mm_in0, cb_in1, matmul_out_buf, cb_matmul_partials, shape, MatmulPostFn{}, pre_k_block);
 
             if constexpr (!partials_cb_uses_output) {
-                // Helper's pin keeps matmul_partials_cb pointers fixed across non-last K-blocks,
-                // but the last K-block's pack advances wr_ptr by one tile and the helper rd_ptr
-                // reset (when pack_last_to_interm) brings rd_ptr back. Wr_ptr still trails by a
-                // tile, which would push downstream phase (bias-add / untilize) writes to the
-                // wrong L1 cell. Original kernel's path A (line 478-483) reset wr_ptr on every
-                // iter including last for !partials_cb_uses_output — replicate that here so
-                // matmul_partials_cb stays wholly pinned at the kernel-entry base across outer
-                // iters.
+                // The helper's pin keeps matmul_partials_cb pointers fixed across non-last
+                // K-blocks, and its post-K-loop rd_ptr reset (under pack_last_to_interm)
+                // restores rd_ptr after the last block. Wr_ptr still trails by one tile from
+                // the last block's pack — which would push downstream (bias-add / untilize)
+                // writes to the wrong L1 cell. Reset it here so matmul_partials_cb stays
+                // wholly pinned at the kernel-entry base across all outer iters.
                 PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
             }
             if constexpr (check_skip_compute) {
