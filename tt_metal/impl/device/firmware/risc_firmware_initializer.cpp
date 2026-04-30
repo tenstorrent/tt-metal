@@ -1499,8 +1499,24 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
 
     // When stale ETH cores were unresponsive, assert calls for remote devices route
     // through the dead ERISC relay and will time out. Catch and log rather than crash.
+    //
+    // FIX QC: For non-MMIO devices the ERISC relay is the only path to the chip.
+    // safe_assert still pays the full 5-second relay timeout before the exception fires,
+    // multiplied by every core iterated (120 tensix + inactive ETH). Skip the call
+    // entirely for non-MMIO devices with a known-dead relay — we cannot reset those
+    // cores anyway, and avoiding the timeouts is critical for staying within CI budgets.
+    const bool is_non_mmio = cluster_.get_associated_mmio_device(device_id) != device_id;
+
     auto safe_assert = [&](auto fn, const char* label) {
         if (had_unresponsive_eth_cores) {
+            if (is_non_mmio) {
+                log_warning(
+                    tt::LogAlways,
+                    "reset_cores: skipping {} for non-MMIO device {} (dead ERISC relay — cannot reach chip, avoiding relay timeout)",
+                    label,
+                    device_id);
+                return;
+            }
             try {
                 fn();
             } catch (const std::exception& e) {
