@@ -379,6 +379,9 @@ def run(
             try:
                 tensor_a_dram.deallocate(True)
             except Exception:
+                # Best-effort cleanup of the intermediate DRAM tensor — if
+                # deallocate raises (already-freed, mesh teardown), the sweep
+                # should continue to verify correctness on tensor_a.
                 pass
         else:
             tensor_a = create_tensor_on_mesh(
