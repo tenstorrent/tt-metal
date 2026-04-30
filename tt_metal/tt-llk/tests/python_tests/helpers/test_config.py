@@ -118,7 +118,7 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
-    ARCH_SPECIFIC_OPTIONS: ClassVar[str]
+    ARCH_SPECIFIC_OPTIONS: ClassVar[str] = ""
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
