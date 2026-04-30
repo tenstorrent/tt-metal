@@ -188,13 +188,6 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
 
         github_job_ids_to_tt_smi_resets[github_job_id] = tt_smi_reset
 
-        if github_job_id in [72824250364, 72824250365, 72824250368]:
-            logger.info(f"DEBUG RESET {github_job_id}: {tt_smi_reset}")
-
-    assert 72824250364 in github_job_ids_to_tt_smi_resets, "72824250364 missing from reset map"
-    assert 72824250365 in github_job_ids_to_tt_smi_resets, "72824250365 missing from reset map"
-    assert 72824250368 in github_job_ids_to_tt_smi_resets, "72824250368 missing from reset map"
-
     return github_job_ids_to_tt_smi_versions, github_job_ids_to_tt_smi_resets
 
 
