@@ -20,6 +20,20 @@ void kernel_main() {
 
     // Compile-time args:
     // Number of tiles along the W (reduction) dimension.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    // The actual number of elements along W (before tiling).
+    constexpr uint32_t W = get_named_compile_time_arg_val("W");
+    // Number of elements per tile in the W dimension
+    // (typically 32, but can be smaller for narrow tiles).
+    constexpr uint32_t tile_width = get_named_compile_time_arg_val("tile_width");
+    // Whether input scaling is required.
+    constexpr bool do_scale = get_named_compile_time_arg_val("do_scale") != 0;
+    // Whether to apply Bessel's correction (divide by N-1 instead of N).
+    constexpr bool correction = get_named_compile_time_arg_val("correction") != 0;
+    // Whether to compute standard deviation (sqrt of variance) instead of variance.
+    constexpr bool is_std = get_named_compile_time_arg_val("is_std") != 0;
+#else
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     // The actual number of elements along W (before tiling).
     constexpr uint32_t W = get_compile_time_arg_val(1);
@@ -32,29 +46,50 @@ void kernel_main() {
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
     constexpr bool is_std = get_compile_time_arg_val(5) != 0;
+#endif
 
     constexpr uint32_t onetile = 1;
 
     // Circular buffer that the reader kernel fills with input tiles.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_in = get_named_compile_time_arg_val("cb_in");
+#else
     constexpr auto cb_in = tt::CBIndex::c_0;
+#endif
     // Scalar tile produced by the reader via generate_reduce_scaler.
     // Used to scale every input tile before Welford processing.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_scalar = get_named_compile_time_arg_val("cb_scalar");
+#else
     constexpr auto cb_scalar = tt::CBIndex::c_2;
+#endif
     // Circular buffer where the final variance output tile is written
     // for the writer kernel to consume.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");
+#else
     constexpr auto cb_out = tt::CBIndex::c_16;
+#endif
     // Scratch circular buffer used to hold the variance tile between
     // the two transpose steps (Welford produces row-oriented results;
     // we transpose back to column orientation via this buffer,
     // and transpose operation can't take data from the DST register).
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_var = get_named_compile_time_arg_val("cb_var");
+#else
     constexpr auto cb_var = tt::CBIndex::c_19;
+#endif
     // 1-tile intermediate: holds the scaled input tile between the
     // mul_tiles_bcast_scalar (scale step) and transpose_wh_tile (Welford step).
     // Only used when do_scale is true.
     // The reason this is needed is because mul_tiles_bcast_scalar writes data
     // to the DST register, but transpose_wh_tile is an unpack operation, so
     // it expects data in a CB. Thus, this CB is used to hold the scaled input tile.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_scaled = get_named_compile_time_arg_val("cb_scaled");
+#else
     constexpr auto cb_scaled = tt::CBIndex::c_20;
+#endif
 
     experimental::CircularBuffer cb_in_obj(cb_in);
     experimental::CircularBuffer cb_scalar_obj(cb_scalar);

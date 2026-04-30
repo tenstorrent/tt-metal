@@ -20,6 +20,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include <circular_buffer_constants.h>
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -1303,9 +1304,14 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
 
-    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
+    std::vector<UnpackToDestMode> unpack_modes(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
         uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        TT_FATAL(
+            dfb_id < unpack_modes.size(),
+            "DFB '{}' has id {}, which does not fit in unpack_to_dest_mode",
+            dfb_name,
+            dfb_id);
         unpack_modes[dfb_id] = mode;
     }
 
@@ -1354,12 +1360,17 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     //  - The unpack_to_dest_mode vector in the QuasarComputeConfig is indexed by DFB ID.
     //  - DFB IDs are always issued sequentially from zero, so this works.
 
-    // Size the vector to the number of DFBs.
-    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
+    // Size the vector to match the legacy CB-indexed format expected by the lower JIT/data-format path.
+    std::vector<UnpackToDestMode> unpack_modes(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
     // Populate unpack_modes using DFB ID as the index
     for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
         uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        TT_FATAL(
+            dfb_id < unpack_modes.size(),
+            "DFB '{}' has id {}, which does not fit in unpack_to_dest_mode",
+            dfb_name,
+            dfb_id);
         unpack_modes[dfb_id] = mode;
     }
 

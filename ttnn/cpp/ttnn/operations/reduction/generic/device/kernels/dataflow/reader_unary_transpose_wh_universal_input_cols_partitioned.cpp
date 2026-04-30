@@ -17,12 +17,22 @@ void kernel_main() {
     uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
     uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
 
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    constexpr uint32_t HtWt = get_named_compile_time_arg_val("HtWt");
+    constexpr uint32_t scaler_bits = get_named_compile_time_arg_val("scaler_bits");
+    constexpr bool use_welford = get_named_compile_time_arg_val("use_welford") != 0;
+    constexpr uint32_t src_args_config = get_named_compile_time_arg_val("src_args_config");
+    constexpr uint32_t src_page_size = get_named_compile_time_arg_val("src_page_size");
+#else
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
 
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
     constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
+#endif
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
     // per chunk, which would feed the Welford kernel tiles from the wrong columns.
@@ -37,8 +47,14 @@ void kernel_main() {
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr bool src_is_dram = (src_args_config & static_cast<uint32_t>(tensor_accessor::ArgConfig::IsDram)) != 0;
+    const auto tensor_accessor =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec<src_is_dram>(), src_addr, src_page_size);
+#else
     constexpr auto tensor_args = TensorAccessorArgs<5>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
+#endif
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);

@@ -10,9 +10,15 @@
 #endif
 
 void kernel_main() {
+#if defined(REDUCE_METAL2_NAMED_ARGS) || defined(REDUCE_MCW_NAMED_ARGS)
+    uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    uint32_t NC = get_named_compile_time_arg_val("NC");
+#else
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
+#endif
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 
@@ -32,7 +38,11 @@ void kernel_main() {
         // with scaler=1.0 and then applies the user scalar via mul_unary_tile (SFPU) on each
         // output DEST register.
         [](uint32_t dst_idx) {
+#if defined(REDUCE_METAL2_NAMED_ARGS) || defined(REDUCE_MCW_NAMED_ARGS)
+            constexpr uint32_t post_mul_scaler_bits = get_named_compile_time_arg_val("post_mul_scaler_bits");
+#else
             constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+#endif
             binop_with_scalar_tile_init();
             mul_unary_tile(dst_idx, post_mul_scaler_bits);
         }

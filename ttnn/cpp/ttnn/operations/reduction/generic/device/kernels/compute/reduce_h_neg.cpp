@@ -17,12 +17,22 @@
 #endif
 
 void kernel_main() {
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    uint32_t Wt = get_named_compile_time_arg_val("Wt");
+    uint32_t NC = get_named_compile_time_arg_val("NC");
+#else
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
+#endif
 #ifdef REDUCE_POST_MUL
     // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr uint32_t post_mul_scaler_bits = get_named_compile_time_arg_val("post_mul_scaler_bits");
+#else
     constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+#endif
 #endif
     constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
 

@@ -22,6 +22,19 @@ void kernel_main() {
 
     // Compile-time args:
     // Number of tiles along the H (reduction) dimension.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("Ht");
+    // The actual number of elements along H (before padding).
+    constexpr uint32_t H = get_named_compile_time_arg_val("H");
+    // Number of elements per tile in the H dimension (typically 32).
+    constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
+    // Whether input scaling is required.
+    constexpr bool do_scale = get_named_compile_time_arg_val("do_scale") != 0;
+    // Whether to apply Bessel's correction (divide by N-1 instead of N).
+    constexpr bool correction = get_named_compile_time_arg_val("correction") != 0;
+    // Whether to compute standard deviation (sqrt of variance) instead of variance.
+    constexpr bool is_std = get_named_compile_time_arg_val("is_std") != 0;
+#else
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     // The actual number of elements along H (before padding).
     constexpr uint32_t H = get_compile_time_arg_val(1);
@@ -33,15 +46,28 @@ void kernel_main() {
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
     constexpr bool is_std = get_compile_time_arg_val(5) != 0;
+#endif
 
     constexpr uint32_t onetile = 1;
 
     // Circular buffer that the reader kernel fills with input tiles.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_in = get_named_compile_time_arg_val("cb_in");
+#else
     constexpr auto cb_in = tt::CBIndex::c_0;
+#endif
     // Scalar tile produced by the reader via generate_reduce_scaler.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_scalar = get_named_compile_time_arg_val("cb_scalar");
+#else
     constexpr auto cb_scalar = tt::CBIndex::c_2;
+#endif
     // Circular buffer where the final variance/std output tile is written.
+#ifdef REDUCE_METAL2_NAMED_ARGS
+    constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");
+#else
     constexpr auto cb_out = tt::CBIndex::c_16;
+#endif
 
     experimental::CircularBuffer cb_in_obj(cb_in);
     experimental::CircularBuffer cb_scalar_obj(cb_scalar);
