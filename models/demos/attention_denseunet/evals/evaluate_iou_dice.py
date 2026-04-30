@@ -12,8 +12,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
 from loguru import logger
+from PIL import Image
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
@@ -223,4 +223,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

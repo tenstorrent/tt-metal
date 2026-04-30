@@ -183,4 +183,3 @@ Current tests run with `OptimizationLevel.STAGE2`.
 - [CNN optimization guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/cnn_optimizations.md)
 - [DenseNet paper](https://arxiv.org/abs/1608.06993)
 - [Attention U-Net paper](https://arxiv.org/abs/1804.03999)
-
