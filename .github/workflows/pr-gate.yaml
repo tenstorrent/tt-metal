@@ -523,13 +523,14 @@ jobs:
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    uses: ./.github/workflows/llk-setup-and-test.yaml
+    uses: ./.github/workflows/llk-smoke.yaml
     secrets: inherit
     with:
-      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
-      runs_on: tt-ubuntu-2204-n150-stable
-      test_splits: 2
-      pytest_markers: "not perf and not nightly and not quasar"
+      docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      enabled-skus: wh_n150_civ2
+      pytest-markers: "not perf and not nightly and not quasar"
+      runs-on-for-coverage: tt-ubuntu-2204-n150-stable
+      coverage: false
 
   # LLK Functional Unit Tests on Blackhole (PR gate - runs on blackhole/common/sfpi/test/ci changes)
   llk-test-blackhole:
@@ -544,13 +545,14 @@ jobs:
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    uses: ./.github/workflows/llk-setup-and-test.yaml
+    uses: ./.github/workflows/llk-smoke.yaml
     secrets: inherit
     with:
-      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
-      runs_on: tt-ubuntu-2204-p150b-stable
-      test_splits: 2
-      pytest_markers: "not perf and not nightly and not quasar"
+      docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      enabled-skus: bh_p150b_civ2
+      pytest-markers: "not perf and not nightly and not quasar"
+      runs-on-for-coverage: tt-ubuntu-2204-p150b-stable
+      coverage: false
 
   # LLK Quasar Build Check (compile-only, no hardware needed)
   llk-build-quasar:

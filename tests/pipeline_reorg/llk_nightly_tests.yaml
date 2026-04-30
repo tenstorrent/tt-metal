@@ -1,4 +1,4 @@
-# LLK nightly — same pytest flow as llk-setup-and-test (coverage, splits, no speed-of-light).
+# LLK nightly — python_tests compile producer/consumer with coverage (5-way split, no speed-of-light).
 # Split style matches tests/pipeline_reorg/ttnn-tests.yaml: one matrix row per --group with cmd + skus.timeout.
 # PYTEST_MARKERS is set by llk-nightly-tests-impl from workflow_dispatch (default matches historical fallback).
 

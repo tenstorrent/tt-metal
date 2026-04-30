@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       pytest-markers:
-        description: "Pytest mark expression (same as llk-setup-and-test pytest_markers)"
+        description: "Pytest mark expression for LLK python_tests"
         required: false
         type: string
         default: "perf"
