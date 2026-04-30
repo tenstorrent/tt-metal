@@ -544,6 +544,43 @@ def build_talker_decode_trace_h2d_constants(
     return cos_h, sin_h, mask_h, pos_h
 
 
+def _alloc_token_buf(device, shape=(1, 1, 1)) -> ttnn.Tensor:
+    """Allocate a uint32 ROW_MAJOR DRAM token output buffer for ttnn.argmax."""
+    return ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.int32),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _argmax_into(logits_tt: ttnn.Tensor, out_tok_tt: ttnn.Tensor) -> None:
+    """Untilize + multicore argmax into a pre-allocated uint32 RM token buffer.
+
+    Multicore ``ttnn.argmax`` only supports ROW_MAJOR inputs. Plain ``ttnn.untilize``
+    on a tile-padded Y (e.g. ``[1,1,1,vocab]`` padded to ``[1,1,32,vocab]``)
+    silently mixes padded rows into row 0. Use ``untilize_with_unpadding`` with
+    the LOGICAL last index to drop tile padding cleanly.
+    """
+    # End index per dim is logical_size - 1.
+    end = [int(s) - 1 for s in logits_tt.shape]
+    logits_rm = ttnn.untilize_with_unpadding(logits_tt, output_tensor_end=end, use_multicore=True)
+    ttnn.argmax(logits_rm, dim=-1, keepdim=False, use_multicore=True, output_tensor=out_tok_tt)
+    ttnn.deallocate(logits_rm)
+
+
+def _read_device_token(tok_tt: ttnn.Tensor, index: int = 0) -> int:
+    """D2H read of a single token id from on-device argmax/sampling output (uint32 RM).
+
+    For ttnn.argmax, the output is a small [...,1] uint32 tensor and we read element
+    [index]. For ttnn.sampling (which requires 32 users per kernel invocation, so
+    we replicate batch=1 across 32 users), the output is shape [1,1,1,32] and we
+    read user[0] (index=0).
+    """
+    return int(ttnn.to_torch(tok_tt).flatten()[index].item())
+
+
 def sample_from_tt_vocab_logits(
     logits_tt: ttnn.Tensor,
     *,
@@ -636,6 +673,7 @@ def generate_codes_ttnn(
     use_kv_cache: bool = True,
     use_trace: bool = True,
     use_2cq: bool = False,
+    streaming_decoder=None,
 ) -> Union[Tuple[torch.Tensor, dict], Tuple[None, dict]]:
     """
     Generate codec tokens autoregressively using TTNN Talker and CodePredictor.
@@ -1085,7 +1123,15 @@ def generate_codes_ttnn(
         decode_attn_mask=trace_mask_tt,
         mode="decode",
     )
-    _ = model.talker.get_codec_logits(_wu_th)
+    _wu_codec_logits = model.talker.get_codec_logits(_wu_th)
+
+    # On-device argmax (greedy path): allocate output token tensors once outside
+    # any trace; argmax inside each trace writes the index here in-place each call.
+    # Hot loop then D2H's just the int (4B) instead of the full [vocab] logits.
+    talker_codec0_token_tt = _alloc_token_buf(device, shape=(1, 1, 1))
+    cp_prefill_token_tt = _alloc_token_buf(device, shape=(1, 1, 2))
+    if config.greedy:
+        _argmax_into(_wu_codec_logits, talker_codec0_token_tt)
     ttnn.synchronize_device(device)
 
     print("  Capturing Talker decode trace (includes codec_head)...")
@@ -1102,6 +1148,8 @@ def generate_codes_ttnn(
             mode="decode",
         )
         trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
+        if config.greedy:
+            _argmax_into(trace_codec_logits_out, talker_codec0_token_tt)
     finally:
         ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
     ttnn.synchronize_device(device)
@@ -1112,7 +1160,7 @@ def generate_codes_ttnn(
     for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
         ttnn.copy_host_to_device_tensor(k_zero, k_cache)
         ttnn.copy_host_to_device_tensor(v_zero, v_cache)
-    _, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
+    _wu_cp_pf_logits, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
         cp_trace_prefill_embed_tt,
         cp_trace_prefill_cos_tt,
         cp_trace_prefill_sin_tt,
@@ -1124,6 +1172,8 @@ def generate_codes_ttnn(
         cp_prefill_mask=cp_trace_prefill_mask_tt,
         return_hidden_state=False,
     )
+    if config.greedy:
+        _argmax_into(_wu_cp_pf_logits, cp_prefill_token_tt)
     ttnn.synchronize_device(device)
 
     print("  Capturing CP prefill trace (seq_len=2, includes lm_heads[0])...")
@@ -1141,6 +1191,10 @@ def generate_codes_ttnn(
             cp_prefill_mask=cp_trace_prefill_mask_tt,
             return_hidden_state=False,
         )
+        if config.greedy:
+            # cp_prefill_logits_tt is [1,1,2,vocab]; argmax over -1 yields [1,1,2]; we
+            # consume only index 1 on host (the post-code0 logits position).
+            _argmax_into(cp_prefill_logits_tt, cp_prefill_token_tt)
     finally:
         ttnn.end_trace_capture(device, cp_prefill_trace_id, cq_id=0)
     ttnn.synchronize_device(device)
@@ -1149,6 +1203,7 @@ def generate_codes_ttnn(
     # --- 5c: CP decode traces x13 ---
     cp_decode_trace_ids = [[], []]
     cp_decode_logits_tts = [[], []]
+    cp_decode_token_tts = [[], []]
     print(f"  Capturing {config.num_code_groups - 2} CP decode traces (one per lm_head)...")
     for _buf_i in range(2):
         for _trace_i, _step_code_idx in enumerate(range(2, config.num_code_groups)):
@@ -1156,7 +1211,7 @@ def generate_codes_ttnn(
             _cp_sin_tt = cp_trace_decode_sin_tts[_trace_i]
             _cp_mask_tt = cp_trace_decode_mask_tts[_trace_i]
             print(f"    Untraced warmup: CP decode (buf={_buf_i}, generation_step={_step_code_idx})...")
-            _, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
+            _wu_cp_dc_logits, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
                 cp_trace_decode_embed_tts[_buf_i],
                 _cp_cos_tt,
                 _cp_sin_tt,
@@ -1169,6 +1224,10 @@ def generate_codes_ttnn(
                 decode_attn_mask=_cp_mask_tt,
                 return_hidden_state=False,
             )
+            _tok_buf = _alloc_token_buf(device, shape=(1, 1, 1))
+            cp_decode_token_tts[_buf_i].append(_tok_buf)
+            if config.greedy:
+                _argmax_into(_wu_cp_dc_logits, _tok_buf)
             ttnn.synchronize_device(device)
 
             _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
@@ -1186,6 +1245,8 @@ def generate_codes_ttnn(
                     decode_attn_mask=_cp_mask_tt,
                     return_hidden_state=False,
                 )
+                if config.greedy:
+                    _argmax_into(_logits_tt, _tok_buf)
             finally:
                 ttnn.end_trace_capture(device, _trace_id, cq_id=0)
             ttnn.synchronize_device(device)
@@ -1275,17 +1336,22 @@ def generate_codes_ttnn(
             else:
                 ttnn.synchronize_device(device)
 
-            _pf_vocab = cp_prefill_logits_tt.shape[3]
-            last_prefill_logits = ttnn.slice(cp_prefill_logits_tt, [0, 0, 1, 0], [1, 1, 2, _pf_vocab])
             _prefill_sp = {}
-            token = sample_from_tt_vocab_logits(
-                last_prefill_logits,
-                temperature=config.temperature,
-                top_k=config.top_k,
-                greedy=config.greedy,
-                prof_acc=_prefill_sp,
-            )
-            ttnn.deallocate(last_prefill_logits)
+            if config.greedy:
+                _t_pf0 = time.perf_counter()
+                token = _read_device_token(cp_prefill_token_tt, index=1)
+                _prefill_sp["device_logits"] = time.perf_counter() - _t_pf0
+            else:
+                _pf_vocab = cp_prefill_logits_tt.shape[3]
+                last_prefill_logits = ttnn.slice(cp_prefill_logits_tt, [0, 0, 1, 0], [1, 1, 2, _pf_vocab])
+                token = sample_from_tt_vocab_logits(
+                    last_prefill_logits,
+                    temperature=config.temperature,
+                    top_k=config.top_k,
+                    greedy=config.greedy,
+                    prof_acc=_prefill_sp,
+                )
+                ttnn.deallocate(last_prefill_logits)
             code_row.append(token)
             _t_after_cp_prefill = time.perf_counter()
 
@@ -1315,18 +1381,25 @@ def generate_codes_ttnn(
                     trace_cq0_idle = cp_decode_input_ready[_buf_i]
 
                 _dsp = {}
-                token = sample_from_tt_vocab_logits(
-                    cp_decode_logits_tts[_buf_i][_trace_i],
-                    temperature=config.temperature,
-                    top_k=config.top_k,
-                    greedy=config.greedy,
-                    prof_acc=_dsp,
-                )
+                if config.greedy:
+                    _t_dc0 = time.perf_counter()
+                    token = _read_device_token(cp_decode_token_tts[_buf_i][_trace_i], index=0)
+                    _dsp["device_logits"] = time.perf_counter() - _t_dc0
+                else:
+                    token = sample_from_tt_vocab_logits(
+                        cp_decode_logits_tts[_buf_i][_trace_i],
+                        temperature=config.temperature,
+                        top_k=config.top_k,
+                        greedy=config.greedy,
+                        prof_acc=_dsp,
+                    )
                 _decode_sp_agg["device_logits"] += _dsp.get("device_logits", 0.0)
                 _decode_sp_agg["cpu_sample"] += _dsp.get("cpu_sample", 0.0)
                 code_row.append(token)
 
             all_codes.append(code_row)
+            if streaming_decoder is not None:
+                streaming_decoder.add_tokens(torch.tensor(code_row, dtype=torch.long))
             if not use_2cq:
                 ttnn.synchronize_device(device)
             t_cp_end = time.time()
@@ -1386,17 +1459,22 @@ def generate_codes_ttnn(
             talker_times_ms.append((t_talker_end - t_cp_end) * 1000)
             cp_times_ms.append((t_cp_end - t_step_start) * 1000)
 
-            # Get next code 0 from trace output (on-device argmax for greedy)
+            # Get next code 0 from trace output (on-device argmax for greedy).
             _c0_sp = {}
-            token_0 = sample_from_tt_vocab_logits(
-                trace_codec_logits_out,
-                temperature=config.temperature,
-                top_k=config.top_k,
-                greedy=config.greedy,
-                repetition_penalty=config.repetition_penalty,
-                generated_tokens=generated_code0_tokens,
-                prof_acc=_c0_sp,
-            )
+            if config.greedy and config.repetition_penalty == 1.0:
+                _t_c00 = time.perf_counter()
+                token_0 = _read_device_token(talker_codec0_token_tt, index=0)
+                _c0_sp["device_logits"] = time.perf_counter() - _t_c00
+            else:
+                token_0 = sample_from_tt_vocab_logits(
+                    trace_codec_logits_out,
+                    temperature=config.temperature,
+                    top_k=config.top_k,
+                    greedy=config.greedy,
+                    repetition_penalty=config.repetition_penalty,
+                    generated_tokens=generated_code0_tokens,
+                    prof_acc=_c0_sp,
+                )
             generated_code0_tokens.append(token_0)
 
             frame_breakdown_sums["cp_input_prep_ms"] += (_t_after_cp_input - _step_pc) * 1000
@@ -2625,6 +2703,29 @@ def run_full_ttnn_tts(
         # Generate codes (TTNN)
         if seed is not None:
             torch.manual_seed(seed)
+
+        # Streaming audio decoder: overlap CPU ConvNext decode with subsequent
+        # generation steps (use_2cq path). decoder_fn matches decode_audio's
+        # filter+reshape so per-chunk output is consistent with the full call.
+        from models.demos.qwen3_tts.reference.functional import (
+            SpeechTokenizerDecoderConfig,
+            speech_tokenizer_decoder_forward,
+        )
+        from models.demos.qwen3_tts.tt.generator_2cq import StreamingAudioDecoder
+
+        _decoder_cfg = SpeechTokenizerDecoderConfig()
+
+        def _streaming_decoder_fn(codes_input: torch.Tensor) -> torch.Tensor:
+            # codes_input: [1, 16, seq_len] long tokens (already shaped by StreamingAudioDecoder)
+            codes_filtered = codes_input.clone().clamp(max=2047)
+            return speech_tokenizer_decoder_forward(codes_filtered, decoder_weights, _decoder_cfg)
+
+        streaming_decoder = StreamingAudioDecoder(_streaming_decoder_fn, chunk_size=50, sample_rate=24000)
+        # Prime with original reference codec frames so HF-style trim still works.
+        streaming_decoder.start()
+        for _ref_frame in ref_codes_original:
+            streaming_decoder.add_tokens(_ref_frame.long())
+
         gen_start = time.time()
         codes, compile_timings = generate_codes_ttnn(
             model=model,
@@ -2637,6 +2738,7 @@ def run_full_ttnn_tts(
             use_kv_cache=use_kv_cache,
             use_trace=use_trace,
             use_2cq=use_2cq,
+            streaming_decoder=streaming_decoder,
         )
         timings["generation"] = time.time() - gen_start
         timings["warmup"] = compile_timings["warmup"]
@@ -2660,9 +2762,10 @@ def run_full_ttnn_tts(
 
         print(f"  Decoding: {ref_codes_len} ref (original) + {len(codes)} gen = {total_codes_len} total frames")
 
-        # Decode full sequence to audio (reference impl)
+        # Drain streaming decoder (chunks decoded in parallel during generation).
         decode_start = time.time()
-        audio = decode_audio(codes_for_decode, decoder_weights)
+        audio = streaming_decoder.get_all_audio()
+        streaming_decoder.stop()
         timings["decode"] = time.time() - decode_start
 
         # Trim reference portion from audio (HF formula)
