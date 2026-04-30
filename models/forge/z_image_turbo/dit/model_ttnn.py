@@ -186,12 +186,14 @@ class ZImageTransformerTTNN(LightweightModule):
             v_T = ttnn.permute(
                 self.weights[f"{prefix}.attention.to_v.weight"], [1, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
-            self.weights[f"{prefix}.attention.qkv_fused_mmT"] = ttnn.concat(
-                [q_T, k_T, v_T], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            qkv_bf16 = ttnn.concat([q_T, k_T, v_T], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            self.weights[f"{prefix}.attention.qkv_fused_mmT"] = ttnn.typecast(
+                qkv_bf16, ttnn.DataType.BFLOAT8_B, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+            ttnn.deallocate(qkv_bf16, False)
 
     def _prep_parallel_weights(self):
-        """Pre-transpose to_out, w1/w2/w3 weights for minimal_matmul."""
+        """Pre-transpose to_out, w1/w2/w3 weights for minimal_matmul, convert to BFP8."""
         suffixes = (
             "attention.to_out.0.weight",
             "feed_forward.w1.weight",
@@ -200,9 +202,11 @@ class ZImageTransformerTTNN(LightweightModule):
         )
         for key in list(self.weights):
             if any(key.endswith(s) for s in suffixes) and len(self.weights[key].shape) == 2:
-                self.weights[key + "_mmT"] = ttnn.permute(
-                    self.weights[key], [1, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                wT = ttnn.permute(self.weights[key], [1, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                self.weights[key + "_mmT"] = ttnn.typecast(
+                    wT, ttnn.DataType.BFLOAT8_B, memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )
+                ttnn.deallocate(wT, False)
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
