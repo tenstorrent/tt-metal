@@ -32,6 +32,8 @@
 // Additional headers for ops below
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/log1p.h"
+#include "api/compute/eltwise_unary/trigonometry.h"
 
 namespace compute_kernel_lib {
 
@@ -45,6 +47,42 @@ struct Negative : UnaryOp<Negative<ApproxMode, Slot>, Slot> {
 
     ALWI static void init() { ckernel::negative_tile_init(); }
     ALWI static void call(uint32_t dst) { ckernel::negative_tile(dst); }
+};
+
+// =============================================================================
+// Log1p — log(1 + x). Programs SFPU log LUT.
+// =============================================================================
+
+template <Dst Slot = Dst::D0>
+struct Log1p : UnaryOp<Log1p<Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = true;
+    ALWI static void init() { ckernel::log1p_tile_init(); }
+    ALWI static void call(uint32_t dst) { ckernel::log1p_tile(dst); }
+};
+
+// =============================================================================
+// Trig: Sin / Cos / Tan / Tanh / Atanh / Sinh / Cosh — programs SFPU LUT.
+// =============================================================================
+
+template <Dst Slot = Dst::D0>
+struct Sin : UnaryOp<Sin<Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = true;
+    ALWI static void init() { ckernel::sin_tile_init(); }
+    ALWI static void call(uint32_t dst) { ckernel::sin_tile(dst); }
+};
+
+template <Dst Slot = Dst::D0>
+struct Cos : UnaryOp<Cos<Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = true;
+    ALWI static void init() { ckernel::cos_tile_init(); }
+    ALWI static void call(uint32_t dst) { ckernel::cos_tile(dst); }
+};
+
+template <Approx ApproxMode = Approx::Exact, Dst Slot = Dst::D0>
+struct Tanh : UnaryOp<Tanh<ApproxMode, Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = true;
+    ALWI static void init() { ckernel::tanh_tile_init<static_cast<bool>(ApproxMode)>(); }
+    ALWI static void call(uint32_t dst) { ckernel::tanh_tile<static_cast<bool>(ApproxMode)>(dst); }
 };
 
 // =============================================================================

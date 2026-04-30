@@ -7,6 +7,7 @@
 
 #include "api/compute/eltwise_unary/gelu.h"
 #include "api/compute/eltwise_unary/tanh_derivative.h"
+#include "api/compute/eltwise_unary/activations.h"
 #include "api/compute/logsigmoid.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -48,6 +49,17 @@ struct GeluDerivative : UnaryOp<GeluDerivative<Slot>, Slot> {
 
     ALWI static void init() { ckernel::gelu_derivative_tile_init(); }
     ALWI static void call(uint32_t dst) { ckernel::gelu_derivative_tile(dst); }
+};
+
+// =============================================================================
+// Hardsigmoid — saturating linear approx. Trivial init (SFPU type register).
+// =============================================================================
+
+template <Dst Slot = Dst::D0>
+struct Hardsigmoid : UnaryOp<Hardsigmoid<Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = false;
+    ALWI static void init() { ckernel::hardsigmoid_tile_init(); }
+    ALWI static void call(uint32_t dst) { ckernel::hardsigmoid_tile(dst); }
 };
 
 // =============================================================================
