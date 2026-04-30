@@ -150,10 +150,7 @@ def _clear_tt_model_args_mesh_refs(*args_objs) -> None:
     for obj in args_objs:
         if obj is None:
             continue
-        try:
-            obj.mesh_device = None
-        except Exception:
-            pass
+        obj.mesh_device = None
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +169,7 @@ def _decode_ttnn_new_tokens(
         return ""
     if prompt_input_ids is not None and isinstance(prompt_input_ids, torch.Tensor) and prompt_input_ids.dim() == 2:
         full = torch.cat([prompt_input_ids.to(torch.long), torch.tensor([token_ids], dtype=torch.long)], dim=1)
-        try:
-            return ref.decode_generated_suffix(full, prompt_input_ids.to(torch.long))
-        except Exception:
-            pass
+        return ref.decode_generated_suffix(full, prompt_input_ids.to(torch.long))
 
     row = torch.tensor([token_ids], dtype=torch.long)
     proc = getattr(ref, "processor", None)
@@ -407,13 +401,10 @@ def _decode_loop(
                     vocab_size=(vocab_size if vocab_size > 0 else None),
                 )
                 out_tok = token_ids_ttnn_to_torch(out_tok_tt, mesh_device=generator.mesh_device)
-                try:
-                    import ttnn
+                import ttnn
 
-                    ttnn.deallocate(tt_logits)
-                    ttnn.deallocate(out_tok_tt)
-                except Exception:
-                    pass
+                ttnn.deallocate(tt_logits)
+                ttnn.deallocate(out_tok_tt)
             else:
                 logits, _ = generator.decode_forward(
                     out_tok,
@@ -479,13 +470,10 @@ def _decode_loop(
                 vocab_size=(vocab_size if vocab_size > 0 else None),
             )
             out_tok = token_ids_ttnn_to_torch(out_tok_tt, mesh_device=generator.mesh_device)
-            try:
-                import ttnn
+            import ttnn
 
-                ttnn.deallocate(tt_logits)
-                ttnn.deallocate(out_tok_tt)
-            except Exception:
-                pass
+            ttnn.deallocate(tt_logits)
+            ttnn.deallocate(out_tok_tt)
         else:
             logits, _ = generator.decode_forward(
                 out_tok,
@@ -810,18 +798,12 @@ def run_ttnn_backend(
             del tt_model
         if ref is not None:
             del ref
-        try:
-            import gc
+        import gc
 
-            gc.collect()
-        except Exception:
-            pass
+        gc.collect()
         # ``model_args`` / ``vision_model_args`` outlive ``tt_model``; clear mesh refs before close.
         _clear_tt_model_args_mesh_refs(model_args, vision_model_args)
-        try:
-            ttnn.synchronize_device(mesh_device)
-        except Exception:
-            pass
+        ttnn.synchronize_device(mesh_device)
         try:
             close_dots_mesh_device(mesh_device)
         finally:
@@ -830,12 +812,9 @@ def run_ttnn_backend(
                 del mesh_device
             if parent_mesh_ref is not None:
                 del parent_mesh_ref
-            try:
-                import gc
+            import gc
 
-                gc.collect()
-            except Exception:
-                pass
+            gc.collect()
 
 
 # ---------------------------------------------------------------------------

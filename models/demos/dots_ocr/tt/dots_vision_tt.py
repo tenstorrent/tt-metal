@@ -75,10 +75,7 @@ def _dots_ttnn_sdpa_program_config(mesh_device: Any, seq_len: int) -> ttnn.SDPAP
 
     grid = (8, 8)
     if mesh_device is not None and hasattr(mesh_device, "compute_with_storage_grid_size"):
-        try:
-            grid = mesh_device.compute_with_storage_grid_size()
-        except Exception:
-            pass
+        grid = mesh_device.compute_with_storage_grid_size()
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid,
         q_chunk_size=_tile_round_down(seq_len, 128),
@@ -463,21 +460,18 @@ class DotsMlpTt(LightweightModule):
         )
         # Defensive: some TTNN versions may still materialize padded tile widths even when the
         # logical shape is 1536. Verify via a quick D2H; if still padded, re-upload the trimmed tensor.
-        try:
-            xt2 = ttnn.to_torch(x)
-            if int(xt2.shape[-1]) != int(self.cfg.embed_dim):
-                xt2 = xt2[..., : int(self.cfg.embed_dim)].contiguous()
-                ttnn.deallocate(x)
-                x = ttnn.from_torch(
-                    xt2,
-                    dtype=ttnn.bfloat16,
-                    device=self.mesh,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-                )
-        except Exception:
-            pass
+        xt2 = ttnn.to_torch(x)
+        if int(xt2.shape[-1]) != int(self.cfg.embed_dim):
+            xt2 = xt2[..., : int(self.cfg.embed_dim)].contiguous()
+            ttnn.deallocate(x)
+            x = ttnn.from_torch(
+                xt2,
+                dtype=ttnn.bfloat16,
+                device=self.mesh,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
         try:
             xt_dbg = ttnn.to_torch(x)
             logger.info(

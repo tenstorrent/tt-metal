@@ -27,11 +27,8 @@ def _is_prefill_from_cache(past_key_values: Any) -> bool:
     """First generation step has no KV cache; decode steps always have a populated cache."""
     if past_key_values is None:
         return True
-    try:
-        if hasattr(past_key_values, "get_seq_length"):
-            return int(past_key_values.get_seq_length()) == 0
-    except Exception:
-        pass
+    if hasattr(past_key_values, "get_seq_length"):
+        return int(past_key_values.get_seq_length()) == 0
     return False
 
 

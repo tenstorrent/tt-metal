@@ -159,13 +159,10 @@ def _unimplemented(*_args, **_kwargs):
 
 def install() -> None:
     """Register stub ``flash_attn`` packages if the real library is not importable."""
-    try:
-        import flash_attn as fa  # noqa: F401
+    import flash_attn as fa  # noqa: F401
 
-        if not getattr(fa, _SHIM_ATTR, False):
-            return
-    except ImportError:
-        pass
+    if not getattr(fa, _SHIM_ATTR, False):
+        return
 
     if "flash_attn" in sys.modules:
         m = sys.modules["flash_attn"]
@@ -202,11 +199,8 @@ def install() -> None:
     # ``transformers`` flash-attention probes use ``PACKAGE_DISTRIBUTION_MAPPING["flash_attn"]``.
     # Some Python / metadata setups omit ``flash_attn`` from ``packages_distributions()``, which
     # raises KeyError when importing Qwen2 modeling (even with eager attention).
-    try:
-        from transformers.utils import import_utils
+    from transformers.utils import import_utils
 
-        m = import_utils.PACKAGE_DISTRIBUTION_MAPPING
-        if isinstance(m, dict) and "flash_attn" not in m:
-            import_utils.PACKAGE_DISTRIBUTION_MAPPING = {**m, "flash_attn": ("flash-attn",)}
-    except Exception:
-        pass
+    m = import_utils.PACKAGE_DISTRIBUTION_MAPPING
+    if isinstance(m, dict) and "flash_attn" not in m:
+        import_utils.PACKAGE_DISTRIBUTION_MAPPING = {**m, "flash_attn": ("flash-attn",)}

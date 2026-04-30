@@ -118,12 +118,9 @@ def _ttnn_embd_4d_to_torch_batched(
             )
     out = ttnn.to_torch(embd4, mesh_composer=composer) if composer is not None else ttnn.to_torch(embd4)
     if composer is not None and out.dim() >= 1 and mesh is not None:
-        try:
-            n = mesh.get_num_devices()
-            if n and n > 1 and int(out.shape[0]) % n == 0:
-                out = out[: int(out.shape[0]) // n]
-        except Exception:
-            pass
+        n = mesh.get_num_devices()
+        if n and n > 1 and int(out.shape[0]) % n == 0:
+            out = out[: int(out.shape[0]) // n]
     out = out.to(torch.bfloat16)
     d = int(out.shape[-1])
     ntok = b * s_len
@@ -249,10 +246,7 @@ def text_embeds_from_ttnn_embedding_ttnn(tt_model, input_ids: torch.Tensor) -> o
     try:
         embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
     except Exception:
-        try:
-            embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT)
-        except Exception:
-            pass
+        embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT)
     return ttnn.reshape(embd4, (b, s_len, h))
 
 
@@ -279,17 +273,11 @@ def pad_embedding_ttnn_tensor(tt_model, pad_token_id: int) -> object:
         try:
             embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
         except Exception:
-            try:
-                embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT)
-            except Exception:
-                pass
+            embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.reshape(embd4, (1, h))
     except Exception:
         if hasattr(ttnn, "to_layout") and mem is not None:
-            try:
-                embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
-            except Exception:
-                pass
+            embd4 = ttnn.to_layout(embd4, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
         return ttnn.reshape(embd4, (1, h))
 
 
@@ -322,10 +310,7 @@ def merge_vision_tokens_ttnn(
     try:
         input_embeds = ttnn.to_layout(input_embeds, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
     except Exception:
-        try:
-            input_embeds = ttnn.to_layout(input_embeds, ttnn.ROW_MAJOR_LAYOUT)
-        except Exception:
-            pass
+        input_embeds = ttnn.to_layout(input_embeds, ttnn.ROW_MAJOR_LAYOUT)
     if not isinstance(image_embeds, ttnn.Tensor):
         fkw: dict = {"device": mesh_device, "dtype": ttnn.bfloat16, "layout": ttnn.ROW_MAJOR_LAYOUT}
         if mem is not None:
@@ -336,10 +321,7 @@ def merge_vision_tokens_ttnn(
         try:
             image_tt = ttnn.to_layout(image_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
         except Exception:
-            try:
-                image_tt = ttnn.to_layout(image_tt, ttnn.ROW_MAJOR_LAYOUT)
-            except Exception:
-                pass
+            image_tt = ttnn.to_layout(image_tt, ttnn.ROW_MAJOR_LAYOUT)
 
     B, S, H = int(input_embeds.shape[0]), int(input_embeds.shape[1]), int(input_embeds.shape[2])
     mask_idx = torch.where(input_ids.view(-1) == image_token_id)[0]
@@ -350,25 +332,16 @@ def merge_vision_tokens_ttnn(
     flat = ttnn.reshape(input_embeds, (-1, H))
     flat = ttnn.scatter(flat, 0, mask_idx_tt, image_tt)
     out = ttnn.reshape(flat, (B, S, H))
-    try:
-        ttnn.deallocate(mask_idx_tt)
-    except Exception:
-        pass
-    try:
-        if image_tt is not image_embeds:
-            ttnn.deallocate(image_tt)
-    except Exception:
-        pass
+    ttnn.deallocate(mask_idx_tt)
+    if image_tt is not image_embeds:
+        ttnn.deallocate(image_tt)
     return out
 
 
 def _ttnn_expand_pad_block(ttnn, pad_1d: object, n_rows: int, d: int) -> object:
     row2 = ttnn.reshape(pad_1d, (1, d))
     if hasattr(ttnn, "Shape"):
-        try:
-            return ttnn.repeat(row2, ttnn.Shape((n_rows, 1)))
-        except (TypeError, ValueError, RuntimeError):
-            pass
+        return ttnn.repeat(row2, ttnn.Shape((n_rows, 1)))
     try:
         return ttnn.expand(row2, (n_rows, d))
     except (TypeError, ValueError, RuntimeError):
@@ -790,15 +763,9 @@ def argmax_token_id_ttnn(
     idx = ttnn.argmax(flat, dim=-1)
     # Keep token ids on device. Caller can explicitly D2H when needed.
     idx = ttnn.reshape(idx, (-1, 1))
-    try:
-        if x is not tt_logits:
-            ttnn.deallocate(x)
-    except Exception:
-        pass
-    try:
-        ttnn.deallocate(flat)
-    except Exception:
-        pass
+    if x is not tt_logits:
+        ttnn.deallocate(x)
+    ttnn.deallocate(flat)
     return idx
 
 
@@ -836,10 +803,7 @@ def argmax_token_id_host_via_ttnn(logits: torch.Tensor, *, mesh_device: object) 
     tt = ttnn.from_torch(row.to(torch.bfloat16), **fkw)
     out_tt = argmax_token_id_ttnn(tt, mesh_device=mesh_device)
     out = token_ids_ttnn_to_torch(out_tt, mesh_device=mesh_device)
-    try:
-        ttnn.deallocate(tt)
-    except Exception:
-        pass
+    ttnn.deallocate(tt)
     return out
 
 

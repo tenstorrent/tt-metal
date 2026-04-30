@@ -384,7 +384,4 @@ class Generator(WarmupForwardMixin):
             logger.debug("Failed to cleanup _ttt during close: {}", e)
 
     def __del__(self):
-        try:
-            self.close()
-        except Exception:
-            pass
+        self.close()

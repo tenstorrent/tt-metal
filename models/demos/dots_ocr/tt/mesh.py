@@ -250,18 +250,12 @@ def open_mesh_device(mesh_shape=None):
                 device = None
         if device is None:
             device = ttnn.open_mesh_device(ttnn.MeshShape(logical[0], logical[1]))
-            try:
-                if physical != logical and t3k_family:
-                    logger.info(
-                        f"dots_ocr.mesh: opened logical mesh {logical} only "
-                        f"(physical system would be {physical}; enable DOTS_T3K_OPEN_FULL_MESH=1 for 8-device init)."
-                    )
-            except Exception:
-                pass
-    try:
-        logger.info(f"dots_ocr.mesh: mesh device shape={tuple(device.shape)} num_devices={device.get_num_devices()}")
-    except Exception:
-        pass
+            if physical != logical and t3k_family:
+                logger.info(
+                    f"dots_ocr.mesh: opened logical mesh {logical} only "
+                    f"(physical system would be {physical}; enable DOTS_T3K_OPEN_FULL_MESH=1 for 8-device init)."
+                )
+    logger.info(f"dots_ocr.mesh: mesh device shape={tuple(device.shape)} num_devices={device.get_num_devices()}")
     return device
 
 

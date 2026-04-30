@@ -45,15 +45,12 @@ class DotsOCRReference:
         if spec.dtype == torch.float32:
             vt = getattr(self.model, "vision_tower", None) or getattr(self.model, "visual", None)
             if vt is not None and hasattr(vt, "forward"):
-                try:
-                    orig_forward = vt.forward
+                orig_forward = vt.forward
 
-                    def _forward_force_fp32(self_vt, hidden_states, grid_thw, bf16=True):
-                        return orig_forward(hidden_states, grid_thw, bf16=False)
+                def _forward_force_fp32(self_vt, hidden_states, grid_thw, bf16=True):
+                    return orig_forward(hidden_states, grid_thw, bf16=False)
 
-                    vt.forward = types.MethodType(_forward_force_fp32, vt)  # type: ignore[assignment]
-                except Exception:
-                    pass
+                vt.forward = types.MethodType(_forward_force_fp32, vt)  # type: ignore[assignment]
 
     @property
     def tokenizer(self):
