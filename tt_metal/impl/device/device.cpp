@@ -425,6 +425,9 @@ void Device::configure_fabric(
     // fabric firmware on all channels, so after this call all channels will go through the
     // full handshake again in the next quiesce cycle.
     fabric_channels_not_ready_for_traffic_ = false;
+    // FIX RZ (#42429): Clear stale-base-UMD flag unconditionally at configure_fabric() start;
+    // re-set below if skip_soft_reset_channels is non-empty on a non-MMIO device.
+    fabric_stale_base_umd_channels_ = false;
     // Clear accumulated soft-reset failures from the prior quiesce cycle.  A channel that was
     // force-reset and recovered should not be permanently excluded from Phase 5 health checks
     // in subsequent cycles — the set is repopulated by this configure_fabric() call below.
@@ -651,6 +654,21 @@ void Device::configure_fabric(
                 go_msg,
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
+    }
+    // FIX RZ (#42429): If this non-MMIO device had base-UMD relay channels that required
+    // FIX M's skip-soft-reset / launch_msg transition, mark the device as having stale
+    // base-UMD channels.  The Python test's is_fabric_degraded() check uses this flag to
+    // skip AllGather operations that would hang on devices whose channels were transitioned
+    // via launch_msg but cannot handle AllGather traffic reliably.
+    if (!skip_soft_reset_channels.empty() && !this->is_mmio_capable()) {
+        fabric_stale_base_umd_channels_ = true;
+        log_warning(
+            tt::LogMetal,
+            "configure_fabric: Device {} (non-MMIO) has {} base-UMD channel(s) transitioned "
+            "via launch_msg (FIX M).  Setting fabric_stale_base_umd_channels_=true — "
+            "AllGather on this cluster may hang.  FIX RZ skips the Python stress test. (#42429)",
+            this->id_,
+            skip_soft_reset_channels.size());
     }
     // Exit summary: on the healthy path (no dead channels, no relay-soft-reset skips) emit
     // a single compact line.  Only log the verbose detail block when something is non-trivial

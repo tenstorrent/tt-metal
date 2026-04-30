@@ -211,6 +211,7 @@ public:
     bool is_mmio_capable() const override;
     bool is_fabric_relay_path_broken() const override { return fabric_relay_path_broken_.load(); }
     bool is_fabric_channels_not_ready_for_traffic() const override { return fabric_channels_not_ready_for_traffic_.load(); }
+    bool is_fabric_stale_base_umd_channels() const override { return fabric_stale_base_umd_channels_.load(); }
     bool is_fabric_teardown_timed_out() const override { return fabric_teardown_timed_out_.load(); }
     // Called by FabricFirmwareInitializer::post_teardown() after teardown_fabric_config() records
     // timed-out chip IDs.  Sets the flag so FIX AB hard-resets MMIO ETH channels at process exit.
@@ -392,6 +393,14 @@ private:
     // before running AllGather operations that require full fabric readiness.
     // Cleared unconditionally at the top of configure_fabric().
     std::atomic<bool> fabric_channels_not_ready_for_traffic_{false};
+
+    // FIX RZ (#42429): Set in configure_fabric() when this non-MMIO device had one or more
+    // ETH channels with base-UMD relay firmware (edm_status=0x49706550) that required FIX M's
+    // skip-soft-reset / launch_msg transition.  The launch_msg path is sufficient for relay
+    // reads but leaves the ETH in a state where AllGather traffic hangs.  The Python test
+    // is_fabric_degraded() guard checks this flag to skip AllGather in such clusters.
+    // Cleared unconditionally at the top of configure_fabric() alongside the other flags.
+    std::atomic<bool> fabric_stale_base_umd_channels_{false};
 
     // FIX AE (#42429): State for deferred ETH ERISC launch during quiesce.
     // (See SERIALIZATION INVARIANT block above — these fields are non-atomic/non-mutex.)

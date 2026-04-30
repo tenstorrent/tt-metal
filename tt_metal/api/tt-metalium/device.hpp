@@ -191,6 +191,12 @@ public:
     virtual bool is_mmio_capable() const = 0;
     virtual bool is_fabric_relay_path_broken() const { return false; }
     virtual bool is_fabric_channels_not_ready_for_traffic() const { return false; }
+    // FIX RZ (#42429): Returns true if configure_fabric() found base-UMD relay firmware
+    // (edm_status=0x49706550) on channels of this non-MMIO device and had to skip soft reset
+    // via FIX M.  The launch_msg transition is sufficient for simple relay reads but leaves
+    // the ETH state in a mode where AllGather traffic hangs.  Python tests must skip AllGather
+    // when any non-MMIO device has stale base-UMD channels.
+    virtual bool is_fabric_stale_base_umd_channels() const { return false; }
     virtual bool is_fabric_teardown_timed_out() const { return false; }
     virtual void set_fabric_teardown_timed_out() {}
     // Called by FabricFirmwareInitializer when a non-MMIO device enters dead_relay_devices_

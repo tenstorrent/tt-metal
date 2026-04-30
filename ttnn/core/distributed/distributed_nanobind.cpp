@@ -267,15 +267,21 @@ void py_module(nb::module_& mod) {
             [](const MeshDevice& self) {
                 for (auto* dev : self.get_devices()) {
                     if (dev->is_fabric_relay_path_broken() ||
-                        dev->is_fabric_channels_not_ready_for_traffic()) {
+                        dev->is_fabric_channels_not_ready_for_traffic() ||
+                        // FIX RZ (#42429): Non-MMIO devices with base-UMD channels transitioned
+                        // via FIX M's launch_msg path appear healthy at init but hang during
+                        // AllGather (completion CQ on non-MMIO never signals).  Treat these as
+                        // degraded so Python tests skip AllGather on such clusters.
+                        dev->is_fabric_stale_base_umd_channels()) {
                         return true;
                     }
                 }
                 return false;
             },
             R"doc(
-              Returns True if any sub-device has a broken fabric relay path or channels not
-              ready for traffic after a degraded-cluster fabric init.
+              Returns True if any sub-device has a broken fabric relay path, channels not
+              ready for traffic, or stale base-UMD channels (FIX RZ) after a degraded-cluster
+              fabric init.
 
               Use this as a skip guard in tests that require a healthy T3K fabric
               (e.g. tests that dispatch AllGather to non-MMIO devices):
