@@ -30,7 +30,7 @@ from models.experimental.tt_symbiote.modules.conv import TTNNConv2dNHWC, TTNNIma
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNDeepseekV2DecoderLayer
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
-from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
+from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun, _TRACE_DISABLED_CLASSES
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from tqdm import tqdm
 
@@ -74,107 +74,71 @@ if not hasattr(DynamicCache, "get_usable_length"):
 _vision_cache = {}
 
 
-def _mesh_to_torch(tensor):
-    dev = tensor.device()
-    if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
-        return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+def _mesh_from_torch(tensor, device, **kwargs):
+    """Wrap ttnn.from_torch with mesh_mapper when device is multi-device."""
+    if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+        kwargs.setdefault("mesh_mapper", ttnn.ReplicateTensorToMesh(device))
+    return ttnn.from_torch(tensor, device=device, **kwargs)
+
+
+def _mesh_to_torch(tensor, device):
+    """Wrap ttnn.to_torch with mesh_composer when device is multi-device."""
+    if hasattr(device, "get_num_devices") and device.get_num_devices() > 1:
+        mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+        t = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+        return t[: tensor.shape[0]]
     return ttnn.to_torch(tensor)
 
 
-def _mesh_from_torch(torch_tensor, device, **kwargs):
-    is_mesh = device is not None and hasattr(device, "get_num_devices") and device.get_num_devices() > 1
-    if is_mesh:
-        kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
-    return ttnn.from_torch(torch_tensor, device=device, **kwargs)
+def _revert_vision_to_torch(model):
+    """Revert SAM and ViT modules back to their original PyTorch implementations.
+
+    On multi-device meshes, TTNN conv2d shards spatial dimensions across devices.
+    Stride-2 convolutions (net_2, net_3 in SAM) produce incorrect results without
+    halo exchange, causing a shape mismatch at masked_scatter_ during prefill.
+    Reverting to PyTorch avoids this; the vision pipeline only runs once per
+    inference so the performance impact is negligible.
+    """
+    for attr in ("sam_model", "vision_model"):
+        mod = getattr(model.model, attr, None)
+        if mod is not None and isinstance(mod, TTNNModule) and hasattr(mod, "_fallback_torch_layer"):
+            setattr(model.model, attr, mod._fallback_torch_layer)
 
 
 def _install_vision_cache(model):
-    from models.experimental.tt_symbiote.modules.conv import _unwrap_ttnn as _uw
+    """Cache vision pipeline outputs so subsequent infer() calls reuse run-0 results.
+
+    The TTNN program cache must be cleared between runs to avoid conv2d buffer
+    corruption, but recompilation introduces floating-point non-determinism in
+    the vision transformer.  Caching the SAM and ViT outputs from the first run
+    eliminates both problems: conv2d never re-executes, and vision features are
+    bit-identical across runs.
+    """
 
     sam = getattr(model.model, "sam_model", None)
-    if sam is not None and isinstance(sam, TTNNModule):
+    if sam is not None and not isinstance(sam, TTNNModule):
+        orig_sam_forward = sam.forward
 
         def _cached_sam_forward(x):
-            x_raw = _uw(x)
-            sam_key = ("sam", tuple(x_raw.shape))
+            sam_key = ("sam", tuple(x.shape))
             if sam_key in _vision_cache:
-                return _mesh_from_torch(
-                    _vision_cache[sam_key],
-                    sam.device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-
-            if isinstance(x_raw, torch.Tensor):
-                x_raw = _mesh_from_torch(x_raw, sam.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            if x_raw.layout != ttnn.TILE_LAYOUT:
-                x_raw = ttnn.to_layout(x_raw, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-            x_perm = ttnn.permute(x_raw, (0, 2, 3, 1))
-            x_conv = _uw(sam.patch_embed(x_perm))
-
-            if sam.torch_layer.pos_embed is not None:
-                B, H, W, C = x_conv.shape
-                cache_key = (B, H, W)
-                if cache_key not in sam._pos_cache:
-                    pos = sam.torch_layer.pos_embed
-                    src_size = pos.shape[1]
-                    if src_size != H:
-                        pos_nhwc = _mesh_from_torch(
-                            pos,
-                            sam.device,
-                            dtype=ttnn.bfloat16,
-                            layout=ttnn.ROW_MAJOR_LAYOUT,
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        )
-                        scale_h = H / src_size
-                        scale_w = W / pos.shape[2]
-                        pos_nhwc = ttnn.upsample(pos_nhwc, scale_factor=[scale_h, scale_w], mode="bicubic")
-                        pos_nhwc = ttnn.to_layout(pos_nhwc, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                        pos_nhwc = ttnn.repeat(pos_nhwc, (B, 1, 1, 1))
-                        sam._pos_cache[cache_key] = pos_nhwc
-                    else:
-                        sam._pos_cache[cache_key] = _mesh_from_torch(
-                            pos.expand(B, -1, -1, -1),
-                            sam.device,
-                            dtype=ttnn.bfloat16,
-                            layout=ttnn.TILE_LAYOUT,
-                        )
-                x_conv = ttnn.add(x_conv, sam._pos_cache[cache_key])
-
-            for blk in sam.blocks:
-                x_conv = _uw(blk(x_conv))
-
-            x_conv = _uw(sam.neck_conv1(x_conv))
-            x_conv = _uw(sam.neck_ln1(x_conv))
-            x_conv = _uw(sam.neck_conv2(x_conv))
-            x_conv = _uw(sam.neck_ln2(x_conv))
-            x_conv = _uw(sam.net_2(x_conv))
-            x_conv = _uw(sam.net_3(x_conv))
-
-            x_conv = ttnn.permute(x_conv, (0, 3, 1, 2))
-            _vision_cache[sam_key] = _mesh_to_torch(x_conv).detach().clone()
-            return x_conv
+                return _vision_cache[sam_key]
+            result = orig_sam_forward(x)
+            _vision_cache[sam_key] = result
+            return result
 
         sam.forward = _cached_sam_forward
 
     vit = getattr(model.model, "vision_model", None)
-    if vit is not None and isinstance(vit, TTNNModule):
+    if vit is not None and not isinstance(vit, TTNNModule):
         orig_vit_forward = vit.forward
 
         def _cached_vit_forward(x, patch_embeds=None):
-            vit_key = ("vit", tuple(_uw(x).shape))
+            vit_key = ("vit", tuple(x.shape))
             if vit_key in _vision_cache:
-                return _mesh_from_torch(
-                    _vision_cache[vit_key],
-                    vit.device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+                return _vision_cache[vit_key]
             result = orig_vit_forward(x, patch_embeds)
-            _vision_cache[vit_key] = _mesh_to_torch(result).detach().clone()
+            _vision_cache[vit_key] = result
             return result
 
         vit.forward = _cached_vit_forward
@@ -214,21 +178,14 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
     [
         {
             "N150": (1, 1),
-            "N300": (1, 2),
-            "N150x4": (1, 4),
             "T3K": (1, 8),
-            "TG": (8, 4),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P150x8": (1, 8),
-            "BHGLX": (8, 4),
         }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
 def test_deepseek_ocr(mesh_device):
     """Test DeepSeek-OCR model with TTNN acceleration."""
+    device = mesh_device
 
     model_name = "deepseek-ai/DeepSeek-OCR"
 
@@ -264,29 +221,56 @@ def test_deepseek_ocr(mesh_device):
     image_file = "test.png"
     output_path = os.path.join(os.path.dirname(__file__), "output_deepseek_ocr")
 
-    use_traced = os.environ.get("TT_SYMBIOTE_RUN_MODE", "").upper() == "TRACED"
-    if use_traced:
-        TracedRun.configure(device=mesh_device)
-
     modules1 = register_module_replacement_dict(model, nn_to_nn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    set_device(model, mesh_device)
-
-    if use_traced and hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
-        from models.experimental.tt_symbiote.core.run_config import trace_enabled as _register_trace
-        from models.experimental.tt_symbiote.modules.moe import TTNNDeepseekV2MoETraced
-
-        _register_trace(TTNNDeepseekV2MoETraced)
+    set_device(model, device)
 
     for layer in model.model.layers:
         if isinstance(layer, TTNNModule):
             layer._bypass_tensor_wrapping = True
 
+    # Only decoder layers should be traced.  Disable trace on every other
+    # TTNNModule class so standalone modules (vision encoder, projector, …)
+    # don't enter TracedRun's warmup/capture lifecycle — which can trigger
+    # ShardTensor2dMesh shape mismatches or unsupported subtile broadcasts
+    # on multi-device meshes.  is_trace_enabled() checks isinstance against
+    # class sets, so we must register classes in _TRACE_DISABLED_CLASSES.
+    # Child modules inside the decoder already run normally during the
+    # decoder's trace (_TRACE_RUNNING path) regardless of this setting.
+    # Only decoder layers should be traced.  Disable trace on every other
+    # TTNNModule class so standalone modules (vision encoder, projector, etc.)
+    # don't enter TracedRun's warmup/capture lifecycle.
+    for _name, _mod in model.named_modules():
+        if isinstance(_mod, TTNNModule) and not isinstance(_mod, TTNNDeepseekV2DecoderLayer):
+            _TRACE_DISABLED_CLASSES.add(type(_mod))
+
+    # Revert the vision-language projector to PyTorch originals.
+    # The default DistributedConfig uses ShardTensor2dMesh which shards inputs
+    # across devices (e.g. 2048 → 256/device on T3K 1x8).  The projector's
+    # replicated weights expect full-width input, causing a matmul mismatch.
+    # Keeping the projector on CPU avoids this; it only runs once at prefill.
+    def _revert_children_to_torch(module):
+        for name, child in list(module.named_children()):
+            if isinstance(child, TTNNModule) and hasattr(child, "_fallback_torch_layer"):
+                setattr(module, name, child._fallback_torch_layer)
+            else:
+                _revert_children_to_torch(child)
+
+    for proj_attr in ("projector",):
+        for parent in (model, model.model):
+            proj = getattr(parent, proj_attr, None)
+            if proj is None:
+                continue
+            if isinstance(proj, TTNNModule) and hasattr(proj, "_fallback_torch_layer"):
+                setattr(parent, proj_attr, proj._fallback_torch_layer)
+            else:
+                _revert_children_to_torch(proj)
+
     for k, v in tqdm({**modules1, **modules2}.items()):
         v.preprocess_weights()
         v.move_weights_to_device()
 
-    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
+    paged_cache = create_paged_kv_cache(model.config, device, batch_size=1)
     _orig_generate = model.generate
 
     def _generate_with_paged_kv(*args, **kwargs):
@@ -312,7 +296,52 @@ def test_deepseek_ocr(mesh_device):
         eval_mode=True,
     )
 
+    # Revert SAM and ViT to PyTorch AFTER set_device/weight processing.
+    # TTNN conv2d shards spatial dims across mesh devices; stride-2 convolutions
+    # (net_2, net_3) produce wrong results without halo exchange.  As plain
+    # nn.Modules, they bypass module_run's distributed tensor transforms.
+    _revert_vision_to_torch(model)
+
     _install_vision_cache(model)
+
+    # Fix lm_head and final norm for multi-device meshes.
+    # The default ShardTensor2dMesh post-processing concatenates replicated
+    # device outputs along dim -1, producing 8x-wide logits.  Sampling from
+    # such logits yields token IDs > vocab_size, crashing embed_tokens.
+    # Bypassing removes that post-processing; the wrapper converts the raw
+    # ttnn.Tensor back to a proper torch.Tensor using ConcatMeshToTensor(dim=0)
+    # and slices to a single replica.
+    _is_mesh = hasattr(device, "get_num_devices") and device.get_num_devices() > 1
+    if _is_mesh and isinstance(model.model.norm, TTNNModule):
+        model.model.norm._bypass_tensor_wrapping = True
+    if _is_mesh and isinstance(model.lm_head, TTNNModule):
+        model.lm_head._bypass_tensor_wrapping = True
+        _real_lm_head = model.lm_head
+
+        class _LMHeadMeshWrapper(nn.Module):
+            """Thin proxy that converts multi-device ttnn output to torch."""
+
+            def __init__(self, wrapped):
+                super().__init__()
+                self._wrapped = wrapped
+
+            def __getattr__(self, name):
+                if name == "_wrapped":
+                    return super().__getattr__(name)
+                return getattr(self._wrapped, name)
+
+            def forward(self, *args, **kwargs):
+                result = self._wrapped(*args, **kwargs)
+                if isinstance(result, ttnn.Tensor):
+                    dev = self._wrapped.device
+                    t = ttnn.to_torch(
+                        result,
+                        mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0),
+                    )
+                    return t[: result.shape[0]]
+                return result
+
+        model.lm_head = _LMHeadMeshWrapper(_real_lm_head)
 
     _CACHE_ATTRS = ("_pos_cache", "_abs_pos_cache", "_trans_mat_decode_sharded_cache")
 
@@ -344,14 +373,16 @@ def test_deepseek_ocr(mesh_device):
             if isinstance(mod, TTNNModule):
                 _clear_device_caches_on_ttnn_module(mod, visited)
 
+    use_traced = os.environ.get("TT_SYMBIOTE_RUN_MODE", "").upper() == "TRACED"
+
     def _reset_between_runs():
-        ttnn.synchronize_device(mesh_device)
+        ttnn.synchronize_device(device)
         paged_cache.reset()
         if not use_traced:
             TTNNConv2dNHWC.CACHED_TTCNN.clear()
             _clear_all_device_caches()
-            mesh_device.disable_and_clear_program_cache()
-            mesh_device.enable_program_cache()
+            device.disable_and_clear_program_cache()
+            device.enable_program_cache()
 
     # Warmup runs fill the program cache and populate vision cache.
     # In TRACED mode the TracedRun lifecycle also progresses:

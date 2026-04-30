@@ -29,7 +29,6 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
-from models.experimental.tt_symbiote.core import run_config as _run_config
 from models.experimental.tt_symbiote.core.run_config import disable_trace, trace_enabled, trace_disabled
 import math
 
@@ -707,7 +706,6 @@ class TTNNBailingMoeV2MLP(TTNNGlm4MoeMLP):
     pass
 
 
-@trace_enabled
 class TTNNDeepseekV2DenseMLP(TTNNModule):
     """Pure-TTNN replacement for the HF DeepseekV2MLP (dense layers).
 
@@ -1247,6 +1245,17 @@ class TTNNExperts(TTNNModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             topk_experts_indices = ttnn.typecast(topk_experts_indices, ttnn.uint16)
+        # Gate may return 4D (1,1,T,top_k); flatten to expected 2D (T, top_k).
+        if len(topk_experts_indices.shape) > 2:
+            topk_experts_indices = ttnn.reshape(
+                topk_experts_indices,
+                ttnn.Shape((topk_experts_indices.shape[-2], topk_experts_indices.shape[-1])),
+            )
+        if len(topk_experts_weights.shape) > 2:
+            topk_experts_weights = ttnn.reshape(
+                topk_experts_weights,
+                ttnn.Shape((topk_experts_weights.shape[-2], topk_experts_weights.shape[-1])),
+            )
         # Pad to nearest multiple of SPARSITY_BLOCK_SIZE if needed
         num_tokens = original_num_tokens
         pad_amount = 0
@@ -1735,7 +1744,6 @@ def _to_torch_for_fallback(tensor):
     return tensor
 
 
-@trace_disabled
 class TTNNDeepseekV2MoE(TTNNModule):
     """TTNN symbiote for DeepSeek V2 MoE.
     Uses TTNNDeepseekOCRMoEGate, reuses TTNNExperts for moe_infer, and TTNNGlm4MoeMLP for shared expert.
@@ -1810,12 +1818,37 @@ class TTNNDeepseekV2MoE(TTNNModule):
             orig_shape = [batch, seq, hidden]
 
         topk_idx, topk_weight, _ = self.gate(hidden_states)
-        topk_idx = topk_idx[:, :, : self.num_experts_per_tok]
-        topk_weight = topk_weight[:, :, : self.num_experts_per_tok]
+        topk_idx = _unwrap_ttnn(topk_idx)
+        topk_weight = _unwrap_ttnn(topk_weight)
 
-        routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
-        routed_output = routed_output[:, :, :, : self.hidden_size]
-        routed_output = _unwrap_ttnn(routed_output)
+        if len(topk_idx.shape) == 4 and topk_idx.shape[-1] > self.num_experts_per_tok:
+            topk_idx = ttnn.slice(
+                topk_idx,
+                [0, 0, 0, 0],
+                [topk_idx.shape[0], topk_idx.shape[1], topk_idx.shape[2], self.num_experts_per_tok],
+            )
+            topk_weight = ttnn.slice(
+                topk_weight,
+                [0, 0, 0, 0],
+                [topk_weight.shape[0], topk_weight.shape[1], topk_weight.shape[2], self.num_experts_per_tok],
+            )
+        elif len(topk_idx.shape) == 3 and topk_idx.shape[-1] > self.num_experts_per_tok:
+            topk_idx = ttnn.slice(
+                topk_idx,
+                [0, 0, 0],
+                [topk_idx.shape[0], topk_idx.shape[1], self.num_experts_per_tok],
+            )
+            topk_weight = ttnn.slice(
+                topk_weight,
+                [0, 0, 0],
+                [topk_weight.shape[0], topk_weight.shape[1], self.num_experts_per_tok],
+            )
+
+        routed_output = _unwrap_ttnn(self.experts(hidden_states_4d, topk_idx, topk_weight))
+        if routed_output.shape[-1] > self.hidden_size:
+            slc_end = list(routed_output.shape)
+            slc_end[-1] = self.hidden_size
+            routed_output = ttnn.slice(routed_output, [0] * len(routed_output.shape), slc_end)
 
         if self.shared_experts is not None:
             shared_out = _unwrap_ttnn(self.shared_experts(hidden_states_4d))
@@ -1832,6 +1865,10 @@ class TTNNDeepseekV2MoE(TTNNModule):
             inp = _to_torch_for_fallback(hidden_states)
             with torch.no_grad():
                 return self._fallback_torch_layer(inp)
+        from models.experimental.tt_symbiote.core.run_config import _TRACE_RUNNING
+
+        if _TRACE_RUNNING:
+            return self._forward_ttnn(hidden_states)
         try:
             return self._forward_ttnn(hidden_states)
         except Exception:
@@ -1841,31 +1878,8 @@ class TTNNDeepseekV2MoE(TTNNModule):
                 return self._fallback_torch_layer(inp)
 
 
-@trace_enabled
 class TTNNDeepseekV2MoETraced(TTNNDeepseekV2MoE):
     _bypass_tensor_wrapping = True
-
-    @staticmethod
-    def _get_seq_len(hidden_states):
-        hidden_states = _unwrap_ttnn(hidden_states)
-        shape = list(hidden_states.shape)
-        if len(shape) == 3:
-            return shape[1]
-        if len(shape) == 4:
-            return shape[2]
-        return None
-
-    def call(self, *args, **kwds):
-        hidden_states = args[0] if len(args) > 0 else kwds.get("hidden_states", None)
-        seq_len = self._get_seq_len(hidden_states) if hidden_states is not None else None
-        if seq_len is not None and seq_len > 1:
-            was_tracing = _run_config._TRACE_RUNNING
-            _run_config._TRACE_RUNNING = True
-            try:
-                return super().call(*args, **kwds)
-            finally:
-                _run_config._TRACE_RUNNING = was_tracing
-        return super().call(*args, **kwds)
 
     def forward(self, hidden_states):
         return TTNNDeepseekV2MoE.forward(self, hidden_states)
@@ -1884,8 +1898,12 @@ class TTNNDeepseekV2MoETraced(TTNNDeepseekV2MoE):
         topk_idx, topk_weight, _ = self.gate(hidden_states)
         topk_idx = _unwrap_ttnn(topk_idx)
         topk_weight = _unwrap_ttnn(topk_weight)
-        topk_idx = ttnn.reshape(topk_idx, (batch * seq, self.num_experts_per_tok))
-        topk_weight = ttnn.reshape(topk_weight, (batch * seq, self.num_experts_per_tok))
+        topk_idx = topk_idx[:, :, : self.num_experts_per_tok]
+        topk_weight = topk_weight[:, :, : self.num_experts_per_tok]
+        if len(topk_idx.shape) == 3:
+            topk_idx = ttnn.reshape(topk_idx, (batch * seq, self.num_experts_per_tok))
+        if len(topk_weight.shape) == 3:
+            topk_weight = ttnn.reshape(topk_weight, (batch * seq, self.num_experts_per_tok))
 
         routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
         routed_output = _unwrap_ttnn(routed_output)
@@ -1899,7 +1917,6 @@ class TTNNDeepseekV2MoETraced(TTNNDeepseekV2MoE):
         return ttnn.reshape(routed_output, orig_shape)
 
 
-@trace_enabled
 class TTNNDeepseekOCRMoEGate(TTNNModule):
     """MoEGate module for DeepSeek OCR."""
 

@@ -1098,31 +1098,30 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         )
         return pixel_values
 
-    def get_abs_pos_ttnn(self, abs_pos: ttnn.Tensor, tgt_size: int, device: ttnn.Device) -> ttnn.Tensor:
-        if tgt_size in self._abs_pos_cache:
-            return self._abs_pos_cache[tgt_size]
+    def get_abs_pos_ttnn(self, abs_pos: ttnn.Tensor, tgt_size: int, device: ttnn.Device, hw_shape=None) -> ttnn.Tensor:
+        cache_key = hw_shape if hw_shape is not None else tgt_size
+        if cache_key in self._abs_pos_cache:
+            return self._abs_pos_cache[cache_key]
         _is_mesh = device is not None and hasattr(device, "get_num_devices") and device.get_num_devices() > 1
         abs_pos_torch = ttnn.to_torch(ttnn.get_device_tensors(abs_pos)[0]) if _is_mesh else ttnn.to_torch(abs_pos)
         src_total = abs_pos_torch.shape[1] - 1
         src_size = int(math.sqrt(src_total))
-        tgt_size_sqrt = int(math.sqrt(tgt_size))
 
-        if src_size != tgt_size_sqrt:
+        if hw_shape is not None:
+            tgt_h, tgt_w = hw_shape
+        else:
+            tgt_h = tgt_w = int(math.sqrt(tgt_size))
+
+        needs_interpolation = (src_size != tgt_h) or (src_size != tgt_w)
+
+        if needs_interpolation:
             cls_token_torch = abs_pos_torch[:, :1, :]
             old_pos_embed = abs_pos_torch[:, 1:, :]
-            old_pos_nhwc = old_pos_embed.view(1, src_size, src_size, -1)
-
-            _from_kw = dict(
-                device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            old_pos_nchw = old_pos_embed.float().view(1, src_size, src_size, -1).permute(0, 3, 1, 2)
+            new_pos_nchw = torch.nn.functional.interpolate(
+                old_pos_nchw, size=(tgt_h, tgt_w), mode="bicubic", align_corners=False
             )
-            if _is_mesh:
-                _from_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
-            old_pos_ttnn = ttnn.from_torch(old_pos_nhwc, **_from_kw)
-            scale = tgt_size_sqrt / src_size
-            new_pos_ttnn = ttnn.upsample(old_pos_ttnn, scale_factor=scale, mode="bicubic")
-            new_pos_torch = (
-                ttnn.to_torch(ttnn.get_device_tensors(new_pos_ttnn)[0]) if _is_mesh else ttnn.to_torch(new_pos_ttnn)
-            ).reshape(1, tgt_size, -1)
+            new_pos_torch = new_pos_nchw.permute(0, 2, 3, 1).reshape(1, tgt_h * tgt_w, -1).to(abs_pos_torch.dtype)
             vision_pos_embed = torch.cat([cls_token_torch, new_pos_torch], dim=1)
         else:
             vision_pos_embed = abs_pos_torch
@@ -1133,7 +1132,7 @@ class TTNNClipVisionEmbeddings(TTNNModule):
         if _is_mesh:
             _result_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
         result = ttnn.from_torch(vision_pos_embed, **_result_kw)
-        self._abs_pos_cache[tgt_size] = result
+        self._abs_pos_cache[cache_key] = result
         return result
 
     def forward(self, pixel_values: ttnn.Tensor, patch_embeds: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
@@ -1177,7 +1176,18 @@ class TTNNClipVisionEmbeddings(TTNNModule):
 
         actual_seq_len = embeddings.shape[1]
         num_patches_actual = actual_seq_len - 1
-        pos_embeds = self.get_abs_pos_ttnn(self.position_embedding, num_patches_actual, self.device)
+        img_h, img_w = pixel_values.shape[2], pixel_values.shape[3]
+        patches_h = img_h // self.patch_size
+        patches_w = img_w // self.patch_size
+        if patches_h * patches_w != num_patches_actual:
+            patches_h = int(math.sqrt(num_patches_actual))
+            patches_w = num_patches_actual // patches_h if patches_h > 0 else num_patches_actual
+            if patches_h * patches_w != num_patches_actual:
+                patches_h = num_patches_actual
+                patches_w = 1
+        pos_embeds = self.get_abs_pos_ttnn(
+            self.position_embedding, num_patches_actual, self.device, hw_shape=(patches_h, patches_w)
+        )
         embeddings = ttnn.add(embeddings, pos_embeds, memory_config=ttnn.L1_MEMORY_CONFIG)
         return embeddings
 
