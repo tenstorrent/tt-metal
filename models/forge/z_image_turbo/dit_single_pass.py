@@ -89,7 +89,7 @@ def _apply_compute_config_patch():
     import dit.model_ttnn as dit_mod
 
     FAST_MATMUL_KERNEL = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
