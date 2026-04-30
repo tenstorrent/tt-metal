@@ -71,6 +71,10 @@ class ModelArgs(TTModelArgs):
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
 
+        # Prewarm prefill host traces (same path as `model.py`) for all Gemma3 sizes, including 27B — longer
+        # startup than untraced-only warmup, but tracing is enabled for warmup sweeps and vision compile.
+        self.warmup_prefill_capture_trace = True
+
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
 
@@ -78,7 +82,9 @@ class ModelArgs(TTModelArgs):
         # Longer seqlens take too much time to warmup, so CI times out
         model_specific_ceil_warmup_lengths = {
             "gemma-3-4b": 2048,
-            "gemma-3-27b": 2048,
+            # Cap at 1024 so get_all_padded_prefill_lengths does not add 2048; combined with
+            # filter_warmup_seq_lens this avoids an extra long untraced prefill warmup on 27B.
+            "gemma-3-27b": 1024,
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
@@ -94,8 +100,14 @@ class ModelArgs(TTModelArgs):
         return to_warmup_seq_lens
 
     def filter_warmup_seq_lens(self, to_warmup_seq_lens):
-        # TODO: Add more model-specific filtering here
-        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+        # gemma-3-27b: only warm up lengths we actually support for prefill trace (e.g. [128, 1024]).
+        # Otherwise the ladder includes 2048 and runs an extra full prefill per warmup — minutes on 27B
+        # and looks like a hang when trace capture runs for 128 + 1024 + untraced 2048.
+        trace_lens = self.trace_prefill_supported_seq_lens
+        if self.base_model_name == "gemma-3-27b" and trace_lens:
+            filtered = sorted(set(to_warmup_seq_lens) & set(trace_lens))
+            if filtered:
+                return filtered
         return to_warmup_seq_lens
 
     def get_trace_prefill_supported_seq_lens(self):
@@ -111,9 +123,15 @@ class ModelArgs(TTModelArgs):
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
         model_specific_supported_seq_lens = {
-            # EXAMPLE: "gemma-3-4b": {
-            #     "N150": [128, 1024, 2048],
-            # }
+            # gemma-3-27b: host prefill trace for supported padded seq lens. For TtGemmaModel
+            # with images, the vision tower runs before the traced graph; merged activations feed
+            # the same decoder trace as text (batch-1 only; batched+vision stays untraced).
+            "gemma-3-27b": {
+                "N150": [128, 1024],
+                "N300": [128, 1024],
+                "T3K": [128, 1024],
+                "TG": [128, 1024],
+            },
         }
 
         model_name = self.base_model_name
