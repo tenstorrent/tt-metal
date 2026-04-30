@@ -51,7 +51,7 @@ POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-5}"
 ENV_EXPORTS_PATH="${ENV_EXPORTS_PATH:-/data/ipotkonjak/watcher_exports.sh}"
 
 TEST_PATH="${TEST_PATH:-models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla}"
-TEST_FILTER="${TEST_FILTER:-line and random and max_sl and skip_check and balanced and 8x4 and seq1k and 1kit}"
+TEST_FILTER="${TEST_FILTER:-line and random and max_sl and skip_check and balanced and 8x4 and seq25k and 10kit}"
 
 pass_count=0
 fail_count=0
