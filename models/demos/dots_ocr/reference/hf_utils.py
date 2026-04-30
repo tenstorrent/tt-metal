@@ -29,7 +29,6 @@ from transformers.utils import logging
 logger = logging.get_logger(__name__)
 
 # Hub remote-code vision classes live under these prefixes; constrain dynamic imports (SAST / supply-chain hygiene).
-_VISION_MODULE_PREFIXES = ("transformers_modules.", "transformers.")
 
 
 def _resolve_remote_vision_module(module_name: str) -> types.ModuleType:

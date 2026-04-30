@@ -119,20 +119,17 @@ class DotsVisionModelArgs(DotsModelArgs):
         self.ccl_dtype = getattr(self, "ccl_dtype", None)
 
         # Optional prefill program config for large vision sequences.
-        try:
-            num_rows = lambda seq_len: min(seq_len, 2048)
-            k_dim = self.vision_dim
-            n_dim = self.vision_dim
-            self.model_config["VISION_WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=num_rows(seq_len),
-                k=k_dim,
-                n=n_dim,
-                grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
-                in0_block_w=max(1, self.vision_dim // 1024),
-                fuse_batch=seq_len <= 1024,
-            )
-        except Exception:
-            pass
+        num_rows = lambda seq_len: min(seq_len, 2048)
+        k_dim = self.vision_dim
+        n_dim = self.vision_dim
+        self.model_config["VISION_WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
+            m=num_rows(seq_len),
+            k=k_dim,
+            n=n_dim,
+            grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
+            in0_block_w=max(1, self.vision_dim // 1024),
+            fuse_batch=seq_len <= 1024,
+        )
 
         # MLP dtype hint (``bfp4_mlp``) for paths that read ``args.optimizations``.
         opt = getattr(self, "optimizations", None)
@@ -156,10 +153,7 @@ class DotsVisionModelArgs(DotsModelArgs):
                     configuration, "compute_kernel_config_hifi2_fp16", None
                 )
 
-        try:
-            self.model_config["DECODERS_OPTIMIZATIONS"] = _VisionOptimShim()
-        except Exception:
-            pass
+        self.model_config["DECODERS_OPTIMIZATIONS"] = _VisionOptimShim()
 
         logger.info(
             f"DotsVisionModelArgs: dim={self.vision_dim}, layers={self.vision_config.num_hidden_layers}, "

@@ -68,6 +68,7 @@ def _open_mesh_device():
         return _open(mesh_shape=ttnn.MeshShape(1, 1))
     except Exception as e:
         pytest.skip(f"Requires TT device runtime (could not open mesh device): {e!r}")
+    return None
 
 
 def test_text_decoder_prefill_pcc(tmp_path):
@@ -154,7 +155,6 @@ def test_text_decoder_prefill_pcc(tmp_path):
             logger.info(f"HF (text submodel) logits shape: {hf_logits.shape} (using eager attention implementation)")
 
             # Capture the text submodel config/class for later conversion-check.
-            torch_text_model_cls = _text_model.__class__
             torch_text_model_cfg = _text_model.config
 
             # Capture embedding + lm_head weights explicitly; the text submodule's state_dict may not include lm_head.

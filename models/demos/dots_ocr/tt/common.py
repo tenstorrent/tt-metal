@@ -111,8 +111,11 @@ def _ttnn_embd_4d_to_torch_batched(
             n = mesh.get_num_devices()
             if n is not None and n > 1:
                 composer = ttnn.ConcatMeshToTensor(mesh, dim=0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "Dots OCR: skipping ConcatMeshToTensor composer; using non-composer to_torch ({})",
+                e,
+            )
     out = ttnn.to_torch(embd4, mesh_composer=composer) if composer is not None else ttnn.to_torch(embd4)
     if composer is not None and out.dim() >= 1 and mesh is not None:
         try:

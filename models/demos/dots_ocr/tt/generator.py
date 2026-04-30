@@ -125,6 +125,7 @@ class Generator(WarmupForwardMixin):
 
     def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None):
         seq_len = tokens.shape[1]
+        result = None
         use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
         if use_chunked_prefill:
             assert page_table is not None, "page_table must be provided for chunked prefill"
@@ -177,10 +178,10 @@ class Generator(WarmupForwardMixin):
                 )
 
                 if chunk_start == last_chunk_start:
-                    logits = self.model.process_output_prefill(
+                    result = self.model.process_output_prefill(
                         tt_logits.cpu(), last_token_idx=(last_token_idx_in_chunk % 32)
                     )
-                    return logits
+                    break
                 del tt_logits
         else:
             ttnn = get_ttnn()
@@ -317,7 +318,13 @@ class Generator(WarmupForwardMixin):
             if page_table is not None:
                 ttnn.deallocate(page_table_tt)
 
-            return logits
+            result = logits
+
+        if result is None:
+            raise RuntimeError(
+                "Prefill(single-user): no logits produced for this input; expected non-empty prefill result."
+            )
+        return result
 
     def _prepare_inputs_prefill_compat(self, *args, **kwargs):
         """
@@ -353,15 +360,31 @@ class Generator(WarmupForwardMixin):
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
         logger.warning("Warmup model prefill not implemented for Dots OCR Generator")
 
-    def __del__(self):
+    def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+
         ttnn = get_ttnn()
         if ttnn is not None:
-            if hasattr(self, "trace_id"):
-                ttnn.release_trace(self.mesh_device, self.trace_id)
-            if hasattr(self, "trace_id_text"):
-                ttnn.release_trace(self.mesh_device, self.trace_id_text)
-        if hasattr(self, "_ttt"):
-            if hasattr(self._ttt, "close"):
+            try:
+                if hasattr(self, "trace_id"):
+                    ttnn.release_trace(self.mesh_device, self.trace_id)
+                if hasattr(self, "trace_id_text"):
+                    ttnn.release_trace(self.mesh_device, self.trace_id_text)
+            except Exception as e:
+                logger.debug("Failed to release trace(s) during close: {}", e)
+
+        try:
+            if hasattr(self, "_ttt") and hasattr(self._ttt, "close"):
                 self._ttt.close()
-            elif hasattr(self._ttt, "cleanup"):
+            elif hasattr(self, "_ttt") and hasattr(self._ttt, "cleanup"):
                 self._ttt.cleanup()
+        except Exception as e:
+            logger.debug("Failed to cleanup _ttt during close: {}", e)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

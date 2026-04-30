@@ -620,7 +620,6 @@ class DotsAttnQkvprojTt(LightweightModule):
             cache_file_name=cache(f"{attn_prefix}wo") if weight_cache_path else None,
         )
         if cfg.use_bias and f"{attn_prefix}qkv.bias" in state_dict:
-            d = 3 * cfg.embed_dim
             b = state_dict[f"{attn_prefix}qkv.bias"]
             self.bqkv = ttnn.as_tensor(
                 b,

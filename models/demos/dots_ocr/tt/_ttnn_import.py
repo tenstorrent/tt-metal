@@ -6,8 +6,9 @@ Safe TTNN import for dots_ocr.
 
 Some environments ship a partial or version-mismatched `ttnn` Python package that
 raises AttributeError during import (e.g. missing symbols on `ttnn._ttnn.device`).
-We catch **all** import-time failures so CPU-only tests and demos can still import
-reference code without a working TTNN runtime.
+We catch import and runtime :class:`Exception` subclasses so CPU-only tests and demos
+can still import reference code without a working TTNN runtime (not BaseException,
+so e.g. ``KeyboardInterrupt`` still propagates).
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 _ttnn_module: Optional[Any] = None
-_import_error: Optional[BaseException] = None
+_import_error: Optional[Exception] = None
 
 
 def get_ttnn():
@@ -34,12 +35,12 @@ def get_ttnn():
 
         _ttnn_module = t
         return _ttnn_module
-    except BaseException as e:  # noqa: BLE001 — intentional: catch broken ttnn installs
+    except Exception as e:  # Import/runtime failures from broken or mismatched ttnn installs
         _import_error = e
         return None
 
 
-def ttnn_import_error() -> Optional[BaseException]:
+def ttnn_import_error() -> Optional[Exception]:
     """Return the exception from the last failed import attempt, if any."""
     get_ttnn()  # ensure attempted
     return _import_error
