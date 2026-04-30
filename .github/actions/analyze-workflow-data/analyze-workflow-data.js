@@ -207,17 +207,29 @@ async function run() {
     // This identifies NEW failing jobs in pipelines that were already failing
     await detectJobLevelRegressions(stayedFailingDetails, regressedDetails, errorSnippetsCache, github.context);
 
-    // Optional: artificially elevate N stayed-failing JOBS (not pipelines) to
-    // regressions for this run.  Used by aggregate-workflow-data.yaml's
-    // workflow_dispatch to force end-to-end exercise of the notification
-    // pipeline without waiting for a real regression.
+    // Optional TEST MODE: artificially elevate N stayed-failing JOBS
+    // (not pipelines) to regressions for this run.  Used by
+    // aggregate-workflow-data.yaml's workflow_dispatch to force end-to-end
+    // exercise of the notification pipeline without waiting for a real
+    // regression.
     //
-    // Walks stayed-failing pipelines in order, taking failing jobs until N is
-    // reached.  Each elevated pipeline clones its envelope but replaces
-    // `failing_jobs` with the chosen subset, so the slack-report per-job loop
-    // and trigger-auto-triage both see a well-formed regression entry.  A
-    // single pipeline with many failing jobs can absorb the whole budget.
+    // When set, this is an EXCLUSIVE REPLACEMENT of the regression output:
+    // real Pass->Fail regressions and detectJobLevelRegressions-synthesized
+    // entries are discarded, and regressedDetails becomes exactly the
+    // elevated entries.  Rationale: a dispatch with `failures_to_elevate=3`
+    // should produce exactly 3 top-level Slack messages, not 3-plus-whatever
+    // else happens to be breaking on main.  The alert-all footer ("N other
+    // pipelines are failing") is also suppressed so the test channel stays
+    // clean.
+    //
+    // Walks stayed-failing pipelines in order, taking failing jobs until N
+    // is reached.  Each elevated pipeline clones its envelope but replaces
+    // `failing_jobs` with the chosen subset, so the slack-report per-job
+    // loop and trigger-auto-triage both see a well-formed regression entry.
+    // A single stayed-failing pipeline with many jobs can absorb the whole
+    // budget.
     const failuresToElevateRaw = (core.getInput('failures_to_elevate') || '').trim();
+    let inTestMode = false;
     if (failuresToElevateRaw !== '') {
       const failuresToElevate = Number.parseInt(failuresToElevateRaw, 10);
       if (!Number.isFinite(failuresToElevate) || failuresToElevate < 0 || String(failuresToElevate) !== failuresToElevateRaw) {
@@ -226,22 +238,13 @@ async function run() {
         if (stayedFailingDetails.length === 0) {
           core.warning(`failures_to_elevate=${failuresToElevate} requested but there are zero stayed-failing pipelines. Skipping elevation.`);
         } else {
-          // detectJobLevelRegressions may have already pushed synthesized
-          // regression entries for some stayed-failing pipelines (e.g. when
-          // a still-failing pipeline has NEW failing jobs this run).  Skip
-          // those pipelines during elevation to avoid duplicate top-level
-          // Slack messages keyed by the same "<workflow> / <job>" boundary.
-          const alreadyRegressedNames = new Set(regressedDetails.map(r => r && r.name).filter(Boolean));
+          inTestMode = true;
+          const originalRegressedCount = regressedDetails.length;
           let remaining = failuresToElevate;
           let totalElevatedJobs = 0;
           const elevated = [];
-          const skippedForOverlap = [];
           for (const pipeline of stayedFailingDetails) {
             if (remaining <= 0) break;
-            if (alreadyRegressedNames.has(pipeline.name)) {
-              skippedForOverlap.push(pipeline.name);
-              continue;
-            }
             const jobs = Array.isArray(pipeline.failing_jobs) ? pipeline.failing_jobs : [];
             if (jobs.length === 0) continue;
             const take = jobs.slice(0, remaining);
@@ -255,20 +258,18 @@ async function run() {
             totalElevatedJobs += take.length;
           }
           core.warning(
-            `failures_to_elevate=${failuresToElevate}: elevated ${totalElevatedJobs} job(s) ` +
-            `across ${elevated.length} pipeline(s) to regressions for this run.`
+            `failures_to_elevate=${failuresToElevate} (TEST MODE): elevated ${totalElevatedJobs} job(s) ` +
+            `across ${elevated.length} pipeline(s); replacing ${originalRegressedCount} real/synthesized regression entry(ies).`
           );
-          if (skippedForOverlap.length > 0) {
-            core.info(
-              `Skipped ${skippedForOverlap.length} stayed-failing pipeline(s) during elevation because they already have a regression entry: ${skippedForOverlap.join(', ')}`
-            );
-          }
           if (totalElevatedJobs < failuresToElevate) {
             core.warning(
               `Only ${totalElevatedJobs} stayed-failing job(s) were available to elevate (requested ${failuresToElevate}).`
             );
           }
-          regressedDetails.push(...elevated);
+          // EXCLUSIVE REPLACEMENT: clear real/synthesized regressions so this
+          // run produces exactly the elevated entries.  Use splice() so we
+          // don't reassign the const binding.
+          regressedDetails.splice(0, regressedDetails.length, ...elevated);
         }
       }
     }
@@ -284,7 +285,9 @@ async function run() {
     fs.writeFileSync(statusChangesPath, JSON.stringify(changes));
     fs.writeFileSync(failedWorkflowsPath, JSON.stringify(failedWorkflows));
     fs.writeFileSync(regressedWorkflowsPath, JSON.stringify(regressedDetails));
-    fs.writeFileSync(alertAllMessagePath, alertAllMessage || '');
+    // In test mode, suppress the "N other pipelines are failing" footer so
+    // the test channel shows only the elevated regressions.
+    fs.writeFileSync(alertAllMessagePath, inTestMode ? '' : (alertAllMessage || ''));
 
     core.setOutput('status_changes_path', statusChangesPath);
     core.setOutput('failed_workflows_path', failedWorkflowsPath);

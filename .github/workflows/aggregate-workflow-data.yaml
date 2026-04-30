@@ -20,7 +20,7 @@ on:
         description: 'Slack channel ID for notifications. Leave empty to use repo secret SLACK_METAL_INFRA_CHANNEL_ID.'
         required: false
       failures-to-elevate:
-        description: 'Number of currently stayed-failing JOBS (not pipelines) to artificially elevate to regressions for this run. Forces end-to-end exercise of the notification + auto-triage pipeline without waiting for a real regression. Empty/0 = no-op.'
+        description: 'TEST MODE. When set to N>0, discards real regressions and replaces them with N currently-stayed-failing JOBS (not pipelines). Produces exactly N top-level Slack messages, suppresses the "X other pipelines are failing" footer. Empty/0 = normal production behavior.'
         required: false
         default: ''
       max-auto-triage-dispatches:
