@@ -12,7 +12,7 @@
 #   Skips flock, device resets, and triage (these require real hardware).
 #   No hang protection — sim runs at kHz, so wall-clock timeouts are meaningless.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--dim KEY=VAL]... <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -20,6 +20,11 @@
 #               on hang with full triage + watcher log dump.
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.
+#   --dim K=V   Filter golden tests by dimension marker. Repeatable; values are
+#               AND-combined into a single `-m "k_v and ..."` pytest expression.
+#               Example: --dim dtype=bfloat16 --dim layout=tile selects tests
+#               carrying both the dtype_bfloat16 and layout_tile markers.
+#               Do not combine with a raw `-m` flag in extra pytest args.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -54,6 +59,7 @@ fi
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
+DIM_EXPRS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -63,6 +69,15 @@ while [[ $# -gt 0 ]]; do
         --run-all)
             FAIL_FAST=false
             shift
+            ;;
+        --dim)
+            if [[ -z "${2:-}" || "$2" != *=* ]]; then
+                echo "SAFE_PYTEST_ERROR: --dim expects KEY=VALUE (got '${2:-}')" >&2
+                exit 3
+            fi
+            # dtype=float32 → dtype_float32 (matches markers registered in conftest)
+            DIM_EXPRS+=("${2/=/_}")
+            shift 2
             ;;
         *)
             break
@@ -187,9 +202,18 @@ fi
 # --- Run pytest ---
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)
+# --dim: AND-combined into a single `-m` expression, prepended to extras.
 PYTEST_CMD=(pytest "${TEST_PATH}")
 if [[ "$FAIL_FAST" == true ]]; then
     PYTEST_CMD+=(-x)
+fi
+if [[ ${#DIM_EXPRS[@]} -gt 0 ]]; then
+    DIM_FILTER="${DIM_EXPRS[0]}"
+    for expr in "${DIM_EXPRS[@]:1}"; do
+        DIM_FILTER+=" and ${expr}"
+    done
+    PYTEST_CMD+=(-m "${DIM_FILTER}")
+    echo "SAFE_PYTEST: dim filter: -m \"${DIM_FILTER}\"" >&2
 fi
 PYTEST_CMD+=("$@")
 
