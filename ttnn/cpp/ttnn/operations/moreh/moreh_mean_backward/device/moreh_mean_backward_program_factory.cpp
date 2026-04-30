@@ -254,8 +254,7 @@ ProgramDescriptor MorehMeanBackwardOperation::create_descriptor(
 
         reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
-        writer_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{input_grad.buffer()->address(), num_tiles_per_core, tile_offset});
+        writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset});
 
         tile_offset += num_tiles_per_core;
     }
