@@ -64,13 +64,18 @@ class TtMolmo2TextMLP(LightweightModule):
         w_value = ff_proj[: self.intermediate_size]  # [12288, 4096]
         w_gate = ff_proj[self.intermediate_size :]  # [12288, 4096]
 
-        col_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=configuration.cluster_shape)
-        row_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(2, None), mesh_shape=configuration.cluster_shape)
+        # ShardTensorToMesh(dim=N) shards across ALL devices along dim N.
+        # ShardTensor2dMesh(dims=(row_dim, col_dim)) shards row_dim across mesh rows
+        # and col_dim across mesh cols — with mesh_shape=[1,8], only col_dim is
+        # effectively sharded (1 row = no row sharding). Using ShardTensorToMesh
+        # is simpler and unambiguous (same pattern used by the ViT blocks).
+        col_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)  # shard output dim
+        row_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)  # shard input dim
 
         def _col(w, name):
-            """Column-parallel: shard output dim across devices."""
+            """Column-parallel: shard output dim (last) across 8 devices."""
             return ttnn.as_tensor(
-                w.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 4096, 12288] → shard last dim
+                w.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 4096, 12288] → each device [4096, 1536]
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -80,9 +85,9 @@ class TtMolmo2TextMLP(LightweightModule):
             )
 
         def _row(w, name):
-            """Row-parallel: shard input dim across devices."""
+            """Row-parallel: shard input dim across 8 devices."""
             return ttnn.as_tensor(
-                w.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 12288, 4096] → shard first matmul dim
+                w.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 12288, 4096] → each device [1536, 4096]
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,

@@ -241,8 +241,13 @@ def test_tp_mlp_pcc(mesh_device, state_dict_and_cfg):
     ttnn.deallocate(out_tt)
 
     pcc = _pcc(out_cpu, ref)
-    print(f"\nTP MLP PCC (S={S}): {pcc:.6f}")
+    # Also check absolute scale: ratio of RMS values should be ~1.0
+    # Pure correlation check (PCC) would pass even if output is 8× too large
+    # (replicated weights + AllReduce sums 8 copies → PCC=1.0 but wrong values)
+    rms_ratio = (out_cpu.float().norm() / ref.float().norm()).item()
+    print(f"\nTP MLP PCC (S={S}): {pcc:.6f}  RMS ratio: {rms_ratio:.4f}")
     assert pcc >= 0.99, f"PCC {pcc:.4f} < 0.99"
+    assert 0.7 <= rms_ratio <= 1.3, f"RMS ratio {rms_ratio:.3f} not in [0.7, 1.3] — possible 8× scaling bug"
 
 
 def test_tp_mlp_no_oom_large_s(mesh_device, state_dict_and_cfg):
