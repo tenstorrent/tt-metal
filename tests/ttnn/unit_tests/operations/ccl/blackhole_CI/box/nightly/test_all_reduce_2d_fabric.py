@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import ttnn
 
-from models.common.utility_functions import skip_for_n_dev, skip_for_n_or_less_dev
+from models.common.utility_functions import skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 from models.demos.llama3_70b_galaxy.tt.model_config import (

@@ -2,20 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 import math
-from time import time
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
-from models.common.utility_functions import skip_for_n_or_less_dev, skip_for_n_dev
+from models.common.utility_functions import skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
-from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 import (
-    round_up,
-)
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
