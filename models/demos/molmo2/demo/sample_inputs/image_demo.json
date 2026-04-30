@@ -1,0 +1,32 @@
+[
+    [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": "https://storage.googleapis.com/oe-training-public/molmo2-eval-media/molmo_2_logo_RGB.png"
+                },
+                {
+                    "type": "text",
+                    "text": "Describe this image in detail."
+                }
+            ]
+        }
+    ],
+    [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"
+                },
+                {
+                    "type": "text",
+                    "text": "What objects can you see in this image?"
+                }
+            ]
+        }
+    ]
+]

@@ -1,0 +1,826 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Molmo2-8B full TTNN model assembly.
+
+Assembles:
+  - Dual embedding (wte.embedding + wte.new_embedding)
+  - 36 text decoder blocks (attention + MLP + RMSNorm residuals)
+  - Final RMSNorm (ln_f) + LM head
+  - ViT encoder (25 blocks, data-parallel)
+  - Image pooling 2D cross-attention adapter
+  - Image projector (SwiGLU)
+  - Image feature injection (additive, at image_patch_id positions)
+  - Bidirectional + causal prefill mask
+
+T3K parallelization:
+  - Text decoder: tensor-parallel (ShardTensor2dMesh)
+  - ViT, pooling, projector, embedding, lm_head: replicated
+"""
+
+import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.demos.molmo2.tt.attention import TtMolmo2TextAttention
+from models.demos.molmo2.tt.image_pooling import TtMolmo2ImagePooling2D
+from models.demos.molmo2.tt.image_projector import TtMolmo2ImageProjector
+from models.demos.molmo2.tt.mlp import TtMolmo2TextMLP
+from models.demos.molmo2.tt.prefill_mask import build_molmo2_prefill_mask
+from models.demos.molmo2.tt.vision_encoder import TtMolmo2ViTEncoder
+from models.tt_transformers.tt.common import Mode, precompute_freqs
+
+
+class TtMolmo2DecoderBlock(LightweightModule):
+    """Single Molmo2 text decoder block: pre-norm attn + pre-norm MLP."""
+
+    def __init__(
+        self,
+        mesh_device,
+        tt_ccl,
+        state_dict,
+        weight_cache_path,
+        layer_num,
+        dtype,
+        transformation_mats,
+        configuration,
+    ):
+        super().__init__()
+
+        layer_name = f"model.transformer.blocks.{layer_num}"
+
+        self.attention_norm = RMSNorm(
+            device=mesh_device,
+            dim=configuration.dim,
+            eps=configuration.norm_eps,
+            state_dict=state_dict,
+            state_dict_prefix=None,
+            weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+            weight_dtype=ttnn.bfloat16,
+            weight_key=f"{layer_name}.attn_norm",
+            is_distributed=False,
+        )
+        self.ff_norm = RMSNorm(
+            device=mesh_device,
+            dim=configuration.dim,
+            eps=configuration.norm_eps,
+            state_dict=state_dict,
+            state_dict_prefix=None,
+            weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+            weight_dtype=ttnn.bfloat16,
+            weight_key=f"{layer_name}.ff_norm",
+            is_distributed=False,
+        )
+        self.attention = TtMolmo2TextAttention(
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            layer_num=layer_num,
+            dtype=dtype,
+            transformation_mats=transformation_mats,
+            configuration=configuration,
+        )
+        self.feed_forward = TtMolmo2TextMLP(
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            layer_num=layer_num,
+            dtype=dtype,
+            configuration=configuration,
+        )
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        current_pos=None,
+        rot_mats=None,
+        user_id: int = 0,
+        mode: str = "prefill",
+        attn_mask=None,
+        kv_cache=None,
+    ) -> ttnn.Tensor:
+        skip_cfg = ttnn.DRAM_MEMORY_CONFIG
+
+        # Attention sub-block
+        attn_in = self.attention_norm(x, mode=Mode.PREFILL if mode == "prefill" else Mode.DECODE)
+        attn_out = self.attention.forward(
+            attn_in,
+            current_pos=current_pos,
+            rot_mats=rot_mats,
+            user_id=user_id,
+            mode=mode,
+            attn_mask=attn_mask,
+            kv_cache=kv_cache,
+        )
+        ttnn.deallocate(attn_in)
+        h = ttnn.add(x, attn_out, memory_config=skip_cfg, dtype=ttnn.bfloat16)
+        ttnn.deallocate(attn_out)
+        ttnn.deallocate(x)
+
+        # MLP sub-block
+        ff_in = self.ff_norm(h, mode=Mode.PREFILL if mode == "prefill" else Mode.DECODE)
+        ff_out = self.feed_forward.forward(ff_in, mode=Mode.PREFILL if mode == "prefill" else Mode.DECODE)
+        ttnn.deallocate(ff_in)
+        out = ttnn.add(h, ff_out, memory_config=skip_cfg, dtype=ttnn.bfloat16)
+        ttnn.deallocate(h)
+        ttnn.deallocate(ff_out)
+        return out
+
+
+class TtMolmo2Model(LightweightModule):
+    """Full Molmo2-8B TTNN model."""
+
+    def __init__(
+        self,
+        mesh_device,
+        tt_ccl,
+        state_dict,
+        weight_cache_path,
+        dtype,
+        configuration,
+    ):
+        super().__init__()
+
+        self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
+        self.configuration = configuration
+        self.dtype = dtype
+
+        # ------------------------------------------------------------------ #
+        # Dual embedding: wte.embedding + wte.new_embedding → concat
+        # ------------------------------------------------------------------ #
+        emb_full = torch.cat(
+            [
+                state_dict["model.transformer.wte.embedding"],  # [151936, 4096]
+                state_dict["model.transformer.wte.new_embedding"],  # [128, 4096]
+            ],
+            dim=0,
+        ).unsqueeze(
+            0
+        )  # [1, 152064, 4096]
+
+        self.embedding = ttnn.as_tensor(
+            emb_full,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # ------------------------------------------------------------------ #
+        # RoPE setup: HF-format cos/sin (concatenated halves, rotate_half style)
+        # Shape: [1, 1, max_seq_len, head_dim] — used by ttnn.experimental.rotary_embedding
+        # ------------------------------------------------------------------ #
+        cos_raw, sin_raw = precompute_freqs(
+            configuration.head_dim,
+            configuration.max_seq_len * 2,
+            configuration.rope_theta,
+            None,
+            None,
+        )
+        # HF concatenated-halves format: [c0,...,c63, c0,...,c63] per row
+        cos_hf = torch.cat(
+            [cos_raw[: configuration.max_seq_len], cos_raw[: configuration.max_seq_len]], dim=-1
+        )  # [S, head_dim]
+        sin_hf = torch.cat([sin_raw[: configuration.max_seq_len], sin_raw[: configuration.max_seq_len]], dim=-1)
+        # Store as CPU tensors for slicing at inference time
+        self._cos_hf = cos_hf  # [max_seq_len, head_dim]
+        self._sin_hf = sin_hf
+
+        # transformation_mats kept for API compatibility (not used with rotary_embedding)
+        self.transformation_mats = {"prefill": None, "decode": None}
+
+        # ------------------------------------------------------------------ #
+        # Text decoder blocks
+        # ------------------------------------------------------------------ #
+        self.layers = [
+            TtMolmo2DecoderBlock(
+                mesh_device=mesh_device,
+                tt_ccl=tt_ccl,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=i,
+                dtype=dtype,
+                transformation_mats=self.transformation_mats,
+                configuration=configuration,
+            )
+            for i in range(configuration.n_layers)
+        ]
+
+        # ------------------------------------------------------------------ #
+        # Final norm + LM head
+        # ------------------------------------------------------------------ #
+        self.ln_f = RMSNorm(
+            device=mesh_device,
+            dim=configuration.dim,
+            eps=configuration.norm_eps,
+            state_dict=state_dict,
+            state_dict_prefix=None,
+            weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+            weight_dtype=ttnn.bfloat16,
+            weight_key="model.transformer.ln_f",
+            is_distributed=False,
+        )
+
+        lm_head_w = state_dict["lm_head.weight"].T.unsqueeze(0).unsqueeze(0)  # [1, 1, 4096, 152064]
+        self.lm_head = ttnn.as_tensor(
+            lm_head_w,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # ------------------------------------------------------------------ #
+        # Vision backbone
+        # ------------------------------------------------------------------ #
+        self.vit_encoder = TtMolmo2ViTEncoder(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            vit_cfg=configuration,
+            weight_cache_path=weight_cache_path,
+        )
+        self.image_pooling = TtMolmo2ImagePooling2D(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            cfg=configuration,
+            weight_cache_path=weight_cache_path,
+        )
+
+        # Keep pooling weights as CPU float32 for the reference CPU pooling path.
+        # The TTNN cross-attn path OOMs for video (N_windows~2430 × tile-padded 32 = 720 MB).
+        pfx = "model.vision_backbone.image_pooling_2d"
+        self._pool_cpu = {
+            "wq": state_dict[f"{pfx}.wq.weight"].float(),
+            "wq_b": state_dict[f"{pfx}.wq.bias"].float(),
+            "wk": state_dict[f"{pfx}.wk.weight"].float(),
+            "wk_b": state_dict[f"{pfx}.wk.bias"].float(),
+            "wv": state_dict[f"{pfx}.wv.weight"].float(),
+            "wv_b": state_dict[f"{pfx}.wv.bias"].float(),
+            "wo": state_dict[f"{pfx}.wo.weight"].float(),
+            "wo_b": state_dict[f"{pfx}.wo.bias"].float(),
+        }
+        self.image_projector = TtMolmo2ImageProjector(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            cfg=configuration,
+            weight_cache_path=weight_cache_path,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Rope helpers
+    # ------------------------------------------------------------------ #
+
+    def _get_rot_mats_prefill(self, seq_len: int):
+        """Get HF-format cos/sin for prefill via ttnn.experimental.rotary_embedding.
+
+        Returns the full cos/sin matrix [1, 1, max_seq_len, head_dim].
+        rotary_embedding will apply positions 0..seq_len-1 and pad to tile size;
+        the attention forward slices the output back to seq_len.
+        """
+        # Upload full matrix once per call; cache on device for repeated use
+        if not hasattr(self, "_cos_hf_tt") or self._cos_hf_tt is None:
+            cos_4d = self._cos_hf.unsqueeze(0).unsqueeze(0)  # [1, 1, max_seq, head_dim]
+            sin_4d = self._sin_hf.unsqueeze(0).unsqueeze(0)
+
+            def _tt(t):
+                return ttnn.from_torch(
+                    t.to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+
+            self._cos_hf_tt = _tt(cos_4d)
+            self._sin_hf_tt = _tt(sin_4d)
+        return [self._cos_hf_tt, self._sin_hf_tt]
+
+    def _get_rot_mats_decode(self, position: int):
+        """Get HF-format cos/sin [1, 1, 1, head_dim] for single-token decode."""
+        cos_1 = self._cos_hf[position : position + 1].unsqueeze(0).unsqueeze(0)  # [1, 1, 1, head_dim]
+        sin_1 = self._sin_hf[position : position + 1].unsqueeze(0).unsqueeze(0)
+
+        def _tt(t):
+            return ttnn.from_torch(
+                t.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        return [_tt(cos_1), _tt(sin_1)]
+
+    # ------------------------------------------------------------------ #
+    # Vision backbone
+    # ------------------------------------------------------------------ #
+
+    def run_vision_backbone(
+        self,
+        pixel_values: torch.Tensor,  # [B, n_crops, 729, 588] CPU
+        pooled_patches_idx: torch.Tensor,  # [B, N_pooled, pool_window] CPU
+    ) -> torch.Tensor:
+        """Run full vision path and return [N_valid, 4096] CPU image features."""
+        B, n_crops, n_patches, px_dim = pixel_values.shape
+
+        # TP ViT: reshape to [n_crops, 1, 729, 588] on CPU first (avoids tile-volume mismatch),
+        # then replicate all crops to all T3K devices.
+        # TP weights (ShardTensorToMesh) handle per-device head parallelism;
+        # ttnn.all_reduce after each block combines partial head results.
+        n_crops_flat = B * n_crops
+        pv_4d = pixel_values.reshape(n_crops_flat, 1, n_patches, px_dim).to(torch.bfloat16)
+
+        pv_ttnn = ttnn.from_torch(
+            pv_4d,  # [n_crops, 1, 729, 588]
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # ViT encode → [1, n_crops, 729, 2304] (same on all devices after all_reduce)
+        vit_features_ttnn = self.vit_encoder.forward(pv_ttnn)
+
+        # Pull from device 0 (all devices have identical result after all_reduce)
+        vit_cpu = ttnn.to_torch(ttnn.get_device_tensors(vit_features_ttnn)[0]).float()
+        ttnn.deallocate(vit_features_ttnn)
+        vit_cpu = vit_cpu.reshape(B, n_crops, n_patches, 2304)
+
+        # Image pooling on CPU via reference PyTorch (avoids TTNN DRAM OOM for video).
+        # The TTNN cross-attn path allocates [N_windows=2430, pool_window=9→32tile, 4608]
+        # ≈720 MB, OOMing alongside 10 GB of model weights.
+        from models.demos.molmo2.reference.functional import image_pooling_2d as _pool_ref
+
+        p = self._pool_cpu
+        pooled_cpu = _pool_ref(
+            vit_cpu,
+            pooled_patches_idx,
+            p["wq"],
+            p["wq_b"],
+            p["wk"],
+            p["wk_b"],
+            p["wv"],
+            p["wv_b"],
+            p["wo"],
+            p["wo_b"],
+            num_heads=self.configuration.pool_n_heads,
+            head_dim=self.configuration.pool_head_dim,
+        )  # [B, N_pooled, 1152]
+
+        # Apply valid-token filter
+        valid_token = (pooled_patches_idx[0] >= 0).any(dim=-1)  # [N_pooled]
+        pooled_valid = pooled_cpu[0][valid_token]  # [N_valid, 1152]
+
+        # Image projector (TTNN) → [N_valid, 4096]
+        pooled_ttnn = ttnn.from_torch(
+            pooled_valid.to(torch.bfloat16).unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        proj_out = self.image_projector.forward(pooled_ttnn)
+        ttnn.deallocate(pooled_ttnn)
+
+        # Move result to CPU for embedding injection
+        proj_cpu = ttnn.to_torch(ttnn.get_device_tensors(proj_out)[0]).float().squeeze(0).squeeze(0)
+        ttnn.deallocate(proj_out)
+        return proj_cpu  # [N_valid, 4096]
+
+    # ------------------------------------------------------------------ #
+    # Main forward
+    # ------------------------------------------------------------------ #
+
+    def forward_prefill(
+        self,
+        input_ids: torch.Tensor,  # [B, S] CPU
+        pixel_values=None,  # [B, n_crops, 729, 588] CPU or None
+        pooled_patches_idx=None,  # [B, N_pooled, pool_window] CPU or None
+        token_type_ids=None,  # [B, S] CPU or None
+        user_id: int = 0,
+    ):
+        """Prefill forward pass. Returns logits [B, S, vocab_size] on CPU."""
+        B, S = input_ids.shape
+
+        # ---- Embedding ----
+        # Dual embedding via ttnn.embedding
+        input_ids_ttnn = ttnn.from_torch(
+            input_ids.unsqueeze(0),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        x_ttnn = ttnn.embedding(input_ids_ttnn, self.embedding)  # [B, S, 4096]
+        ttnn.deallocate(input_ids_ttnn)
+
+        # ---- Vision backbone + image feature injection ----
+        if pixel_values is not None:
+            image_features = self.run_vision_backbone(pixel_values, pooled_patches_idx)
+
+            # Additive injection at image_patch_id positions.
+            # x_cpu may be [S, H] or [1, S, H] depending on embedding output shape;
+            # use view(-1, H) to handle both (matches the reference pattern).
+            x_cpu = ttnn.to_torch(ttnn.get_device_tensors(x_ttnn)[0]).float()
+            ttnn.deallocate(x_ttnn)
+            H = self.configuration.dim
+            is_patch_flat = input_ids.view(-1) == self.configuration.image_patch_id
+            x_cpu.view(-1, H)[is_patch_flat] += image_features.to(x_cpu.dtype)
+
+            x_ttnn = ttnn.from_torch(
+                x_cpu.view(1, 1, S, H).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            x_ttnn = ttnn.to_layout(x_ttnn, ttnn.TILE_LAYOUT)
+
+        # Reshape to [1, 1, S, dim] for decoder
+        x_ttnn = ttnn.reshape(x_ttnn, [1, 1, S, self.configuration.dim])
+
+        # ---- Prefill mask ----
+        attn_mask = None
+        if token_type_ids is not None:
+            attn_mask = build_molmo2_prefill_mask(S, token_type_ids.long(), self.mesh_device, dtype=ttnn.bfloat8_b)
+        # else: is_causal=True in SDPA handles causal masking
+
+        # ---- RoPE ----
+        rot_mats = self._get_rot_mats_prefill(S)
+
+        # ---- Decoder blocks ----
+        for layer in self.layers:
+            x_ttnn = layer.forward(
+                x_ttnn,
+                rot_mats=rot_mats,
+                user_id=user_id,
+                mode="prefill",
+                attn_mask=attn_mask,
+            )
+
+        if attn_mask is not None:
+            ttnn.deallocate(attn_mask)
+
+        # ---- Final norm + LM head ----
+        x_ttnn = self.ln_f(x_ttnn, mode=Mode.PREFILL)
+        logits = ttnn.linear(
+            x_ttnn,
+            self.lm_head,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.configuration.compute_kernel_config_hifi2_fp16,
+        )
+        ttnn.deallocate(x_ttnn)
+
+        logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float().squeeze(0)
+        ttnn.deallocate(logits)
+        return logits_cpu  # [1, S, vocab_size]
+
+    def forward_decode_step(self, new_token_id: int, current_pos: int) -> torch.Tensor:
+        """Single-token decode using the filled KV cache.
+
+        Args:
+            new_token_id: integer token id of the newly generated token
+            current_pos: position in the sequence to write K/V cache to
+
+        Returns:
+            logits [1, vocab_size] CPU tensor for sampling the next token
+        """
+        # ---- Embedding for the single new token ----
+        tok = torch.tensor([[new_token_id]], dtype=torch.int32)
+        tok_ttnn = ttnn.from_torch(
+            tok.unsqueeze(0),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        # [1, 1, 4096]
+        x_ttnn = ttnn.embedding(tok_ttnn, self.embedding)
+        ttnn.deallocate(tok_ttnn)
+        x_ttnn = ttnn.to_layout(x_ttnn, ttnn.TILE_LAYOUT)
+        x_ttnn = ttnn.reshape(x_ttnn, [1, 1, 1, self.configuration.dim])
+
+        # ---- Decode RoPE mats for current position ----
+        rot_mats = self._get_rot_mats_decode(current_pos)
+
+        # ---- Current position tensor (TTNN INT32) for paged_update_cache ----
+        cur_pos_ttnn = ttnn.from_torch(
+            torch.tensor([current_pos], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # ---- Decoder blocks (decode mode uses KV cache) ----
+        for layer in self.layers:
+            x_ttnn = layer.forward(
+                x_ttnn,
+                current_pos=cur_pos_ttnn,
+                rot_mats=rot_mats,
+                mode="decode",
+            )
+        ttnn.deallocate(cur_pos_ttnn)
+
+        # ---- Final norm + LM head ----
+        x_ttnn = self.ln_f(x_ttnn, mode=Mode.DECODE)
+        logits = ttnn.linear(
+            x_ttnn,
+            self.lm_head,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.configuration.compute_kernel_config_hifi2_fp16,
+        )
+        ttnn.deallocate(x_ttnn)
+
+        logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float().squeeze(0).squeeze(0)
+        ttnn.deallocate(logits)
+        return logits_cpu  # [1, vocab_size]
+
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values=None,
+        pooled_patches_idx=None,
+        token_type_ids=None,
+        max_new_tokens: int = 128,
+        eos_token_id: int = None,
+        temperature: float = 1.0,
+        user_id: int = 0,
+    ) -> torch.Tensor:
+        """Full autoregressive generate: TTNN prefill then CPU decode.
+
+        Phase 1 decode uses reference PyTorch (avoids TTNN decode-mode
+        HEIGHT_SHARDED shape issues). KV cache is pulled from device to CPU
+        after prefill — ~200 MB for S=2701, negligible overhead.
+        """
+        import sys as _sys
+
+        _sys.path.insert(
+            0,
+            "/home/ttuser/.cache/huggingface/hub/models--allenai--Molmo2-8B/"
+            "snapshots/e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b",
+        )
+        import torch.nn.functional as F
+
+        from models.demos.molmo2.reference.functional import build_rope_cache, rmsnorm
+
+        B, S = input_ids.shape
+
+        # ---- TTNN prefill: fills device KV cache ----
+        logits = self.forward_prefill(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            pooled_patches_idx=pooled_patches_idx,
+            token_type_ids=token_type_ids,
+            user_id=user_id,
+        )
+        next_token = _sample(logits[0, -1], temperature)
+        generated_ids = [next_token]
+
+        # ---- Pull state dict for CPU decode (weights already on CPU) ----
+        # We reconstruct on-the-fly since we only need a few layers at a time.
+        # For efficiency, cache the block weights CPU-side.
+        if not hasattr(self, "_cpu_sd"):
+            # Pull the raw weights that were used to build the model
+            # We can reconstruct them from the TTNN tensors, but it's easier
+            # to just reload from HF — the state dict is already in memory.
+            # (self._raw_sd was set during __init__ if we cache it)
+            self._cpu_sd = None  # will be populated lazily
+
+        # ---- Build CPU KV cache from device ----
+        # Each layer's KV cache holds positions 0..S-1.
+        # Shape on device: [1, n_local_kv_heads=1, max_seq_len, head_dim=128]
+        # We pull only the filled slice [0..S].
+        print(f"  [decode] pulling KV cache from device (S={S})...", flush=True)
+        cpu_kv = []  # list of (k_cpu, v_cpu) per layer, shape [1, 8, S, 128]
+
+        for layer in self.layers:
+            keys_dev = layer.attention.layer_past[0]  # [1, 1, max_seq, 128] per device
+            vals_dev = layer.attention.layer_past[1]
+
+            # Collect k from all 8 devices (each has 1 KV head)
+            k_parts = [ttnn.to_torch(t).float()[:, :, :S, :] for t in ttnn.get_device_tensors(keys_dev)]
+            v_parts = [ttnn.to_torch(t).float()[:, :, :S, :] for t in ttnn.get_device_tensors(vals_dev)]
+
+            k_full = torch.cat(k_parts, dim=1)  # [1, 8, S, 128]  (8 KV heads)
+            v_full = torch.cat(v_parts, dim=1)
+            cpu_kv.append((k_full, v_full))
+        print(f"  [decode] KV cache downloaded ({len(cpu_kv)} layers, " f"k_shape={cpu_kv[0][0].shape})", flush=True)
+
+        # ---- CPU decode loop ----
+        # We need the embedding table and block weights on CPU.
+        # Reconstruct them from the TTNN tensors stored on the model.
+        emb_cpu = ttnn.to_torch(ttnn.get_device_tensors(self.embedding)[0]).float().squeeze(0)
+        # emb_cpu: [vocab_size, 4096] or [1, vocab, 4096]
+        if emb_cpu.dim() == 3:
+            emb_cpu = emb_cpu.squeeze(0)  # [vocab, 4096]
+
+        cfg = self.configuration
+        norm_eps = cfg.norm_eps
+
+        # LN final and LM head on CPU
+        ln_f_w = ttnn.to_torch(ttnn.get_device_tensors(self.ln_f.weight)[0]).float().reshape(-1)
+        lm_head_w = (
+            ttnn.to_torch(ttnn.get_device_tensors(self.lm_head)[0]).float().squeeze(0).squeeze(0)
+        )  # [4096, vocab] before .T
+        # lm_head was stored as lm_head_weight.T → [1,1,4096,vocab]; squeeze gives [4096,vocab]
+        # For F.linear out=vocab, in=4096: weight=[vocab,4096], so take .T of [4096,vocab]
+        lm_head_w = lm_head_w.T  # [vocab, 4096]
+
+        # RoPE cache — extend to cover decode positions
+        from models.tt_transformers.tt.common import precompute_freqs
+
+        cos_raw, sin_raw = precompute_freqs(cfg.head_dim, (S + max_new_tokens + 1) * 2, cfg.rope_theta, None, None)
+        from models.demos.molmo2.reference.functional import build_rope_cache
+
+        cos_full, sin_full = build_rope_cache(S + max_new_tokens + 1, cfg.head_dim, cfg.rope_theta, torch.device("cpu"))
+
+        # Pull block weights to CPU (attention + MLP)
+        print("  [decode] pulling block weights to CPU...", flush=True)
+        block_weights = []
+        q_per_dev = cfg.n_heads // cfg.num_devices * cfg.head_dim  # 512
+        kv_per_dev = cfg.n_kv_heads // cfg.num_devices * cfg.head_dim  # 128
+        qkv_chunk = q_per_dev + 2 * kv_per_dev  # 768
+
+        for i, layer in enumerate(self.layers):
+            attn = layer.attention
+            ffn = layer.feed_forward
+
+            # wqkv: ShardTensor2dMesh(dims=(2,3)) — device i has [4096, 768]
+            # Layout per device: [wq_i.T(512), wk_i.T(128), wv_i.T(128)]
+            # Gather 8 shards along dim -1 → [4096, 6144] interleaved
+            wqkv_full = torch.cat(
+                [ttnn.to_torch(t).float().squeeze(0).squeeze(0) for t in ttnn.get_device_tensors(attn.wqkv)], dim=-1
+            )  # [4096, 6144]
+
+            # De-interleave: reconstruct [wq_full, wk_full, wv_full] from interleaved shards
+            wq_cols, wk_cols, wv_cols = [], [], []
+            for di in range(cfg.num_devices):
+                s = di * qkv_chunk
+                wq_cols.append(wqkv_full[:, s : s + q_per_dev])
+                wk_cols.append(wqkv_full[:, s + q_per_dev : s + q_per_dev + kv_per_dev])
+                wv_cols.append(wqkv_full[:, s + q_per_dev + kv_per_dev : s + qkv_chunk])
+            att_proj_weight = torch.cat(
+                [
+                    torch.cat(wq_cols, dim=-1).T,  # [4096, 4096] → [4096, 4096]
+                    torch.cat(wk_cols, dim=-1).T,  # [4096, 1024] → [1024, 4096]
+                    torch.cat(wv_cols, dim=-1).T,  # [4096, 1024] → [1024, 4096]
+                ],
+                dim=0,
+            )  # [6144, 4096]
+
+            # wo: replicated — device 0 has full [1,1,4096,4096] = attn_out.weight.T
+            # F.linear(x, W) = x @ W.T; need W = attn_out.weight → use wo_cpu.T
+            wo_cpu = ttnn.to_torch(ttnn.get_device_tensors(attn.wo)[0]).float().squeeze(0).squeeze(0)
+            wo_weight = wo_cpu.T  # [4096, 4096] = attn_out.weight
+
+            q_norm_w = ttnn.to_torch(ttnn.get_device_tensors(attn.q_norm.weight)[0]).float().reshape(-1)
+            k_norm_w = ttnn.to_torch(ttnn.get_device_tensors(attn.k_norm.weight)[0]).float().reshape(-1)
+
+            # MLP: all weights REPLICATED — use device 0 only
+            # w1 stores w_gate.T [4096, 12288]; w3 stores w_value.T [4096, 12288]
+            # w2 stores ff_out.T [12288, 4096]
+            w1_full = ttnn.to_torch(ttnn.get_device_tensors(ffn.w1)[0]).float().squeeze(0).squeeze(0)  # [4096, 12288]
+            w3_full = ttnn.to_torch(ttnn.get_device_tensors(ffn.w3)[0]).float().squeeze(0).squeeze(0)  # [4096, 12288]
+            w2_full = ttnn.to_torch(ttnn.get_device_tensors(ffn.w2)[0]).float().squeeze(0).squeeze(0)  # [12288, 4096]
+
+            # Reconstruct reference text_mlp format:
+            #   ff_proj [24576, 4096] = [value, gate] stacked (value=w3_full.T, gate=w1_full.T)
+            #   ff_out  [4096, 12288] = w2_full.T
+            ff_proj = torch.cat([w3_full.T, w1_full.T], dim=0)  # [24576, 4096]
+            ff_out = w2_full.T  # [4096, 12288]
+
+            attn_norm_w = ttnn.to_torch(ttnn.get_device_tensors(layer.attention_norm.weight)[0]).float().reshape(-1)
+            ff_norm_w = ttnn.to_torch(ttnn.get_device_tensors(layer.ff_norm.weight)[0]).float().reshape(-1)
+
+            block_weights.append(
+                {
+                    "attn_norm": attn_norm_w,
+                    "ff_norm": ff_norm_w,
+                    "att_proj": att_proj_weight,
+                    "attn_out": wo_weight,
+                    "q_norm": q_norm_w,
+                    "k_norm": k_norm_w,
+                    "ff_proj": ff_proj,
+                    "ff_out": ff_out,
+                }
+            )
+        print("  [decode] block weights ready, starting decode loop...", flush=True)
+
+        import torch.nn.functional as _F
+
+        from models.demos.molmo2.reference.functional import rmsnorm
+
+        def cpu_decode_step(token_id, pos, kv_cache_list):
+            """One CPU decode step — single token, attending to positions 0..pos."""
+            # Embedding
+            x = F.embedding(torch.tensor([token_id]), emb_cpu).float()  # [1, 4096]
+            x = x.unsqueeze(0)  # [1, 1, 4096]
+
+            # cos_full: [1, S, 128] — index the sequence dim, not the batch dim
+            cos_pos = cos_full[:, pos : pos + 1, :]  # [1, 1, 128]
+            sin_pos = sin_full[:, pos : pos + 1, :]
+
+            for i, bw in enumerate(block_weights):
+                k_cache, v_cache = kv_cache_list[i]  # [1, 8, pos, 128]
+
+                # Attention
+                normed = rmsnorm(x, bw["attn_norm"], eps=norm_eps)
+                # Full attention using text_attention reference
+                # q,k,v from fused att_proj
+                qkv = _F.linear(normed, bw["att_proj"])  # [1, 1, 6144]
+                q_dim = cfg.n_heads * cfg.head_dim
+                kv_dim = cfg.n_kv_heads * cfg.head_dim
+                q_, k_, v_ = qkv.split([q_dim, kv_dim, kv_dim], dim=-1)
+                q_ = q_.view(1, 1, cfg.n_heads, cfg.head_dim)
+                k_ = k_.view(1, 1, cfg.n_kv_heads, cfg.head_dim)
+                v_ = v_.view(1, 1, cfg.n_kv_heads, cfg.head_dim)
+                q_ = rmsnorm(q_, bw["q_norm"], eps=norm_eps)
+                k_ = rmsnorm(k_, bw["k_norm"], eps=norm_eps)
+                # Transpose to [B, heads, S, D]
+                q_ = q_.transpose(1, 2)
+                k_ = k_.transpose(1, 2)
+                v_ = v_.transpose(1, 2)
+                # Apply RoPE for this position
+                cos_b = cos_pos.unsqueeze(2)  # [1, 1, 1, 128]  (broadcast over heads)
+                sin_b = sin_pos.unsqueeze(2)
+
+                def _rot(t):
+                    h = t.shape[-1] // 2
+                    return torch.cat([-t[..., h:], t[..., :h]], dim=-1)
+
+                q_ = q_ * cos_b + _rot(q_) * sin_b
+                k_ = k_ * cos_b + _rot(k_) * sin_b
+                # Build new K and append to cache
+                k_new = k_.squeeze(2)  # [1, 8, 128]
+                v_new = v_.squeeze(2)
+                k_prev = k_cache  # [1, 8, pos, 128]
+                v_prev = v_cache
+                k_full = torch.cat([k_prev, k_new.unsqueeze(2)], dim=2)  # [1, 8, pos+1, 128]
+                v_full = torch.cat([v_prev, v_new.unsqueeze(2)], dim=2)
+                # Update cache
+                kv_cache_list[i] = (k_full, v_full)
+                # GQA: repeat k/v 4 times
+                n_rep = cfg.n_heads // cfg.n_kv_heads
+                k_gqa = k_full.repeat_interleave(n_rep, dim=1)  # [1, 32, pos+1, 128]
+                v_gqa = v_full.repeat_interleave(n_rep, dim=1)
+                # Attention scores
+                scale = cfg.head_dim**-0.5
+                attn_w = torch.matmul(q_, k_gqa.transpose(-2, -1)) * scale  # [1,32,1,pos+1]
+                attn_w = _F.softmax(attn_w.float(), dim=-1).to(q_.dtype)
+                attn_o = torch.matmul(attn_w, v_gqa)  # [1, 32, 1, 128]
+                attn_o = attn_o.transpose(1, 2).reshape(1, 1, cfg.n_heads * cfg.head_dim)
+                attn_o = _F.linear(attn_o, bw["attn_out"])
+                x = x + attn_o
+
+                # MLP
+                normed_ff = rmsnorm(x, bw["ff_norm"], eps=norm_eps)
+                ff = _F.linear(normed_ff, bw["ff_proj"])
+                val, gate = ff.chunk(2, dim=-1)
+                x = x + _F.linear(_F.silu(gate) * val, bw["ff_out"])
+
+            # Final norm + LM head
+            x = rmsnorm(x, ln_f_w, eps=norm_eps)
+            logits = _F.linear(x, lm_head_w)  # [1, 1, vocab]: x@lm_head_w.T=[4096]@[4096,vocab]=[vocab]
+            return logits[0, 0]  # [vocab]
+
+        # Run decode loop
+        current_pos = S
+        kv_cache = [(cpu_kv[i][0].clone(), cpu_kv[i][1].clone()) for i in range(len(cpu_kv))]
+
+        for step in range(max_new_tokens - 1):
+            if eos_token_id is not None and next_token == eos_token_id:
+                break
+            logits_1 = cpu_decode_step(next_token, current_pos, kv_cache)
+            next_token = _sample(logits_1, temperature)
+            generated_ids.append(next_token)
+            current_pos += 1
+            if (step + 1) % 4 == 0:
+                print(f"  [decode] step {step+1}/{max_new_tokens-1}", flush=True)
+
+        return torch.tensor(generated_ids, dtype=torch.long)
+
+
+def _sample(logits: torch.Tensor, temperature: float) -> int:
+    """Sample from logits [vocab_size]. temperature=1.0 → greedy (argmax)."""
+    if temperature == 0.0 or temperature == 1.0:
+        return int(logits.argmax().item())
+    probs = torch.softmax(logits.float() / temperature, dim=-1)
+    return int(torch.multinomial(probs, num_samples=1).item())

@@ -1,0 +1,425 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Molmo2 text decoder attention with fused att_proj and Qwen3-style QK-norm.
+
+Phase 1 T3K layout (correctness-first, before performance optimization):
+  - wqkv: column-parallel — each device holds its local Q+K+V head weights.
+    No AllReduce needed (column-parallel QKV gives local heads directly).
+  - After local attention: AllGather head outputs across T3K devices → full hidden.
+  - wo: replicated — each device computes the full output projection independently.
+    No AllReduce needed (all devices produce the same replicated output).
+  - QK-norm applied AFTER nlp_create_qkv_heads (Qwen3-style, head_dim=128).
+
+This produces [1, 1, S, 4096] replicated output on all devices, matching the
+reference and enabling direct PCC verification.
+
+Adapted from:
+  - models/demos/qwen3_vl/tt/vision_attention.py  (q_norm/k_norm, column-parallel QKV)
+  - models/demos/qwen3_vl/tt/attention.py          (prefill/decode flow, KV cache)
+"""
+
+
+import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.common import Mode
+
+
+class TtMolmo2TextAttention(LightweightModule):
+    """Text decoder GQA with fused att_proj, QK-norm, RoPE, KV cache.
+
+    Runs on T3K with column-parallel QKV + AllGather + replicated wo.
+    Produces replicated [1, 1, S, 4096] output on all devices.
+    """
+
+    def __init__(
+        self,
+        mesh_device,
+        tt_ccl,
+        state_dict,
+        weight_cache_path,
+        layer_num,
+        dtype,
+        transformation_mats,
+        configuration,
+    ):
+        super().__init__()
+
+        self.mesh_device = mesh_device
+        self.num_devices = configuration.num_devices
+        self.hidden_size = configuration.dim
+        self.n_heads = configuration.n_heads
+        self.head_dim = configuration.head_dim
+        self.padded_head_dim = configuration.padded_head_dim
+        self.max_seq_len = configuration.max_seq_len
+        self.max_batch_size = configuration.max_batch_size
+        self.n_kv_heads = configuration.n_kv_heads
+        self.n_local_heads = configuration.n_local_heads
+        self.n_local_kv_heads = configuration.n_local_kv_heads
+        self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
+        self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
+        self.tile_size = configuration.tile_size
+        self.dtype = dtype
+        self.transformation_mats = transformation_mats
+        self.model_config = configuration.get_model_config()
+        self.is_multichip = configuration.is_multichip
+        self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
+        self.compute_kernel_config_hifi2_fp16 = configuration.compute_kernel_config_hifi2_fp16
+        self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+        self.scale = self.head_dim**-0.5
+
+        layer_name = f"model.transformer.blocks.{layer_num}.self_attn"
+        if configuration.dummy_weights or weight_cache_path is None:
+            cache_name = lambda _: None
+        else:
+            cache_name = lambda name: weight_cache_path / f"{layer_name}.{name}"
+
+        # ------------------------------------------------------------------ #
+        # Fused att_proj [6144, 4096] → column-parallel wqkv
+        # Each device holds weights for its local Q+K+V heads (4+1+1 = 768 channels).
+        # Input [S, 4096] (replicated) × wqkv_shard[4096, 768] → [S, 768] per device.
+        # No AllReduce needed — each device independently computes its heads.
+        # ------------------------------------------------------------------ #
+        att_proj = state_dict[f"{layer_name}.att_proj.weight"]  # [6144, 4096]
+        q_dim = self.n_heads * self.head_dim  # 4096
+        kv_dim = self.n_kv_heads * self.head_dim  # 1024
+
+        wq_full = att_proj[:q_dim]
+        wk_full = att_proj[q_dim : q_dim + kv_dim]
+        wv_full = att_proj[q_dim + kv_dim :]
+
+        qkv_list = []
+        for i in range(self.num_devices):
+            wq_i = wq_full.chunk(self.num_devices, dim=0)[i]
+            wk_i = wk_full.chunk(self.num_devices, dim=0)[i]
+            wv_i = wv_full.chunk(self.num_devices, dim=0)[i]
+            qkv_i = torch.cat([wq_i.T, wk_i.T, wv_i.T], dim=-1)
+            qkv_list.append(qkv_i)
+
+        qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
+        # [1, 1, 4096, 6144] → ShardTensor2dMesh(dims=(2,3)) splits dim 3 per device
+
+        self.wqkv = ttnn.as_tensor(
+            qkv_cat,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(2, 3), mesh_shape=configuration.cluster_shape),
+            cache_file_name=cache_name("wqkv_sharded_2d"),
+        )
+
+        # ------------------------------------------------------------------ #
+        # attn_out.weight [4096, 4096] → REPLICATED wo (Phase 1)
+        # After AllGather of attn output to [S, 4096], each device applies the
+        # full wo to get [S, 4096] replicated output. No AllReduce needed.
+        # ------------------------------------------------------------------ #
+        pt_wo = state_dict[f"{layer_name}.attn_out.weight"].T.unsqueeze(0).unsqueeze(0)
+
+        self.wo = ttnn.as_tensor(
+            pt_wo,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            cache_file_name=cache_name("wo_replicated"),
+        )
+
+        # ------------------------------------------------------------------ #
+        # QK-norm (Qwen3-style: applied AFTER nlp_create_qkv_heads)
+        # head_dim=128 is tile-aligned; no padding or special handling needed.
+        # ------------------------------------------------------------------ #
+        def _rmsnorm(key_suffix):
+            return RMSNorm(
+                device=self.mesh_device,
+                dim=self.head_dim,
+                eps=configuration.norm_eps,
+                state_dict=state_dict,
+                state_dict_prefix=None,
+                weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key=f"{layer_name}.{key_suffix}",
+                is_distributed=False,
+                sharded_program_config=None,
+                sharded_output_config=None,
+            )
+
+        self.q_norm = _rmsnorm("q_norm")
+        self.k_norm = _rmsnorm("k_norm")
+
+        # ------------------------------------------------------------------ #
+        # KV cache — stored as bfloat8_b (matches the typecast before fill_cache)
+        # ------------------------------------------------------------------ #
+        cache_k = torch.zeros(self.max_batch_size, self.n_local_kv_heads, self.max_seq_len, self.head_dim)
+        self.layer_past = [
+            ttnn.as_tensor(
+                kv,
+                dtype=ttnn.bfloat8_b,  # must match k_8b / v_8b fill dtype
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            for kv in (cache_k, torch.zeros_like(cache_k))
+        ]
+
+    def _gather_and_project(self, attn_11SH, seq_len):
+        """AllGather local attn output → full hidden, then apply wo.
+
+        On single device: AllGather is a no-op.
+        On T3K: collects [S, 512] from 8 devices → [S, 4096], then wo.
+        """
+        chunked = seq_len > 1024 and seq_len % 1024 == 0
+        if chunked:
+            attn_11SH = ttnn.reshape(attn_11SH, [1, seq_len // 1024, 1024, -1])
+
+        if self.is_multichip:
+            attn_gathered = ttnn.all_gather(
+                attn_11SH,
+                dim=3,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(attn_11SH)
+        else:
+            attn_gathered = attn_11SH
+
+        out = ttnn.linear(
+            attn_gathered,
+            self.wo,
+            compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(attn_gathered)
+
+        if chunked:
+            out = ttnn.reshape(out, [1, 1, seq_len, -1])
+        return out
+
+    # ------------------------------------------------------------------ #
+    # Decode (single token)
+    # ------------------------------------------------------------------ #
+
+    def forward_decode(self, x, current_pos, rot_mats=None, kv_cache=None):
+        """x: [1, 1, batch, dim] replicated on all devices."""
+        # Column-parallel QKV — each device gets its local heads, no AllReduce
+        xqkv = ttnn.linear(
+            x,
+            self.wqkv,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.deallocate(x)
+
+        xqkv = ttnn.reshape(xqkv, (1, 1, self.max_batch_size, xqkv.shape[3]))
+
+        q_pre, k_pre, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            xqkv,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(xqkv)
+
+        # nlp_create_qkv_heads_decode outputs HEIGHT_SHARDED.
+        # Save memory configs: RMSNorm requires interleaved; paged_update_cache requires sharded.
+        k_mem_cfg = k_pre.memory_config()
+        v_mem_cfg = v.memory_config()
+        q_pre = ttnn.to_memory_config(q_pre, ttnn.DRAM_MEMORY_CONFIG)
+        k_pre = ttnn.to_memory_config(k_pre, ttnn.DRAM_MEMORY_CONFIG)
+        q_pre = self.q_norm(q_pre, mode=Mode.DECODE)
+        k_pre = self.k_norm(k_pre, mode=Mode.DECODE)
+
+        if q_pre.dtype != ttnn.bfloat16:
+            q_pre = ttnn.typecast(q_pre, dtype=ttnn.bfloat16)
+        if k_pre.dtype != ttnn.bfloat16:
+            k_pre = ttnn.typecast(k_pre, dtype=ttnn.bfloat16)
+
+        # RoPE (HF-style); pads seq to tile=32, slice back to 1
+        q_rotated = ttnn.experimental.rotary_embedding(q_pre, rot_mats[0], rot_mats[1])
+        k_rotated = ttnn.experimental.rotary_embedding(k_pre, rot_mats[0], rot_mats[1])
+        ttnn.deallocate(q_pre)
+        ttnn.deallocate(k_pre)
+        q = q_rotated[:, :, :1, :]
+        k = k_rotated[:, :, :1, :]
+        ttnn.deallocate(q_rotated)
+        ttnn.deallocate(k_rotated)
+
+        # Restore HEIGHT_SHARDED for paged_update_cache (requires sharded input)
+        k_sharded = ttnn.to_memory_config(k, k_mem_cfg)
+        v_sharded = ttnn.to_memory_config(v, v_mem_cfg)
+
+        # KV cache update
+        keys = kv_cache[0] if kv_cache else self.layer_past[0]
+        values = kv_cache[1] if kv_cache else self.layer_past[1]
+        ttnn.experimental.paged_update_cache(keys, k_sharded, update_idxs_tensor=current_pos)
+        ttnn.experimental.paged_update_cache(values, v_sharded, update_idxs_tensor=current_pos)
+        ttnn.deallocate(k_sharded)
+        ttnn.deallocate(v_sharded)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
+            q,
+            keys,
+            values,
+            cur_pos_tensor=current_pos,
+            scale=self.scale,
+            program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+            compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q)
+
+        # Phase 1: CPU round-trip to concatenate heads, bypassing TTNN reshape constraints.
+        print(
+            f"[DBG_SDPA] attn_out.shape={attn_out.shape} dev0_shape={ttnn.get_device_tensors(attn_out)[0].shape}",
+            flush=True,
+        )
+        attn_cpu = ttnn.to_torch(ttnn.get_device_tensors(attn_out)[0]).float()
+        ttnn.deallocate(attn_out)
+        # attn_cpu may be [1, n_local_heads, batch_padded, head_dim]
+        # Flatten to [1, 1, batch_padded, n_local_heads*head_dim]
+        s = attn_cpu.shape
+        attn_flat = attn_cpu.reshape(s[0], 1, s[2], s[1] * s[3]).to(torch.bfloat16)
+        attn_out_cat = ttnn.from_torch(
+            attn_flat,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # Assemble full attention output from all devices (each device has different heads).
+        # wqkv is column-parallel: device i has heads i*n_local...(i+1)*n_local.
+        # Pull each device's [1,1,batch,n_local*head_dim] and concat → [1,1,batch,4096].
+        device_tensors = ttnn.get_device_tensors(attn_out_cat)
+        parts = [ttnn.to_torch(t).float() for t in device_tensors]
+        print(f"[DBG2] n_devices={self.num_devices} len(parts)={len(parts)} part_shape={parts[0].shape}", flush=True)
+        attn_full = torch.cat(parts, dim=-1).to(torch.bfloat16)  # [1,1,batch,4096]
+        attn_gathered = ttnn.from_torch(
+            attn_full,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.deallocate(attn_out_cat)
+
+        print(f"[DBG_DEC] attn_gathered={attn_gathered.shape} wo={self.wo.shape}", flush=True)
+        out = ttnn.linear(
+            attn_gathered,
+            self.wo,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+            dtype=ttnn.bfloat16,
+        )
+        ttnn.deallocate(attn_gathered)
+        return out
+
+    # ------------------------------------------------------------------ #
+    # Prefill (full sequence)
+    # ------------------------------------------------------------------ #
+
+    def forward_prefill(self, x_11SH, rot_mats, user_id=0, kv_cache=None, mask=None):
+        """x_11SH: [1, 1, S, 4096] replicated on all T3K devices."""
+        seq_len = x_11SH.shape[-2]
+
+        # Only chunk if evenly divisible — arbitrary seq_lens (e.g. 2701) must not be chunked
+        qkv_chunked = seq_len > self.MAX_QKV_MM_SEQ_LEN and seq_len % self.MAX_QKV_MM_SEQ_LEN == 0
+        if qkv_chunked:
+            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
+
+        # Column-parallel QKV: each device computes its local head outputs
+        xqkv_fused = ttnn.linear(
+            x_11SH,
+            self.wqkv,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+        )
+
+        if qkv_chunked:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        ttnn.deallocate(x_11SH)
+
+        # Split into Q, K, V head tensors
+        q_pre, k_pre, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv_fused,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(xqkv_fused)
+
+        # QK-norm AFTER head split (Qwen3-style, must come before RoPE)
+        q_pre = self.q_norm(q_pre, mode=Mode.PREFILL)
+        k_pre = self.k_norm(k_pre, mode=Mode.PREFILL)
+
+        # RoPE: HF-style rotate_half via ttnn.experimental.rotary_embedding.
+        # rot_mats = [cos, sin] shape [1, 1, max_seq_len, head_dim] (full pre-computed).
+        # rotary_embedding pads the seq dim to tile=32 internally; we slice back to seq_len.
+        if q_pre.dtype != ttnn.bfloat16:
+            q_pre = ttnn.typecast(q_pre, dtype=ttnn.bfloat16)
+        if k_pre.dtype != ttnn.bfloat16:
+            k_pre = ttnn.typecast(k_pre, dtype=ttnn.bfloat16)
+
+        q_rotated = ttnn.experimental.rotary_embedding(q_pre, rot_mats[0], rot_mats[1])
+        ttnn.deallocate(q_pre)
+        k_rotated = ttnn.experimental.rotary_embedding(k_pre, rot_mats[0], rot_mats[1])
+        ttnn.deallocate(k_pre)
+
+        # Slice back to original seq_len (rotary_embedding pads to tile multiple)
+        q = q_rotated[:, :, :seq_len, :]
+        k = k_rotated[:, :, :seq_len, :]
+        ttnn.deallocate(q_rotated)
+        ttnn.deallocate(k_rotated)
+
+        # KV cache fill: store bfloat8_b copies for memory efficiency
+        keys = kv_cache[0] if kv_cache else self.layer_past[0]
+        values = kv_cache[1] if kv_cache else self.layer_past[1]
+        k_8b = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
+        v_8b = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
+        ttnn.fill_cache(keys, k_8b, user_id % self.max_batch_size)
+        ttnn.fill_cache(values, v_8b, user_id % self.max_batch_size)
+        ttnn.deallocate(k_8b)
+        ttnn.deallocate(v_8b)
+
+        # SDPA: is_causal and attn_mask are mutually exclusive in TTNN SDPA.
+        # When a custom mask is provided (image-bidir override), it already encodes
+        # the causal structure, so is_causal must be False.
+        attn_out = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=(mask is None),
+            attn_mask=mask,
+            scale=self.scale,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        attn_out = ttnn.reshape(attn_out, [1, self.n_local_heads, -1, self.padded_head_dim])
+        attn_11SH = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn_out)
+
+        # AllGather + replicated wo → [1, 1, S, 4096] on all devices
+        return self._gather_and_project(attn_11SH, seq_len)
+
+    def forward(self, x, current_pos, rot_mats=None, user_id=0, mode="decode", kv_cache=None, attn_mask=None):
+        if mode == "prefill":
+            return self.forward_prefill(x, rot_mats, user_id, kv_cache=kv_cache, mask=attn_mask)
+        return self.forward_decode(x, current_pos, rot_mats, kv_cache=kv_cache)
