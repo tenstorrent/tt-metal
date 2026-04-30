@@ -176,11 +176,16 @@ runs:
 
             const runs = runsResp.data.workflow_runs.filter(r =>
               r.id !== context.runId &&
-              r.status === 'completed' &&
-              r.conclusion === 'success'
+              // Accept runs that are fully successful OR still in_progress.
+              // Artifacts are uploaded as soon as the build job finishes — the
+              // overall run may still be in_progress (waiting for test jobs)
+              // but the build artifact is already available for reuse.
+              // Explicitly exclude failed/cancelled/timed_out conclusions.
+              (r.status === 'in_progress' ||
+               (r.status === 'completed' && r.conclusion === 'success'))
             );
 
-            console.log(`Found ${runsResp.data.workflow_runs.length} runs for SHA, ${runs.length} completed successfully (excluding current)`);
+            console.log(`Found ${runsResp.data.workflow_runs.length} runs for SHA, ${runs.length} eligible (completed+success or in_progress, excluding current)`);
 
             // Step 2: For each completed run, scan artifacts until we find a
             // run that satisfies ALL requirements. When check-wheel=true, a
