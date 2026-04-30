@@ -38,6 +38,11 @@ on:
         required: false
         default: false
         type: boolean
+      generate_quad_cluster_descriptors:
+        description: 'Quad Galaxy only: run scripts/scaleout/generate_cluster_descriptors.sh (requires workflow setup quad or both)'
+        required: false
+        default: false
+        type: boolean
       recalculate_weights_cache:
         description: 'Recalculate weights cache in a new directory'
         required: false
@@ -76,7 +81,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
 
-run-name: "DeepSeek V3 – ${{ github.event_name == 'schedule' && 'nightly' || inputs.setup }} [${{ github.event_name == 'schedule' && 'nightly' || (inputs.deepseekv3_unit_tests && 'unit ' || '') }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
+run-name: "DeepSeek V3 – ${{ github.event_name == 'schedule' && 'nightly' || inputs.setup }} [${{ github.event_name == 'schedule' && 'nightly' || (inputs.deepseekv3_unit_tests && 'unit ' || '') }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress ' || '' }}${{ inputs.generate_quad_cluster_descriptors && 'quad-cluster-desc ' || '' }}]"
 
 jobs:
   build-artifact:
@@ -91,7 +96,7 @@ jobs:
       build-wheel: true
 
   deepseekv3-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
+    if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress || inputs.generate_quad_cluster_descriptors }}
     strategy:
       fail-fast: false
       matrix:
@@ -157,6 +162,42 @@ jobs:
           else
             echo "cache_override=" >> $GITHUB_OUTPUT
           fi
+
+      # ── Quad Galaxy: generate cluster descriptors (scaleout) ────────────
+      - name: Generate quad WH cluster descriptors (scaleout)
+        if: ${{ matrix.setup == 'quad' && inputs.generate_quad_cluster_descriptors }}
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 45
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: false
+          run_args: |
+            ./scripts/scaleout/generate_cluster_descriptors.sh \
+              --rankfile /etc/mpirun/rankfile \
+              --mapping-file WH_quad_cluster_desc_mapping.yaml \
+              --output-dir wh_quad_cluster_descs \
+              --base-name wh_quad_glx_cluster_desc
+
+      - name: Upload quad cluster descriptor artifacts
+        if: ${{ always() && matrix.setup == 'quad' && inputs.generate_quad_cluster_descriptors }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: quad-wh-cluster-descs-${{ github.run_id }}
+          path: |
+            WH_quad_cluster_desc_mapping.yaml
+            wh_quad_cluster_descs/
+          if-no-files-found: warn
 
       # ── DeepSeek V3 unit tests ──────────────────────────────────────────
       - name: Run dual DeepSeek V3 unit tests
