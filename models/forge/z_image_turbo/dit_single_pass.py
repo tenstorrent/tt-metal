@@ -240,7 +240,7 @@ def main():
     te = TextEncoderTTNN(mesh_device, seq_len=CAP_TOKENS)
 
     print("Applying perf patches ...")
-    _apply_matmul_config_patch()
+    # _apply_matmul_config_patch()  # disabled: only 1.4ms gain, may not help with trace
     _apply_compute_config_patch()
     _apply_fast_activations_patch()
 
