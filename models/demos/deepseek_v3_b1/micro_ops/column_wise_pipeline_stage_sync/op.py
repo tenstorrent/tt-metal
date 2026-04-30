@@ -91,7 +91,6 @@ class ColumnWisePipelineStageSync:
                 mesh_coord = ttnn.MeshCoordinate(mesh_row, mesh_col)
 
                 is_entry_device = mesh_col == entry_device_mesh_col
-                is_exit_device = mesh_col == exit_device_mesh_col
 
                 # === Compile-time args ===
 
