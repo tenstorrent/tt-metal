@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reblock_untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -545,49 +546,41 @@ void kernel_main() {
                     // if last block we pack the final result with relu enabled
                     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
                 }
-                pack_reconfig_data_format(matmul_partials_cb, untilize_mode_out_cb_id);
                 if constexpr (packer_l1_acc) {
                     pack_reconfig_l1_acc(0);
                 }
-                reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
 
+                // Bias is row-broadcast on the conv2d path (single bias tile per output column).
+                // Caller owns bias CB lifecycle: writer pushes bias_ntiles_w once at startup
+                // (load_bias=true→false), and the compute kernel walks through it via
+                // bias_block_offset advancing by in1_block_w per outer w iteration. The helper
+                // reads bias at offset bias_block_offset+in1_index_subblock_offset and never
+                // pops bias_buf, matching that lifecycle.
                 cb_bias.wait_front(bias_ntiles_w);
-                cb_matmul_partials.wait_front(out_block_num_tiles);
-                for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                    uint32_t in1_index_subblock_offset = 0;
-                    for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                        tile_regs_acquire();
-                        uint32_t i = 0;
-                        for (uint32_t h = 0; h < out_subblock_h; ++h) {
-                            uint32_t bcast_tile_i = bias_block_offset + in1_index_subblock_offset;
-                            for (uint32_t w = 0; w < out_subblock_w; ++w) {
-                                add_tiles_bcast_rows(matmul_partials_cb, bias_cb_id, i, bcast_tile_i, i);
-                                ++bcast_tile_i;
-                                ++i;
-                            }
-                        }
-
+                const auto bias_shape = compute_kernel_lib::BiasAddShape::of(
+                    in0_num_subblocks,
+                    in1_num_subblocks,
+                    out_subblock_h,
+                    out_subblock_w,
+                    /*out_row_width=*/0);  // 0 => derive from out_subblock_w * in1_num_subblocks
 #ifdef SFPU_OP_INIT_ACTIVATION
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                            SFPU_OP_FUNC_ACTIVATION
-                        }
+                compute_kernel_lib::add_bias_bcast_rows<
+                    compute_kernel_lib::BiasBroadcast::RowBroadcast,
+                    compute_kernel_lib::OutputLayout::SubblockMajor,
+                    ConvSFPUPostCompute>(
+                    cb_matmul_partials,
+                    cb_bias,
+                    cb_untilize_mode_out,
+                    bias_shape,
+                    ConvSFPUPostCompute{},
+                    bias_block_offset);
+#else
+                compute_kernel_lib::add_bias_bcast_rows<
+                    compute_kernel_lib::BiasBroadcast::RowBroadcast,
+                    compute_kernel_lib::OutputLayout::SubblockMajor>(
+                    cb_matmul_partials, cb_bias, cb_untilize_mode_out, bias_shape, {}, bias_block_offset);
 #endif
-                        tile_regs_commit();
-                        // do not pop front bias as it may be used again for subsequent blocks
-                        cb_matmul_partials.pop_front(out_subblock_num_tiles);
 
-                        cb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            pack_tile(i, untilize_mode_out_cb_id);
-                        }
-                        tile_regs_release();
-                        cb_untilize_mode_out.push_back(out_subblock_num_tiles);
-
-                        in1_index_subblock_offset += out_subblock_w;
-                    }  // for in1_num_subblocks
-                }  // in0_num_subblocks
                 if constexpr (untilize_out) {
                     UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
                     PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
