@@ -165,9 +165,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
         vae_t_chunk_size: int | None = 1,
         sdpa_t_fracture_w_only: bool = False,
-        height: int = 0,
-        width: int = 0,
-        num_frames: int = 0,
+        height: int = 720,
+        width: int = 1280,
+        num_frames: int = 81,
         t_chunk_size: int = 0,
         run_warmup: bool = True,
     ):
@@ -373,8 +373,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         is_fsdp=None,
         pipeline_class=None,
         sdpa_t_fracture_w_only=None,
-        height: int = 0,
-        width: int = 0,
+        height: int = 720,
+        width: int = 1280,
         num_frames: int = 81,
     ):
         if "DEMO_WEIGHTS_DIR_T2V" in os.environ:
