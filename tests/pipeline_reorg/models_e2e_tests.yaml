@@ -97,7 +97,7 @@
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
     pytest --timeout 1000 models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace"
-  model: llama90b-vl
+  model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
       timeout: 25

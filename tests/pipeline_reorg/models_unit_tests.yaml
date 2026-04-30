@@ -86,7 +86,7 @@
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
     pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
-  model: llama90b-vl
+  model: llama3.2-90b-vision
   skus:
     wh_llmbox_perf:
       timeout: 15

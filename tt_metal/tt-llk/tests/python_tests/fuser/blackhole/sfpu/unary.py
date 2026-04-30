@@ -104,7 +104,7 @@ class UnarySfpu(Sfpu):
 
         return (
             f"    _llk_math_eltwise_unary_sfpu_start_<dest_sync{stage}>({self.dest_idx});\n"
-            f"    test_utils::call_sfpu_operation<{approx_mode}, {dest_acc}, {self.iterations}>({op}, math_format{stage}, {self.fill_const_value});\n"
+            f"    test_utils::call_sfpu_operation<{approx_mode}, {dest_acc}, {self.iterations}>({op}, {config.sentinel.math_format}, {self.fill_const_value});\n"
             f"    _llk_math_eltwise_unary_sfpu_done_();\n"
         )
 

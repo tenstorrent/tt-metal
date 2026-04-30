@@ -224,14 +224,14 @@ bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }
 bool has_tensix_risc(uint16_t risc_mask) { return (risc_mask & 0x0F00) != 0; }
 
 uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_producer) {
-    if (config.cap == ::dfb::AccessPattern::BLOCKED) {
+    if (config.cap == ::dfb::AccessPattern::ALL) {
         bool producer_has_dm = has_dm_risc(config.producer_risc_mask);
         bool consumer_has_dm = has_dm_risc(config.consumer_risc_mask);
         bool producer_is_tensix_only = !producer_has_dm && has_tensix_risc(config.producer_risc_mask);
         bool consumer_is_tensix_only = !consumer_has_dm && has_tensix_risc(config.consumer_risc_mask);
-        bool dm_dm_blocked = !producer_is_tensix_only && !consumer_is_tensix_only;
+        bool dm_dm_all = !producer_is_tensix_only && !consumer_is_tensix_only;
         if (is_producer) {
-            if (dm_dm_blocked) {
+            if (dm_dm_all) {
                 return config.num_consumers;
             }
             return 1;
@@ -395,11 +395,11 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     // Address arithmetic for L1 base/limit/step:
     //   - STRIDED (stride_in_entries = max_prod_cons): interleaved layout.
     //     Each producer occupies 1 slot per round → base step = entry_size.
-    //   - BLOCKED (stride_in_entries = 1): contiguous block per producer/TC.
+    //   - ALL (stride_in_entries = 1): contiguous block per producer/TC.
     //     Each producer occupies `capacity` consecutive slots → base step = capacity * entry_size.
-    //     This applies to both DM-DM BLOCKED (broadcast_tc) and Tensix-involved BLOCKED (remapper).
+    //     This applies to both DM-DM ALL (broadcast_tc) and Tensix-involved ALL (remapper).
     //     The hardware derives the per-pop stride from (limit - base - entry_size) / (capacity - 1),
-    //     which equals entry_size for BLOCKED and max_prod_cons * entry_size for STRIDED.
+    //     which equals entry_size for ALL and max_prod_cons * entry_size for STRIDED.
     const uint32_t effective_stride = this->stride_in_entries;
     const uint32_t base_step = (effective_stride > 1) ? entry_size : (this->capacity * entry_size);
 
@@ -431,8 +431,8 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
                 base += base_step;
             }
         }
-        // In blocked case all consumers share the producer address regions as they see every producer's data.
-        if (this->config.cap == dfb::AccessPattern::BLOCKED && this->config.num_producers > 1 &&
+        // In ALL case all consumers share the producer address regions as they see every producer's data.
+        if (this->config.cap == dfb::AccessPattern::ALL && this->config.num_producers > 1 &&
             tc < num_consumer_tcs) {
             base += base_step;
         }
@@ -556,11 +556,11 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     TT_FATAL(config.entry_size > 0, "Entry size must be > 0");
     TT_FATAL(config.num_entries > 0, "Num entries must be > 0");
 
-    TT_FATAL(config.pap != dfb::AccessPattern::BLOCKED, "Blocked producer pattern not supported");
+    TT_FATAL(config.pap != dfb::AccessPattern::ALL, "ALL producer pattern not supported");
 
     TT_FATAL(
-        config.cap != dfb::AccessPattern::BLOCKED || config.num_consumers <= 4,
-        "Blocked consumer pattern supports at most 4 consumers, but {} were specified",
+        config.cap != dfb::AccessPattern::ALL || config.num_consumers <= 4,
+        "ALL consumer pattern supports at most 4 consumers, but {} were specified",
         config.num_consumers);
 
     auto dfb = std::make_shared<DataflowBufferImpl>();
@@ -600,7 +600,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             capacity = config.num_entries / std::max(config.num_producers, config.num_consumers);
             dfb->stride_in_entries = std::max(config.num_producers, config.num_consumers);
             break;
-        case dfb::AccessPattern::BLOCKED:
+        case dfb::AccessPattern::ALL:
             TT_FATAL(
                 config.num_entries % config.num_producers == 0,
                 "Num entries in DFB {} must be divisible by num producers {}",
@@ -694,10 +694,10 @@ void ProgramImpl::finalize_dataflow_buffer_configs() {
     for (auto& [core, core_dfbs] : dfbs_by_core) {
         bool core_needs_remapper = false;
         for (const auto& dfb : core_dfbs) {
-            if (dfb->config.cap == dfb::AccessPattern::BLOCKED) {
-                bool dm_dm_blocked = !has_tensix_risc(dfb->config.producer_risc_mask) &&
+            if (dfb->config.cap == dfb::AccessPattern::ALL) {
+                bool dm_dm_all = !has_tensix_risc(dfb->config.producer_risc_mask) &&
                                      !has_tensix_risc(dfb->config.consumer_risc_mask);
-                if (!dm_dm_blocked) {
+                if (!dm_dm_all) {
                     core_needs_remapper = true;
                     break;
                 }
@@ -778,17 +778,17 @@ void ProgramImpl::finalize_single_dfb_config(
 
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
 
-    // DM-DM BLOCKED: producer broadcasts to N TCs (one per consumer) instead of using remapper.
+    // DM-DM ALL: producer broadcasts to N TCs (one per consumer) instead of using remapper.
     // No Tensix involved on either side.
-    bool dm_dm_blocked = (config.cap == dfb::AccessPattern::BLOCKED) &&
+    bool dm_dm_all = (config.cap == dfb::AccessPattern::ALL) &&
                          !producer_is_tensix_only && !consumer_is_tensix_only;
 
-    // Remapper is needed only for BLOCKED 1-to-many with Tensix
+    // Remapper is needed only for ALL 1-to-many with Tensix
     // Adding a TC to a remapper config entry removes it from the default Tensix<->DM mirror group, even with
     // remapper enabled the default mirroring holds for STRIDED cases
     bool use_remapper = core_has_remapper &&
-                        (config.cap == dfb::AccessPattern::BLOCKED) &&
-                        !dm_dm_blocked;
+                        (config.cap == dfb::AccessPattern::ALL) &&
+                        !dm_dm_all;
 
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
@@ -910,9 +910,9 @@ void ProgramImpl::finalize_single_dfb_config(
                     consumer_idx,
                     consumer_risc_id,
                     use_remapper);
-            } else if (config.cap == dfb::AccessPattern::BLOCKED) {
-                if (dm_dm_blocked) {
-                    // DM-DM BLOCKED: allocate one TC per consumer (tc_slot == consumer_idx).
+            } else if (config.cap == dfb::AccessPattern::ALL) {
+                if (dm_dm_all) {
+                    // DM-DM ALL: allocate one TC per consumer (tc_slot == consumer_idx).
                     // The TC is shared between producer and consumer i -- no remapper needed.
                     uint8_t tensix_id = get_dm_tensix_id_for_pair(pair_counter++);
                     group.producer_tc = tile_counter_allocator_.allocate(core, tensix_id);
@@ -920,13 +920,13 @@ void ProgramImpl::finalize_single_dfb_config(
 
                     log_trace(
                         tt::LogMetal,
-                        "Blocked DM-DM: Producer[{}] TC[{}] (tensix_id={}) shared with Consumer[{}]",
+                        "ALL DM-DM: Producer[{}] TC[{}] (tensix_id={}) shared with Consumer[{}]",
                         producer_idx,
                         tc_slot,
                         tensix_id,
                         tc_slot);
                 } else {
-                    // Tensix-involved BLOCKED: use remapper for 1-to-many
+                    // Tensix-involved ALL: use remapper for 1-to-many
                     uint8_t producer_tensix_id = producer_risc_ids[producer_idx] % 4;
                     group.producer_tc = tile_counter_allocator_.allocate(core, producer_tensix_id);
 
@@ -940,7 +940,7 @@ void ProgramImpl::finalize_single_dfb_config(
 
                     log_trace(
                         tt::LogMetal,
-                        "Blocked: Producer[{}] TC[{}] (tensix_id={}) maps to {} consumer TCs via Remapper",
+                        "ALL: Producer[{}] TC[{}] (tensix_id={}) maps to {} consumer TCs via Remapper",
                         producer_idx,
                         tc_slot,
                         producer_tensix_id,
@@ -976,7 +976,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 (uint32_t)dfb::get_counter_id(risc_config.config.packed_tile_counter[tc]));
         }
         risc_config.config.num_tcs_to_rr = num_producer_tcs;
-        risc_config.config.broadcast_tc = dm_dm_blocked;
+        risc_config.config.broadcast_tc = dm_dm_all;
 
         if (use_remapper) {
             risc_config.config.remapper_pair_index = remapper_index_allocator_.allocate(core);
@@ -987,8 +987,8 @@ void ProgramImpl::finalize_single_dfb_config(
             uint32_t packed = 0;
             uint8_t consumer_ids_mask = 0;
 
-            if (config.cap == dfb::AccessPattern::BLOCKED) {
-                // BLOCKED: 1-to-many, all consumers
+            if (config.cap == dfb::AccessPattern::ALL) {
+                // ALL: 1-to-many, all consumers
                 for (size_t i = 0; i < group.consumer_tcs.size() && i < ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR;
                      i++) {
                     packed |= (dfb::get_counter_id(group.consumer_tcs[i]) & 0x1F) << (i * 5);
@@ -1056,15 +1056,15 @@ void ProgramImpl::finalize_single_dfb_config(
                     // Without remapper: shared TC with producer
                     risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][producer_tc_slot].producer_tc;
                 }
-            } else if (config.cap == dfb::AccessPattern::BLOCKED) {
-                if (dm_dm_blocked) {
-                    // DM-DM BLOCKED: consumer[consumer_idx] TC[tc] = shared TC from producer[tc][consumer_idx].
+            } else if (config.cap == dfb::AccessPattern::ALL) {
+                if (dm_dm_all) {
+                    // DM-DM ALL: consumer[consumer_idx] TC[tc] = shared TC from producer[tc][consumer_idx].
                     // tc iterates over num_consumer_tcs = num_producers.
                     uint8_t producer_idx = tc;
                     risc_config.config.packed_tile_counter[tc] =
                         tc_groups[producer_idx][consumer_idx].consumer_tcs[0];
                 } else {
-                    // Tensix-involved BLOCKED: consumer gets its remapper-translated TC
+                    // Tensix-involved ALL: consumer gets its remapper-translated TC
                     uint8_t producer_idx = tc;
                     uint8_t producer_tc_slot = 0;
                     risc_config.config.packed_tile_counter[tc] =
