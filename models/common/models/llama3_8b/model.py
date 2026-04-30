@@ -847,15 +847,8 @@ class TracedLlamaExecutor:
     # Warmup — delegate to engine
     # =========================================================================
 
-    def warmup_model_prefill(
-        self, kv_cache=None, enable_trace=True, can_sample_on_device=False, non_greedy_decoding_on_device=False
-    ):
-        return self._engine.warmup_model_prefill(
-            kv_cache=kv_cache,
-            enable_trace=enable_trace,
-            can_sample_on_device=can_sample_on_device,
-            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
-        )
+    def warmup_model_prefill(self, seq_lens, make_tokens, make_page_table):
+        return self._engine.warmup_model_prefill(seq_lens, make_tokens, make_page_table)
 
     # =========================================================================
     # Compile — delegate to engine
@@ -908,7 +901,6 @@ class TracedLlamaExecutor:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
-        enable_trace=True,
         sampling_params=None,
         start_pos=None,
     ):
@@ -918,7 +910,6 @@ class TracedLlamaExecutor:
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
-            enable_trace=enable_trace,
             sampling_params=sampling_params,
             start_pos=start_pos,
         )
@@ -929,7 +920,6 @@ class TracedLlamaExecutor:
         start_pos,
         page_table,  # Required
         kv_cache=None,
-        enable_trace=True,
         read_from_device=True,
         sampling_params=None,
     ):
@@ -938,7 +928,6 @@ class TracedLlamaExecutor:
             start_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
         )

@@ -347,7 +347,6 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size, ca
             num_decode_tokens=128,
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
-            enable_trace=True,
         )
 
         logger.info(

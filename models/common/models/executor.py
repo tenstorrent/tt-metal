@@ -27,7 +27,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.models.module_input_validation import validate_module_input_configs
+from models.common.models.module_input_validation import suspend_module_input_validation, validate_module_input_configs
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_ttnn_value
 from models.tt_transformers.tt.common import (
@@ -1148,13 +1148,29 @@ class TracedLLMExecutor:
             page_table=page_table,
             last_token_idx=last_token_idx,
         )
+        trace_inputs = self.trace_inputs_prefill[prefill_seq_len]
         copy_host_to_device(
-            host_tensors=host_inputs,
-            device_tensors=self.trace_inputs_prefill[prefill_seq_len],
+            host_tensors=(host_inputs[0], host_inputs[3], host_inputs[4]),
+            device_tensors=(trace_inputs[0], trace_inputs[3], trace_inputs[4]),
         )
 
         ttnn.execute_trace(self.mesh_device, self.trace_id_prefill[prefill_seq_len], cq_id=0, blocking=False)
         return self.trace_output_prefill[prefill_seq_len]
+
+    def _run_prefill_trace_body(self, device_inputs, user_id):
+        tokens_embd = self.model.embed_prefill(device_inputs[0])
+        rot_mats = [device_inputs[1], device_inputs[2]]
+        tt_page_table = device_inputs[3]
+        tt_chunk_page_table = device_inputs[4]
+
+        return self.model.prefill_forward(
+            tokens_embd,
+            rot_mats,
+            user_id=user_id,
+            page_table=tt_page_table,
+            chunk_page_table=tt_chunk_page_table,
+            get_last_token=-1,
+        )
 
     def _capture_and_run_prefill_trace(self, tokens, page_table, user_id, last_token_idx, prefill_seq_len):
         """Compile + capture trace for a specific prefill seq_len."""
@@ -1165,6 +1181,7 @@ class TracedLLMExecutor:
             user_id=user_id,
             last_token_idx=last_token_idx,
         )
+        ttnn.synchronize_device(self.mesh_device)
         logger.info(f"Compiled prefill for seq_len={prefill_seq_len}")
 
         host_inputs = self._prepare_prefill_trace_inputs_host(
@@ -1174,23 +1191,19 @@ class TracedLLMExecutor:
         )
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
+        with suspend_module_input_validation():
+            trace_warmup_output = self._run_prefill_trace_body(device_inputs, user_id)
+        ttnn.synchronize_device(self.mesh_device)
+        cleanup_ttnn_value(trace_warmup_output)
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Compiled trace-compatible prefill for seq_len={prefill_seq_len}")
+
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-
-        # todo)) clean up these code
-        tokens_embd = self.model.embed_prefill(device_inputs[0])
-        tt_page_table = device_inputs[3]
-        tt_chunk_page_table = device_inputs[4]
-
-        logits = self.model.prefill_forward(
-            tokens_embd,
-            device_inputs[1],
-            user_id=user_id,
-            page_table=tt_page_table,
-            chunk_page_table=tt_chunk_page_table,
-            get_last_token=-1,
-        )
+        with suspend_module_input_validation():
+            logits = self._run_prefill_trace_body(device_inputs, user_id)
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
 
         self.trace_id_prefill[prefill_seq_len] = trace_id
         self.trace_inputs_prefill[prefill_seq_len] = device_inputs
@@ -1291,6 +1304,7 @@ class TracedLLMExecutor:
             read_from_device=False,
             sampling_params=None,
         )
+        ttnn.synchronize_device(self.mesh_device)
         logger.info("Compiled decode")
 
         host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
@@ -1298,26 +1312,28 @@ class TracedLLMExecutor:
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
-        tt_tokens, tt_current_pos, tt_rot_mat_idxs, tt_page_table = device_inputs
-        rot_mats = self.model.rope_setup.get_rot_mats(tt_rot_mat_idxs)
-        x_embed = self.model.embed_decode(tt_tokens)
+        with suspend_module_input_validation():
+            tt_tokens, tt_current_pos, tt_rot_mat_idxs, tt_page_table = device_inputs
+            rot_mats = self.model.rope_setup.get_rot_mats(tt_rot_mat_idxs)
+            x_embed = self.model.embed_decode(tt_tokens)
 
-        logits = self.model.decode_forward(
-            x_embed,
-            tt_current_pos,
-            rot_mats,
-            page_table=tt_page_table,
-        )
+            logits = self.model.decode_forward(
+                x_embed,
+                tt_current_pos,
+                rot_mats,
+                page_table=tt_page_table,
+            )
 
-        if sampling_on_device and self.model.sampling is not None:
-            self.model.increment_positions(tt_current_pos, tt_rot_mat_idxs)
-            tt_toks, tt_log_probs = self.model.sampling.decode_forward(logits, tt_out_tok=tt_tokens)
-            output = (tt_toks, tt_log_probs)
-        else:
-            logits = self.model.gather_and_untilize_logits(logits)
-            output = (logits, None)
+            if sampling_on_device and self.model.sampling is not None:
+                self.model.increment_positions(tt_current_pos, tt_rot_mat_idxs)
+                tt_toks, tt_log_probs = self.model.sampling.decode_forward(logits, tt_out_tok=tt_tokens)
+                output = (tt_toks, tt_log_probs)
+            else:
+                logits = self.model.gather_and_untilize_logits(logits)
+                output = (logits, None)
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
 
         self.trace_ids_decode[sampling_on_device] = trace_id
         self.trace_inputs_decode[sampling_on_device] = device_inputs
@@ -1576,7 +1592,7 @@ class PerfBenchmarkResult:
 
 
 def run_perf_benchmark(
-    executor: EagerLLMExecutor | TracedLLMExecutor,
+    executor: TracedLLMExecutor,
     *,
     tokens: torch.Tensor,
     kv_cache: list,

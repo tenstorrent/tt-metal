@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import functools
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from loguru import logger
 import ttnn
 
 NamedModuleIterator = Callable[[object], Iterable[tuple[str, object]]]
+_validation_suspend_depth = contextvars.ContextVar("module_input_validation_suspend_depth", default=0)
 
 
 @dataclass
@@ -22,6 +24,16 @@ class ConfigMismatch:
     expected_memcfg: ttnn.MemoryConfig
     actual_memcfg: ttnn.MemoryConfig
     # todo)) check for more details like dtype --> example: somebody messed up and run compile with float32 but actual is bfloat16 --> meaning unexpected compilation time included in the actual run
+
+
+@contextlib.contextmanager
+def suspend_module_input_validation():
+    """Temporarily bypass validation checks while keeping wrapped methods installed."""
+    token = _validation_suspend_depth.set(_validation_suspend_depth.get() + 1)
+    try:
+        yield
+    finally:
+        _validation_suspend_depth.reset(token)
 
 
 @contextlib.contextmanager
@@ -62,7 +74,7 @@ def validate_module_input_configs(
             @functools.wraps(orig)
             def wrapper(x, *args, **kwargs):
                 # TODO: replace monkey-patched method interception with explicit module-level validation hooks.
-                if isinstance(x, ttnn.Tensor) and x.is_allocated():
+                if _validation_suspend_depth.get() <= 0 and isinstance(x, ttnn.Tensor) and x.is_allocated():
                     actual = x.memory_config()
                     logger.info(
                         f"[validate_module_configs] Validating module configs in {mode} mode: "
