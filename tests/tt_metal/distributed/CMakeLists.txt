@@ -56,6 +56,10 @@ target_sources(
         test_gap56_fixm2_dead_peer_erisc_reset.cpp
         test_gap57_fixpl_barrier_guard_dead_relay.cpp
         test_gap58_fixqc_nonmmio_reset_cores_skip.cpp
+        test_gap59_fixqb_reset_loop_early_break.cpp
+        test_gap60_fixpypz_phase25_topology_timeout.cpp
+        test_gap61_fixqd_dead_router_mmio_skip.cpp
+        test_gap62_fixqu_reassert_flags_after_configure.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
