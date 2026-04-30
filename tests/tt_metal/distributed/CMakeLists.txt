@@ -60,6 +60,10 @@ target_sources(
         test_gap60_fixpypz_phase25_topology_timeout.cpp
         test_gap61_fixqd_dead_router_mmio_skip.cpp
         test_gap62_fixqu_reassert_flags_after_configure.cpp
+        test_gap63_fixny_relay_mux_cluster_guard.cpp
+        test_gap64_fixtb_topology_mapper_unknown_asic.cpp
+        test_gap65_fixqv_phase4_skip_channels_not_ready.cpp
+        test_gap66_fixrz_stale_base_umd_flag.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
