@@ -81,7 +81,7 @@ class DotsTransformer(TTTransformer):
                     mat.expand(cos_matrix.shape[0], -1, -1, -1),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=self.rope_setup.datatype,
+                    dtype=self.dtype,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 ),
             )
