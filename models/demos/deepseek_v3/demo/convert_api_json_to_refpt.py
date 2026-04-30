@@ -18,6 +18,10 @@ Usage:
 The resulting ``.refpt`` stores only the tensors the test needs (prompt token
 IDs, ground-truth generated token IDs, top-5 predictions) — no raw text — so
 it is typically <100 KB (LZMA-compressed) instead of the ~93 MB JSON.
+
+Prompt IDs use the same chat-template encoding as the TT demo (user message +
+``add_generation_prompt=True``). Regenerate committed ``.refpt`` files after
+changing tokenizer/chat-template behavior.
 """
 
 from __future__ import annotations
@@ -31,6 +35,27 @@ from typing import Optional
 
 import torch
 from tqdm import tqdm
+
+
+def encode_prompt_like_generator(tokenizer, prompt_text: str) -> list[int]:
+    """Match TT demo chat encoding: single user turn + generation prompt (see DeepseekGeneratorDP._encode_prompt)."""
+    messages = [{"role": "user", "content": prompt_text}]
+    try:
+        out = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_tensors=None,
+        )
+    except Exception as e:
+        raise RuntimeError(
+            "apply_chat_template failed; regenerate .refpt with a tokenizer that supports chat templates."
+        ) from e
+    if isinstance(out, torch.Tensor):
+        ids = out.flatten().tolist()
+    else:
+        ids = list(out)
+    return [int(x) for x in ids]
 
 
 def api_token_to_id(tokenizer, token_str: str, token_bytes: Optional[list[int]]) -> int:
@@ -94,7 +119,7 @@ def build_entries_from_api_json(
         generated_text: str = item.get("generated_text", "")
         steps: list[dict] = item.get("top_logprobs_per_step", [])
 
-        prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+        prompt_ids = encode_prompt_like_generator(tokenizer, prompt_text)
 
         if steps:
             generated_tokens = [
@@ -225,6 +250,7 @@ def main() -> None:
             "eos_id": getattr(tokenizer, "eos_token_id", None),
             "bos_id": getattr(tokenizer, "bos_token_id", None),
             "pad_id": getattr(tokenizer, "pad_token_id", None),
+            "prompt_encoding": "chat_template_user_add_generation_prompt",
         },
         "tensor_lzma": compressed,
         "entry_layout": layout,
