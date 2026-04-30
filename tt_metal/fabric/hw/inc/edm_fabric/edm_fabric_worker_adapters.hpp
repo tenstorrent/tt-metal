@@ -365,6 +365,14 @@ struct WorkerToFabricEdmSenderBase {
             credit_noc_addr, packed_val, 0xF, this->sync_noc_cmd_buf, noc, NOC_UNICAST_WRITE_VC);
     }
 
+    // Advanced usage API:
+    // Override the cmd buffers used by the stateful send path.
+    // Must be called before setup_stateful_send_cmd_bufs().
+    FORCE_INLINE void set_stateful_cmd_bufs(uint8_t data_noc_cmd_buf, uint8_t sync_noc_cmd_buf) {
+        this->data_noc_cmd_buf = data_noc_cmd_buf;
+        this->sync_noc_cmd_buf = sync_noc_cmd_buf;
+    }
+
     template <bool posted = false>
     FORCE_INLINE void send_current_slot_stateful_non_blocking(
         uint32_t payload_source_l1_addr,
