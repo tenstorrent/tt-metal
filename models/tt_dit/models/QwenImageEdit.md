@@ -84,9 +84,39 @@ This implementation maximally reuses existing tt-dit components:
 | `QwenImageTransformer` | `models/transformers/transformer_qwenimage.py` |
 | `QwenImageVaeDecoder` | `models/vae/vae_qwenimage.py` (wraps Wan 2.1 decoder) |
 | `Qwen25VlTokenizerEncoderPair` | `encoders/qwen25vl/encoder_pair.py` |
+| `Qwen25VlMultimodalPreprocessor` | `encoders/qwen25vl/multimodal_preprocess.py` |
 | `TransformerBlock` / `Attention` | `blocks/transformer_block.py`, `blocks/attention.py` |
 | `ParallelFeedForward` | `layers/feedforward.py` |
 | Parallel config utilities | `parallel/config.py`, `parallel/manager.py` |
+
+
+## Device / Host Residency
+
+| Stage | Runs on | Notes |
+|-------|---------|-------|
+| Prompt tokenization + VL image preprocessing | Host | `Qwen25VlMultimodalPreprocessor`: edit-checkpoint `Qwen2Tokenizer` + `AutoImageProcessor` from `Qwen/Qwen2.5-VL-7B-Instruct` (same tensors as the former `Qwen2VLProcessor` contract). See `encoders/qwen25vl/multimodal_preprocess.py` and `tests/encoders/qwen25vl/test_multimodal_preprocess_contract.py` |
+| Vision tower forward (32-layer ViT + patch merger) | Device | `Qwen25VlVisionEncoder` on the encoder submesh |
+| Image-feature splice into LLM token embeddings | Device (FSDP-aware) | `_get_tp_image_col_proj` now builds a `ColParallelLinear` with the same `fsdp_mesh_axis` as `embed_tokens`, removing the prior torch fallback for FSDP>1 encoder submeshes. Verified by `tests/encoders/qwen25vl/test_encode_with_images_parity.py` (text-token PCC ≥ 0.90, image-token PCC ≥ 0.35 regression floors) |
+| Text LLM forward (28-layer Qwen2.5-LLM) | Device | `Qwen25VlTextEncoder`; text-token hidden states match the torch reference at ~0.97 PCC |
+| Prompt slice + pad + mask (`PROMPT_DROP_IDX_EDIT` → `IMAGE_PROMPT_PAD_SEQ_LEN`) | Device | `Qwen25VlTokenizerEncoderPair._finalize_edit_prompt_device` runs `ttnn.slice` + `ttnn.pad` + mask multiply on the encoder submesh; pipeline enters this path via `encode_with_images(..., omit_final_host_gather=True)`. Covered end-to-end by `tests/models/qwenimageedit/test_pipeline_qwenimageedit.py` |
+| Last hidden → host + per-submesh upload | Host round-trip | Needed to broadcast prompt embeddings across transformer submeshes. Blocked on a new inter-submesh fabric primitive (requires C++/platform work); kept on host by design |
+| Noise sampling | Device | `torch.randn` uploaded to device via `from_torch(on_host=False)` and pulled into the traced prompt-step graph |
+| Latent packing (noise + reference image) | Device | `tensor.pack_latents_device` on each submesh, combined with `ttnn.concat`. Replaces the legacy host `_pack_latents` call |
+| VAE image encode | Device (VAE submesh) → host scatter | The VAE submesh runs the encoder and applies `(latents - mean) / std` normalization on-device (`ttnn.subtract` + `ttnn.multiply` against a replicated `(1, C, 1, 1)` bf16 constant). The resulting latents are gathered to host only to fan out to the transformer submeshes — blocked on the same cross-submesh fabric primitive as above |
+| RoPE frequency tables (spatial + prompt) | Device | Built by `QwenPosEmbedTT.build` and sharded with `ttnn.mesh_partition` when `sp_factor > 1` |
+| Denoising loop (transformer + scheduler step) | Device | Fully traced |
+| VAE decode | Device (VAE submesh) | |
+
+### TT-NN image preprocessing (optional Phase 2)
+
+Moving resize/normalize/patch-pack onto wormhole with `ttnn` was **not** pursued: host-side multimodal prep is a small fraction of end-to-end latency, and a fixed-resolution ttnn path would add significant PCC and maintenance cost for little gain. Revisit only if profiling shows preprocessing as a bottleneck.
+
+### Known numerical caveat
+
+`encode_with_images` last-hidden PCC versus the torch reference is split:
+
+- Text-token positions: ~0.97 PCC (comparable to `test_qwen25vl_text_encoder`).
+- Image-token positions: ~0.42 PCC, dominated by bf16 accumulation across the 32-block vision ViT. The end-to-end pipeline gate still passes and produces visually comparable output to the torch-VL baseline. A follow-up task is to selectively promote hot ViT layers to f32 accumulation; see `tests/encoders/qwen25vl/test_encode_with_images_parity.py` for the regression floor.
 
 
 ## Weight Key Mapping

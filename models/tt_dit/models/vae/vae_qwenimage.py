@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import torch
+
 import ttnn
 
 from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
@@ -16,8 +18,6 @@ from ...utils.tensor import bf16_tensor_2dshard
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-    import torch
 
 
 class QwenImageVaeDecoder:
