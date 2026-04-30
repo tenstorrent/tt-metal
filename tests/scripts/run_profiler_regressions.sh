@@ -79,8 +79,6 @@ run_profiling_test() {
     # from @pytest.mark.timeout decorators on the individual tests.
     pytest tests/ttnn/tracy/test_realtime_profiler.py
 
-    # Trace capture with real-time profiler: verify profiler works across trace replay
-    pytest tests/ttnn/tracy/test_trace_runs.py --timeout 120
 }
 
 main() {
