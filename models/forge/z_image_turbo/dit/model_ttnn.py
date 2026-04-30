@@ -392,7 +392,7 @@ class ZImageTransformerTTNN(LightweightModule):
         x = self._ccl.reduce_scatter(old_x, dim=3, mesh_axis=1, use_persistent_buffer=True)
         ttnn.deallocate(old_x, False)
         old_x = x
-        x = self._ccl.all_gather(old_x, dim=3, mesh_axis=1, use_hyperparams=True, use_persistent_buffer=True)
+        x = self._ccl.all_gather(old_x, dim=3, mesh_axis=1, use_hyperparams=False, use_persistent_buffer=True)
         ttnn.deallocate(old_x, False)
         old_x = x
         x = ttnn.reshape(old_x, [1, seq_len, HIDDEN_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
