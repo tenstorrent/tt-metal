@@ -48,6 +48,11 @@ SINGLE_POD_NUM_PROCS = 16
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
             "fabric_router_config": create_fabric_router_config(15232),
+            # Must match the demo CLI's worker_l1_size (cli.py:46). Without this, the
+            # MoE stage's L1-budget-driven sharding falls back to an unsharded tensor
+            # and CBDescriptor creation asserts:
+            #   TT_FATAL: Tensor must be sharded to automatically create a CBDescriptor
+            "worker_l1_size": 1431568,
         }
     ],
     indirect=True,
