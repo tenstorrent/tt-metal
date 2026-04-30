@@ -193,7 +193,6 @@ def run_all_broadcast_impl(
                 ttnn.MeshMapperConfig(placement, logical_shape),
             ),
         )
-        # breakpoint()
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -216,9 +215,7 @@ def run_all_broadcast_impl(
             tt_out_tensor_list.append(tt_out_tensor)
         else:
             logger.info("Running all broadcast")
-            # breakpoint()
             for i in range(num_iters):
-                logger.info(f"Running all broadcast for iter {i}")
                 tt_out_tensors = ttnn.all_broadcast(
                     input_tensor_mesh_list[i],
                     num_links=num_links,
@@ -227,11 +224,9 @@ def run_all_broadcast_impl(
                     topology=all_broadcast_topology,
                     subdevice_id=worker_sub_device_id,
                 )
-                logger.info(f"Appending result for iter {i}")
                 tt_out_tensor_list.append(tt_out_tensors)
 
             logger.info(f"Waiting for op")
-            # breakpoint()
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done op")
 
@@ -244,8 +239,7 @@ def run_all_broadcast_impl(
             output_tensor = output_tensors[k]
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensors[k])):
                 logger.info(f"calculating output tensor...")
-                # breakpoint()
-                tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()  # hanging
+                tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
                 logger.info(f"Checking for device {t.device().id()}")
                 if input_dtype == ttnn.bfloat16:
                     eq, output = comp_equal(tt_output_tensor, output_tensor)
