@@ -264,7 +264,28 @@ def test_10_videos_back_to_back(mesh_device, tt_model, processor, video_tests):
 
         # ---- Preprocess ----
         t0 = time.time()
-        input_ids, pv, pool_idx, token_type_ids = build_video_inputs(processor, vpath, prompt)
+        try:
+            input_ids, pv, pool_idx, token_type_ids = build_video_inputs(processor, vpath, prompt)
+        except Exception as e:
+            # decord / ffmpeg errors on corrupt/unsupported video files
+            t_prep = time.time() - t0
+            logger.error(f"  PREPROCESS ERROR: {e}  ({t_prep:.1f}s) — skipping")
+            fail_count += 1
+            results.append(
+                {
+                    "test_index": idx,
+                    "expected": ref,
+                    "response": f"PREPROCESS_ERROR: {e}",
+                    "status": "ERROR",
+                    "seq_len": -1,
+                    "prep_s": round(t_prep, 3),
+                    "gen_s": None,
+                    "total_s": round(time.time() - t0, 3),
+                }
+            )
+            with open(results_path, "a") as f:
+                f.write(json.dumps(results[-1]) + "\n")
+            continue
         S = input_ids.shape[1]
         t_prep = time.time() - t0
         logger.info(f"  preprocess: {t_prep:.1f}s  seq_len={S}")
