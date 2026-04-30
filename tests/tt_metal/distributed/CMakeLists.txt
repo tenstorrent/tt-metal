@@ -45,6 +45,13 @@ target_sources(
         test_gap45_fixx_ext_eth_training_fabric_erisc.cpp
         test_gap46_fixny_relay_broken_chips_cache.cpp
         test_gap47_fixnz_read_core_relay_guard.cpp
+        test_gap48_fixpa_fw_launch_addr_force_reset.cpp
+        test_gap49_fixpb_fw_launch_addr_rescue.cpp
+        test_gap50_fixpd_fw_launch_addr_quiesce.cpp
+        test_gap51_fixpf_umd_heartbeat_skip_exit.cpp
+        test_gap52_fixpg_phase25_relay_retry.cpp
+        test_gap53_fixph_yaml_ethcoord_graceful_skip.cpp
+        test_gap54_fixba_teardown_null_control_plane.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
