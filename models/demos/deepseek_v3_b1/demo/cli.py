@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import sys
 import time
@@ -175,7 +176,6 @@ def run_demo(
     logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
 
     with open_mesh_device() as mesh_device:
-        # Initialize model pipeline
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             weights_mode=weights_mode,
@@ -195,52 +195,68 @@ def run_demo(
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
         )
 
-        my_mesh_id = mesh_device.get_system_mesh_id()
-        if my_mesh_id == 0 and not launch_only:
-            tokenizer = load_tokenizer(tokenizer_name_or_path)
-            messages = [{"role": "user", "content": prompt}]
-            prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            logger.debug("Prompt with chat template: {}", prompt)
+        try:
+            my_mesh_id = mesh_device.get_system_mesh_id()
+            if my_mesh_id == 0 and not launch_only:
+                tokenizer = load_tokenizer(tokenizer_name_or_path)
+                messages = [{"role": "user", "content": prompt}]
+                prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                logger.debug("Prompt with chat template: {}", prompt)
 
-            prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-            think_open_id = tokenizer.encode("<think>", add_special_tokens=False)
-            think_close_id = tokenizer.encode("</think>", add_special_tokens=False)
-            if len(think_open_id) != 1 or len(think_close_id) != 1:
-                raise RuntimeError("Thinking token IDs must be single tokens")
-            if not prompt_ids:
-                raise RuntimeError("Chat template produced an empty prompt")
-            logger.debug(f"Encoded prompt: {prompt_ids}")
+                prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+                think_open_id = tokenizer.encode("<think>", add_special_tokens=False)
+                think_close_id = tokenizer.encode("</think>", add_special_tokens=False)
+                if len(think_open_id) != 1 or len(think_close_id) != 1:
+                    raise RuntimeError("Thinking token IDs must be single tokens")
+                if not prompt_ids:
+                    raise RuntimeError("Chat template produced an empty prompt")
+                logger.debug(f"Encoded prompt: {prompt_ids}")
 
-            logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
-            generated_tokens = model_pipeline.run_inference(
-                prompt_token_ids=prompt_ids,
-                max_new_tokens=iterations,
-                eos_token_id=tokenizer.eos_token_id,
-                think_token_ids=[think_open_id[0], think_close_id[0]],
-                return_generated_tokens=True,
-            )
-            assert generated_tokens is not None
-            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
+                logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
+                generated_tokens = model_pipeline.run_inference(
+                    prompt_token_ids=prompt_ids,
+                    max_new_tokens=iterations,
+                    eos_token_id=tokenizer.eos_token_id,
+                    think_token_ids=[think_open_id[0], think_close_id[0]],
+                    return_generated_tokens=True,
+                )
+                assert generated_tokens is not None
+                generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
-        if launch_only and my_mesh_id == 0:
-            # Keep process/pipeline alive until user interrupts
-            # Only runs on mesh 0, all other processes wait for a barrier
-            logger.info("Pipeline launched; keeping sockets alive until interrupted.")
-            try:
-                while True:
-                    time.sleep(3600)
-            except KeyboardInterrupt:
-                logger.info("Shutting down launch-only pipeline after interrupt.")
+            if launch_only and my_mesh_id == 0:
+                # Keep process/pipeline alive until user interrupts
+                # Only runs on mesh 0, all other processes wait for a barrier
+                logger.info("Pipeline launched; keeping sockets alive until interrupted.")
+                try:
+                    while True:
+                        time.sleep(3600)
+                except KeyboardInterrupt:
+                    logger.info("Shutting down launch-only pipeline after interrupt.")
 
-        model_pipeline.barrier()
+            model_pipeline.barrier()
 
-        logger.info("Pod pipeline complete - terminating now...")
-        model_pipeline.terminate()
+            logger.info("Pod pipeline complete - terminating now...")
+            model_pipeline.terminate()
+        finally:
+            # Release every device-resident ``ttnn.Tensor`` held by the
+            # pipeline *before* ``close_mesh_device`` runs in
+            # ``open_mesh_device.__exit__``.  Otherwise ``model_pipeline``
+            # (and the weight tensors it owns) would only be garbage-collected
+            # after ``run_demo`` returns, at which point the per-device
+            # ``AllocatorImpl`` is already torn down.
+            # ``Tensor::~Tensor → MeshBuffer::deallocate →
+            # device->allocator_impl()->unmirror_lockstep_allocation`` then
+            # dereferences the freed allocator's mutex and segfaults
+            # (``pthread_mutex_lock`` at address 0x10).  An explicit ``del``
+            # plus ``gc.collect()`` forces all destructors to run while the
+            # allocator is still alive.
+            del model_pipeline
+            gc.collect()
 
 
 def main(argv: list[str] | None = None) -> int:
