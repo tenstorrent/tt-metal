@@ -213,6 +213,46 @@ void FabricFirmwareInitializer::configure() {
                 "verify_all_fabric_channels_healthy() to allow clean teardown (FIX AM). "
                 "Fabric is degraded — tests will fail at fabric-op time.",
                 dead_relay_devices_.size());
+
+            // FIX QU (#42429): Re-assert per-device flags after Device::configure_fabric() resets them.
+            //
+            // Device::configure_fabric() resets fabric_relay_path_broken_ = false AND
+            // fabric_channels_not_ready_for_traffic_ = false at its top (correct for a clean
+            // quiesce cycle where fresh firmware is loaded).  But for devices in dead_relay_devices_
+            // or mmio_dead_master_chan_devices_, the fabric path IS still degraded — fresh firmware
+            // was NOT loaded on the dead channels.  The flag reset leaves both flags as false, so
+            // test-fixture guards (FIX QS: is_fabric_relay_path_broken() ||
+            // is_fabric_channels_not_ready_for_traffic()) see a healthy-looking cluster and proceed
+            // to dispatch tensor operations to devices that have no dispatch kernel.  Those ops then
+            // hang for TT_METAL_OPERATION_TIMEOUT_SECONDS before throwing TIMEOUT.
+            //
+            // Re-assert the correct flags here so any test guard that runs after configure() sees
+            // the true degraded state and can SKIP or fail fast (#42429 FIX QU).
+            for (auto* dev : devices_) {
+                if (!dev) {
+                    continue;
+                }
+                if (dead_relay_devices_.count(dev->id()) > 0) {
+                    dev->set_fabric_relay_path_broken();
+                    log_warning(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::configure: FIX QU (#42429) — re-asserting "
+                        "fabric_relay_path_broken_ for Device {} (dead-relay; "
+                        "Device::configure_fabric() reset it to false). "
+                        "Test guards will now correctly detect degraded fabric.",
+                        dev->id());
+                }
+                if (mmio_dead_master_chan_devices_.count(dev->id()) > 0) {
+                    dev->set_fabric_channels_not_ready_for_traffic();
+                    log_warning(
+                        tt::LogMetal,
+                        "FabricFirmwareInitializer::configure: FIX QU (#42429) — setting "
+                        "fabric_channels_not_ready_for_traffic_ for Device {} (MMIO dead-master-chan; "
+                        "verify_all_fabric_channels_healthy() was skipped by FIX AM). "
+                        "Test guards will now correctly detect degraded fabric.",
+                        dev->id());
+                }
+            }
         } else {
             verify_all_fabric_channels_healthy();
         }
