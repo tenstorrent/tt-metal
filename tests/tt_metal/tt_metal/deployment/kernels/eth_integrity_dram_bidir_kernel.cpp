@@ -23,11 +23,15 @@
     X(uint32_t, read_bank) \
     X(uint32_t, write_bank)
 
+void noc_barrier() {
+    noc_async_full_barrier();
+    noc_async_full_barrier(1);
+}
+
 uint32_t dram_to_buf(
     uint32_t read_bank, uint32_t end_addr, uint32_t curraddr, uint32_t transfer_size, uint32_t sendbuf) {
     uint32_t remaining_send = end_addr - curraddr;
     uint32_t to_send = remaining_send > transfer_size ? transfer_size : remaining_send;
-    DPRINT << __func__ << " \t" << HEX() << curraddr << " " << transfer_size << " " << to_send << ENDL();
 
     uint64_t noc_addr = get_noc_addr_from_bank_id<true>(read_bank, curraddr);
     noc_async_read(noc_addr, sendbuf, to_send);
@@ -39,7 +43,6 @@ uint32_t buf_to_dram(
     uint32_t write_bank, uint32_t end_addr, uint32_t curraddr, uint32_t transfer_size, uint32_t recvbuf) {
     uint32_t remaining_send = end_addr - curraddr;
     uint32_t to_send = remaining_send > transfer_size ? transfer_size : remaining_send;
-    DPRINT << __func__ << " \t" << HEX() << curraddr << " " << transfer_size << " " << to_send << ENDL();
 
     uint64_t noc_addr = get_noc_addr_from_bank_id<true>(write_bank, curraddr);
     noc_async_write(recvbuf, noc_addr, to_send);
@@ -55,9 +58,9 @@ uint32_t buf_to_eth(
     uint32_t sendbuf,
     uint32_t recvbuf,
     uint32_t send_size) {
+    /* ============== */
     uint32_t remaining_send = end_addr - curraddr;
     uint32_t to_send = remaining_send > transfer_size ? transfer_size : remaining_send;
-    DPRINT << __func__ << " \t" << HEX() << curraddr << " " << transfer_size << " " << to_send << ENDL();
     eth_send_bytes_over_channel(sendbuf, recvbuf, to_send, chan, send_size, send_size >> 4);
 
     return to_send;
@@ -107,7 +110,7 @@ void kernel_main() {
 
         curr_recv_addr += buf_to_dram(write_bank, dram_end_addr, curr_recv_addr, transfer_size, recvbuf0);
 
-        noc_async_full_barrier();
+        noc_barrier();
 
         eth_wait_for_bytes_on_channel(to_recv, channel1);
         eth_receiver_channel_done(channel1);
@@ -122,14 +125,14 @@ void kernel_main() {
 
     curr_recv_addr += buf_to_dram(write_bank, dram_end_addr, curr_recv_addr, transfer_size, recvbuf0);
 
-    noc_async_full_barrier();
+    noc_barrier();
 
     eth_wait_for_bytes_on_channel(to_recv, channel1);
     eth_receiver_channel_done(channel1);
     eth_wait_for_receiver_channel_done(channel0);
 
     buf_to_dram(write_bank, dram_end_addr, curr_recv_addr, transfer_size, recvbuf1);
-    noc_async_full_barrier();
+    noc_barrier();
 
     uint64_t delta = timestamp() - start;
 
