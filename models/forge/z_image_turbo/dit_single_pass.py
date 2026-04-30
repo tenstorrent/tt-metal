@@ -276,13 +276,22 @@ def _apply_cached_freqs_patch():
         ttnn.deallocate(out_imag, False)
         old_q_rot = q_rot
         q_rot = ttnn.reshape(
-            old_q_rot, [1, seq_len, num_heads, dit_mod.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            old_q_rot, [1, 1, seq_len, num_heads * dit_mod.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(old_q_rot, False)
         old_q_rot = q_rot
-        q_rot = ttnn.permute(old_q_rot, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
-        ttnn.deallocate(old_q_rot, False)
-        return q_rot
+        q_rot = self._ensure_tile(old_q_rot)
+        if q_rot is not old_q_rot:
+            ttnn.deallocate(old_q_rot, False)
+        q_out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q_rot,
+            num_heads=num_heads,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q_rot, False)
+        return q_out
 
     dit_mod.ZImageTransformerTTNN._apply_rope = _apply_rope_cached
 
