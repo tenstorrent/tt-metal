@@ -200,9 +200,28 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             # Input is TP-sharded, need to gather
             # Use MoE's all_gather config which outputs the correct memory layout for MoEGate
             ccl_moe = cfg["moe"]["ccl"]
-            x_gathered = ttnn.experimental.all_gather_async(
-                x, **ccl_moe.populate_all_gather_runtime_args(cfg["moe"]["revert_tp"])
+            temp = ccl_moe.populate_all_gather_runtime_args(cfg["moe"]["revert_tp"])
+
+            in0_core_coords = x.device().get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+            in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+            in0_core_range = [
+                ttnn.CoreRange(in0_core_coord, in0_core_coord) for in0_core_coord in in0_core_coords_sorted
+            ]
+            in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+            in0_shard_spec = ttnn.ShardSpec(
+                grid=in0_core_range_set,
+                shard_shape=(32, 7168),
+                shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             )
+            input_sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
+            )
+            breakpoint()
+            temp["memory_config"] = input_sharded_mem_config
+            temp["use_broadcast"] = True
+
+            breakpoint()
+            x_gathered = ttnn.experimental.all_gather_async(x, **temp)
         else:
             # Should always be TP-sharded at this point
             assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
