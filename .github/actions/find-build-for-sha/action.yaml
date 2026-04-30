@@ -28,10 +28,11 @@ inputs:
     default: 'true'
   check-wheel:
     description: >
-      Also check for a matching wheel artifact in the prior run.
-      When 'true' and a wheel is found in the same run as the C++ build,
-      wheel-found is set to 'true'. The C++ build (found) is accepted
-      regardless of whether a wheel exists.
+      Also require a matching wheel artifact in the prior run.
+      When 'true', found=true only if the same run contains BOTH a matching
+      C++ build artifact AND a matching wheel artifact. This ensures callers
+      never need to inspect more than one output — found=true means all
+      requested artifacts are available for reuse.
     required: false
     default: 'false'
   python-version:
@@ -65,15 +66,12 @@ outputs:
     value: ${{ steps.find.outputs.run-id }}
   found:
     description: >
-      'true' if a reusable C++ build artifact was found for this SHA and config.
-      wheel-found is set independently: true only if the same run also has a matching wheel.
+      'true' if all requested artifacts were found in a single prior run for
+      this SHA and config. When check-wheel=false, requires only a matching
+      C++ build. When check-wheel=true, requires both a matching C++ build
+      AND a matching wheel in the same run. Callers only need to check this
+      single output — no separate wheel-found output exists.
     value: ${{ steps.find.outputs.found }}
-  wheel-found:
-    description: '''true'' if a reusable wheel artifact was also found, ''false'' otherwise'
-    value: ${{ steps.find.outputs.wheel-found }}
-  wheel-run-id:
-    description: Run ID where the wheel artifact was found (always equals run-id when found, since build and wheel must come from the same run)
-    value: ${{ steps.find.outputs.wheel-run-id }}
 
 runs:
   using: composite
@@ -103,17 +101,21 @@ runs:
           // of scanning ALL repo artifacts (5M+) which can't be paginated
           // deep enough.
           //
-          // found=true as soon as ANY prior run has a matching C++ build.
-          // wheel-found=true only if the SAME run also has a matching wheel.
-          // A missing wheel never blocks C++ build reuse — the build-wheel
-          // job checks wheel-found independently.
+          // found=true iff ALL requested artifacts exist in a single prior run:
+          //   check-wheel=false: found=true when a matching C++ build exists.
+          //   check-wheel=true:  found=true when a matching C++ build AND a
+          //                      matching wheel exist in the SAME run.
+          //
+          // A run is skipped (not accepted) if it has C++ but no wheel when
+          // check-wheel=true — the search continues to the next run.
           //
           // Artifact name patterns (underscores for build, hyphens for wheel):
           //   TTMetal_build_any_{VERSION}_{ARCH}_{TOOLCHAIN}[_profiler][_no_distributed]_{BUILD_TYPE}_{SHA}_{RUN_ID}
           //   ttnn-dist-cp{PYVER}-{BUILD_TYPE}[-profiler]-{SHA}-{RUN_ID}
 
-          let foundBuild = null;
-          let foundWheel = null;
+          let foundRunId = null;
+          let foundBuildName = null;
+          let foundWheelName = null;
 
           function matchBuild(artifact) {
             if (!artifact.name.startsWith('TTMetal_build_any')) return false;
@@ -170,10 +172,10 @@ runs:
 
             console.log(`Found ${runsResp.data.workflow_runs.length} runs for SHA, ${runs.length} completed successfully (excluding current)`);
 
-            // Step 2: Check artifacts for each completed run.
-            // Accept the C++ build as soon as we find one (independent of wheel).
-            // If check-wheel is true, also record whether the SAME run has a
-            // matching wheel — but a missing wheel never blocks found=true.
+            // Step 2: For each completed run, scan artifacts until we find a
+            // run that satisfies ALL requirements. When check-wheel=true, a
+            // run with only a C++ build (no wheel) is skipped and the search
+            // continues to the next run.
             for (const run of runs) {
               let candidateBuild = null;
               let candidateWheel = null;
@@ -201,7 +203,7 @@ runs:
                   if (checkWheel && !candidateWheel && matchWheel(artifact)) {
                     candidateWheel = artifact;
                   }
-                  // Early exit if we found everything possible in this run
+                  // Early exit once all requested artifacts found in this run
                   if (candidateBuild && (!checkWheel || candidateWheel)) break;
                 }
 
@@ -210,16 +212,14 @@ runs:
                 page++;
               }
 
-              // Accept the C++ build if found (independent of wheel)
-              if (candidateBuild) {
-                foundBuild = candidateBuild;
-                foundBuild._runId = run.id;
-                // Also record wheel if this same run has one
-                if (checkWheel && candidateWheel) {
-                  foundWheel = candidateWheel;
-                  foundWheel._runId = run.id; // same-run guarantee
-                }
-                break; // stop searching once we have the C++ build
+              // Accept this run only if ALL requested artifacts are present.
+              // When check-wheel=true: both C++ AND wheel must exist in this run.
+              // When check-wheel=false: only C++ build required.
+              if (candidateBuild && (!checkWheel || candidateWheel)) {
+                foundRunId = run.id;
+                foundBuildName = candidateBuild.name;
+                if (candidateWheel) foundWheelName = candidateWheel.name;
+                break;
               }
             }
           } catch (err) {
@@ -227,32 +227,22 @@ runs:
             console.log('Hint: ensure the calling job has "actions: read" permission');
             core.setOutput('run-id', '');
             core.setOutput('found', 'false');
-            core.setOutput('wheel-found', 'false');
-            core.setOutput('wheel-run-id', '');
             return;
           }
 
-          if (foundBuild) {
-            const runId = foundBuild._runId || '';
-            console.log(`✅ Found reusable build artifact "${foundBuild.name}" from run ${runId}`);
-            core.setOutput('run-id', runId.toString());
+          if (foundRunId) {
+            console.log(`✅ Found reusable build artifact "${foundBuildName}" from run ${foundRunId}`);
+            if (foundWheelName) {
+              console.log(`✅ Found reusable wheel artifact "${foundWheelName}" from same run ${foundRunId}`);
+            }
+            core.setOutput('run-id', foundRunId.toString());
             core.setOutput('found', 'true');
           } else {
-            console.log('No reusable C++ build artifacts found — will build fresh');
+            if (checkWheel) {
+              console.log('No prior run found with both C++ build and wheel artifacts — will build fresh');
+            } else {
+              console.log('No reusable C++ build artifacts found — will build fresh');
+            }
             core.setOutput('run-id', '');
             core.setOutput('found', 'false');
-          }
-
-          if (foundWheel) {
-            // wheel-run-id is always the same as run-id (same-run guarantee)
-            const wheelRunId = foundWheel._runId || '';
-            console.log(`✅ Found reusable wheel artifact "${foundWheel.name}" from run ${wheelRunId}`);
-            core.setOutput('wheel-found', 'true');
-            core.setOutput('wheel-run-id', wheelRunId.toString());
-          } else {
-            if (checkWheel) {
-              console.log('No reusable wheel artifact found — will build wheel fresh');
-            }
-            core.setOutput('wheel-found', 'false');
-            core.setOutput('wheel-run-id', '');
           }

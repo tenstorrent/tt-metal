@@ -282,8 +282,6 @@ jobs:
     outputs:
       run-id: ${{ steps.find.outputs.run-id }}
       found: ${{ steps.find.outputs.found }}
-      wheel-found: ${{ steps.find.outputs.wheel-found }}
-      wheel-run-id: ${{ steps.find.outputs.wheel-run-id }}
     steps:
       - name: ⬇️ Checkout (actions only)
         uses: actions/checkout@v4
@@ -693,13 +691,12 @@ jobs:
 
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    # Skip when a wheel artifact is confirmed available from a prior run.
-    # NOTE: We check wheel-found (not found) because found only confirms a C++ build
-    # artifact exists — a prior run may have had build-wheel=false, so no wheel was built.
+    # Skip when a prior run with BOTH C++ and wheel artifacts was found (found=true with check-wheel=true).
+    # found=true guarantees the wheel is present in the same run as the C++ build.
     if: >-
       ${{ always() && !failure() && !cancelled() && inputs.build-wheel &&
           inputs.use-artifacts-from-run == '' &&
-          needs.find-existing-build.outputs.wheel-found != 'true' }}
+          needs.find-existing-build.outputs.found != 'true' }}
     name: 🐍 Build wheel (Python ${{ needs.determine-python-version.outputs.python-version }})
     uses: ./.github/workflows/wheels.yaml
     needs: [parse-platform, build-docker-image, determine-python-version, find-existing-build]
