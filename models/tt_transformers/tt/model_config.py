@@ -472,6 +472,8 @@ class ModelArgs:
         "Llama-3.2-90B-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
+        # Keep direct HF repo mapping for bring-up flows where local model_params are not yet vendored.
+        "Mistral-Small-4-119B-2603": "mistralai/Mistral-Small-4-119B-2603",
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Phi-4": "models/tt_transformers/model_params/phi-4",
@@ -576,7 +578,8 @@ class ModelArgs:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
-        if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
+        # Some newer models require remote code to resolve config/model classes.
+        if self.base_model_name in ["Phi-3-mini-128k-instruct", "Mistral-Small-4-119B"]:
             self.trust_remote_code_hf = True
 
         self._set_hf_params(self.CKPT_DIR)
@@ -2332,6 +2335,7 @@ class ModelArgs:
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Mistral-Small-4-119B": {"N150": 4, "N300": 8, "T3K": 32, "TG": 128, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2829,7 +2833,7 @@ class ModelArgs:
             merged_text_config = merge_text_config(config)
             self._set_params_from_dict(merged_text_config)
 
-            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            if self._is_mistral_small_pixtral_family():
                 self._set_vision_params(config["vision_config"])
             else:
                 if "vision_config" in config:
@@ -2899,9 +2903,16 @@ class ModelArgs:
             "mistral" in self.model_name.lower()
             and (
                 (self.CKPT_DIR is not None and "vision" in self.CKPT_DIR.lower())
-                or "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
+                or self._is_mistral_small_pixtral_family()
             )
         )
+
+    def _is_mistral_small_pixtral_family(self):
+        mistral_small_vision_models = (
+            "Mistral-Small-3.1-24B-Instruct-2503",
+            "Mistral-Small-4-119B-2603",
+        )
+        return any(model_name in self.model_name for model_name in mistral_small_vision_models)
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         # Llama vision models use "text_model." prefix for text keys
@@ -2951,12 +2962,20 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
+        try:
+            from transformers import AutoModelForVision2Seq
+
+            multimodal_model_classes = (AutoModelForVision2Seq, AutoModelForImageTextToText)
+        except ImportError:
+            # Some transformers versions don't expose AutoModelForVision2Seq.
+            multimodal_model_classes = (AutoModelForImageTextToText,)
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+        for model_cls in multimodal_model_classes:
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
 
@@ -3436,6 +3455,7 @@ class ModelArgs:
             "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+            "Mistral-Small-4-119B": "mistralai/Mistral-Small-4-119B-2603",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
         }
 
@@ -3490,6 +3510,8 @@ class ModelArgs:
                     fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
                 elif "mistral" in model_name_lower and "small" in model_name_lower and "24b" in model_name_lower:
                     fallback_tokenizer_path = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
+                elif "mistral" in model_name_lower and "small" in model_name_lower and "119b" in model_name_lower:
+                    fallback_tokenizer_path = "mistralai/Mistral-Small-4-119B-2603"
                 elif "phi-3-mini" in model_name_lower and "128k" in model_name_lower and "instruct" in model_name_lower:
                     fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
 
@@ -3726,7 +3748,7 @@ class ModelArgs:
 
     def reference_vision_model(self):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+        if self._is_mistral_small_pixtral_family():
             # Mistral-Small-3.1-24B-Instruct-2503 has a different structure
             layer = model.vision_tower
         else:
@@ -3738,7 +3760,7 @@ class ModelArgs:
     def reference_vision_mlp(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if "Mistral-Small-3.1-24B" in self.model_name or "Mistral-Small-4-119B" in self.model_name:
             layer = vision_tower.transformer.layers[layer_idx].feed_forward
         else:
             layer = vision_tower.vision_model.encoder.layers[0].mlp
@@ -3782,7 +3804,7 @@ class ModelArgs:
     def reference_vision_attention(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if "Mistral-Small-3.1-24B" in self.model_name or "Mistral-Small-4-119B" in self.model_name:
             layer = vision_tower.transformer.layers[layer_idx].attention
         else:
             layer = vision_tower.vision_model.encoder.layers[0].self_attn
@@ -3807,7 +3829,7 @@ class ModelArgs:
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if "Mistral-Small-3.1-24B" in self.model_name or "Mistral-Small-4-119B" in self.model_name:
             layer = vision_tower.transformer
         else:
             layer = vision_tower.vision_model.encoder
@@ -3842,7 +3864,7 @@ class ModelArgs:
     def reference_vision_rot_emb(self):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if "Mistral-Small-3.1-24B" in self.model_name or "Mistral-Small-4-119B" in self.model_name:
             layer = vision_tower.patch_positional_embedding
         else:
             raise NotImplementedError(f"reference_vision_rot_emb not implemented for {self.model_name}")
