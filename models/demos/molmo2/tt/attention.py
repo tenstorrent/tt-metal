@@ -152,15 +152,13 @@ class TtMolmo2TextAttention(LightweightModule):
         self.k_norm = _rmsnorm("k_norm")
 
         # ------------------------------------------------------------------ #
-        # KV cache — bfloat16 for SDPA precision with long sequences.
-        # bfloat8_b KV + bfloat16 SDPA caused logit flips for video (S≈2701).
-        # Memory: 2× vs bfloat8_b (≈648 MB/device for max_seq=36864), fits in 12 GB.
+        # KV cache — bfloat8_b matches the reference implementation.
         # ------------------------------------------------------------------ #
         cache_k = torch.zeros(self.max_batch_size, self.n_local_kv_heads, self.max_seq_len, self.head_dim)
         self.layer_past = [
             ttnn.as_tensor(
                 kv,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -230,28 +228,40 @@ class TtMolmo2TextAttention(LightweightModule):
         ttnn.deallocate(xqkv)
 
         # nlp_create_qkv_heads_decode outputs HEIGHT_SHARDED.
-        # Save memory configs: RMSNorm requires interleaved; paged_update_cache requires sharded.
+        # Save KV memory configs for paged_update_cache; convert to L1 for QK-norm
+        # (matches reference: ttnn.rms_norm without compute_kernel_config = default/HiFi4 precision)
         k_mem_cfg = k_pre.memory_config()
         v_mem_cfg = v.memory_config()
-        q_pre = ttnn.to_memory_config(q_pre, ttnn.DRAM_MEMORY_CONFIG)
-        k_pre = ttnn.to_memory_config(k_pre, ttnn.DRAM_MEMORY_CONFIG)
-        q_pre = self.q_norm(q_pre, mode=Mode.DECODE)
-        k_pre = self.k_norm(k_pre, mode=Mode.DECODE)
+        q_pre = ttnn.to_memory_config(q_pre, ttnn.L1_MEMORY_CONFIG)
+        k_pre = ttnn.to_memory_config(k_pre, ttnn.L1_MEMORY_CONFIG)
+        q_pre = ttnn.rms_norm(q_pre, weight=self.q_norm.weight, epsilon=self.q_norm.eps)
+        k_pre = ttnn.rms_norm(k_pre, weight=self.k_norm.weight, epsilon=self.k_norm.eps)
 
         if q_pre.dtype != ttnn.bfloat16:
             q_pre = ttnn.typecast(q_pre, dtype=ttnn.bfloat16)
         if k_pre.dtype != ttnn.bfloat16:
             k_pre = ttnn.typecast(k_pre, dtype=ttnn.bfloat16)
 
-        # RoPE (HF-style); pads seq to tile=32, slice back to 1
-        q_rotated = ttnn.experimental.rotary_embedding(q_pre, rot_mats[0], rot_mats[1])
-        k_rotated = ttnn.experimental.rotary_embedding(k_pre, rot_mats[0], rot_mats[1])
+        # RoPE (HF-style). nlp_create_qkv_heads_decode output: [1, batch, heads, head_dim].
+        # For single-token decode, we need ALL heads at the SAME position p.
+        # Reshape to [1, heads, 1, head_dim] so Y=1 (seq) → rotary_embedding applies
+        # position p (from rot_mats) uniformly to all heads. Then reshape back.
+        q_pre_r = ttnn.reshape(q_pre, [1, self.n_local_heads, 1, self.padded_head_dim])
+        k_pre_r = ttnn.reshape(k_pre, [1, self.n_local_kv_heads, 1, self.padded_head_dim])
         ttnn.deallocate(q_pre)
         ttnn.deallocate(k_pre)
-        q = q_rotated[:, :, :1, :]
-        k = k_rotated[:, :, :1, :]
+        q_rotated = ttnn.experimental.rotary_embedding(q_pre_r, rot_mats[0], rot_mats[1])
+        k_rotated = ttnn.experimental.rotary_embedding(k_pre_r, rot_mats[0], rot_mats[1])
+        ttnn.deallocate(q_pre_r)
+        ttnn.deallocate(k_pre_r)
+        # Slice the padded seq dim back to 1, then reshape to [1, 1, heads, head_dim]
+        q = ttnn.reshape(q_rotated[:, :, :1, :], [1, 1, self.n_local_heads, self.padded_head_dim])
+        k = ttnn.reshape(k_rotated[:, :, :1, :], [1, 1, self.n_local_kv_heads, self.padded_head_dim])
         ttnn.deallocate(q_rotated)
         ttnn.deallocate(k_rotated)
+
+        # SDPA decode requires Q in DRAM
+        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
 
         # Restore HEIGHT_SHARDED for paged_update_cache (requires sharded input)
         k_sharded = ttnn.to_memory_config(k, k_mem_cfg)
@@ -365,11 +375,15 @@ class TtMolmo2TextAttention(LightweightModule):
         ttnn.deallocate(q_rotated)
         ttnn.deallocate(k_rotated)
 
-        # KV cache fill: bfloat16 (cache dtype matches; no typecast needed)
+        # KV cache fill: cast to bfloat8_b to match cache dtype
         keys = kv_cache[0] if kv_cache else self.layer_past[0]
         values = kv_cache[1] if kv_cache else self.layer_past[1]
-        ttnn.fill_cache(keys, k, user_id % self.max_batch_size)
-        ttnn.fill_cache(values, v, user_id % self.max_batch_size)
+        k_8b = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
+        v_8b = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
+        ttnn.fill_cache(keys, k_8b, user_id % self.max_batch_size)
+        ttnn.fill_cache(values, v_8b, user_id % self.max_batch_size)
+        ttnn.deallocate(k_8b)
+        ttnn.deallocate(v_8b)
 
         # SDPA: is_causal and attn_mask are mutually exclusive in TTNN SDPA.
         # When a custom mask is provided (image-bidir override), it already encodes
