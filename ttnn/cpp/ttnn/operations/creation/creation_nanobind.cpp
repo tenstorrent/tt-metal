@@ -8,11 +8,13 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bfloat16_type_caster.hpp"  // NOLINT - for nanobind bfloat16 binding support.
@@ -495,38 +497,36 @@ void bind_empty_like(nb::module_& mod) {
         nb::arg("memory_config") = nb::none());
 }
 
+// nanobind variant caster converts the Python sequence to the matching C++
+// vector at the wrapper boundary (GIL held), so the body runs with the GIL
+// released (call_guard applied by bind_function) and uses only C++ values.
+using BufferVariant = std::variant<
+    std::vector<uint8_t>,
+    std::vector<uint16_t>,
+    std::vector<int32_t>,
+    std::vector<uint32_t>,
+    std::vector<float>,
+    std::vector<::bfloat16>>;
+
 Tensor from_buffer_impl(
-    const nb::object& buffer,
+    BufferVariant buffer,
     const Shape& shape,
     const DataType dtype,
     MeshDevice* device,
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
     switch (dtype) {
-        case DataType::UINT8: {
-            auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
-            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-        }
-        case DataType::UINT16: {
-            auto cpp_buffer = nb::cast<std::vector<uint16_t>>(buffer);
-            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-        }
-        case DataType::INT32: {
-            auto cpp_buffer = nb::cast<std::vector<int32_t>>(buffer);
-            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-        }
-        case DataType::UINT32: {
-            auto cpp_buffer = nb::cast<std::vector<uint32_t>>(buffer);
-            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-        }
-        case DataType::FLOAT32: {
-            auto cpp_buffer = nb::cast<std::vector<float>>(buffer);
-            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-        }
-        case DataType::BFLOAT16: {
-            auto cpp_buffer = nb::cast<std::vector<::bfloat16>>(buffer);
-            return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
-        }
+        case DataType::UINT8:
+        case DataType::UINT16:
+        case DataType::INT32:
+        case DataType::UINT32:
+        case DataType::FLOAT32:
+        case DataType::BFLOAT16:
+            return std::visit(
+                [&](auto&& cpp_buffer) {
+                    return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
+                },
+                std::move(buffer));
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
         case DataType::INVALID: {
