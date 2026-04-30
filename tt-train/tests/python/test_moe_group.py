@@ -444,47 +444,32 @@ class TestMoeGroupDevice:
             num_total_cores=num_total_cores,
             t_cap=device_t_cap,
         )
-        print(
-            f"\n[{label}] dispatched={dispatched.shape} metadata={metadata.shape} k={k} E_local={local_expert_ids.numel()}"
-        )
-        print(f"[{label}] ref_counts={ref_counts.tolist()} ref_offsets={ref_offsets.tolist()}")
-        print(f"[{label}] calling device op...")
         grouped_tt, counts_tt, offsets_tt, plan_tt = TestMoeGroupDevice._run_op(
             dispatched, metadata, local_expert_ids, k
         )
-        print(f"[{label}] device op returned", flush=True)
 
         # -- counts --
-        print(f"[{label}] reading counts...", flush=True)
         counts_np = ttnn.to_torch(counts_tt).flatten().numpy().astype(np.int64)
-        print(f"[{label}] counts={counts_np.tolist()}", flush=True)
         ref_counts_np = ref_counts.numpy()
         np.testing.assert_array_equal(
             counts_np, ref_counts_np, err_msg=f"{label}: counts mismatch: got {counts_np} expected {ref_counts_np}"
         )
 
         # -- offsets --
-        print(f"[{label}] reading offsets...", flush=True)
         offsets_np = ttnn.to_torch(offsets_tt).flatten().numpy().astype(np.int64)
-        print(f"[{label}] offsets={offsets_np.tolist()}", flush=True)
         ref_offsets_np = ref_offsets.numpy()
         np.testing.assert_array_equal(
             offsets_np, ref_offsets_np, err_msg=f"{label}: offsets mismatch: got {offsets_np} expected {ref_offsets_np}"
         )
 
         # -- plan --
-        print(f"[{label}] reading plan...", flush=True)
         plan_np = ttnn.to_torch(plan_tt).flatten().numpy().astype(np.int64)
-        print(f"[{label}] plan (first 16): {plan_np[:16].tolist()}", flush=True)
         ref_plan_np = ref_plan.numpy()
         np.testing.assert_array_equal(plan_np, ref_plan_np, err_msg=f"{label}: plan mismatch")
 
         # -- grouped: check every active row for every expert --
-        print(f"[{label}] untiling grouped...", flush=True)
         grouped_rm = ttnn.to_layout(grouped_tt, ttnn.ROW_MAJOR_LAYOUT)
-        print(f"[{label}] reading grouped to torch...", flush=True)
         grouped_np = ttnn.to_torch(grouped_rm).float().numpy()  # [1, 1, T_cap, H]
-        print(f"[{label}] grouped ready", flush=True)
         ref_np = ref_grouped.float().numpy()
         D, B, S, H = dispatched.shape
         # Round-trip dispatched through bf16 so expected values match what the device sees.
@@ -701,14 +686,6 @@ class TestMoeGroupProfile:
             ttnn.synchronize_device(device)
             ttnn.ReadDeviceProfiler(device)  # flush device zones for this op
         _signpost(f"moe_group_end_{routing}")
-
-        T_total = D * B * S
-        T_cap = moe_group_t_cap(E_local, K, D, B, S, num_total_cores=TestMoeGroupDevice._device_num_total_cores())
-        print(
-            f"\n[{label}] D={D} B={B} S={S} T_total={T_total} H={H} "
-            f"E={E} K={K} E_local={E_local} T_cap={T_cap}  iters={num_iters}  "
-            f"(device-kernel times: see summary table from parse_profile_results.py)"
-        )
 
     # -------- parametrized shape sweeps --------
 
