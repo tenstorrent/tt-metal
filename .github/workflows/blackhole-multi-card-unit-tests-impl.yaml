@@ -131,6 +131,7 @@ jobs:
             test-type: loudbox
             owner_id: U09LK84G4TF # Nikola Milicevic
             model-name: deepseek_prefill
+            hang-detection-timeout: 90.0
           - name: bh_qb_DeepSeek_PREFILL
             cmd: |
               pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc" --timeout 1800
@@ -230,6 +231,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          hang-detection-timeout: ${{ matrix.test-group.hang-detection-timeout || 5.0 }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:
