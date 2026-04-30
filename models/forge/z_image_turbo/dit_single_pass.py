@@ -111,6 +111,18 @@ def _apply_compute_config_patch():
     dit_mod.ZImageTransformerTTNN._mm = _fast_mm
 
 
+def _apply_fast_activations_patch():
+    """Disable fp32_dest_acc_en on REDUCE_KERNEL used for norms to speed them up."""
+    import dit.model_ttnn as dit_mod
+
+    dit_mod.REDUCE_KERNEL = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
 def compute_pcc(a, b):
     a = a.float().flatten()
     b = b.float().flatten()
@@ -215,6 +227,7 @@ def main():
     print("Applying perf patches ...")
     _apply_matmul_config_patch()
     _apply_compute_config_patch()
+    _apply_fast_activations_patch()
 
     print("Loading DIT ...")
     dit = ZImageTransformerTTNN(mesh_device)
