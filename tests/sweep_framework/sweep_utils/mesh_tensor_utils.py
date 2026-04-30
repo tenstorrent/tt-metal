@@ -826,6 +826,27 @@ def broadcast_torch_inputs_to_global(
     fa = _factors(placement_a, torch_a.ndim)
     fb = _factors(placement_b, torch_b.ndim)
 
+    def _try_broadcast(a, b):
+        try:
+            return torch.broadcast_tensors(a, b)
+        except RuntimeError:
+            return None
+
+    def _fallback_global_broadcast():
+        """Try expanding per-chip sharded operands to their gathered global shape."""
+        tiled_a = tile_torch_to_global(torch_a, placement_a)
+        tiled_b = tile_torch_to_global(torch_b, placement_b)
+        for cand_a, cand_b in (
+            (torch_a, tiled_b),
+            (tiled_a, torch_b),
+            (tiled_a, tiled_b),
+            (torch_a, torch_b),
+        ):
+            result = _try_broadcast(cand_a, cand_b)
+            if result is not None:
+                return result
+        return torch_a, torch_b
+
     new_a, new_b = torch_a, torch_b
     for d in range(torch_a.ndim):
         sa = new_a.shape[d]
@@ -849,19 +870,19 @@ def broadcast_torch_inputs_to_global(
             elif sb < sa and sa % sb == 0:
                 new_b = _tile(new_b, d, sa // sb)
             else:
-                return torch_a, torch_b
+                return _fallback_global_broadcast()
         elif per_chip_a == 1 and per_chip_b > 1:
             # a's per-chip element broadcasts to all per_chip_b elements on
             # each chip; globally that is repeat_interleave.
             if sb % sa == 0:
                 new_a = new_a.repeat_interleave(per_chip_b, dim=d)
             else:
-                return torch_a, torch_b
+                return _fallback_global_broadcast()
         elif per_chip_b == 1 and per_chip_a > 1:
             if sa % sb == 0:
                 new_b = new_b.repeat_interleave(per_chip_a, dim=d)
             else:
-                return torch_a, torch_b
+                return _fallback_global_broadcast()
         else:
             # Mixed per-chip sizes neither equal nor singleton: try plain tile.
             if sa < sb and sb % sa == 0:
@@ -869,8 +890,9 @@ def broadcast_torch_inputs_to_global(
             elif sb < sa and sa % sb == 0:
                 new_b = _tile(new_b, d, sa // sb)
             else:
-                return torch_a, torch_b
-    return new_a, new_b
+                return _fallback_global_broadcast()
+    result = _try_broadcast(new_a, new_b)
+    return result if result is not None else _fallback_global_broadcast()
 
 
 def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[Dict]) -> torch.Tensor:

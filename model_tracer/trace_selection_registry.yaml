@@ -47,7 +47,7 @@ targets:
     - model:
         - gpt_oss
         - tt_dit
-      trace: [9]
+      trace: [9,15]
 
   model_traced:
     - model:

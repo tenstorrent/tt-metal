@@ -62,6 +62,9 @@ def invalidate_vector(test_vector) -> tuple:
     """
     Filter out configs that are known to cause timeouts or resource issues.
     """
+    if test_vector.get("traced_machine_info") is not None:
+        return False, None
+
     input_shape = test_vector.get("input_a_shape")
 
     # Extract Q shape - handle both dict (V1) and tuple/list (V2) formats
@@ -184,9 +187,16 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
 
     # The master trace may record attention_sink and sliding_window_size as explicit kwargs
-    # (possibly None). build_op_kwargs filters None values, so add them back when present.
+    # (possibly None). In combined vector files, absent keys from other configs are
+    # materialized as None, so use __absent_keys__ to avoid passing kwargs the
+    # model never passed.
+    absent_keys = kwargs.get("__absent_keys__") or set()
+    if not isinstance(absent_keys, (set, frozenset, list, tuple)):
+        absent_keys = set()
+    else:
+        absent_keys = set(absent_keys)
     for key in ("attention_sink", "sliding_window_size"):
-        if key in kwargs and kwargs[key] is None and key not in op_kwargs:
+        if key in kwargs and key not in absent_keys and kwargs[key] is None and key not in op_kwargs:
             op_kwargs[key] = None
 
     # Clear sharded memory_config from op_kwargs too
