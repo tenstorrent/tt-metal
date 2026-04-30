@@ -7,10 +7,8 @@ Z-Image-Turbo with Metal Trace — traces both the text encoder and DIT denoisin
 loop for fast inference.
 
 Metal Trace eliminates host dispatch overhead by recording the TTNN op graph once
-and replaying it from device-side command buffers.  Both the text encoder (1 call
-per prompt) and the DIT (8 calls per prompt) are traced.
-
-VAE decoder runs once per prompt and is NOT traced.
+and replaying it from device-side command buffers.  All three models are traced:
+text encoder (1 call), DIT (8 calls), and VAE decoder (1 call).
 
 Usage:
     python server.py
@@ -105,6 +103,16 @@ def _copy_to_persistent(host_pt, persistent_tt, dtype=ttnn.DataType.BFLOAT16):
         ttnn.copy_host_to_device_tensor(host_tt, shard, cq_id=0)
 
 
+def _copy_to_persistent_device(src_tt, persistent_tt):
+    """Copy a device mesh tensor into a persistent device mesh tensor (same addresses).
+
+    Both tensors must have the same shape, dtype, and layout.
+    """
+    src_host = ttnn.from_device(src_tt)
+    for src_shard, dst_shard in zip(ttnn.get_device_tensors(src_host), ttnn.get_device_tensors(persistent_tt)):
+        ttnn.copy_host_to_device_tensor(src_shard, dst_shard, cq_id=0)
+
+
 # ── Scheduler helper ─────────────────────────────────────────────────────────
 
 
@@ -135,7 +143,7 @@ def _make_scheduler(template, steps):
 
 
 class ZImageTurbo:
-    """Z-Image-Turbo pipeline with Metal Trace on the TE and DIT."""
+    """Z-Image-Turbo pipeline with Metal Trace on TE, DIT, and VAE."""
 
     def __init__(self):
         t0 = time.time()
@@ -151,7 +159,7 @@ class ZImageTurbo:
         self.mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape((1, 4)),
             l1_small_size=1 << 15,
-            trace_region_size=60_000_000,
+            trace_region_size=70_000_000,
         )
         self.mesh_device.enable_program_cache()
 
@@ -172,6 +180,10 @@ class ZImageTurbo:
         self._lat_buf = None
         self._ts_buf = None
         self._dit_output_ref = None
+
+        self._vae_trace_id = None
+        self._vae_input_buf = None
+        self._vae_output_ref = None
 
         print(f"Model loading: {(time.time() - t0) * 1000:.0f} ms\n")
 
@@ -215,28 +227,38 @@ class ZImageTurbo:
         cap_cpu = _tt_to_torch(self._te_output_ref, self.mesh_device)[:CAP_TOKENS].bfloat16()
         return cap_cpu.unsqueeze(0)  # [1, CAP_TOKENS, 2560]
 
-    # ── VAE decode (runs without trace) ───────────────────────────────────────
+    # ── VAE decode helpers ─────────────────────────────────────────────────────
 
-    def _decode_latents(self, latents):
-        """VAE decode on TTNN -> PIL image."""
+    def _decode_latents_no_trace(self, latents):
+        """VAE decode without trace (used during compile phase)."""
         image_tensor = self.vae(latents)
-        # Force GC to free VAE intermediate device tensors before next DIT trace.
-        # The trace bakes in memory addresses; any stray device allocation at those
-        # addresses would be overwritten during trace replay, corrupting VAE state.
         import gc
 
         gc.collect()
         return self.vae_processor.postprocess(image_tensor, output_type="pil")[0]
 
-    # ── Warmup: compile + capture TE & DIT traces ──────────────────────────────
+    def _decode_latents(self, latents):
+        """VAE decode via trace → PIL image."""
+        preprocessed = self.vae.preprocess(latents)
+        _copy_to_persistent_device(preprocessed, self._vae_input_buf)
+        ttnn.deallocate(preprocessed, False)
+        ttnn.execute_trace(self.mesh_device, self._vae_trace_id, cq_id=0, blocking=True)
+        out = ttnn.to_torch(
+            ttnn.from_device(self._vae_output_ref),
+            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+        )
+        image_tensor = out[: out.shape[0] // 4].float()
+        return self.vae_processor.postprocess(image_tensor, output_type="pil")[0]
+
+    # ── Warmup: compile + capture TE, DIT & VAE traces ─────────────────────────
 
     def warmup(self, prompt="a cat sitting on a mat", steps=9, seed=42):
-        """Compile all models, capture TE + DIT traces, and run one full generation.
+        """Compile all models, capture TE + DIT + VAE traces, run one full generation.
 
-        After this call, generate() uses cached traces for both TE and DIT calls.
+        After this call, generate() uses cached traces for all three models.
         """
         print("=" * 72)
-        print("WARMUP: compile all programs → capture TE + DIT traces → generate")
+        print("WARMUP: compile all programs → capture TE + DIT + VAE traces → generate")
         print("=" * 72)
         t_total = time.time()
 
@@ -279,7 +301,7 @@ class ZImageTurbo:
 
         # 1c) Compile VAE programs (first decode, pays consteval cost).
         t0 = time.time()
-        _warmup_image = self._decode_latents(compile_latents)
+        _warmup_image = self._decode_latents_no_trace(compile_latents)
         print(f"  VAE compile: {(time.time() - t0) * 1000:.0f} ms")
 
         # ── Phase 2: Capture traces (all programs already compiled).
@@ -302,7 +324,16 @@ class ZImageTurbo:
         self._dit_output_ref = trace_out[0]
         print(f"  DIT trace capture: {(time.time() - t0) * 1000:.0f} ms")
 
-        # ── Phase 3: Full warmup generation using both traces.
+        # 2c) Capture VAE trace.
+        self._vae_input_buf = self.vae.preprocess(compile_latents)
+
+        t0 = time.time()
+        self._vae_trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._vae_output_ref = self.vae.forward_device(self._vae_input_buf)
+        ttnn.end_trace_capture(self.mesh_device, self._vae_trace_id, cq_id=0)
+        print(f"  VAE trace capture: {(time.time() - t0) * 1000:.0f} ms")
+
+        # ── Phase 3: Full warmup generation using all traces.
         torch.manual_seed(seed)
         latents = torch.randn(1, LATENT_CHANNELS, IMG_LATENT_H, IMG_LATENT_W)
         scheduler = _make_scheduler(self.scheduler_template, steps)
@@ -334,18 +365,18 @@ class ZImageTurbo:
 
         t0 = time.time()
         image = self._decode_latents(latents)
-        print(f"  VAE decode: {(time.time() - t0) * 1000:.0f} ms")
+        print(f"  VAE decode (traced): {(time.time() - t0) * 1000:.0f} ms")
 
         print(f"  WARMUP TOTAL: {(time.time() - t_total) * 1000:.0f} ms")
         _dram_stats(self.mesh_device, "after warmup")
         print("=" * 72)
-        print("TE + DIT traces captured. Ready for fast generation.\n")
+        print("TE + DIT + VAE traces captured. Ready for fast generation.\n")
         return image
 
     # ── Fast generation using cached trace ────────────────────────────────────
 
     def generate(self, prompt, steps=9, seed=42):
-        """Generate an image using the cached TE + DIT traces.
+        """Generate an image using cached TE + DIT + VAE traces.
 
         Must call warmup() first. Returns a PIL Image.
         """
@@ -398,7 +429,7 @@ class ZImageTurbo:
             step_times.append(elapsed)
             print(f"  step {i + 1}/{num_steps}: {elapsed:.0f} ms")
 
-        # 5) VAE decode (runs normally).
+        # 5) VAE decode via trace.
         t0 = time.time()
         image = self._decode_latents(latents)
         vae_ms = (time.time() - t0) * 1000
@@ -406,7 +437,10 @@ class ZImageTurbo:
         total_ms = (time.time() - t_total) * 1000
         steady = step_times[1:] if len(step_times) > 1 else step_times
         avg_steady = sum(steady) / len(steady) if steady else 0
-        print(f"  VAE: {vae_ms:.0f} ms  |  total: {total_ms:.0f} ms  " f"|  steady-state step: {avg_steady:.0f} ms avg")
+        print(
+            f"  VAE (traced): {vae_ms:.0f} ms  |  total: {total_ms:.0f} ms  "
+            f"|  steady-state step: {avg_steady:.0f} ms avg"
+        )
         _dram_stats(self.mesh_device, "after generate")
         return image
 
@@ -444,13 +478,13 @@ def main():
     except ImportError:
         pass
 
-    # 1) Load models + warmup (compile all programs + capture TE & DIT traces).
+    # 1) Load models + warmup (compile all programs + capture TE, DIT & VAE traces).
     pipeline = ZImageTurbo()
 
     bar = "=" * 72
     print(bar)
     print(f"Warming up with dummy prompt {WARMUP_PROMPT!r}")
-    print("(first run is slow: compile all programs + TE & DIT Metal Trace capture)")
+    print("(first run is slow: compile all programs + TE, DIT & VAE Metal Trace capture)")
     print(bar)
 
     t0 = time.time()

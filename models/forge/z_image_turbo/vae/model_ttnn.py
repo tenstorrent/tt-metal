@@ -51,9 +51,22 @@ class VaeDecoderTTNN(LightweightModule):
 
     def forward(self, raw_latents):
         """Decode raw (pre-scaling) latents → [1, 3, 512, 512] float32 CPU tensor."""
-        w = self.weights
+        latent = self.preprocess(raw_latents)
+        nchw = self.forward_device(latent)
+        ttnn.deallocate(latent, False)
+        out = ttnn.to_torch(
+            ttnn.from_device(nchw),
+            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+        )
+        return out[: out.shape[0] // 4].float()
+
+    def preprocess(self, raw_latents):
+        """Scale + shift raw latents and upload to device.
+
+        Returns a [1, 16, 64, 64] BF16 ROW_MAJOR TTNN tensor (replicated).
+        """
         z = (raw_latents.float() / SCALING_FACTOR) + SHIFT_FACTOR
-        latent = ttnn.from_torch(
+        return ttnn.from_torch(
             z.bfloat16(),
             dtype=ttnn.DataType.BFLOAT16,
             layout=ttnn.Layout.ROW_MAJOR,
@@ -62,9 +75,16 @@ class VaeDecoderTTNN(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
 
-        # conv_in
+    def forward_device(self, latent):
+        """Device-only VAE decode: on-device latent → on-device [1, 3, 512, 512] NCHW.
+
+        Input:  [1, 16, 64, 64] BF16 ROW_MAJOR on device
+        Output: [1, 3, 512, 512] BF16 TILE on device
+        """
+        w = self.weights
+
+        # conv_in (caller owns latent — do not deallocate it here)
         x = ttnn.to_layout(latent, ttnn.Layout.TILE, None, memory_config=None)
-        ttnn.deallocate(latent, False)
         nhwc = ttnn.permute(x, [0, 2, 3, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(x, False)
         x = ttnn.reshape(nhwc, [1, 1, 4096, 16], memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -146,12 +166,7 @@ class VaeDecoderTTNN(LightweightModule):
         ttnn.deallocate(x, False)
         nchw = ttnn.permute(nhwc, [0, 3, 1, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
         ttnn.deallocate(nhwc, False)
-
-        out = ttnn.to_torch(
-            ttnn.from_device(nchw),
-            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-        )
-        return out[: out.shape[0] // 4].float()
+        return nchw
 
     # ── Conv2d ────────────────────────────────────────────────────────────────
 
