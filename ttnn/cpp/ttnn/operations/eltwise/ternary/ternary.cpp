@@ -254,11 +254,18 @@ Tensor addcmul(
 
     bool is_supported_dtype =
         (input_a.dtype() == DataType::BFLOAT16 || input_a.dtype() == DataType::FLOAT32 ||
-         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B);  // TODO(#38972): UINT32 support
+         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B ||
+         input_a.dtype() == DataType::UINT32);
     TT_FATAL(
         is_supported_dtype,
-        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, and INT32 dtypes. Got {}",
+        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, INT32, and UINT32 dtypes. Got {}",
         input_a.dtype());
+    TT_FATAL(
+        input_b.dtype() == input_a.dtype() && input_c.dtype() == input_a.dtype(),
+        "Addcmul TTT requires all input tensors to have the same dtype. Got input_a={}, input_b={}, input_c={}",
+        input_a.dtype(),
+        input_b.dtype(),
+        input_c.dtype());
 
     // Only TTT variant is supported for addcmul
     auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());

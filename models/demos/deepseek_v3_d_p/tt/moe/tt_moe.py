@@ -14,6 +14,7 @@ This module assembles the full MoE pipeline:
 6. Final: Add routed output + shared output
 """
 
+import os
 from pathlib import Path
 from typing import Optional, Union
 
@@ -337,6 +338,9 @@ class TtMoe(LightweightModule):
             topology=self.col_topology,
         )
 
+        # Load debug flags from environment
+        self.debug_token_count = os.getenv("TT_DS_PREFILL_DEBUG_TOKEN_COUNT", "0").lower() in ("1", "true", "yes")
+
         logger.debug("TtMoe initialization complete")
 
     def forward(
@@ -375,18 +379,17 @@ class TtMoe(LightweightModule):
             else ttnn.deallocate(gate_logits)
         )  # gate_logits is only used for debugging/intermediates, move to DRAM or deallocate immediately
 
-        # DEBUG
-        # Print full token counts per expert for monitoring
-        _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
-        _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
-        _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
-        logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
+        if self.debug_token_count:
+            # DEBUG: Print full token counts per expert for monitoring (controlled by env var)
+            _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
+            _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+            _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
+            logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
 
-        # DEBUG
-        # Print full region offsets per expert for monitoring
-        _offsets_4d = ttnn.unsqueeze_to_4D(tt_expert_region_offsets)
-        _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
-        logger.info(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
+            # DEBUG: Print full region offsets per expert for monitoring
+            _offsets_4d = ttnn.unsqueeze_to_4D(tt_expert_region_offsets)
+            _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
+            logger.info(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
 
         # Gate outputs uint16 indices; dispatch requires int32.
         # this should be aligned in the further PR.

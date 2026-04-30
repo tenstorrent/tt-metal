@@ -731,17 +731,15 @@ public:
         }
         mock_cluster_desc_path =
             get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
-        // Set target device to Mock if simulator is not enabled
-        if (simulator_path.empty()) {
-            runtime_target_device_ = tt::TargetDevice::Mock;
-        }
+        // Mock mode always overrides the simulator: configure_mock_mode() is an explicit
+        // request for a fully mocked environment, so libttsim must not be used even if
+        // TT_METAL_SIMULATOR is set in the environment.
+        runtime_target_device_ = tt::TargetDevice::Mock;
     }
     void clear_mock_cluster_desc() {
         mock_cluster_desc_path.clear();
-        // Only reset to Silicon if simulator is not enabled
-        if (simulator_path.empty()) {
-            runtime_target_device_ = tt::TargetDevice::Silicon;
-        }
+        // Restore to Simulator if TT_METAL_SIMULATOR was set, otherwise Silicon.
+        runtime_target_device_ = simulator_path.empty() ? tt::TargetDevice::Silicon : tt::TargetDevice::Simulator;
     }
 
     // Target device accessor
