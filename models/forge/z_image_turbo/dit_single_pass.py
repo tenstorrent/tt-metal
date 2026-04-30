@@ -414,7 +414,7 @@ def open_mesh_device():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape((1, 4)),
-        l1_small_size=1 << 15,
+        l1_small_size=1 << 17,
         trace_region_size=70_000_000,
     )
     device.enable_program_cache()
