@@ -1254,6 +1254,7 @@ class Generator(WarmupForwardMixin):
             self.trace_ids_decode[return_logits] = trace_id
             self.trace_inputs_decode[return_logits] = device_inputs
             self.trace_output_decode[return_logits] = tt_out_tok
+            reset_inputs = True
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded

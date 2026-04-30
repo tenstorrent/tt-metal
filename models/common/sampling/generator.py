@@ -517,7 +517,10 @@ def _scatter_sampling_params_to_slots(
                 f"Sampling param '{field_name}' length {len(value)} is smaller than occupied slot count {len(occupied_slots)}"
             )
 
-        scattered = [_SAMPLING_PARAM_DEFAULTS[field_name]] * max_batch_size
+        # The formatted list is compact request values followed by formatted
+        # padding defaults, so use the first padded entry for inactive slots.
+        filler = value[len(occupied_slots)] if len(value) > len(occupied_slots) else value[-1]
+        scattered = [filler] * max_batch_size
         for request_idx, slot in enumerate(occupied_slots):
             if slot < 0 or slot >= max_batch_size:
                 raise IndexError(f"Slot index {slot} is out of range for batch size {max_batch_size}")
