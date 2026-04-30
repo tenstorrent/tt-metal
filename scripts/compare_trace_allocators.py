@@ -28,7 +28,7 @@ import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Hashable
 
 
 LAUNCH_MSG_BUFFER_NUM_ENTRIES = 8
@@ -97,7 +97,8 @@ class SimpleMetadata:
 
 @dataclass(eq=False)
 class TraceCacheTraceNode:
-    program_id: int
+    program_id: Hashable
+    original_trace_idx: int
     remaining: int = 0
     next_idx: int | None = None
     weight: float = 0.0
@@ -114,7 +115,7 @@ class TraceCacheProgram:
 
 @dataclass(eq=False)
 class TraceCacheAllocNode:
-    program_id: int
+    program_id: Hashable
     addr: int
     size: int
     first_use: int
@@ -123,7 +124,14 @@ class TraceCacheAllocNode:
 
     @classmethod
     def free(cls, addr: int, size: int) -> TraceCacheAllocNode:
-        return cls(program_id=-1, addr=addr, size=size, first_use=-TRACE_CACHE_MAX_REUSE_WINDOW, prev_use=-TRACE_CACHE_MAX_REUSE_WINDOW, is_free=True)
+        return cls(
+            program_id=("free",),
+            addr=addr,
+            size=size,
+            first_use=-TRACE_CACHE_MAX_REUSE_WINDOW,
+            prev_use=-TRACE_CACHE_MAX_REUSE_WINDOW,
+            is_free=True,
+        )
 
     def weight(self, trace: list[TraceCacheTraceNode]) -> float:
         if self.is_free:
@@ -441,13 +449,13 @@ class TraceCacheWorkerBufferManager:
     def __init__(self, buffer_size: int, reuse_window: int) -> None:
         self.buffer_size = buffer_size
         self.reuse_window = reuse_window
-        self.program_data_alloced: dict[int, bool] = {}
+        self.program_data_alloced: dict[Hashable, bool] = {}
         self.allocator: list[TraceCacheAllocNode] = []
         self.lru: list[TraceCacheAllocNode] = []
-        self.alloced_programs: dict[int, TraceCacheAllocNode | None] = {}
+        self.alloced_programs: dict[Hashable, TraceCacheAllocNode | None] = {}
 
     def process_trace(
-        self, trace: list[TraceCacheTraceNode], programs: dict[int, TraceCacheProgram]
+        self, trace: list[TraceCacheTraceNode], programs: dict[Hashable, TraceCacheProgram]
     ) -> list[TraceCacheTraceNode]:
         self.program_data_alloced = {program_id: False for program_id in programs}
         self.allocator.clear()
@@ -458,9 +466,9 @@ class TraceCacheWorkerBufferManager:
             self._alloc(trace, programs)
         return trace
 
-    def _build_use_data(self, trace: list[TraceCacheTraceNode], programs: dict[int, TraceCacheProgram]) -> None:
-        used_idx: dict[int, int] = {}
-        counts: dict[int, int] = {}
+    def _build_use_data(self, trace: list[TraceCacheTraceNode], programs: dict[Hashable, TraceCacheProgram]) -> None:
+        used_idx: dict[Hashable, int] = {}
+        counts: dict[Hashable, int] = {}
         max_cost = max((program.cost for program in programs.values()), default=0)
 
         for trace_idx in range(len(trace) - 1, -1, -1):
@@ -482,7 +490,7 @@ class TraceCacheWorkerBufferManager:
             trace_node.weight = normalized_cost * trace_node.remaining
 
     def _handle_trivial_cases(
-        self, trace: list[TraceCacheTraceNode], programs: dict[int, TraceCacheProgram]
+        self, trace: list[TraceCacheTraceNode], programs: dict[Hashable, TraceCacheProgram]
     ) -> bool:
         total_alloced = sum(programs[trace_node.program_id].size for trace_node in trace)
         if total_alloced > self.buffer_size:
@@ -502,7 +510,7 @@ class TraceCacheWorkerBufferManager:
             trace_node.does_dispatch = True
         return True
 
-    def _alloc(self, trace: list[TraceCacheTraceNode], programs: dict[int, TraceCacheProgram]) -> None:
+    def _alloc(self, trace: list[TraceCacheTraceNode], programs: dict[Hashable, TraceCacheProgram]) -> None:
         trace_idx = 0
         eviction_mode = False
         pre_alloc_addr_top = self.buffer_size
@@ -562,6 +570,16 @@ class TraceCacheWorkerBufferManager:
         if not eviction_mode:
             self._commit_preallocations(pre_alloc_addr_top, uncommitted_marker, trace)
 
+    def _event_time(self, event_idx: int, trace: list[TraceCacheTraceNode]) -> int:
+        if event_idx < 0:
+            return event_idx
+        return trace[event_idx].original_trace_idx
+
+    def _node_prev_time(self, node: TraceCacheAllocNode, trace: list[TraceCacheTraceNode]) -> int:
+        if node.is_free:
+            return node.prev_use
+        return self._event_time(node.prev_use, trace)
+
     def _find_eviction_candidates(
         self,
         only_stale: bool,
@@ -572,6 +590,7 @@ class TraceCacheWorkerBufferManager:
     ) -> TraceCacheAllocNode | None:
         match: TraceCacheAllocNode | None = None
         best_score = math.inf
+        current_time = trace[trace_idx].original_trace_idx
 
         for lru_node in self.lru:
             free_size = 0
@@ -580,7 +599,7 @@ class TraceCacheWorkerBufferManager:
             alloc_index = self._allocator_index(lru_node)
 
             for alloc_node in self.allocator[alloc_index:]:
-                if alloc_node.prev_use + window > trace_idx:
+                if self._node_prev_time(alloc_node, trace) + window > current_time:
                     break
 
                 weight = alloc_node.weight(trace)
@@ -614,8 +633,9 @@ class TraceCacheWorkerBufferManager:
                 self.program_data_alloced[alloc_node.program_id] = False
                 self.alloced_programs[alloc_node.program_id] = None
 
-            if trace[trace_idx].stall_idx is None or alloc_node.prev_use > trace[trace_idx].stall_idx:
-                trace[trace_idx].stall_idx = alloc_node.prev_use
+            prev_time = self._node_prev_time(alloc_node, trace)
+            if prev_time >= 0 and (trace[trace_idx].stall_idx is None or prev_time > trace[trace_idx].stall_idx):
+                trace[trace_idx].stall_idx = prev_time
 
             self._remove_lru(alloc_node)
             del self.allocator[alloc_index]
@@ -694,7 +714,7 @@ class TraceCacheWorkerBufferManager:
 
     def _sort_preallocations(self, uncommitted_marker: TraceCacheAllocNode | None, trace: list[TraceCacheTraceNode]) -> None:
         start = 0 if uncommitted_marker is None else self._allocator_index(uncommitted_marker) + 1
-        sorted_tail = sorted(self.allocator[start:], key=lambda node: (-node.weight(trace), -node.prev_use))
+        sorted_tail = sorted(self.allocator[start:], key=lambda node: (-node.weight(trace), -self._node_prev_time(node, trace)))
         self.allocator[start:] = sorted_tail
 
     def _commit_preallocations(
@@ -729,19 +749,21 @@ class TraceCacheWorkerBufferManager:
         eviction_mode = True
         done = False
         stall_idx: int | None = None
+        current_time = trace[trace_idx].original_trace_idx
 
         while not done and self.allocator:
             node = self.allocator[-1]
             last_use = node.prev_use
+            last_use_time = self._node_prev_time(node, trace)
             pre_alloc_addr = node.addr
             pre_alloc_addr_top = node.addr
 
-            if last_use + self.reuse_window >= trace_idx or trace[last_use].remaining != 0:
+            if last_use_time + self.reuse_window >= current_time or trace[last_use].remaining != 0:
                 done = True
             else:
                 self.program_data_alloced[node.program_id] = False
                 self.alloced_programs[node.program_id] = None
-                stall_idx = node.prev_use
+                stall_idx = last_use_time
                 self._remove_lru(node)
                 self.allocator.pop()
                 eviction_mode = False
@@ -777,32 +799,48 @@ class TraceCacheWorkerBufferManager:
         self.lru.append(node)
 
 
-def trace_cache_program_size(core_info: CoreTypeInfo, per_core: PerCoreTypeNode) -> int:
-    if core_info.skip:
-        return 0
-    if core_info.has_separate_binary_offset and core_info.binary_in_config:
-        return per_core.nonbinary_size + per_core.binary_size
-    return per_core.nonbinary_size
-
-
 def build_trace_cache_inputs(
     core_info: CoreTypeInfo, trace_nodes: list[TraceNodeInput]
-) -> tuple[list[TraceCacheTraceNode], dict[int, TraceCacheProgram]]:
-    trace = [TraceCacheTraceNode(node.program_id) for node in trace_nodes]
-    programs: dict[int, TraceCacheProgram] = {}
-    for node in trace_nodes:
+) -> tuple[list[TraceCacheTraceNode], dict[Hashable, TraceCacheProgram]]:
+    trace: list[TraceCacheTraceNode] = []
+    programs: dict[Hashable, TraceCacheProgram] = {}
+
+    for trace_idx, node in enumerate(trace_nodes):
         per_core = node.per_core_type[core_info.index]
-        size = trace_cache_program_size(core_info, per_core)
-        if size == 0:
-            continue
-        cost = size
-        existing = programs.get(node.program_id)
-        if existing is not None and existing.size != size:
-            raise RuntimeError(
-                f"program {node.program_id} has inconsistent size for core {core_info.index}: "
-                f"{existing.size} vs {size}"
+
+        binary_bundled_with_nonbinary = (
+            not core_info.has_separate_binary_offset and core_info.binary_in_config and per_core.binary_size > 0
+        )
+        if per_core.nonbinary_size > 0 and not binary_bundled_with_nonbinary:
+            # Non-binary config data is rewritten for every trace node, so it is
+            # intentionally unique and never reuses a prior allocation.
+            nonbinary_id = ("nonbinary", core_info.index, trace_idx)
+            programs[nonbinary_id] = TraceCacheProgram(size=per_core.nonbinary_size, cost=per_core.nonbinary_size)
+            trace.append(TraceCacheTraceNode(nonbinary_id, original_trace_idx=trace_idx))
+
+        if core_info.has_separate_binary_offset and core_info.binary_in_config and per_core.binary_size > 0:
+            binary_id = ("binary", core_info.index, node.program_id)
+            existing = programs.get(binary_id)
+            if existing is not None and existing.size != per_core.binary_size:
+                raise RuntimeError(
+                    f"program {node.program_id} has inconsistent binary size for core {core_info.index}: "
+                    f"{existing.size} vs {per_core.binary_size}"
+                )
+            programs[binary_id] = TraceCacheProgram(size=per_core.binary_size, cost=per_core.binary_size)
+            trace.append(TraceCacheTraceNode(binary_id, original_trace_idx=trace_idx))
+        elif binary_bundled_with_nonbinary:
+            # Core types without a separate binary offset have the binary data
+            # bundled into the per-node config allocation.
+            bundled_id = ("nonbinary-bundled-binary", core_info.index, trace_idx)
+            size = per_core.nonbinary_size + per_core.binary_size
+            programs[bundled_id] = TraceCacheProgram(size=size, cost=size)
+            trace.append(
+                TraceCacheTraceNode(
+                    bundled_id,
+                    original_trace_idx=trace_idx,
+                )
             )
-        programs[node.program_id] = TraceCacheProgram(size=size, cost=cost)
+
     return trace, programs
 
 
@@ -811,10 +849,10 @@ def run_trace_cache2_allocator(
     ringbuffer_configs: list[RingbufferConfig],
     trace_nodes: list[TraceNodeInput],
     reuse_window: int,
-) -> tuple[list[int | None], list[int], dict[int, list[TraceCacheTraceNode]]]:
+) -> tuple[list[int | None], list[int], dict[int, tuple[list[int | None], list[int]]]]:
     combined_stalls: list[int | None] = [None] * len(trace_nodes)
     dispatch_bytes: list[int] = [0] * len(trace_nodes)
-    per_core_traces: dict[int, list[TraceCacheTraceNode]] = {}
+    per_core_stats_inputs: dict[int, tuple[list[int | None], list[int]]] = {}
 
     sub_device_ids = sorted({node.sub_device_id for node in trace_nodes})
     for core_info in core_types:
@@ -825,25 +863,32 @@ def run_trace_cache2_allocator(
         if not programs:
             continue
 
+        core_stalls: list[int | None] = [None] * len(trace_nodes)
+        core_dispatch_bytes: list[int] = [0] * len(trace_nodes)
         for sub_device_id in sub_device_ids:
-            subdevice_indices = [
-                index for index, node in enumerate(trace_nodes) if node.sub_device_id == sub_device_id
+            subdevice_trace = [
+                copy.copy(event)
+                for event in per_core_full_trace
+                if trace_nodes[event.original_trace_idx].sub_device_id == sub_device_id
             ]
-            subdevice_trace = [copy.copy(per_core_full_trace[index]) for index in subdevice_indices]
+            if not subdevice_trace:
+                continue
             manager = TraceCacheWorkerBufferManager(ringbuffer_configs[core_info.index].size, reuse_window)
             manager.process_trace(subdevice_trace, programs)
 
-            for local_index, global_index in enumerate(subdevice_indices):
-                per_core_full_trace[global_index] = subdevice_trace[local_index]
+            for event in subdevice_trace:
+                trace_idx = event.original_trace_idx
+                if event.stall_idx is not None:
+                    core_stalls[trace_idx] = merge_syncs(core_stalls[trace_idx], event.stall_idx)
+                    combined_stalls[trace_idx] = merge_syncs(combined_stalls[trace_idx], event.stall_idx)
+                if event.does_dispatch:
+                    size = programs[event.program_id].size
+                    core_dispatch_bytes[trace_idx] += size
+                    dispatch_bytes[trace_idx] += size
 
-        per_core_traces[core_info.index] = per_core_full_trace
-        for trace_idx, trace_node in enumerate(per_core_full_trace):
-            if trace_node.stall_idx is not None:
-                combined_stalls[trace_idx] = merge_syncs(combined_stalls[trace_idx], trace_node.stall_idx)
-            if trace_node.does_dispatch:
-                dispatch_bytes[trace_idx] += programs[trace_node.program_id].size
+        per_core_stats_inputs[core_info.index] = (core_stalls, core_dispatch_bytes)
 
-    return combined_stalls, dispatch_bytes, per_core_traces
+    return combined_stalls, dispatch_bytes, per_core_stats_inputs
 
 
 def compute_stats(name: str, stalls: list[int | None], dispatch_bytes: list[int]) -> AllocatorStats:
@@ -1009,19 +1054,15 @@ def main() -> int:
 
     per_core_stats: list[AllocatorStats] = []
     for core_info in core_types:
-        trace = per_core_trace_cache.get(core_info.index)
-        if trace is None:
+        stats_input = per_core_trace_cache.get(core_info.index)
+        if stats_input is None:
             continue
-        _, programs = build_trace_cache_inputs(core_info, trace_nodes)
-        dispatch_bytes = [
-            programs[node.program_id].size if node.does_dispatch else 0
-            for node in trace
-        ]
+        core_stalls, core_dispatch_bytes = stats_input
         per_core_stats.append(
             compute_stats(
                 f"trace-cache2 core {core_info.index} {core_info.core_type}",
-                [node.stall_idx for node in trace],
-                dispatch_bytes,
+                core_stalls,
+                core_dispatch_bytes,
             )
         )
     if per_core_stats:
