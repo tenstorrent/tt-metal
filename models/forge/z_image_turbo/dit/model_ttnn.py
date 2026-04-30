@@ -345,16 +345,16 @@ class ZImageTransformerTTNN(LightweightModule):
             is_causal=False,
             scale=ATTN_SCALE,
             sliding_window_size=None,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ACT_MEM,
         )
         ttnn.deallocate(q, False)
         ttnn.deallocate(k, False)
         ttnn.deallocate(v, False)
         old_attn = attn_out
-        attn_out = ttnn.transformer.concatenate_heads(old_attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_out = ttnn.transformer.concatenate_heads(old_attn, memory_config=ACT_MEM)
         ttnn.deallocate(old_attn, False)
         old_attn = attn_out
-        attn_out = ttnn.reshape(old_attn, [seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_out = ttnn.reshape(old_attn, [seq_len, N], memory_config=ACT_MEM)
         ttnn.deallocate(old_attn, False)
 
         # ── to_out projection (row_par) ───────────────────────────────────────
