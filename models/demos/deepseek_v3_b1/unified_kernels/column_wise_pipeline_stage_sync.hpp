@@ -149,6 +149,7 @@ struct ColumnWisePipelineStageSync {
             // == Round 2
             noc_semaphore_wait_min(r2_semaphore_l1_ptr, 2);
             unified_kernels::semaphore_dec(r2_semaphore_l1_ptr);
+            unified_kernels::semaphore_dec(r2_semaphore_l1_ptr);
 
             // propagate to just left neighbour
             packet_header_a_ptr->to_noc_unicast_atomic_inc(

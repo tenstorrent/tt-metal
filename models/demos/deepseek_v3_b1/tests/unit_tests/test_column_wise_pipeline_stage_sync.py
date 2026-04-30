@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Unit tests for PipelineStageSync operation.
+Unit tests for ColumnWisePipelineStageSync operation.
 """
 
 import pytest
@@ -18,9 +18,9 @@ from models.demos.deepseek_v3_b1.micro_ops.column_wise_pipeline_stage_sync.op im
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize("entry_device_mesh_col, exit_device_mesh_col", [(0, 1), (1, 0)])
 @pytest.mark.parametrize("entry_device_core_coord", [ttnn.CoreCoord(1, 1), ttnn.CoreCoord(12, 9)])
-@pytest.mark.parametrize("run_entry_device_logic_on_ncrsic", [True, False])
+@pytest.mark.parametrize("run_entry_device_logic_on_ncrisc", [True, False])
 @pytest.mark.parametrize("exit_device_core_coord", [ttnn.CoreCoord(1, 1), ttnn.CoreCoord(12, 9)])
-@pytest.mark.parametrize("run_exit_device_logic_on_ncrsic", [True, False])
+@pytest.mark.parametrize("run_exit_device_logic_on_ncrisc", [True, False])
 @pytest.mark.parametrize("num_iterations", [50])
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize(
@@ -28,14 +28,14 @@ from models.demos.deepseek_v3_b1.micro_ops.column_wise_pipeline_stage_sync.op im
     [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X})],
     indirect=["device_params"],
 )
-def test_pipeline_stage_sync_2d(
+def test_column_wise_pipeline_stage_sync_2d(
     bh_2d_mesh_device,
     entry_device_mesh_col,
     exit_device_mesh_col,
     entry_device_core_coord,
-    run_entry_device_logic_on_ncrsic,
+    run_entry_device_logic_on_ncrisc,
     exit_device_core_coord,
-    run_exit_device_logic_on_ncrsic,
+    run_exit_device_logic_on_ncrisc,
     num_iterations,
     num_devices,
 ):
@@ -87,9 +87,9 @@ def test_pipeline_stage_sync_2d(
         entry_device_mesh_col=entry_device_mesh_col,
         exit_device_mesh_col=exit_device_mesh_col,
         entry_device_core_coord=entry_device_core_coord,
-        run_entry_device_logic_on_ncrsic=run_entry_device_logic_on_ncrsic,
+        run_entry_device_logic_on_ncrisc=run_entry_device_logic_on_ncrisc,
         exit_device_core_coord=exit_device_core_coord,
-        run_exit_device_logic_on_ncrsic=run_exit_device_logic_on_ncrsic,
+        run_exit_device_logic_on_ncrisc=run_exit_device_logic_on_ncrisc,
         num_iterations=num_iterations,
     )
     ttnn.synchronize_device(submesh_device)

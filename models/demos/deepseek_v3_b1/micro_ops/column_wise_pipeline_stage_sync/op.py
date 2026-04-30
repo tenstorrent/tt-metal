@@ -33,9 +33,9 @@ class ColumnWisePipelineStageSync:
         entry_device_mesh_col: int,
         exit_device_mesh_col: int,
         entry_device_core_coord: ttnn.CoreCoord,
-        run_entry_device_logic_on_ncrsic: bool,
+        run_entry_device_logic_on_ncrisc: bool,
         exit_device_core_coord: ttnn.CoreCoord,
-        run_exit_device_logic_on_ncrsic: bool,
+        run_exit_device_logic_on_ncrisc: bool,
         num_iterations: int = 1,
     ) -> None:
         """
@@ -47,13 +47,14 @@ class ColumnWisePipelineStageSync:
 
         if entry_device_mesh_col == exit_device_mesh_col:
             raise ValueError("entry and exit mesh columns cannot be the same")
-        if entry_device_mesh_col >= 2 or exit_device_mesh_col >= 2:
-            raise ValueError("requires operating on a 2 column mesh")
 
         # mesh details
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
+
+        if mesh_cols != 2 or entry_device_mesh_col >= 2 or exit_device_mesh_col >= 2:
+            raise ValueError("requires operating on a 2 column mesh")
 
         # create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -110,7 +111,7 @@ class ColumnWisePipelineStageSync:
 
                 # select risc for entry and exit device cores
                 if is_entry_device:
-                    if run_entry_device_logic_on_ncrsic:
+                    if run_entry_device_logic_on_ncrisc:
                         run_entry_device_logic_on_ncrisc = True
                         run_entry_device_logic_on_brisc = False
                     else:
@@ -120,7 +121,7 @@ class ColumnWisePipelineStageSync:
                     run_exit_device_logic_on_ncrisc = False
                     run_exit_device_logic_on_brisc = False
                 else:
-                    if run_exit_device_logic_on_ncrsic:
+                    if run_exit_device_logic_on_ncrisc:
                         run_exit_device_logic_on_ncrisc = True
                         run_exit_device_logic_on_brisc = False
                     else:
@@ -201,7 +202,7 @@ class ColumnWisePipelineStageSync:
                         [link_index, link_index],
                         program,
                         kernel_idx,
-                        exit_device_core_coord,
+                        entry_device_core_coord,
                     )
                     per_core_rt_args_ref.extend(fabric_args)
 
