@@ -9,6 +9,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include <bit>
+#include <cmath>
 
 inline uint32_t get_block_size(uint32_t num_tiles, uint32_t max_block_size) {
     uint32_t block_size{1};
@@ -106,7 +107,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     const auto f_c = static_cast<float>(num_channels) / static_cast<float>(num_groups);
     const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
     const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
-    auto scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_c * f_ht * f_wt));
+    float scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * std::sqrt(f_c * f_ht * f_wt));
 
     const bool gamma_has_value = gamma.has_value();
     const bool beta_has_value = beta.has_value();
@@ -304,14 +305,13 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_addr = input.buffer()->address();
+    auto* const input_buf = input.buffer();
+    auto* const output_buf = output.buffer();
+    const uint32_t mean_addr = mean_has_value ? mean.value().buffer()->address() : 0u;
+    const uint32_t rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0u;
 
-    const auto output_addr = output.buffer()->address();
-    const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0;
-    const auto rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0;
-
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
-    const auto beta_addr = beta_has_value ? beta.value().buffer()->address() : 0;
+    const uint32_t gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0u;
+    const uint32_t beta_addr = beta_has_value ? beta.value().buffer()->address() : 0u;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -326,34 +326,32 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         }
 
         // reader
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input_addr,
-                gamma_addr,
-                beta_addr,
-                std::bit_cast<uint32_t>(scaler),
-                std::bit_cast<uint32_t>(eps),
-                tile_offset,
-                num_rows_per_core,
-                num_inner_tiles,
-                num_channels,
-                origin_h,
-                origin_w,
-                block_size});
+            {input_buf,
+             gamma_addr,
+             beta_addr,
+             std::bit_cast<uint32_t>(scaler),
+             std::bit_cast<uint32_t>(eps),
+             tile_offset,
+             num_rows_per_core,
+             num_inner_tiles,
+             num_channels,
+             origin_h,
+             origin_w,
+             block_size});
 
         // writer
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output_addr,
-                mean_addr,
-                rstd_addr,
-                tile_offset,
-                num_rows_per_core,
-                num_inner_tiles,
-                num_groups,
-                block_size});
+            {output_buf,
+             mean_addr,
+             rstd_addr,
+             tile_offset,
+             num_rows_per_core,
+             num_inner_tiles,
+             num_groups,
+             block_size});
 
         tile_offset += num_rows_per_core * num_inner_tiles;
     }
