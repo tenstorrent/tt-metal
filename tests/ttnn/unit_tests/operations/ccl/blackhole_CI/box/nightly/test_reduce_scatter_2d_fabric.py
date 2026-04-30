@@ -38,7 +38,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [8])
 def test_reduce_scatter_2d_fabric(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     num_links,
     rs_input_shape,
     dim,
@@ -53,13 +53,14 @@ def test_reduce_scatter_2d_fabric(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    num_devices = bh_1d_mesh_device.shape[0]
+    num_devices = bh_2d_mesh_device.shape[0]
     cluster_axis = 0
 
-    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     run_reduce_scatter_impl(
-        bh_1d_mesh_device,
+        submesh_device,
         num_devices,
         rs_input_shape,
         dim,
@@ -76,4 +77,3 @@ def test_reduce_scatter_2d_fabric(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
     )
-    ttnn.ReadDeviceProfiler(bh_1d_mesh_device)

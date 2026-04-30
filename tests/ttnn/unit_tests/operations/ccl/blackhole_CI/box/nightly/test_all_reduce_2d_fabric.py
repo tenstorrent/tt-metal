@@ -7,6 +7,7 @@ from loguru import logger
 import ttnn
 
 from models.common.utility_functions import skip_for_n_dev, skip_for_n_or_less_dev
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
@@ -75,7 +76,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_new_all_
     indirect=True,
 )
 def test_all_reduce_2d_fabric(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     output_shape,
     cluster_axis,
     input_dtype,
@@ -89,7 +90,11 @@ def test_all_reduce_2d_fabric(
     trace_mode,
     function_level_defaults,
 ):
-    num_devices = bh_1d_mesh_device.shape[0]
+    num_devices = bh_2d_mesh_device.shape[0]
+    cluster_axis = 0
+
+    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
         pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
@@ -97,7 +102,7 @@ def test_all_reduce_2d_fabric(
     profiler = BenchmarkProfiler()
 
     run_all_reduce_impl(
-        bh_1d_mesh_device,
+        submesh_device,
         output_shape,
         cluster_axis,
         input_dtype,

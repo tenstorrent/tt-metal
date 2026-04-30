@@ -40,7 +40,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_2d_fabric_linear(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     ag_output_shape,
     dim,
     num_links,
@@ -56,12 +56,14 @@ def test_all_gather_2d_fabric_linear(
     num_buffers_per_channel,
     cluster_axis,
 ):
-    num_devices = bh_1d_mesh_device.shape[0]
+    num_devices = bh_2d_mesh_device.shape[0]
+    cluster_axis = 0
 
-    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, ttnn.Topology.Linear, bh_2d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     run_all_gather_impl(
-        bh_1d_mesh_device,
+        submesh_device,
         num_devices,
         ag_output_shape,
         dim,
