@@ -37,6 +37,15 @@ constexpr uint32_t socket_start_idx = get_compile_time_arg_val(13);
 constexpr uint32_t packet_header_slot_start = get_compile_time_arg_val(14);
 
 constexpr uint32_t receiver_socket_addrs_start_idx = 15;
+constexpr uint32_t downstream_header_ring_size = 2;
+constexpr uint32_t downstream_header_slot_count = use_fabric_on_sender ? downstream_header_ring_size : 0;
+
+struct DownstreamSendState {
+    std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, downstream_header_ring_size> packet_headers = {};
+    uint32_t next_packet_header_idx = 0;
+    uint32_t packet_headers_in_use = 0;
+    uint32_t cached_free_write_slots = 0;
+};
 
 template <size_t START_IDX, size_t COUNT, size_t I = 0>
 struct CTAArrayFiller {
@@ -82,51 +91,55 @@ FORCE_INLINE void wait_for_cached_free_write_slot(
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
+    DownstreamSendState& downstream_send_state,
     uint32_t l1_read_addr,
     uint64_t dst_addr,
-    uint32_t packet_size,
-    uint32_t& cached_free_write_slots) {
+    uint32_t packet_size) {
+    if (downstream_send_state.packet_headers_in_use == downstream_header_ring_size) {
+        // Drain once per ring wrap so a header slot is only reused after its prior send has departed.
+        noc_async_writes_flushed();
+        downstream_send_state.packet_headers_in_use = 0;
+    }
+
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr =
+        downstream_send_state.packet_headers[downstream_send_state.next_packet_header_idx];
     packet_header_addr->set_fused_unicast_write_atomic_inc_write_noc_address(dst_addr);
     packet_header_addr->set_fused_unicast_write_atomic_inc_value(packet_size);
     packet_header_addr->set_payload_size_bytes(static_cast<uint16_t>(packet_size));
 
-    wait_for_cached_free_write_slot(fabric_connection, cached_free_write_slots);
+    wait_for_cached_free_write_slot(fabric_connection, downstream_send_state.cached_free_write_slots);
 
     fabric_connection.send_current_slot_non_blocking(
         l1_read_addr, packet_size, reinterpret_cast<uint32_t>(packet_header_addr));
 
-    cached_free_write_slots--;
-    // Drain before mutating the shared downstream header for the next packet.
-    noc_async_writes_flushed();
+    downstream_send_state.cached_free_write_slots--;
+    if (++downstream_send_state.next_packet_header_idx == downstream_header_ring_size) {
+        downstream_send_state.next_packet_header_idx = 0;
+    }
+    downstream_send_state.packet_headers_in_use++;
 }
 
 FORCE_INLINE void send_worker_data_over_fabric(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
+    DownstreamSendState& downstream_send_state,
     uint32_t l1_read_addr,
-    uint64_t dst_addr,
-    uint32_t& cached_free_write_slots) {
+    uint64_t dst_addr) {
     uint32_t src = l1_read_addr;
     uint64_t dst = dst_addr;
     if constexpr (partial_packet_size > 0) {
         for (uint32_t i = 0; i < num_whole_fabric_packets_per_link; ++i) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection, packet_header_addr, src, dst, whole_packet_size, cached_free_write_slots);
+            write_data_to_remote_core_with_ack(fabric_connection, downstream_send_state, src, dst, whole_packet_size);
             src += whole_packet_size;
             dst += whole_packet_size;
         }
-        write_data_to_remote_core_with_ack(
-            fabric_connection, packet_header_addr, src, dst, partial_packet_size, cached_free_write_slots);
+        write_data_to_remote_core_with_ack(fabric_connection, downstream_send_state, src, dst, partial_packet_size);
     } else if constexpr (num_whole_fabric_packets_per_link > 0) {
         for (uint32_t i = 0; i < num_whole_fabric_packets_per_link - 1; ++i) {
-            write_data_to_remote_core_with_ack(
-                fabric_connection, packet_header_addr, src, dst, whole_packet_size, cached_free_write_slots);
+            write_data_to_remote_core_with_ack(fabric_connection, downstream_send_state, src, dst, whole_packet_size);
             src += whole_packet_size;
             dst += whole_packet_size;
         }
-        write_data_to_remote_core_with_ack(
-            fabric_connection, packet_header_addr, src, dst, whole_packet_size, cached_free_write_slots);
+        write_data_to_remote_core_with_ack(fabric_connection, downstream_send_state, src, dst, whole_packet_size);
     }
 }
 
@@ -150,7 +163,7 @@ FORCE_INLINE void notify_sender_over_fabric(
 FORCE_INLINE bool process_upstream_sockets(
     SocketReceiverInterface* receiver_sockets,
     tt::tt_fabric::WorkerToFabricEdmSender& downstream_fabric_connection,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_packet_header,
+    DownstreamSendState& downstream_send_state,
     uint64_t dst_addr_base,
     tt::tt_fabric::WorkerToFabricEdmSender& upstream_fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE** upstream_packet_headers,
@@ -161,7 +174,6 @@ FORCE_INLINE bool process_upstream_sockets(
     uint32_t remaining = num_sockets_this_risc;
     uint32_t worker_idx = 0;
     uint32_t processed_mask = 0;
-    [[maybe_unused]] uint32_t downstream_cached_free_write_slots = 0;
     [[maybe_unused]] uint32_t upstream_cached_free_write_slots = 0;
     [[maybe_unused]] bool upstream_flush_pending = false;
 
@@ -186,11 +198,7 @@ FORCE_INLINE bool process_upstream_sockets(
 
             if constexpr (use_fabric_on_sender) {
                 send_worker_data_over_fabric(
-                    downstream_fabric_connection,
-                    downstream_packet_header,
-                    l1_read_addr,
-                    dst_addr,
-                    downstream_cached_free_write_slots);
+                    downstream_fabric_connection, downstream_send_state, l1_read_addr, dst_addr);
             } else {
                 write_data_to_local_core_with_ack(l1_read_addr, dst_addr, upstream_page_size);
             }
@@ -263,7 +271,7 @@ void kernel_main() {
         }
     }
 
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_packet_header = nullptr;
+    DownstreamSendState downstream_send_state = {};
     std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_slots_per_risc> upstream_packet_headers = {};
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
@@ -278,18 +286,22 @@ void kernel_main() {
         packet_header_cb_base = get_write_ptr(fabric_packet_header_cb_id);
     }
     if constexpr (use_fabric_on_sender) {
-        uint32_t hdr_base = packet_header_cb_base + packet_header_slot_start * sizeof(PACKET_HEADER_TYPE);
-        downstream_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_base);
         downstream_fabric_connection.open();
-        fabric_set_unicast_route(downstream_packet_header, downstream_enc);
-        downstream_packet_header->to_noc_fused_unicast_write_atomic_inc(
-            NocUnicastAtomicIncFusedCommandHeader{
-                downstream_data_addr, downstream_bytes_sent_noc_addr, whole_packet_size, false},
-            whole_packet_size);
+        uint32_t header_addr = packet_header_cb_base + packet_header_slot_start * sizeof(PACKET_HEADER_TYPE);
+        for (uint32_t i = 0; i < downstream_header_ring_size; i++) {
+            downstream_send_state.packet_headers[i] =
+                reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_addr);
+            fabric_set_unicast_route(downstream_send_state.packet_headers[i], downstream_enc);
+            downstream_send_state.packet_headers[i]->to_noc_fused_unicast_write_atomic_inc(
+                NocUnicastAtomicIncFusedCommandHeader{
+                    downstream_data_addr, downstream_bytes_sent_noc_addr, whole_packet_size, false},
+                whole_packet_size);
+            header_addr += sizeof(PACKET_HEADER_TYPE);
+        }
     }
     if constexpr (use_fabric_on_receiver) {
         upstream_fabric_connection.open();
-        uint32_t upstream_header_slot_start = packet_header_slot_start + (use_fabric_on_sender ? 1 : 0);
+        uint32_t upstream_header_slot_start = packet_header_slot_start + downstream_header_slot_count;
         uint32_t header_addr = packet_header_cb_base + upstream_header_slot_start * sizeof(PACKET_HEADER_TYPE);
         for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
             upstream_packet_headers[i] = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_addr);
@@ -323,7 +335,7 @@ void kernel_main() {
         terminated = process_upstream_sockets(
             receiver_sockets,
             downstream_fabric_connection,
-            downstream_packet_header,
+            downstream_send_state,
             dst_addr_base,
             upstream_fabric_connection,
             upstream_packet_headers.data(),
