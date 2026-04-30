@@ -250,6 +250,9 @@ def apply_tensor_placement_topology(tensor, tensor_placement, mesh_shape_tuple):
     try:
         _restore_topology(tensor, entries, dist_parsed, mesh_shape_tuple)
     except Exception:
+        # Best-effort: topology restore is a soft annotation on the tensor.
+        # Failure here doesn't affect numeric correctness — the tensor is
+        # still valid for downstream use.
         pass
 
 
@@ -306,6 +309,9 @@ def replicate_with_topology(
         try:
             tensor = ttnn.to_memory_config(tensor, memory_config)
         except Exception:
+            # Best-effort upcast to the requested memory_config (e.g. L1
+            # sharded). On failure we keep the DRAM-resident tensor — sweeps
+            # tolerate the placement difference and the kernel still runs.
             pass
     else:
         tensor = ttnn.from_torch(
@@ -502,6 +508,9 @@ def create_tensor_on_mesh(
         try:
             result = ttnn.to_memory_config(result, memory_config)
         except Exception:
+            # Best-effort upcast to the requested memory_config. On failure we
+            # keep the DRAM-resident tensor — sweeps tolerate the placement
+            # difference and the kernel still runs.
             pass
     else:
         result = ttnn.from_torch(
@@ -565,6 +574,8 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
         elif num_devices >= 2:
             return (1, num_devices)
     except Exception:
+        # ttnn may not be initialized yet (env var path is preferred).
+        # Fall through to None so the caller can pick a default.
         pass
 
     return None
@@ -596,6 +607,8 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
         elif num_devices >= 2:
             return (1, num_devices)
     except Exception:
+        # ttnn may not be initialized yet (env var path is preferred).
+        # Fall through to a 1x1 default for non-mesh runs.
         pass
     return (1, 1)
 

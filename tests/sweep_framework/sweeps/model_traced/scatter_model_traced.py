@@ -186,11 +186,6 @@ def run(
     # [0, per_chip_dim_size), chunk each tensor along its own shard axis
     # (input/index/src all may be Sharded), scatter per-chip, then concat
     # along the input shard axis.
-    _scat_in_axis, _scat_in_factor = _scatter_input_shard_axis_and_factor(input_a_tensor_placement)
-    n_in = len(shape)
-    _scat_in_axis_norm = (
-        (_scat_in_axis if _scat_in_axis >= 0 else _scat_in_axis + n_in) if _scat_in_axis is not None else None
-    )
     # In trace-validation mode, create_tensor_on_mesh routes shard placements
     # through replicate_with_topology, so every chip receives the FULL per-chip
     # input/index/src and computes a full scatter. The gathered result is the

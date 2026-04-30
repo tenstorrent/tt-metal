@@ -143,6 +143,9 @@ def run(
             if ss is not None and getattr(ss, "shape", None) is not None:
                 return int(ss.shape[1])
         except Exception:
+            # mc may be a serialized dict (no .shard_spec attr) or a memory
+            # config without a shard spec. Fall through to the dict path /
+            # None default below.
             pass
         if isinstance(mc, dict):
             ss = mc.get("data", {}).get("shard_spec")
@@ -152,10 +155,7 @@ def run(
 
     _ss_w = _shard_spec_width(input_a_memory_config)
     _already_per_chip = (
-        _ss_w is not None
-        and _nchd_axis_norm is not None
-        and _nchd_axis_norm == n_in - 1
-        and shape[-1] == _ss_w
+        _ss_w is not None and _nchd_axis_norm is not None and _nchd_axis_norm == n_in - 1 and shape[-1] == _ss_w
     )
     if (
         _nchd_factor > 1

@@ -426,9 +426,10 @@ def run(
     else:
         shape_a = list(input_shape)
         # Defer dim unpack until after potential shard-axis shrink.
-        # Use explicit shapes from V2 vectors if available, otherwise derive
+        # Use explicit shapes from V2 vectors if available, otherwise derive.
+        # shape_c is only consumed in the traced-config branch above; the
+        # non-traced cos/sin path constructs caches from shape_b alone.
         shape_b = list(_kwargs.get("input_b_shape", [1, 1, max(shape_a[2], 1024), shape_a[3]]))
-        shape_c = list(_kwargs.get("input_c_shape", [1, 1, max(shape_a[2], 1024), shape_a[3]]))
 
     # Decode mode (HEIGHT_SHARDED) uses replicate-with-topology to put the
     # SAME per-chip tensor on every chip; V2 expanded the head_dim axis to
