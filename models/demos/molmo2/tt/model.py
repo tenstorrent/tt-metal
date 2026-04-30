@@ -829,13 +829,18 @@ class TtMolmo2Model(LightweightModule):
             ttnn.deallocate(logits)
             return logits_cpu  # [1, 1, vocab_size]
 
-        # ---- Eager path: pad S to next power-of-2 for SDPA compatibility ----
-        # TTNN SDPA hangs for specific (S, chunk=256) combinations where Q-tile count
-        # hits a problematic value (empirically: Q-tiles=19 deadlocks).
-        # Padding to the next power-of-2 guarantees S_pad/256 is also a power-of-2,
-        # giving Q-tile counts of 8, 16, 32, 64 — all safe.
-        # Mask, x, and rot_mats are all built for S_pad; we slice back to S for lm_head.
-        S_pad = max(256, 1 << math.ceil(math.log2(S)) if S > 1 else 256)
+        # ---- Eager path: pad S to eliminate SDPA partial-tile hangs ----
+        # Strategy:
+        #   S ≤ 8192: power-of-2 padding → Q-tiles ∈ {8,16,32} — all confirmed safe.
+        #   S > 8192: chunk-multiple (×256) padding → minimal DRAM footprint.
+        #             Power-of-2 would require S_pad=65536 for S=34395, making the
+        #             embedding tensor 536 MB/device which OOMs alongside 12 GB weights.
+        #             chunk-multiple gives S_pad=34560 (283 MB/device, fits).
+        # In both cases S_pad % 256 == 0 → no partial Q-tiles.
+        if S <= 8192:
+            S_pad = max(256, 1 << math.ceil(math.log2(S)) if S > 1 else 256)
+        else:
+            S_pad = ((S + 255) // 256) * 256
         pad_len = S_pad - S
 
         if pad_len > 0:
