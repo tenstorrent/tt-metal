@@ -112,10 +112,29 @@ Track A and the recent-window SDPA serially.
 
 Two T3K-specific findings worth flagging:
 
-1. **Track A K=14 produces 0% accuracy.** The Tier 2A K-split path is
-   broken under multi-device sharding. K=1 works, hybrid (which forces K=1
-   internally for the combine) works. Out of scope for this PR — flag for
-   a separate fix.
+1. **Track A K>1 produces 0% accuracy on T3K — numerical drift in the
+   cross-core merge.** Initially flagged as K=14-specific; confirmed
+   K=2, 8, 14 all return 0%. Reproduced on single-chip N150 with NQH=4
+   (mimicking T3K's per-chip work, since on T3K the model's 8 KV heads
+   are sharded across 8 chips → 4 Q heads per chip, total_work=4).
+   `test_K_split_low_nqh.py`:
+
+   | K | max\|diff\| vs K=1 | cosine sim |
+   |---:|---:|---:|
+   | 2 | 5.0e-3 | 0.99989 |
+   | 4 | 4.2e-3 | 0.99983 |
+   | 8 | 4.2e-3 | 0.99983 |
+
+   The merge is *nearly* correct (cos ≈ 0.9999) but each call accumulates
+   ~5e-3 error. Compounded across 32 layers × 1023 decode steps in the
+   model eval, this dominates the logit margin and zeroes out top-1. On
+   N150 with the model's actual NQH=32, K is clamped to ≤2 (max =
+   64/32 = 2) so the bug surfaces less; only on T3K with total_work=4
+   does K really run at K=8 or K=14 and trigger the drift. Hybrid path
+   forces `num_cores_per_head=1` at `ttnn_integration.py:1065` so it's
+   unaffected. Enabling K>1 in hybrid requires fixing the merge first
+   — likely FP32 intermediates in the online-softmax correction
+   (`sdpa_tq_decode.cpp` merge path). Non-trivial kernel work; deferred.
 
 2. **Optimal W on T3K is 128, not 64 (the N150 winner).** Sharding-induced
    numerical drift in the chunked online softmax appears to be partially
