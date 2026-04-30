@@ -31,6 +31,58 @@ import ttnn
 HERE = os.path.dirname(os.path.abspath(__file__))
 REF_OUTPUT_PATH = os.path.join(HERE, "reference_output.pt")
 
+# ── Performance optimizations (applied before model init) ─────────────────────
+
+# Matmul blocking configs for 13x10 core grid (not in default registry).
+_GRID_13x10_CONFIGS = {
+    # Default 8x8x8 underutilizes 130 cores (~50-75 work items).
+    # Use (4, K, 4) to create 180-270 work items for better utilization.
+    # Joint blocks (30 layers, M=1152, 36 M-tiles): dominant cost
+    (1152, 3840, 3072): (4, 8, 4),  # QKV fused, 9*24=216 items
+    (1152, 1024, 3840): (4, 4, 4),  # to_out, 9*30=270 items
+    (1152, 3840, 2560): (4, 8, 4),  # MLP w1/w3, 9*20=180 items
+    (1152, 2560, 3840): (4, 8, 4),  # MLP w2, 9*30=270 items
+    # Noise refiner (2 layers, M=1024, 32 M-tiles)
+    (1024, 3840, 3072): (4, 8, 4),  # QKV fused, 8*24=192 items
+    (1024, 1024, 3840): (4, 4, 4),  # to_out, 8*30=240 items
+    (1024, 3840, 2560): (4, 8, 4),  # MLP w1/w3, 8*20=160 items
+    (1024, 2560, 3840): (4, 8, 4),  # MLP w2, 8*30=240 items
+    # Context refiner (2 layers, M=128, 4 M-tiles)
+    (128, 3840, 3072): (2, 8, 4),  # QKV fused, 2*24=48 items
+    (128, 1024, 3840): (2, 4, 4),  # to_out, 2*30=60 items
+    (128, 3840, 2560): (2, 8, 4),  # MLP w1/w3, 2*20=40 items
+    (128, 2560, 3840): (2, 8, 4),  # MLP w2, 2*30=60 items
+}
+
+
+def _apply_matmul_config_patch():
+    """Monkey-patch get_matmul_config in dit.model_ttnn to handle 13x10 grid."""
+    import dit.model_ttnn as dit_mod
+
+    _orig = dit_mod._get_matmul_config
+
+    def _patched(M, K, N, core_grid, default_block_size=None):
+        gx = getattr(core_grid, "x", None)
+        gy = getattr(core_grid, "y", None)
+        if (gx, gy) == (13, 10):
+            cfg = _GRID_13x10_CONFIGS.get((M, K, N))
+            if cfg is not None:
+                sb_h, sb_w = 2, 2
+                if len(cfg) == 4:
+                    sb_h, sb_w = cfg[3]
+                    cfg = cfg[:3]
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=cfg[0],
+                    K_block_size=cfg[1],
+                    N_block_size=cfg[2],
+                    subblock_h=sb_h,
+                    subblock_w=sb_w,
+                    compute_with_storage_grid_size=core_grid,
+                )
+        return _orig(M, K, N, core_grid, default_block_size)
+
+    dit_mod._get_matmul_config = _patched
+
 
 def compute_pcc(a, b):
     a = a.float().flatten()
@@ -132,6 +184,9 @@ def main():
 
     print("Loading text encoder ...")
     te = TextEncoderTTNN(mesh_device, seq_len=CAP_TOKENS)
+
+    print("Applying perf patches ...")
+    _apply_matmul_config_patch()
 
     print("Loading DIT ...")
     dit = ZImageTransformerTTNN(mesh_device)
