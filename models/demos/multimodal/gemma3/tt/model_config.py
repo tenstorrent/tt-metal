@@ -14,6 +14,7 @@ from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf
 from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
     HfAttentionWrapper,
     HfDecoderWrapper,
     HfModelWrapper,
@@ -94,6 +95,10 @@ class ModelArgs(TTModelArgs):
             cache_hf=cache_hf,
         )
 
+        if self.num_devices > 1 and getattr(self.optimizations, "__name__", None) == "accuracy":
+            self.optimizations = DecodersPrecision.performance(self.n_layers, self.model_name)
+            self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+
         # For Gemma3 we still need a real tokenizer even when using dummy_weights,
         # because prompt encoding relies on HF chat templates, not on checkpoint weights.
         if dummy_weights and self.tokenizer is None:
@@ -104,10 +109,13 @@ class ModelArgs(TTModelArgs):
         self.padded_vocab_size = 262400
         # Raise the per-device cap so on-device sampling is enabled for Gemma3's 131200-wide shard.
         self.device_sampling_max_per_device_vocab = 192 * 1024
-        self._force_sdpa_decode_hifi2_na()
+        # HiFi2 NA fixes single-device decode token drift; on multi-device it pushes SDPA decode L1
+        # into the traced circular-buffer region (TT_THROW CB vs L1 clash). Skip when num_devices > 1.
+        if self.num_devices == 1:
+            self._force_sdpa_decode_hifi2_na()
 
     def _force_sdpa_decode_hifi2_na(self):
-        """Gemma3 decode SDPA requires no-accumulation HiFi2 for correctness."""
+        """Gemma3 decode SDPA requires no-accumulation HiFi2 for correctness (single-device)."""
         for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
             tensor_precision = {key: value for key, value in conf.tensor_dtype_settings.items() if value is not None}
             op_fidelity = dict(conf.op_fidelity_settings)
