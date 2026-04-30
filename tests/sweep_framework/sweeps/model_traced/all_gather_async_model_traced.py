@@ -390,7 +390,7 @@ def run(
     input_a_memory_config=None,
     input_a_tensor_placement=None,
     memory_config=None,  # output memory_config
-    persistent_output_buffer=None,
+    persistent_output_buffer=_ABSENT,
     multi_device_global_semaphore=None,  # From traced config (ignored, we create fresh)
     barrier_semaphore=None,  # From traced config (ignored, we create fresh)
     mesh_device=None,  # From traced config (ignored, we use device param)
@@ -403,6 +403,17 @@ def run(
     device,  # unused
     **kwargs,
 ) -> list:
+    absent_keys = kwargs.get("__absent_keys__") or set()
+    if not isinstance(absent_keys, (set, frozenset, list, tuple)):
+        absent_keys = set()
+    else:
+        absent_keys = set(absent_keys)
+    persistent_output_buffer_was_provided = (
+        persistent_output_buffer != _ABSENT and "persistent_output_buffer" not in absent_keys
+    )
+    if not persistent_output_buffer_was_provided:
+        persistent_output_buffer = None
+
     # Check if this is a model_traced run (V2 format has input_a_shape)
     is_model_traced = input_a_shape is not None
 
@@ -670,26 +681,13 @@ def run(
                 pob_placement_kw = kwargs.get("persistent_output_buffer_tensor_placement", _ABSENT)
                 # PoB-tensor case: shape was unpacked (master had a real tensor).
                 pob_tensor_was_traced = pob_shape_kw not in (_ABSENT, None)
-                # PoB-explicit-None case: the kwarg was in vector with value None
-                # AND no unpacked shape (so the model passed None explicitly).
+                # PoB-explicit-None case: the kwarg was present in the master
+                # vector with value None. The runner's __absent_keys__ marker is
+                # the authoritative way to distinguish that from a missing kwarg.
                 pob_explicit_none = (
                     not pob_tensor_was_traced
                     and persistent_output_buffer is None
-                    and pob_shape_kw == _ABSENT
-                    and any(kwargs.get(k, _ABSENT) == _ABSENT for k in ("persistent_output_buffer_shape",))
-                    # Only treat as explicit None when the unpacked-fields family
-                    # is even known to the loader (i.e., wan-style run); detect
-                    # that by the presence of *any* of the unpacked keys in kwargs.
-                    and any(
-                        k in kwargs
-                        for k in (
-                            "persistent_output_buffer_shape",
-                            "persistent_output_buffer_dtype",
-                            "persistent_output_buffer_layout",
-                            "persistent_output_buffer_memory_config",
-                            "persistent_output_buffer_tensor_placement",
-                        )
-                    )
+                    and persistent_output_buffer_was_provided
                 )
 
             for i in range(num_iters):
@@ -732,7 +730,6 @@ def run(
                             op_kwargs["persistent_output_buffer"] = pob_tensor
                         elif pob_explicit_none:
                             # Master had `persistent_output_buffer=None` explicitly.
-                            # Pass via kwarg so it shows up in the trace as None.
                             op_kwargs["persistent_output_buffer"] = None
 
                         tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
