@@ -14,7 +14,7 @@ Architecture (Qwen3Model from Tongyi-MAI/Z-Image-Turbo / text_encoder):
       Norms and embedding: replicated
 
 Weights are loaded directly from the HuggingFace PyTorch model — no tensorbin files.
-RoPE tables and causal mask are computed at forward time for each sequence length.
+RoPE tables and causal mask are precomputed at init time for a fixed sequence length.
 """
 
 import math
@@ -51,12 +51,12 @@ class TextEncoderTTNN(LightweightModule):
     Qwen3 text encoder in TTNN with 4-way tensor parallelism.
 
     Loads weights directly from a PyTorch Qwen3Model and converts them
-    to TTNN with TP sharding. Supports variable sequence lengths.
+    to TTNN with TP sharding. Uses a fixed sequence length (default 128).
 
     Usage::
 
-        model = TextEncoderTTNN(mesh_device, pt_model)
-        tt_out = model(input_ids_tt)  # [1, seq_len] INT32 on device
+        model = TextEncoderTTNN(mesh_device, pt_model, seq_len=128)
+        tt_out = model(input_ids_tt)  # [1, 128] INT32 on device
     """
 
     # Architecture constants
@@ -69,9 +69,9 @@ class TextEncoderTTNN(LightweightModule):
     RMS_NORM_EPS = 1e-6
     ROPE_THETA = 1_000_000.0
     TP = 4  # tensor parallelism degree
-    ATTN_SCALE = 1.0 / math.sqrt(128)  # 1/sqrt(head_dim) ≈ 0.08839
+    ATTN_SCALE = 1.0 / math.sqrt(HEAD_DIM)  # 1/sqrt(head_dim) ≈ 0.08839
 
-    def __init__(self, mesh_device, pt_model=None):
+    def __init__(self, mesh_device, pt_model=None, seq_len=128):
         """
         Initialize and load all weights.
 
@@ -79,8 +79,10 @@ class TextEncoderTTNN(LightweightModule):
             mesh_device: TTNN MeshDevice ((1,4) mesh, already opened).
             pt_model: PyTorch Qwen3Model in eval mode. If None, loads from
                       Tongyi-MAI/Z-Image-Turbo automatically.
+            seq_len: Fixed sequence length for RoPE tables and causal mask.
         """
         self.mesh_device = mesh_device
+        self.seq_len = seq_len
         self.q_per_dev = self.NUM_HEADS // self.TP  # 8 Q heads per device
         self.kv_per_dev = self.NUM_KV_HEADS // self.TP  # 2 KV heads per device
 
@@ -99,6 +101,11 @@ class TextEncoderTTNN(LightweightModule):
         self.weights = params.load_weights(mesh_device, pt_model)
         print("  Weight loading complete.")
 
+        print(f"  Precomputing RoPE tables and causal mask for seq_len={seq_len} ...")
+        self.cos, self.sin = self._compute_rope_tables(seq_len)
+        self.attn_mask = self._compute_causal_mask(seq_len)
+        print("  Precomputation complete.")
+
     # ── Forward pass ───────────────────────────────────────────────────────────
 
     def forward(self, input_ids):
@@ -112,17 +119,18 @@ class TextEncoderTTNN(LightweightModule):
             [seq_len, hidden_size] bfloat16 TTNN tensor — last hidden state.
         """
         seq_len = input_ids.shape[-1]
+        assert seq_len == self.seq_len, f"Input seq_len={seq_len} != precomputed seq_len={self.seq_len}"
 
-        # Compute RoPE tables and causal mask for this sequence length
-        cos, sin = self._compute_rope_tables(seq_len)
-        attn_mask = self._compute_causal_mask(seq_len)
+        cos, sin, attn_mask = self.cos, self.sin, self.attn_mask
 
         # Token embedding: [1, seq_len] INT32 → [seq_len, 2560] BF16
         hidden_states = self._embedding(input_ids, seq_len)  # [seq_len, 2560]
 
         # 36 Qwen3 decoder layers
         for layer_idx in range(self.NUM_LAYERS):
-            hidden_states = self._decoder_layer(hidden_states, cos, sin, attn_mask, layer_idx)
+            old_hidden_states = hidden_states
+            hidden_states = self._decoder_layer(old_hidden_states, cos, sin, attn_mask, layer_idx)
+            ttnn.deallocate(old_hidden_states, False)
 
         # Return pre-norm hidden states (equivalent to hidden_states[-2] in HuggingFace
         # Qwen3Model with output_hidden_states=True). The ZImagePipeline uses
@@ -130,9 +138,11 @@ class TextEncoderTTNN(LightweightModule):
         # The cap_embedder in the transformer applies its own RMSNorm, so the
         # text encoder's final norm should NOT be applied here.
         if len(hidden_states.shape) == 3:
+            old_hidden_states = hidden_states
             hidden_states = ttnn.reshape(
-                hidden_states, [seq_len, self.HIDDEN_SIZE], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                old_hidden_states, [seq_len, self.HIDDEN_SIZE], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+            ttnn.deallocate(old_hidden_states, False)
 
         return hidden_states
 
@@ -149,19 +159,27 @@ class TextEncoderTTNN(LightweightModule):
           INT32 → TILE → UINT32 (for embedding) → ROW_MAJOR → embedding → reshape
         """
         x = ttnn.to_layout(input_ids, ttnn.Layout.TILE, None, memory_config=None)
-        x = ttnn.typecast(x, ttnn.DataType.UINT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.to_layout(x, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
+        old_x = x
+        x = ttnn.typecast(old_x, ttnn.DataType.UINT32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
+        old_x = x
+        x = ttnn.to_layout(old_x, ttnn.Layout.ROW_MAJOR, None, memory_config=None)
+        ttnn.deallocate(old_x, False)
 
+        old_x = x
         x = ttnn.embedding(
-            x,
+            old_x,
             self.weights["embed_tokens.weight"],
             padding_idx=None,
             layout=ttnn.Layout.TILE,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, seq_len, 2560]
+        ttnn.deallocate(old_x, False)
 
-        x = ttnn.reshape(x, [seq_len, self.HIDDEN_SIZE], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_x = x
+        x = ttnn.reshape(old_x, [seq_len, self.HIDDEN_SIZE], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
         return x
 
     # ── RoPE ───────────────────────────────────────────────────────────────────
@@ -272,10 +290,11 @@ class TextEncoderTTNN(LightweightModule):
         x = ttnn.reshape(hidden_states, [seq_len, self.HIDDEN_SIZE], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # ── Attention sub-layer ───────────────────────────────────────────────
-        residual = x
+        residual = x  # residual and x point to the same tensor
 
+        old_x = x
         x = ttnn.rms_norm(
-            x,
+            old_x,
             epsilon=self.RMS_NORM_EPS,
             weight=self.weights[f"layers.{layer_idx}.input_layernorm.weight"],
             bias=None,
@@ -284,23 +303,30 @@ class TextEncoderTTNN(LightweightModule):
             program_config=None,
             compute_kernel_config=NORM_KERNEL,
         )  # [seq_len, 2560]
+        # Don't deallocate old_x here — residual still points to it
 
-        x = self._attention(x, cos, sin, attn_mask, seq_len, layer_idx)
-        # x: [1, seq_len, 2560]
+        x_attn_out = self._attention(x, cos, sin, attn_mask, seq_len, layer_idx)
+        ttnn.deallocate(x, False)
+        # x_attn_out: [1, seq_len, 2560]
 
         hidden_states = ttnn.add(
             residual,
-            x,
+            x_attn_out,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, seq_len, 2560] (broadcast from [S, H] + [1, S, H])
+        ttnn.deallocate(residual, False)  # == old x before rms_norm
+        ttnn.deallocate(x_attn_out, False)
 
         # ── MLP sub-layer ─────────────────────────────────────────────────────
-        x = ttnn.reshape(hidden_states, [seq_len, self.HIDDEN_SIZE], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        residual = x
+        old_hidden_states = hidden_states
+        x = ttnn.reshape(old_hidden_states, [seq_len, self.HIDDEN_SIZE], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_hidden_states, False)
+        residual = x  # residual and x point to the same tensor
 
+        old_x = x
         x = ttnn.rms_norm(
-            x,
+            old_x,
             epsilon=self.RMS_NORM_EPS,
             weight=self.weights[f"layers.{layer_idx}.post_attention_layernorm.weight"],
             bias=None,
@@ -309,16 +335,20 @@ class TextEncoderTTNN(LightweightModule):
             program_config=None,
             compute_kernel_config=NORM_KERNEL,
         )  # [seq_len, 2560]
+        # Don't deallocate old_x here — residual still points to it
 
-        x = self._mlp(x, seq_len, layer_idx)
-        # x: [1, seq_len, 2560]
+        x_mlp_out = self._mlp(x, seq_len, layer_idx)
+        ttnn.deallocate(x, False)
+        # x_mlp_out: [1, seq_len, 2560]
 
         hidden_states = ttnn.add(
             residual,
-            x,
+            x_mlp_out,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, seq_len, 2560]
+        ttnn.deallocate(residual, False)  # == old x before rms_norm
+        ttnn.deallocate(x_mlp_out, False)
 
         return hidden_states
 
@@ -361,12 +391,15 @@ class TextEncoderTTNN(LightweightModule):
             compute_kernel_config=None,
         )  # [seq_len, 1024] per device
 
+        old_q = q
         q = ttnn.reshape(
-            q, [1, seq_len, self.q_per_dev, self.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            old_q, [1, seq_len, self.q_per_dev, self.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1, seq_len, 8, 128]
+        ttnn.deallocate(old_q, False)
 
+        old_q = q
         q = ttnn.rms_norm(
-            q,
+            old_q,
             epsilon=self.RMS_NORM_EPS,
             weight=self.weights[f"layers.{li}.self_attn.q_norm.weight"],
             bias=None,
@@ -375,18 +408,25 @@ class TextEncoderTTNN(LightweightModule):
             program_config=None,
             compute_kernel_config=NORM_KERNEL,
         )  # [1, seq_len, 8, 128]
+        ttnn.deallocate(old_q, False)
 
-        q = ttnn.permute(q, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        old_q = q
+        q = ttnn.permute(old_q, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        ttnn.deallocate(old_q, False)
         # [1, 8, seq_len, 128]
 
-        q = ttnn.experimental.rotary_embedding(q, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_q = q
+        q = ttnn.experimental.rotary_embedding(old_q, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_q, False)
+        old_q = q
         q = ttnn.slice(
-            q,
+            old_q,
             [0, 0, 0, 0],
             [1, self.q_per_dev, seq_len, self.HEAD_DIM],
             [1, 1, 1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 8, seq_len, 128] — trims TILE padding from rotary_embedding
+        ttnn.deallocate(old_q, False)
 
         # ── K projection (col_par: 2 KV heads per device) ────────────────────
         k = ttnn.matmul(
@@ -401,12 +441,15 @@ class TextEncoderTTNN(LightweightModule):
             compute_kernel_config=None,
         )  # [seq_len, 256] per device
 
+        old_k = k
         k = ttnn.reshape(
-            k, [1, seq_len, self.kv_per_dev, self.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            old_k, [1, seq_len, self.kv_per_dev, self.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1, seq_len, 2, 128]
+        ttnn.deallocate(old_k, False)
 
+        old_k = k
         k = ttnn.rms_norm(
-            k,
+            old_k,
             epsilon=self.RMS_NORM_EPS,
             weight=self.weights[f"layers.{li}.self_attn.k_norm.weight"],
             bias=None,
@@ -415,18 +458,25 @@ class TextEncoderTTNN(LightweightModule):
             program_config=None,
             compute_kernel_config=NORM_KERNEL,
         )  # [1, seq_len, 2, 128]
+        ttnn.deallocate(old_k, False)
 
-        k = ttnn.permute(k, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        old_k = k
+        k = ttnn.permute(old_k, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        ttnn.deallocate(old_k, False)
         # [1, 2, seq_len, 128]
 
-        k = ttnn.experimental.rotary_embedding(k, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_k = k
+        k = ttnn.experimental.rotary_embedding(old_k, cos, sin, None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_k, False)
+        old_k = k
         k = ttnn.slice(
-            k,
+            old_k,
             [0, 0, 0, 0],
             [1, self.kv_per_dev, seq_len, self.HEAD_DIM],
             [1, 1, 1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 2, seq_len, 128]
+        ttnn.deallocate(old_k, False)
 
         # ── V projection (col_par: 2 KV heads per device) ────────────────────
         v = ttnn.matmul(
@@ -441,11 +491,15 @@ class TextEncoderTTNN(LightweightModule):
             compute_kernel_config=None,
         )  # [seq_len, 256] per device
 
+        old_v = v
         v = ttnn.reshape(
-            v, [1, seq_len, self.kv_per_dev, self.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            old_v, [1, seq_len, self.kv_per_dev, self.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1, seq_len, 2, 128]
+        ttnn.deallocate(old_v, False)
 
-        v = ttnn.permute(v, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        old_v = v
+        v = ttnn.permute(old_v, [0, 2, 1, 3], memory_config=ttnn.DRAM_MEMORY_CONFIG, pad_value=0.0)
+        ttnn.deallocate(old_v, False)
         # [1, 2, seq_len, 128] — no RoPE on V
 
         # ── Scaled Dot-Product Attention (GQA: 4 Q heads per KV head) ─────────
@@ -456,7 +510,9 @@ class TextEncoderTTNN(LightweightModule):
         # Manual SDPA (matmul + scale + mask + softmax + matmul) is used instead.
         grp = self.q_per_dev // self.kv_per_dev  # 4
         k_exp = self._expand_kv(k, self.kv_per_dev, grp, seq_len)
+        ttnn.deallocate(k, False)
         v_exp = self._expand_kv(v, self.kv_per_dev, grp, seq_len)
+        ttnn.deallocate(v, False)
         # k_exp, v_exp: [1, 8, seq_len, 128] each
 
         scores = ttnn.matmul(
@@ -467,19 +523,30 @@ class TextEncoderTTNN(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
         )  # [1, 8, seq_len, seq_len]
+        ttnn.deallocate(q, False)
+        ttnn.deallocate(k_exp, False)
+
+        old_scores = scores
         scores = ttnn.multiply(
-            scores,
+            old_scores,
             self.ATTN_SCALE,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(old_scores, False)
+
+        old_scores = scores
         scores = ttnn.add(
-            scores,
+            old_scores,
             attn_mask,
             dtype=ttnn.DataType.BFLOAT16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # causal mask broadcast: [1,1,S,S] → [1,8,S,S]
+        ttnn.deallocate(old_scores, False)
+
         attn_w = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(scores, False)
+
         out = ttnn.matmul(
             attn_w,
             v_exp,
@@ -488,17 +555,24 @@ class TextEncoderTTNN(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.DataType.BFLOAT16,
         )  # [1, 8, seq_len, 128]
+        ttnn.deallocate(attn_w, False)
+        ttnn.deallocate(v_exp, False)
 
-        out = ttnn.transformer.concatenate_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_out = out
+        out = ttnn.transformer.concatenate_heads(old_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_out, False)
         # [1, seq_len, 1024]
 
+        old_out = out
         out = ttnn.reshape(
-            out, [seq_len, self.q_per_dev * self.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            old_out, [seq_len, self.q_per_dev * self.HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [seq_len, 1024]
+        ttnn.deallocate(old_out, False)
 
         # ── O projection (row_par) + TP all-reduce ────────────────────────────
+        old_out = out
         out = ttnn.matmul(
-            out,
+            old_out,
             self.weights[f"layers.{li}.self_attn.o_proj.weight"],
             transpose_a=False,
             transpose_b=True,
@@ -508,6 +582,7 @@ class TextEncoderTTNN(LightweightModule):
             activation=None,
             compute_kernel_config=None,
         )  # [seq_len, 2560] — partial sum per device
+        ttnn.deallocate(old_out, False)
 
         return self._all_reduce(out, seq_len)  # [1, seq_len, 2560]
 
@@ -532,6 +607,7 @@ class TextEncoderTTNN(LightweightModule):
             [1, kv_heads * grp, seq_len, head_dim] BF16 TTNN tensor
         """
         slices = []
+        unique_slices = []
         for kv_i in range(kv_heads):
             s = ttnn.slice(
                 kv,
@@ -540,9 +616,13 @@ class TextEncoderTTNN(LightweightModule):
                 [1, 1, 1, 1],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            unique_slices.append(s)
             for _ in range(grp):
                 slices.append(s)
-        return ttnn.concat(slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        result = ttnn.concat(slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for s in unique_slices:
+            ttnn.deallocate(s, False)
+        return result
 
     # ── MLP ────────────────────────────────────────────────────────────────────
 
@@ -594,6 +674,8 @@ class TextEncoderTTNN(LightweightModule):
 
         # Element-wise product (SwiGLU)
         h = ttnn.multiply(gate, up, dtype=ttnn.DataType.BFLOAT16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(gate, False)
+        ttnn.deallocate(up, False)
         # [seq_len, 2432]
 
         # Down projection (row_par) + all-reduce
@@ -608,6 +690,7 @@ class TextEncoderTTNN(LightweightModule):
             activation=None,
             compute_kernel_config=None,
         )  # [seq_len, 2560] — partial sum per device
+        ttnn.deallocate(h, False)
 
         return self._all_reduce(out, seq_len)  # [1, seq_len, 2560]
 
@@ -631,10 +714,13 @@ class TextEncoderTTNN(LightweightModule):
         """
         H = self.HIDDEN_SIZE  # 2560
 
-        x = ttnn.reshape(x, [1, 1, seq_len, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_x = x
+        x = ttnn.reshape(old_x, [1, 1, seq_len, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
 
+        old_x = x
         x = ttnn.reduce_scatter(
-            input_tensor=x,
+            input_tensor=old_x,
             dim=3,
             cluster_axis=1,
             subdevice_id=None,
@@ -643,12 +729,16 @@ class TextEncoderTTNN(LightweightModule):
             topology=ttnn.Topology.Ring,
             compute_kernel_config=REDUCE_KERNEL,
         )  # [1, 1, seq_len, H//4] per device
+        ttnn.deallocate(old_x, False)
 
-        x = ttnn.reshape(x, [seq_len, H // self.TP], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_x = x
+        x = ttnn.reshape(old_x, [seq_len, H // self.TP], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
         # [seq_len, 640]
 
+        old_x = x
         x = ttnn.all_gather(
-            input_tensor=x,
+            input_tensor=old_x,
             dim=1,
             cluster_axis=1,
             subdevice_id=None,
@@ -656,8 +746,11 @@ class TextEncoderTTNN(LightweightModule):
             num_links=None,
             topology=ttnn.Topology.Ring,
         )  # [seq_len, H]
+        ttnn.deallocate(old_x, False)
 
-        x = ttnn.reshape(x, [1, seq_len, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        old_x = x
+        x = ttnn.reshape(old_x, [1, seq_len, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_x, False)
         # [1, seq_len, 2560]
 
         return x

@@ -3,17 +3,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """
-Z-Image-Turbo with Metal Trace — traces the DIT denoising loop for fast inference.
+Z-Image-Turbo with Metal Trace — traces both the text encoder and DIT denoising
+loop for fast inference.
 
-The DIT runs 9 steps per prompt and dominates end-to-end latency.  Metal Trace
-eliminates host dispatch overhead for every DIT call by recording the TTNN op
-graph once and replaying it from device-side command buffers.
+Metal Trace eliminates host dispatch overhead by recording the TTNN op graph once
+and replaying it from device-side command buffers.  Both the text encoder (1 call
+per prompt) and the DIT (8 calls per prompt) are traced.
 
-Text encoder and VAE decoder each run once per prompt and are NOT traced.
+VAE decoder runs once per prompt and is NOT traced.
 
 Usage:
-    python zit.py
-    python zit.py --steps 9 --seed 42
+    python server.py
+    python server.py --steps 9 --seed 42
 """
 
 import argparse
@@ -134,7 +135,7 @@ def _make_scheduler(template, steps):
 
 
 class ZImageTurbo:
-    """Z-Image-Turbo pipeline with Metal Trace on the DIT denoising loop."""
+    """Z-Image-Turbo pipeline with Metal Trace on the TE and DIT."""
 
     def __init__(self):
         t0 = time.time()
@@ -155,7 +156,7 @@ class ZImageTurbo:
         self.mesh_device.enable_program_cache()
 
         print("[3/5] Building Text Encoder ...")
-        self.te = TextEncoderTTNN(self.mesh_device)
+        self.te = TextEncoderTTNN(self.mesh_device, seq_len=CAP_TOKENS)
 
         print("[4/5] Building Transformer (DIT) ...")
         self.tr = ZImageTransformerTTNN(self.mesh_device)
@@ -163,17 +164,21 @@ class ZImageTurbo:
         print("[5/5] Loading TTNN VAE decoder ...")
         self.vae = VaeDecoderTTNN(self.mesh_device)
 
-        self._trace_id = None
+        self._te_trace_id = None
+        self._te_input_buf = None
+        self._te_output_ref = None
+
+        self._dit_trace_id = None
         self._lat_buf = None
         self._ts_buf = None
-        self._output_ref = None
+        self._dit_output_ref = None
 
         print(f"Model loading: {(time.time() - t0) * 1000:.0f} ms\n")
 
-    # ── Text encoding (runs without trace) ────────────────────────────────────
+    # ── Text encoding helpers ───────────────────────────────────────────────────
 
-    def _encode_prompt(self, prompt):
-        """Tokenize + encode → [1, CAP_TOKENS, 2560] BF16 CPU tensor."""
+    def _tokenize(self, prompt):
+        """Tokenize a prompt → [1, CAP_TOKENS] INT32 CPU tensor."""
         messages = [{"role": "user", "content": prompt}]
         try:
             formatted = self.tokenizer.apply_chat_template(
@@ -184,7 +189,7 @@ class ZImageTurbo:
             )
         except TypeError:
             formatted = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        input_ids = self.tokenizer(
+        return self.tokenizer(
             formatted,
             padding="max_length",
             truncation=True,
@@ -192,13 +197,23 @@ class ZImageTurbo:
             return_tensors="pt",
         )["input_ids"]
 
+    def _encode_prompt_no_trace(self, prompt):
+        """Tokenize + encode without trace (used during compile phase)."""
+        input_ids = self._tokenize(prompt)
         tt_input_ids = _to_device_int32(input_ids, self.mesh_device)
         tt_cap_out = self.te(tt_input_ids)
         cap_cpu = _tt_to_torch(tt_cap_out, self.mesh_device)[:CAP_TOKENS].bfloat16()
-        # Free device tensors so they don't occupy addresses the DIT trace needs.
         ttnn.deallocate(tt_input_ids, force=True)
         ttnn.deallocate(tt_cap_out, force=True)
-        return cap_cpu.unsqueeze(0)  # [1, 32, 2560]
+        return cap_cpu.unsqueeze(0)  # [1, CAP_TOKENS, 2560]
+
+    def _encode_prompt(self, prompt):
+        """Tokenize + encode via TE trace → [1, CAP_TOKENS, 2560] BF16 CPU tensor."""
+        input_ids = self._tokenize(prompt).to(torch.int32)
+        _copy_to_persistent(input_ids, self._te_input_buf, dtype=ttnn.DataType.INT32)
+        ttnn.execute_trace(self.mesh_device, self._te_trace_id, cq_id=0, blocking=True)
+        cap_cpu = _tt_to_torch(self._te_output_ref, self.mesh_device)[:CAP_TOKENS].bfloat16()
+        return cap_cpu.unsqueeze(0)  # [1, CAP_TOKENS, 2560]
 
     # ── VAE decode (runs without trace) ───────────────────────────────────────
 
@@ -213,27 +228,27 @@ class ZImageTurbo:
         gc.collect()
         return self.vae_processor.postprocess(image_tensor, output_type="pil")[0]
 
-    # ── Warmup: compile + capture DIT trace ───────────────────────────────────
+    # ── Warmup: compile + capture TE & DIT traces ──────────────────────────────
 
     def warmup(self, prompt="a cat sitting on a mat", steps=9, seed=42):
-        """Compile the DIT, capture Metal Trace, and run one full generation.
+        """Compile all models, capture TE + DIT traces, and run one full generation.
 
-        After this call, generate() uses the cached trace for all DIT calls.
+        After this call, generate() uses cached traces for both TE and DIT calls.
         """
         print("=" * 72)
-        print("WARMUP: compile all programs → capture DIT trace → generate")
+        print("WARMUP: compile all programs → capture TE + DIT traces → generate")
         print("=" * 72)
         t_total = time.time()
 
-        # ── Phase 1: Compile ALL programs (TE, DIT, VAE) BEFORE trace capture.
-        # The trace bakes in device memory addresses.  Any program compiled AFTER
+        # ── Phase 1: Compile ALL programs (TE, DIT, VAE) BEFORE any trace capture.
+        # Traces bake in device memory addresses.  Any program compiled AFTER
         # trace capture may place its binary at an address the trace uses for
         # intermediates; the next trace replay then overwrites the binary and the
         # affected model hangs.
 
         # 1a) Compile TE programs.
         t0 = time.time()
-        cap_cpu = self._encode_prompt(prompt)
+        cap_cpu = self._encode_prompt_no_trace(prompt)
         print(f"  TE compile: {(time.time() - t0) * 1000:.0f} ms")
 
         # 1b) Compile DIT programs.
@@ -267,18 +282,36 @@ class ZImageTurbo:
         _warmup_image = self._decode_latents(compile_latents)
         print(f"  VAE compile: {(time.time() - t0) * 1000:.0f} ms")
 
-        # ── Phase 2: Capture DIT trace (all programs already compiled).
+        # ── Phase 2: Capture traces (all programs already compiled).
+
+        # 2a) Capture TE trace.
+        input_ids = self._tokenize(prompt)
+        self._te_input_buf = _to_device_int32(input_ids, self.mesh_device)
+
         t0 = time.time()
-        self._trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._te_trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._te_output_ref = self.te(self._te_input_buf)
+        ttnn.end_trace_capture(self.mesh_device, self._te_trace_id, cq_id=0)
+        print(f"  TE trace capture: {(time.time() - t0) * 1000:.0f} ms")
+
+        # 2b) Capture DIT trace.
+        t0 = time.time()
+        self._dit_trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         trace_out = self.tr._forward_impl([self._lat_buf], self._ts_buf)
-        ttnn.end_trace_capture(self.mesh_device, self._trace_id, cq_id=0)
-        self._output_ref = trace_out[0]
+        ttnn.end_trace_capture(self.mesh_device, self._dit_trace_id, cq_id=0)
+        self._dit_output_ref = trace_out[0]
         print(f"  DIT trace capture: {(time.time() - t0) * 1000:.0f} ms")
 
-        # ── Phase 3: Full warmup generation using the trace.
+        # ── Phase 3: Full warmup generation using both traces.
         torch.manual_seed(seed)
         latents = torch.randn(1, LATENT_CHANNELS, IMG_LATENT_H, IMG_LATENT_W)
         scheduler = _make_scheduler(self.scheduler_template, steps)
+
+        t0 = time.time()
+        cap_cpu = self._encode_prompt(prompt)
+        print(f"  warmup TE (traced): {(time.time() - t0) * 1000:.0f} ms")
+
+        _copy_to_persistent(cap_cpu, self.tr._cap_feats_buf)
 
         # The scheduler produces N timesteps but the last one (t=0) is a no-op
         # (dt=0, so latents += 0). Skip it to save one full DIT execution.
@@ -292,9 +325,9 @@ class ZImageTurbo:
             _copy_to_persistent(lat_pt, self._lat_buf)
             _copy_to_persistent(ts_pt, self._ts_buf)
 
-            ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
+            ttnn.execute_trace(self.mesh_device, self._dit_trace_id, cq_id=0, blocking=True)
 
-            out = _tt_to_torch(self._output_ref, self.mesh_device)
+            out = _tt_to_torch(self._dit_output_ref, self.mesh_device)
             out = out.squeeze(1).unsqueeze(0).bfloat16()
             latents = scheduler.step(-out.float(), t, latents, return_dict=False)[0]
         print(f"  warmup denoising ({len(active_timesteps)} steps): {(time.time() - t0) * 1000:.0f} ms")
@@ -306,27 +339,27 @@ class ZImageTurbo:
         print(f"  WARMUP TOTAL: {(time.time() - t_total) * 1000:.0f} ms")
         _dram_stats(self.mesh_device, "after warmup")
         print("=" * 72)
-        print("Trace captured. Ready for fast generation.\n")
+        print("TE + DIT traces captured. Ready for fast generation.\n")
         return image
 
     # ── Fast generation using cached trace ────────────────────────────────────
 
     def generate(self, prompt, steps=9, seed=42):
-        """Generate an image using the cached DIT trace.
+        """Generate an image using the cached TE + DIT traces.
 
         Must call warmup() first. Returns a PIL Image.
         """
-        if self._trace_id is None:
+        if self._dit_trace_id is None:
             raise RuntimeError("Call warmup() before generate().")
 
         t_total = time.time()
         _dram_stats(self.mesh_device, "before generate")
 
-        # 1) Text encoding (TE runs normally).
+        # 1) Text encoding via TE trace.
         t0 = time.time()
         cap_cpu = self._encode_prompt(prompt)
         te_ms = (time.time() - t0) * 1000
-        print(f"  text encoding: {te_ms:.0f} ms")
+        print(f"  text encoding (traced): {te_ms:.0f} ms")
 
         # 2) Copy new caption features to the DIT's persistent buffer.
         #    MUST NOT call set_cap_feats() — that allocates a new tensor and
@@ -355,9 +388,9 @@ class ZImageTurbo:
             _copy_to_persistent(lat_pt, self._lat_buf)
             _copy_to_persistent(ts_pt, self._ts_buf)
 
-            ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
+            ttnn.execute_trace(self.mesh_device, self._dit_trace_id, cq_id=0, blocking=True)
 
-            out = _tt_to_torch(self._output_ref, self.mesh_device)
+            out = _tt_to_torch(self._dit_output_ref, self.mesh_device)
             out = out.squeeze(1).unsqueeze(0).bfloat16()
             latents = scheduler.step(-out.float(), t, latents, return_dict=False)[0]
 
@@ -411,13 +444,13 @@ def main():
     except ImportError:
         pass
 
-    # 1) Load models + warmup (compile all programs + capture DIT trace).
+    # 1) Load models + warmup (compile all programs + capture TE & DIT traces).
     pipeline = ZImageTurbo()
 
     bar = "=" * 72
     print(bar)
     print(f"Warming up with dummy prompt {WARMUP_PROMPT!r}")
-    print("(first run is slow: compile all programs + Metal Trace capture)")
+    print("(first run is slow: compile all programs + TE & DIT Metal Trace capture)")
     print(bar)
 
     t0 = time.time()
