@@ -208,13 +208,38 @@ contains the needle value (`banana-7421`).
      layer_past (paged BF8) into the FP ring buffer. Required for hybrid
      to have a non-empty recent window at decode start.
 
-**To make the test discriminate Track A from Hybrid**, would need:
-- A *harder* retrieval (multi-needle with distractors, verbatim long-span
-  recall, cross-document reasoning), or
-- A retrieval where the answer depends on the last W tokens (e.g.,
-  needle in the question itself, or chain-of-thought that references
-  recent generation). For the current single-needle-at-depth-0.5 test,
-  3-bit TQ is sufficient at 128K.
+**Discriminating test attempts (`--distractors N`, 2026-04-30):**
+Added a multi-needle mode where N similar-but-distinct needles are
+inserted: target=`Mary uses banana-7421`, distractors=`Tom 7422`,
+`Sue 7423`, etc. The K vectors of these phrases differ mostly by name
+(1 token) and last digit (1 token); if TQ noise blurs them together,
+attention can't disambiguate.
+
+| Length | Target depth | Distractors | Track A result |
+|---:|---:|---:|---|
+| 4K | 0.99 | 4 | PASS_EXACT (recency dominates) |
+| 32K | 0.30 | 4 | PASS_EXACT |
+| 128K | 0.10 | 8 | **PASS_EXACT** (worst case) |
+
+**3-bit TQ is robust to this retrieval pattern at every config tested,
+including 128 K with 8 distractors at depth 0.1.** The needle test
+doesn't discriminate Track A from Hybrid because:
+
+1. The name token (Mary/Tom/Sue/...) is a hard, lexically-distinct
+   anchor — TQ noise on a 128-dim K vector apparently doesn't blur it
+   enough to confuse retrieval.
+2. Needle retrieval is binary success/fail; the W-sweep gap
+   (Track A 88.9 % → Hybrid W=64 94.1 %) is at the per-token
+   *distribution* level, much more sensitive than this binary check.
+
+**To get a discriminating long-context test, would need either:**
+- Construct needles with K vectors deliberately closer (same anchor
+  token, similar values, only one differentiating bit) — likely
+  artificial.
+- A per-token top-1 metric over a teacher-forced long-context decode.
+  The existing `eval_token_accuracy.py` populates cache step-by-step
+  (decode-only); extending it to prefill + teacher-forced would give
+  the right metric. Open work for a future PR.
 
 ## 🚀 RESUME HERE — TurboQuant 128K plan complete (2026-04-29)
 

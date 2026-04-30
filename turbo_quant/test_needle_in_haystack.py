@@ -54,25 +54,72 @@ HAYSTACK_FILLER = (
     "The Andes form the longest continental mountain range, running along the western edge of South America. "
 )
 
-NEEDLE_TEMPLATE = "Important: the secret access code Mary uses is {value}. Remember this."
-QUESTION = "\n\nQuestion: What is the secret access code that Mary uses? Answer with just the code value, nothing else.\n\nAnswer:"
+NEEDLE_TEMPLATE = "Important: the secret access code {name} uses is {value}. Remember this."
+QUESTION_TEMPLATE = "\n\nQuestion: What is the secret access code that {name} uses? Answer with just the code value, nothing else.\n\nAnswer:"
+
+# Distractors share a name+code template that's lexically very similar to the
+# target — the K vectors of these phrases differ mostly by the name token and
+# the last digit. If 3-bit TQ blurs them together, attention can't disambiguate
+# and the model retrieves a wrong code. Hybrid's FP ring keeps the recent
+# needles bit-exact, so any needle inside W of the question is unambiguous.
+DISTRACTOR_NAMES = ["Tom", "Sue", "John", "Lisa", "Carl", "Anna", "Mike", "Beth", "Paul", "Jane"]
 
 
-def build_haystack_prompt(target_tokens, needle_value, depth_frac, tokenizer):
-    """Build a haystack with a needle inserted at depth_frac, ending with a question.
+def build_haystack_prompt(
+    target_tokens, target_name, target_value, depth_frac, tokenizer, distractor_count=0, distractor_value_base=None
+):
+    """Build a haystack with the target needle at depth_frac plus N distractors at evenly-spaced depths.
 
-    Returns (encoded_tokens, prompt_string, needle_token_position).
+    With distractor_count=0 this is the original single-needle test. With >0,
+    inserts N distractor needles whose codes differ from the target by their
+    last digit (target=banana-7421, distractors=banana-7422, banana-7423, ...).
+    The target sits at depth_frac; distractors are spread across other depths.
+
+    Returns (encoded_tokens, target_needle_pos, distractor_positions).
     """
-    needle = NEEDLE_TEMPLATE.format(value=needle_value)
-    question = QUESTION
+    target_needle = NEEDLE_TEMPLATE.format(name=target_name, value=target_value)
+    question = QUESTION_TEMPLATE.format(name=target_name)
     intro = "You are an assistant. Read the following document carefully, then answer the question at the end.\n\n"
 
-    needle_tokens = tokenizer.encode(needle, add_special_tokens=False)
+    target_needle_tokens = tokenizer.encode(target_needle, add_special_tokens=False)
     question_tokens = tokenizer.encode(question, add_special_tokens=False)
     intro_tokens = tokenizer.encode(intro, add_special_tokens=False)
     bos = [tokenizer.bos_token_id] if tokenizer.bos_token_id is not None else []
 
-    overhead = len(bos) + len(intro_tokens) + len(needle_tokens) + len(question_tokens)
+    # Build distractor needles. Spread depths excluding the target's depth.
+    distractor_needles = []
+    distractor_depths = []
+    if distractor_count > 0:
+        if distractor_value_base is None:
+            distractor_value_base = target_value  # e.g., "banana-7421" → distractors banana-7422, ...
+        # Parse the trailing number out of the value
+        import re
+
+        m = re.search(r"(\d+)$", target_value)
+        assert m, f"Need a trailing number in target_value to vary; got {target_value!r}"
+        target_num = int(m.group(1))
+        prefix = target_value[: -len(m.group(1))]
+        # Generate distractor values: base+1, base+2, ... offset away from target
+        for i in range(distractor_count):
+            d_num = target_num + i + 1
+            d_name = DISTRACTOR_NAMES[i % len(DISTRACTOR_NAMES)]
+            d_value = f"{prefix}{d_num}"
+            d_text = NEEDLE_TEMPLATE.format(name=d_name, value=d_value)
+            distractor_needles.append(tokenizer.encode(d_text, add_special_tokens=False))
+        # Place distractors at evenly spaced depths AVOIDING target's depth.
+        # Use depths 0.1, 0.3, 0.7, 0.9 etc, skipping the bucket containing depth_frac.
+        candidate_depths = [(i + 0.5) / (distractor_count + 1) for i in range(distractor_count + 1)]
+        # Closest candidate to depth_frac is the target's bucket — drop it.
+        target_bucket = min(range(len(candidate_depths)), key=lambda i: abs(candidate_depths[i] - depth_frac))
+        distractor_depths = [d for i, d in enumerate(candidate_depths) if i != target_bucket]
+
+    overhead = (
+        len(bos)
+        + len(intro_tokens)
+        + len(target_needle_tokens)
+        + sum(len(d) for d in distractor_needles)
+        + len(question_tokens)
+    )
     filler_budget = target_tokens - overhead
     if filler_budget < 100:
         raise ValueError(f"target_tokens={target_tokens} too small (overhead={overhead})")
@@ -82,14 +129,34 @@ def build_haystack_prompt(target_tokens, needle_value, depth_frac, tokenizer):
     chunks_needed = (filler_budget // len(filler_chunk_tokens)) + 1
     filler_tokens = (filler_chunk_tokens * chunks_needed)[:filler_budget]
 
-    # Insert needle at depth_frac of the filler.
-    insert_at = int(len(filler_tokens) * depth_frac)
-    haystack_tokens = filler_tokens[:insert_at] + needle_tokens + filler_tokens[insert_at:]
+    # Build a list of (depth_in_filler, kind, tokens) sorted by depth, then insert.
+    inserts = [(depth_frac, "target", target_needle_tokens)]
+    for d, t in zip(distractor_depths, distractor_needles):
+        inserts.append((d, "distractor", t))
+    inserts.sort(key=lambda x: x[0])
+
+    haystack_tokens = []
+    last_filler_idx = 0
+    target_pos_in_haystack = None
+    distractor_positions = []
+    for depth, kind, ntokens in inserts:
+        insert_at = int(len(filler_tokens) * depth)
+        # Snap to never go backwards
+        insert_at = max(insert_at, last_filler_idx)
+        haystack_tokens.extend(filler_tokens[last_filler_idx:insert_at])
+        if kind == "target":
+            target_pos_in_haystack = len(haystack_tokens)
+        else:
+            distractor_positions.append(len(haystack_tokens))
+        haystack_tokens.extend(ntokens)
+        last_filler_idx = insert_at
+    haystack_tokens.extend(filler_tokens[last_filler_idx:])
 
     full_tokens = bos + intro_tokens + haystack_tokens + question_tokens
-    needle_pos = len(bos) + len(intro_tokens) + insert_at
+    target_pos = len(bos) + len(intro_tokens) + target_pos_in_haystack
+    distractor_global_positions = [len(bos) + len(intro_tokens) + p for p in distractor_positions]
 
-    return full_tokens, needle_pos
+    return full_tokens, target_pos, distractor_global_positions
 
 
 def migrate_prefill_kv_interleaved(
@@ -254,8 +321,15 @@ def populate_fp_ring_from_prefill(tt_model, prompt_len, recent_window, mesh_devi
 def build_parser():
     p = argparse.ArgumentParser(description="TurboQuant needle-in-haystack accuracy test")
     p.add_argument("--haystack-len", type=int, default=4096, help="Target prompt token count")
-    p.add_argument("--needle-depth", type=float, default=0.5, help="Where to insert the needle (0..1)")
-    p.add_argument("--needle-value", default="banana-7421", help="The secret value to retrieve")
+    p.add_argument("--needle-depth", type=float, default=0.5, help="Where to insert the target needle (0..1)")
+    p.add_argument("--needle-value", default="banana-7421", help="Target secret value (must end in digits)")
+    p.add_argument("--target-name", default="Mary", help="Name in the target needle / question")
+    p.add_argument(
+        "--distractors",
+        type=int,
+        default=0,
+        help="Number of distractor needles with similar codes (last digit varied) at other depths",
+    )
     p.add_argument("--max-new-tokens", type=int, default=20)
     p.add_argument("--bits", type=int, default=3, choices=[1, 2, 3, 4])
     p.add_argument("--seed", type=int, default=42)
@@ -295,12 +369,25 @@ def main():
     tokenizer = model_args.tokenizer
 
     # Build haystack prompt.
-    encoded, needle_pos = build_haystack_prompt(args.haystack_len, args.needle_value, args.needle_depth, tokenizer)
+    encoded, needle_pos, distractor_positions = build_haystack_prompt(
+        args.haystack_len,
+        args.target_name,
+        args.needle_value,
+        args.needle_depth,
+        tokenizer,
+        distractor_count=args.distractors,
+    )
     prompt_len = len(encoded)
     needle_depth_actual = needle_pos / prompt_len
-    print(f"\nPrompt   : {prompt_len} tokens  (target {args.haystack_len})")
-    print(f"Needle   : {args.needle_value!r} at token {needle_pos} (depth {needle_depth_actual:.2f})")
-    print(f"Mode     : {'HYBRID' if args.tq_recent_window > 0 else 'TRACK A'}  W={args.tq_recent_window}")
+    print(f"\nPrompt        : {prompt_len} tokens  (target {args.haystack_len})")
+    print(
+        f"Target needle : {args.target_name}={args.needle_value!r} at token {needle_pos} (depth {needle_depth_actual:.3f})"
+    )
+    if args.distractors > 0:
+        print(
+            f"Distractors   : {args.distractors} similar needles at depths {[round(p / prompt_len, 3) for p in distractor_positions]}"
+        )
+    print(f"Mode          : {'HYBRID' if args.tq_recent_window > 0 else 'TRACK A'}  W={args.tq_recent_window}")
     assert prompt_len < args.max_seq_len, f"Prompt ({prompt_len}) >= max_seq_len ({args.max_seq_len})"
 
     print("\nLoading state dict...")
@@ -490,12 +577,35 @@ def main():
     generated_text = tokenizer.decode(all_new_tokens)
     print(f"\nGenerated: {generated_text!r}")
     found = args.needle_value in generated_text
+
+    # Distractor confusion check: did the model output a distractor's code?
+    distractor_hit = None
+    if args.distractors > 0 and not found:
+        import re
+
+        m = re.search(r"(\d+)$", args.needle_value)
+        target_num = int(m.group(1))
+        prefix = args.needle_value[: -len(m.group(1))]
+        for i in range(args.distractors):
+            d_value = f"{prefix}{target_num + i + 1}"
+            if d_value in generated_text:
+                distractor_hit = d_value
+                break
+
+    if found:
+        result = "PASS_EXACT"
+    elif distractor_hit:
+        result = f"FAIL_DISTRACTOR(retrieved {distractor_hit})"
+    else:
+        result = "FAIL"
+
     print(f"\n{'=' * 60}")
-    print(f"NEEDLE VALUE     : {args.needle_value!r}")
+    print(f"TARGET           : {args.target_name}={args.needle_value!r}")
     print(f"GENERATED TEXT   : {generated_text!r}")
-    print(f"NEEDLE DEPTH     : {needle_depth_actual:.2f} (token {needle_pos}/{prompt_len})")
+    print(f"NEEDLE DEPTH     : {needle_depth_actual:.3f} (token {needle_pos}/{prompt_len})")
     print(f"MODE             : {'HYBRID W=' + str(args.tq_recent_window) if args.tq_recent_window > 0 else 'TRACK A'}")
-    print(f"RESULT           : {'PASS' if found else 'FAIL'}")
+    print(f"DISTRACTORS      : {args.distractors}")
+    print(f"RESULT           : {result}")
     print(f"{'=' * 60}")
 
     for layer in tt_model.layers:
