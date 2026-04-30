@@ -171,38 +171,27 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-  # Two tests share a known chip-3 AllGather hang (0x880030060 unsafe NOC access):
-  #   1. MultiCQFabricMeshDevice2x4Fixture.AsyncExecutionWorksCQ0 (2x4 mesh)
-  #   2. MeshDevice1x4FabricFixture.TestGenericOpAllGather (1x4 mesh, unit_tests_ttnn)
-  # Tensix workers on far N300 chips (non-MMIO) perform an unsafe NOC access at
-  # 0x880030060 during dummy ops after ttnn::all_gather (hangs at
-  # dispatch_thread_pool_->wait() in enqueue_write_shards_nolock). This is DISTINCT
-  # from the ERISC firmware init race fixed on this branch (predecessor tests pass).
-  # Multiple triage captures are already in AI-JOURNAL.md. Skip both via the escape
-  # hatch until the underlying all_gather NOC access bug is root-caused.
-  # Run the chip-3 CQ0 AllGather hang reproducer FIRST. With the escape hatch
-  # above, the async_cq0 step will SKIP (GTEST_SKIP) rather than hang. The
-  # predecessor step (unit_tests_ttnn_ccl_ops) still runs normally — it
-  # validates the ERISC race condition fixes on this branch. Keep this at the
-  # top of the list so any new predecessor failure is caught early.
-  # See tests/scripts/t3000/repro_ccl_cq0_hang.sh.
-  # --solo: skip the predecessor (unit_tests_ttnn_ccl_ops) here — it runs again
-  # below at full coverage. Running it twice (641s each) consumed the entire
-  # budget before unit_tests_ttnn could complete.
+
+  # ===========================================================================
+  # BATCH 1: AllGather — runs FIRST to keep the primary goal in focus.
+  # The mission of this branch is to eliminate AllGather hangs. Any regression
+  # that reintroduces a hang should surface before any other test batch runs.
+  # ===========================================================================
+  echo "LOG_METAL: [BATCH 1/3] AllGather tests"
+
+  # chip-3 CQ0 AllGather hang reproducer — runs the async_cq0 binary solo
+  # (predecessor unit_tests_ttnn_ccl_ops runs below as part of the CCL batch).
+  # With TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP set, AsyncExecutionWorksCQ0 will
+  # GTEST_SKIP() rather than hang. If the env var is ever removed this is the
+  # canary that catches the regression immediately.
+  # See tests/scripts/t3000/repro_ccl_cq0_hang.sh for full repro instructions.
   ${TT_METAL_HOME}/tests/scripts/t3000/repro_ccl_cq0_hang.sh --solo ; record_test
-  # GTEST_OUTPUT writes skip counts to XML so record_test can detect all-skipped passes.
-  # FIX RC: Skip MeshDevice1x4FabricFixture.TestGenericOpAllGather on T3K — it hits the
-  # same dispatch hang as AsyncExecutionWorksCQ0 (unsafe NOC access at 0x880030060 on
-  # non-MMIO chips).  The skip guard already exists in test_generic_op.cpp:1221; we just
-  # need to set the env var so it fires.
-  TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/ttnn/unit_tests_ttnn ; record_test
-  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 600 ./build/test/ttnn/unit_tests_ttnn_tensor ; record_test
+
+  # CCL operation binaries — AllGather, ReduceScatter, and multi-tensor CCL.
   GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl ; record_test
   GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor ; record_test
   GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 300 ./build/test/ttnn/unit_tests_ttnn_ccl_ops ; record_test
-  # Disabled: ManualPagesIterationInterleaved rank_6+ hangs with unsafe NOC read on T3K (issue #42195)
-  # timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; record_test
-  #
+
   # test_ccl_multi_cq_multi_device: chip-3 CQ0 AllGather hang investigation.
   # - Split each TEST_F into its own subprocess so predecessor state cannot bleed
   #   across and so a hang pinpoints exactly one test.
@@ -224,6 +213,37 @@ run_t3000_ttnn_tests() {
       record_test
       sleep 1
   done
+
+  # AllGather-specific GAP regression tests.
+  # GAP-21: Rapid AllGather+quiesce stress (FIX AE/AF/AN)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
+  # GAP-22: AllGather interrupted mid-flight by mesh close (FIX AO/AP/AD)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test
+  # GAP-23: Partial-mesh quiesce cycling with AllGather (FIX AK/AM/AE)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap23_partial_mesh_quiesce_cycling.py::test_partial_mesh_quiesce_cycling ; record_test
+  # GAP-25: Back-to-back AllGather without explicit sync (FIX AE/AF)
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap25_back_to_back_allgather_nosync.py::test_back_to_back_allgather_nosync ; record_test
+  # GAP-38: AllGather correctness after FIX BA teardown chain (FIX BA + FIX AC + FIX AY).
+  # GAP-37 verifies the second open is FAST. GAP-38 verifies the second session AllGather
+  # produces numerically correct output (PCC >= 0.9999). These are orthogonal: a regression
+  # where FIX BA cleans up timing but leaves stale EDM routing tables would pass GAP-37 but
+  # fail GAP-38 (wrong AllGather output or hang).
+  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap38_fixba_allgather_correctness_after_cleanup.py::test_gap38_fixba_allgather_correctness_after_cleanup ; record_test
+
+  # ===========================================================================
+  # BATCH 2: Broader TTNN and TT-Metal tests.
+  # ===========================================================================
+  echo "LOG_METAL: [BATCH 2/3] Broader TTNN tests"
+
+  # GTEST_OUTPUT writes skip counts to XML so record_test can detect all-skipped passes.
+  # FIX RC: Skip MeshDevice1x4FabricFixture.TestGenericOpAllGather on T3K — it hits the
+  # same dispatch hang as AsyncExecutionWorksCQ0 (unsafe NOC access at 0x880030060 on
+  # non-MMIO chips).  The skip guard already exists in test_generic_op.cpp:1221; we just
+  # need to set the env var so it fires.
+  TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/ttnn/unit_tests_ttnn ; record_test
+  GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 600 ./build/test/ttnn/unit_tests_ttnn_tensor ; record_test
+  # Disabled: ManualPagesIterationInterleaved rank_6+ hangs with unsafe NOC read on T3K (issue #42195)
+  # timeout 300 ./build/test/ttnn/unit_tests_ttnn_accessor ; record_test
   pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; record_test
   pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; record_test
   pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; record_test
@@ -232,9 +252,14 @@ run_t3000_ttnn_tests() {
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; record_test
   pytest tests/ttnn/distributed/test_data_parallel_example.py ; record_test
   pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; record_test
+
+  # ===========================================================================
+  # BATCH 3: ETH/ERISC infrastructure regression tests.
   # Targeted async-dispatch + teardown race condition regression tests.
   # Validates fixes for the ERISC stale firmware race (AI-JOURNAL.md Pass A-F).
-  # Run at the end: a failure here points at the teardown/reinit path, not CCL ops.
+  # ===========================================================================
+  echo "LOG_METAL: [BATCH 3/3] ETH/ERISC infrastructure regression tests"
+
   # Scenario D (Fabric2DAsyncDispatchThenReinit) exercises the ETH-router
   # TERMINATED poll in FabricFirmwareInitializer::teardown() — the code path
   # that Scenarios A/B/C (FabricConfig::DISABLED) bypass entirely.
@@ -289,19 +314,9 @@ run_t3000_ttnn_tests() {
   GTEST_OUTPUT="xml:/tmp/gtest_last_result.xml" timeout 900 ./build/test/tt_metal/distributed/distributed_unit_tests \
     --gtest_filter='AsyncTeardownRaceFixture.*:AsyncTeardownMultiCQFixture.*:AsyncTeardownFabric2DFixture.*:AsyncTeardownFabric2DRepeatFixture.*:AsyncTeardownFabric1DQuiesceFixture.*:AsyncTeardownKillPredecessorFixture.*:FabricFirmwareInitializer.*:QuiesceStressFixture.*:PhaseWFixture.*:PhaseZFixture.*:FixAvRelayBrokenSysmemGuardFixture.*:ClusterTeardownHangRelayBrokenFixture.*:FixAyDeferredNonMmioResetFixture.*:FixAzL1BarrierSkipNoPriorFabricFixture.*:EthCoordPreservedOnAqSkipFixture.*:MmioEthCoordBeforeRelayGuardFixture.*:AsyncBuildPhaseRelayGuardFixture.*:WriteCorRelayGuardFixture.*:EthTrainingFabricEriscsFixture.*:RelayBrokenChipsCacheFixture.*' ; record_test
 
-  # GAP regression tests — validate race condition / ETH hang fixes.
-  # Each test is a direct regression for one or more numbered fixes.
-  # Run with timeout to ensure CI doesn't hang indefinitely on a regression.
-  # GAP-21: Rapid AllGather+quiesce stress (FIX AE/AF/AN)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
-  # GAP-22: AllGather interrupted mid-flight by mesh close (FIX AO/AP/AD)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test
-  # GAP-23: Partial-mesh quiesce cycling with AllGather (FIX AK/AM/AE)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap23_partial_mesh_quiesce_cycling.py::test_partial_mesh_quiesce_cycling ; record_test
+  # Remaining GAP regression tests — infrastructure / ETH hang fixes.
   # GAP-24: Rapid mesh close/reopen cycling under FABRIC_2D (FIX AD/AC/AL/AQ)
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap24_rapid_close_reopen_cycling.py::test_rapid_close_reopen_cycling ; record_test
-  # GAP-25: Back-to-back AllGather without explicit sync (FIX AE/AF)
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap25_back_to_back_allgather_nosync.py::test_back_to_back_allgather_nosync ; record_test
   # GAP-26: FIX AS canary poll timeout → newly-dead graceful degradation (FIX AS sad-path)
   timeout 180 pytest -svv tests/nightly/t3000/ccl/test_gap26_fixas_canary_timeout_graceful.py::test_gap26_fixas_canary_timeout_graceful ; record_test
   # GAP-27: FIX AV — non-MMIO sysmem_manager reset prevents stale in-flight counter
@@ -311,7 +326,6 @@ run_t3000_ttnn_tests() {
   # GAP-34: FIX AM — Phase 5b skipped when master chan at STARTED (out-of-mesh peer);
   #   saves ~2s per device vs FIX AL alone; caught TestMeshWidthShardedCopy3D timeout in CI run 25048641877
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap34_fixam_phase5b_skip_timing.py::test_gap34_fixam_phase5b_skip_timing ; record_test
-
   # GAP-35: FIX AT — Phase 5 handshake poll skipped when MMIO master chan was FIX AS Pass-0
   #   timeout'd (WH BRISC boot >500ms → status=0x0, no firmware loaded). Without FIX AT:
   #   Phase 5 polls for 10s per MMIO device = 20s overhead per cycle (2 MMIO devices on T3K).
@@ -330,20 +344,11 @@ run_t3000_ttnn_tests() {
   #   With FIX BA: STARTED-state devices added to relay_broken_non_mmio → FIX AC + FIX AY
   #   clean up ERISCs. Second open in this test must complete < 15s.
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap37_fixba_started_state_nonmmio_cleanup.py::test_gap37_fixba_started_state_nonmmio_cleanup ; record_test
-
-  # GAP-38: AllGather correctness after FIX BA teardown chain (FIX BA + FIX AC + FIX AY).
-  # GAP-37 verifies the second open is FAST. GAP-38 verifies the second session AllGather
-  # produces numerically correct output (PCC >= 0.9999). These are orthogonal: a regression
-  # where FIX BA cleans up timing but leaves stale EDM routing tables would pass GAP-37 but
-  # fail GAP-38 (wrong AllGather output or hang).
-  timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap38_fixba_allgather_correctness_after_cleanup.py::test_gap38_fixba_allgather_correctness_after_cleanup ; record_test
-
   # GAP-39: FIX NS — Single topology discovery per open.
   # Verifies that MetalEnvImpl::initialize_base_objects() does NOT trigger a redundant
   # topology discovery before Cluster creation, which would fill relay queues to 4/4
   # capacity on systems with stale FABRIC-mode ERISCs (14m40s hang observed in CI).
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap39_fixns_single_topology_discovery.py::test_gap39_fixns_single_topology_discovery ; record_test
-
   # GAP-40: FIX AE — Catch flush timeouts in write_core/write_reg/noc_multicast_write
   # and pre-mark remote chips relay-broken in ~Cluster() before close_device().
   # Verifies: (1) no 5s-per-call cascade from dead-relay mid-session writes; and
