@@ -153,7 +153,7 @@ def main():
     code_predictor.model.forward = capture_cp_forward
 
     print("  Running official generation...")
-    wavs, sr = model.generate_voice_clone(
+    _, _ = model.generate_voice_clone(
         text=target_text,
         language="English",
         ref_audio=ref_audio_path,

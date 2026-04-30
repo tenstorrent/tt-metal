@@ -2475,9 +2475,6 @@ def speaker_encoder_forward(
     Returns:
         Speaker embedding [batch, output_dim]
     """
-    if config is None:
-        config = SpeakerEncoderConfig()
-
     # Convert to float32 for computation
     hidden = mel_spectrogram.float()
 
