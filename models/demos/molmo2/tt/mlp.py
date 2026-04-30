@@ -71,9 +71,13 @@ class TtMolmo2TextMLP(LightweightModule):
         col_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
 
         def _col(w, name):
+            # bfloat16 for sharded w1/w3: each device holds [4096, 1536] = 12 MB.
+            # Total across 36 layers × 2 weights: 36×2×4096×1536×2B = 901 MB/device —
+            # less than bfloat8_b replicated (5.4 GB/device) and eliminates the 4%
+            # accuracy regression from per-shard bfloat8_b quantization noise.
             return ttnn.as_tensor(
                 w.T.unsqueeze(0).unsqueeze(0),  # [1, 1, 4096, 12288] → each device [4096, 1536]
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
