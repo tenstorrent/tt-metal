@@ -246,6 +246,22 @@ class Fabric2DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+
+    void SetUp() override {
+        BaseFabricFixture::SetUp();
+        // FIX SA (#42429): skip fabric unicast tests on degraded cluster — non-MMIO devices
+        // with broken relay paths will throw TT_THROW in read_completion_queue_event (FIX Z),
+        // turning a data-path race condition test into an uninformative crash.
+        for (const auto& mesh_dev : devices_) {
+            for (auto* dev : mesh_dev->get_devices()) {
+                if (dev->is_fabric_relay_path_broken() || dev->is_fabric_channels_not_ready_for_traffic()) {
+                    GTEST_SKIP() << "Fabric2DFixture: device " << dev->id()
+                                 << " has broken relay path or channels not ready"
+                                 << " — skipping unicast test on degraded cluster";
+                }
+            }
+        }
+    }
 };
 
 class Fabric2DUDMModeFixture : public BaseFabricFixture {
@@ -313,6 +329,18 @@ public:
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        // FIX SA (#42429): skip fabric unicast tests on degraded cluster — non-MMIO devices
+        // with broken relay paths will throw TT_THROW in read_completion_queue_event (FIX Z),
+        // turning a data-path race condition test into an uninformative crash.
+        for (const auto& mesh_dev : devices_) {
+            for (auto* dev : mesh_dev->get_devices()) {
+                if (dev->is_fabric_relay_path_broken() || dev->is_fabric_channels_not_ready_for_traffic()) {
+                    GTEST_SKIP() << "CustomMeshGraphFabric2DFixture: device " << dev->id()
+                                 << " has broken relay path or channels not ready"
+                                 << " — skipping unicast test on degraded cluster";
+                }
+            }
+        }
     }
 
 private:
