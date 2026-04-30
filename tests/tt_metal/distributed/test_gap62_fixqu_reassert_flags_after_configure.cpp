@@ -253,14 +253,12 @@ TEST_F(FixQuReassertFlagsFixture, ReassertDegradedFlagsAfterConfigureFabric) {
                 /*num_command_queues=*/1);
 
             // Check flag state on all devices after full init (including configure_fabric()).
-            bool any_degraded = false;
             int total_devices = 0;
             int degraded_count = 0;
             for (auto* idev : dev->get_devices()) {
                 total_devices++;
                 if (idev->is_fabric_relay_path_broken() ||
                     idev->is_fabric_channels_not_ready_for_traffic()) {
-                    any_degraded = true;
                     degraded_count++;
                 }
             }
