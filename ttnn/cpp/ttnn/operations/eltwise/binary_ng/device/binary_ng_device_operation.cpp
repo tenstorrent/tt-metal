@@ -354,17 +354,24 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             larger_rank,
             a_dim,
             b_dim);
+    }
 
-        if (i <= -6) {
-            TT_FATAL(
-                a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 6 at dimension index {} (output rank {}). "
-                "Broadcast is supported up to rank 5. dim a: {}, dim b: {}",
-                i,
-                larger_rank,
-                a_dim,
-                b_dim);
+    // For rank > 5, all dimensions beyond rank 5 are collapsed into a single "nD" batch
+    // dimension by the program factory (see extract_nD_dims). Broadcasting in the collapsed
+    // nD extent is only correct when one of aND or bND is 1 (the other fully broadcasts).
+    // When both are > 1 and unequal, the flat indexing in the kernel would be wrong.
+    if (larger_rank >= 6) {
+        uint32_t aND = 1, bND = 1;
+        for (int i = -6; i >= -larger_rank; --i) {
+            if (i >= -rank_a) aND *= static_cast<uint32_t>(input_shape_a[i]);
+            if (i >= -rank_b) bND *= static_cast<uint32_t>(input_shape_b[i]);
         }
+        TT_FATAL(
+            aND == bND || aND == 1 || bND == 1,
+            "Broadcasting rule violation for rank >= 6: collapsed nD extents are incompatible "
+            "(aND={}, bND={}). Per-dimension broadcast across multiple higher dimensions is not supported.",
+            aND,
+            bND);
     }
 }
 
