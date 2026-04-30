@@ -2182,7 +2182,7 @@ def main():
             avg_loss = gradient_accumulator.average_loss()
             loss_meter.update(avg_loss)
 
-            global_tokens = actual_batch_size * num_devices * seq_len
+            global_tokens = actual_batch_size * num_devices * seq_len * training_config.gradient_accumulation_steps
             tps = global_tokens / (macro_batch_step_time / 1000.0) if macro_batch_step_time > 0 else 0.0
             achieved_tflops = None
             mfu = None
