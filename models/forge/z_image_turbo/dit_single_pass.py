@@ -411,7 +411,7 @@ DRAM_RM = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType
 
 
 def open_mesh_device():
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape((1, 4)),
         l1_small_size=1 << 15,
