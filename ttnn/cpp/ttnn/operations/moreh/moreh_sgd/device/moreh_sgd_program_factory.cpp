@@ -256,27 +256,25 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                param_in.buffer()->address(),
-                grad.buffer()->address(),
-                momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0u,
-                num_tiles_per_core,
-                tile_offset,
-                u_lr,
-                u_momentum,
-                u_dampening,
-                u_weight_decay,
-                u_one});
+            {param_in.buffer(),
+             grad.buffer(),
+             momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0u,
+             num_tiles_per_core,
+             tile_offset,
+             u_lr,
+             u_momentum,
+             u_dampening,
+             u_weight_decay,
+             u_one});
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                param_out.buffer()->address(),
-                momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer()->address() : 0u,
-                num_tiles_per_core,
-                tile_offset});
+            {param_out.buffer(),
+             momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer()->address() : 0u,
+             num_tiles_per_core,
+             tile_offset});
 
         tile_offset += num_tiles_per_core;
     }
