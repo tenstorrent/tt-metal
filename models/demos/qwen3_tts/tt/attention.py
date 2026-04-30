@@ -31,6 +31,8 @@ _DRAM_SHARD_QKV = os.environ.get("QWEN3_TTS_ATTN_DRAM_SHARD_QKV", "0") == "1"
 _DRAM_SHARD_O = os.environ.get("QWEN3_TTS_ATTN_DRAM_SHARD_O", "0") == "1"
 _BF16_SDPA = os.environ.get("QWEN3_TTS_BF16_SDPA", "0") == "1"
 _DECODE_SHARDED = os.environ.get("QWEN3_TTS_DECODE_SHARDED", "0") == "1"
+_PREFILL_OPTI = os.environ.get("QWEN3_TTS_PREFILL_OPTI", "0") == "1"
+_PREFILL_SEQ = 128
 
 
 class Attention(LightweightModule):
@@ -419,6 +421,48 @@ class Attention(LightweightModule):
                 ttnn.ShardSpec(kv_grid, (32, head_dim), ttnn.ShardOrientation.ROW_MAJOR),
             )
             self._decode_qkv_split_v_out_memcfg = self._decode_qkv_split_k_out_memcfg
+
+        # Prefill ISL=128 versions of the sharded NLP head op memcfgs (m=128, 4 tiles).
+        self._prefill_concat_heads_in_memcfg = None
+        self._prefill_concat_heads_out_memcfg = None
+        self._prefill_qkv_split_in_memcfg = None
+        self._prefill_qkv_split_q_out_memcfg = None
+        self._prefill_qkv_split_k_out_memcfg = None
+        self._prefill_qkv_split_v_out_memcfg = None
+        if _PREFILL_OPTI:
+            _compute_grid = device.compute_with_storage_grid_size()
+            concat_grid = ttnn.num_cores_to_corerangeset(num_heads, _compute_grid, True)
+            self._prefill_concat_heads_in_memcfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(concat_grid, (_PREFILL_SEQ, head_dim), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self._prefill_concat_heads_out_memcfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(concat_grid, (_PREFILL_SEQ, head_dim), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            qkv_shard_width = ((num_heads // num_kv_heads) + 2) * head_dim
+            qkv_num_cores = _fused_qkv // qkv_shard_width
+            qkv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(qkv_num_cores - 1, 0))})
+            self._prefill_qkv_split_in_memcfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(qkv_grid, (_PREFILL_SEQ, qkv_shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            q_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_heads - 1, 0))})
+            kv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_kv_heads - 1, 0))})
+            self._prefill_qkv_split_q_out_memcfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(q_grid, (_PREFILL_SEQ, head_dim), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self._prefill_qkv_split_k_out_memcfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(kv_grid, (_PREFILL_SEQ, head_dim), ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self._prefill_qkv_split_v_out_memcfg = self._prefill_qkv_split_k_out_memcfg
 
         # Pre-compute HEIGHT_SHARDED memory config for paged_update_cache input.
         # paged_update_cache requires input in [1, batch, kv_heads, head_dim] HEIGHT_SHARDED on batch cores.
@@ -894,23 +938,37 @@ class Attention(LightweightModule):
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
         use_dram_shard_o = (is_decode or seq_len == 1) and self.wo_dram_sharded is not None and seq_len < 1024
+        # Pick decode (m=32) vs prefill ISL=128 (m=128) sharded NLPConcat memcfgs.
+        sharded_concat_decode = _DECODE_SHARDED and is_decode and self._decode_concat_heads_in_memcfg is not None
+        sharded_concat_prefill = (
+            _PREFILL_OPTI
+            and not is_decode
+            and seq_len == _PREFILL_SEQ
+            and self._prefill_concat_heads_in_memcfg is not None
+        )
+        use_sharded_concat = sharded_concat_decode or sharded_concat_prefill
+        concat_in_memcfg = (
+            self._prefill_concat_heads_in_memcfg if sharded_concat_prefill else self._decode_concat_heads_in_memcfg
+        )
+        concat_out_memcfg = (
+            self._prefill_concat_heads_out_memcfg if sharded_concat_prefill else self._decode_concat_heads_out_memcfg
+        )
         # Reshape: [b, num_heads, seq, head_dim] → [b, 1, seq, hidden_size]
-        if _DECODE_SHARDED and is_decode and self._decode_concat_heads_in_memcfg is not None:
-            if attn_output.memory_config() == self._decode_concat_heads_in_memcfg:
+        if use_sharded_concat:
+            if attn_output.memory_config() == concat_in_memcfg:
                 attn_sharded = attn_output
                 _own_attn_sharded_pre = False
             else:
-                attn_sharded = ttnn.to_memory_config(attn_output, self._decode_concat_heads_in_memcfg)
+                attn_sharded = ttnn.to_memory_config(attn_output, concat_in_memcfg)
                 ttnn.deallocate(attn_output)
                 _own_attn_sharded_pre = True
-            attn_concat_sharded = ttnn.experimental.nlp_concat_heads(
-                attn_sharded, memory_config=self._decode_concat_heads_out_memcfg
-            )
+            attn_concat_sharded = ttnn.experimental.nlp_concat_heads(attn_sharded, memory_config=concat_out_memcfg)
             if _own_attn_sharded_pre:
                 ttnn.deallocate(attn_sharded)
             # Direct sharded→sharded reshard 16c → 64c into wo's expected in0 layout,
             # skipping the L1_INTERLEAVED intermediate (saves S→I + I→S = 2 ops).
-            if use_dram_shard_o and self._decode_wo_n_padded == self.hidden_size:
+            # Only applicable in decode where wo is DRAM-sharded; prefill goes back to L1.
+            if sharded_concat_decode and use_dram_shard_o and self._decode_wo_n_padded == self.hidden_size:
                 attn_output = ttnn.to_memory_config(attn_concat_sharded, self._decode_wo_in0_memcfg)
                 ttnn.deallocate(attn_concat_sharded)
                 _attn_already_in_wo_in0 = True
