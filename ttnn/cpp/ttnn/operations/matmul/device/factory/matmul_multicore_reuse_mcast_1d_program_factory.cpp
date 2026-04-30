@@ -700,7 +700,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     };
 
     if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
-        using operations::matmul::utilities::get_activation_params;
+        using ttnn::operations::matmul::utilities::get_activation_params;
         const auto& activation = fused_activation.value();
         const auto params = get_activation_params(activation);
         compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);
@@ -1588,7 +1588,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     // Add activation type if needed
     if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
-        using operations::matmul::utilities::get_activation_params;
+        using ttnn::operations::matmul::utilities::get_activation_params;
         const auto& activation = fused_activation.value();
         const auto params = get_activation_params(activation);
         compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);
@@ -2298,7 +2298,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
-            using operations::matmul::utilities::get_activation_params;
+            using ttnn::operations::matmul::utilities::get_activation_params;
             const auto params = get_activation_params(activation);
             compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);
             compute_named_compile_args["activation_param0"] = params.param0;

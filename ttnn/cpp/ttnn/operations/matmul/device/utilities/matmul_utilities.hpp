@@ -287,14 +287,15 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
             // param0 is max value (default 6.0)
             result.param0 = has_first ? std::bit_cast<uint32_t>(params[0]) : 0x40c00000u;
             break;
-
-        case UnaryOpType::SIGMOID:
+        case UnaryOpType::SIGMOID: {
             result.type = KernelActivation::SIGMOID;
-            // param0 is vector mode (0=RC, 1=R, 2=C)
-            result.param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            const uint32_t param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            TT_FATAL(param0 <= 4, "Invalid Vector mode value: {}", param0);
+            result.param0 = param0;
             // param1 is fast_approximate flag
             result.param1 = has_second ? static_cast<uint32_t>(params[1]) : 0;
             break;
+        }
 
         case UnaryOpType::HARDSIGMOID:
             result.type = KernelActivation::HARDSIGMOID;

@@ -133,6 +133,29 @@ FORCE_INLINE void update_rd_ptr_to_ring_index(
     }
 }
 
+struct ActivationContext {
+    uint32_t type;
+    uint32_t param0;
+    uint32_t param1;
+    uint32_t param2;
+}
+
+template <uint32_t type, uint32_t param0, uint32_t param1, uint32_t param2>
+FORCE_INLINE void apply_activation_from_pack(uint32_t out_subblock_num_tiles) {
+    PACK(TTI_SEMWAIT(
+        p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
+
+    // Flip destination register offset for PACKER access
+    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+        ActivationApplyHelper<type, param0, param1, param2>::apply(i);
+    }
+
+    // Wait for SFPU completion before packing
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+}
+
 // Named CB arg lookup tables for batch-indexed output and partials CBs.
 // The factory emits "cb_mm_out_0" .. "cb_mm_out_N" and "cb_mm_partials_0" .. "cb_mm_partials_N"
 // as named compile-time args. These tables let fill_named_cb_array resolve them by index.
@@ -391,25 +414,11 @@ void kernel_main() {
                         mm_out_cb.reserve_back(out_subblock_num_tiles);
 
 #if not defined FUSE_BIAS and defined SFPU_ACTIVATION
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-
-                        // Flip destination register offset for PACKER access
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<
-                                activation_type,
-                                activation_param0,
-                                activation_param1,
-                                activation_param2>::apply(i);
-                        }
-
-                        // Wait for SFPU completion before packing
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        apply_activation_from_pack<
+                            activation_type,
+                            activation_param0,
+                            activation_param1,
+                            activation_param2>(out_subblock_num_tiles);
 #else
                         tile_regs_wait();
 #endif

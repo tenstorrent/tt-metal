@@ -526,7 +526,7 @@ create_program_batch_sharded(
     };
 
     if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
-        using operations::matmul::utilities::get_activation_params;
+        using ttnn::operations::matmul::utilities::get_activation_params;
         const auto& activation = fused_activation.value();
         const auto params = get_activation_params(activation);
         compute_named_compile_args["activation_type"] = static_cast<uint32_t>(params.type);

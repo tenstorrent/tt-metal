@@ -76,10 +76,6 @@ struct ActivationApplyHelper {
 
     // Parameter-specific validation
     static_assert(
-        ACT != KernelActivation::SIGMOID || PARAM0 <= 2,
-        "SIGMOID PARAM0 must be 0 (RC), 1 (R), or 2 (C) for vector mode");
-
-    static_assert(
         ACT != KernelActivation::SOFTPLUS || PARAM0 != 0,
         "SOFTPLUS PARAM0 (beta) must be non-zero to avoid division by zero");
 
