@@ -24,6 +24,8 @@ void kernel_main() {
     uint32_t num_cores = get_arg_val<uint32_t>(6);
     uint32_t local_barrier_addr = get_arg_val<uint32_t>(7);
     uint32_t barrier_done_sem_id = get_arg_val<uint32_t>(8);
+    uint32_t profiling_num_transactions = get_arg_val<uint32_t>(9);
+    uint32_t profiling_transaction_size = get_arg_val<uint32_t>(10);
 
     uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_per_core_read_addr);
 
@@ -47,4 +49,6 @@ void kernel_main() {
     }
 
     DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Number of transactions", profiling_num_transactions);
+    DeviceTimestampedData("Transaction size in bytes", profiling_transaction_size);
 }

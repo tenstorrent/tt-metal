@@ -97,7 +97,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val)
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
         // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven));
+        y = sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven);
     }
 
     return y;

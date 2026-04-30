@@ -37,6 +37,7 @@ void bind_reduce_scatter(nb::module_& mod) {
             chunks_per_sync (int, optional): Hyperparameter.
             num_workers_per_link (int, optional): Hyperparameter.
             num_buffers_per_channel (int, optional): Hyperparameter.
+            use_l1_small_for_semaphores (bool, optional): If True, allocate internal global semaphores in L1_SMALL instead of L1 to reduce L1 fragmentation. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: The reduced and scattered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
@@ -66,7 +67,8 @@ void bind_reduce_scatter(nb::module_& mod) {
         nb::arg("chunks_per_sync") = nb::none(),
         nb::arg("num_workers_per_link") = nb::none(),
         nb::arg("num_buffers_per_channel") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("use_l1_small_for_semaphores") = false);
 }
 
 }  // namespace ttnn::operations::ccl

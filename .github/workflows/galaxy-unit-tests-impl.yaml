@@ -101,9 +101,7 @@ jobs:
           all_tests=$(jq -n '[
             { "name": "Galaxy Fabric tests", "arch": "wormhole_b0", "model": "fabric", "timeout": 5, "owner_id": "UJ45FEC7M" },
             { "name": "Galaxy Multi-Process tests", "arch": "wormhole_b0", "model": "multiprocess", "timeout": 15, "owner_id": "U03NG0A5ND7", "auto-triage": false },
-            # { "name": "Galaxy Llama3-70b unit tests", "arch": "wormhole_b0", "model": "llama3-70b", "timeout": 30, "owner_id": "U053W15B6JF", "mlperf": true },
             # { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
-            { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 25, "owner_id": "U08TJ70UFRT", "mlperf": true },
             { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 5, "owner_id": "U044T8U8DEF" },
             { "name": "Galaxy tttv2 tests", "arch": "wormhole_b0", "model": "tttv2", "timeout": 10, "owner_id": "U07RY6B5FLJ", "mlperf": true} # Gongyu Wang
           ]')
@@ -186,16 +184,6 @@ jobs:
         if: ${{ matrix.test-group.model == 'multiprocess' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-multi-process-tests
-      - name: Run Llama3-70b unit tests
-        if: ${{ matrix.test-group.model == 'llama3-70b' }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        env:
-          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
-          FAKE_DEVICE: TG
-        run: |
-          mkdir -p generated/test_reports
-          pytest models/demos/llama3_70b_galaxy/tests/unit_tests
-
       - name: Run prefetcher unit tests
         if: ${{ matrix.test-group.model == 'prefetcher' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -209,20 +197,6 @@ jobs:
         run: |
           mkdir -p generated/test_reports
           pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py
-
-      # GPT-OSS 20B tests are currently commented out to reduce runtime and resource usage
-      - name: Run GPT-OSS unit tests
-        if: ${{ matrix.test-group.model == 'gpt-oss' }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports
-          uv pip install -r models/demos/gpt_oss/requirements.txt
-
-          # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
-          #  pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
-
-          TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
-            pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 600
 
       - name: Run tttv2 module tests
         if: ${{ matrix.test-group.model == 'tttv2' }}

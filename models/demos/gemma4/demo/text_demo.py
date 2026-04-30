@@ -26,6 +26,7 @@ from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.tt_transformers.tt.model_config import determine_device_name
 
 
 def run_generation(
@@ -484,12 +485,12 @@ def run_generation(
             target=None,
         )
 
-        model_name = "Gemma4"
         benchmark_data.save_partial_run_json(
             profiler,
             run_type="demo",
-            ml_model_name=model_name,
+            ml_model_name="gemma4",
             ml_model_type="llm",
+            device_name=determine_device_name(mesh_device),
             num_layers=num_layers or model_args.num_hidden_layers,
             batch_size=batch_size,
             config_params={},

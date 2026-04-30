@@ -6,34 +6,36 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
-    copy_tile_init(tt::CBIndex::c_0);
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
 
-    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            tile_regs_acquire();
+    experimental::CircularBuffer cb_in(cb_input);
+    experimental::CircularBuffer cb_out(cb_output);
 
-            // Pop tile after tile, copy to DST and pack
-            cb_wait_front(tt::CBIndex::c_0, 1);
+    init_sfpu(cb_input, cb_output);
+    copy_tile_init(cb_input);
 
-            copy_tile(tt::CBIndex::c_0, 0, 0);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
 
-            tile_regs_commit();
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
 
-            tile_regs_wait();
+        copy_tile(cb_input, 0, 0);
 
-            pack_tile(0, tt::CBIndex::c_2);
+        tile_regs_commit();
+        tile_regs_wait();
 
-            cb_pop_front(tt::CBIndex::c_0, 1);
+        pack_tile(0, cb_output);
 
-            tile_regs_release();
-        }
-        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
+        cb_in.pop_front(1);
+        cb_out.push_back(1);
+
+        tile_regs_release();
     }
 }

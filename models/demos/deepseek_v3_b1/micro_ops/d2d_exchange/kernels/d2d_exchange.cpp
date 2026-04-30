@@ -7,7 +7,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "api/debug/dprint.h"
+#include "../../../unified_kernels/termination.hpp"
 
 constexpr uint32_t sender_socket_config_addr = get_compile_time_arg_val(0);
 constexpr uint32_t receiver_socket_config_addr = get_compile_time_arg_val(1);
@@ -135,9 +135,6 @@ void kernel_main() {
     set_receiver_socket_page_size(receiver_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-    DPRINT << "Starting d2d exchange kernel" << ENDL();
-    DEVICE_PRINT("Starting d2d exchange kernel\n");
-
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
         downstream_enc.d2d.downstream_noc_y,
@@ -178,12 +175,9 @@ void kernel_main() {
     }
 
     while (true) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == 1) {
-            break;
-        }
         socket_reserve_pages(sender_socket, 1);
-        while (!socket_wait_for_pages(receiver_socket, 1)) {
+        if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+            break;
         }
 
         auto l1_read_addr = receiver_socket.read_ptr;

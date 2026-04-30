@@ -61,7 +61,7 @@ void kernel_main() {
             cb_reserve_back(cb0_id, num_rows_per_packet);
             uint32_t l1_write_addr = get_write_ptr(cb0_id);
             for (uint32_t i = 0; i < num_rows_per_packet && row_id < row_id_end; ++i) {
-                uint64_t noc_src_addr = get_noc_addr(row_id, tensor0_addrgen);
+                uint64_t noc_src_addr = tensor0_addrgen.get_noc_addr(row_id);
                 uint32_t bytes_remaining = page_size;
                 uint32_t offset = 0;
                 for (uint32_t pkt = 0; pkt < num_packets_per_page && bytes_remaining > 0; ++pkt) {

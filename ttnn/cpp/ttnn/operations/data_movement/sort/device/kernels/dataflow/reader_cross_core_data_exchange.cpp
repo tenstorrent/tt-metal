@@ -64,7 +64,7 @@ void kernel_main() {
     // Read lookup table for physical core IDs
     cb_reserve_back(physical_core_lookup_table_cb_index, one_tile);
     const uint32_t physical_core_lookup_table_l1_write_addr = get_write_ptr(physical_core_lookup_table_cb_index);
-    uint64_t noc_addr = get_noc_addr(0, physical_core_lookup_table_accessor);
+    uint64_t noc_addr = physical_core_lookup_table_accessor.get_noc_addr(0);
     noc_async_read(noc_addr, physical_core_lookup_table_l1_write_addr, physical_core_lookup_table_tile_size_bytes);
     noc_async_read_barrier();
 

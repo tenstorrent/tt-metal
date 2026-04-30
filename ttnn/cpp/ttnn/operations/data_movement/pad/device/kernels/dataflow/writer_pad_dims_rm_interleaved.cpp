@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
@@ -24,6 +25,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
+    experimental::CircularBuffer cb(cb_id);
 
     const auto s1 = TensorAccessor(dst_args, dst_addr);
 
@@ -34,13 +36,13 @@ void kernel_main() {
             for (uint32_t y = 0; y < num_local_Y; ++y) {
                 // DPRINT << "WR: " << w << ", " << z << ", " << y << ENDL();
                 // DEVICE_PRINT("WR: w={} z={} y={}\n", w, z, y);
-                cb_wait_front(cb_id, 1);
-                uint32_t l1_addr = get_read_ptr(cb_id);
+                cb.wait_front(1);
+                uint32_t l1_addr = cb.get_read_ptr();
                 uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1, dst_stick_offset);
                 noc_async_write(l1_addr, dst_noc_addr, padded_X_nbytes);
                 noc_async_write_barrier();
                 ++dst_stick_id;
-                cb_pop_front(cb_id, 1);
+                cb.pop_front(1);
             }
         }
     }

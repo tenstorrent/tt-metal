@@ -121,7 +121,7 @@ def test_untilize_single_core_interleaved_to_sharded(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -325,7 +325,7 @@ def test_untilize_single_core_sharded_to_interleaved(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -442,7 +442,7 @@ def test_untilize_single_core_sharded_to_sharded(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -496,7 +496,7 @@ def test_untilize_single_core_buffer_type_variations(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -636,7 +636,7 @@ def test_untilize_multi_core_interleaved_to_sharded(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -851,7 +851,7 @@ def test_untilize_multi_core_sharded_to_interleaved(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -905,7 +905,7 @@ def test_untilize_multi_core_sharded_to_interleaved_uneven_input_shard_spec(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1005,7 +1005,7 @@ def test_untilize_multi_core_sharded_to_sharded_different_shard_types(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1164,7 +1164,7 @@ def test_untilize_multi_core_sharded_to_sharded_different_shard_types_uneven_inp
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1307,7 +1307,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1366,7 +1366,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1456,7 +1456,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1504,7 +1504,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec_u
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1561,7 +1561,7 @@ def test_untilize_multi_core_buffer_type_variations(
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize(
@@ -1635,7 +1635,7 @@ def test_untilize_same_volume_different_shapes(device, dtype, use_multicore, sha
             input_ttnn_tensor, memory_config=output_memory_config, use_multicore=use_multicore
         )
 
-        assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+        assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

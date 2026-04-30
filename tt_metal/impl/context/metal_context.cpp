@@ -288,7 +288,7 @@ void MetalContext::initialize(
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
-        get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        !get_cluster().is_mock_or_emulated()) {
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
 
@@ -335,14 +335,14 @@ void MetalContext::teardown() {
     }
 
     if (dprint_server_) {
-        if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        if (!get_cluster().is_mock_or_emulated()) {
             dprint_server_->detach_devices();
         }
         dprint_server_.reset();
         rtoptions().set_disable_dma_ops(false);
     }
 
-    if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!get_cluster().is_mock_or_emulated()) {
         watcher_server_->detach_devices();
     }
     watcher_server_.reset();
@@ -725,7 +725,8 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
     }
 
     CoreCoord virtual_coord = get_cluster().get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
-    return get_cluster().is_ethernet_core(virtual_coord, id) || get_cluster().is_worker_core(virtual_coord, id);
+    return get_cluster().is_ethernet_core(virtual_coord, id) || get_cluster().is_worker_core(virtual_coord, id) ||
+           get_cluster().is_dram_core(virtual_coord, id);
 }
 
 void MetalContext::on_dispatch_timeout_detected() {
