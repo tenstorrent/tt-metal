@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """
-Decode-mode PCC test for MLP. Random weights vs torch reference.
+Decode-mode and prefill-ISL=128 PCC test for MLP. Random weights vs torch reference.
 
-Run with the DRAM-sharded flag to verify the new path:
-    QWEN3_TTS_MLP_DRAM_SHARD_DOWN=1 python -m pytest -q \
-        models/demos/qwen3_tts/tests/test_mlp_decode_pcc.py
+    python -m pytest -q models/demos/qwen3_tts/tests/test_mlp_decode_pcc.py
 """
 import pytest
 import torch
