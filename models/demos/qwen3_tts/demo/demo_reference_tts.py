@@ -90,7 +90,7 @@ def run_reference_tts_demo(
         _existing_user_audio_path(audio_path)
     except (ValueError, FileNotFoundError) as e:
         print(f"ERROR: {e}")
-        return
+        return None
 
     # Import reference implementations
     from huggingface_hub import snapshot_download

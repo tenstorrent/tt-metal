@@ -412,7 +412,7 @@ def hf_model():
                 state_dict[key] = f.get_tensor(key)
         return state_dict
     except Exception as e:
-        pytest.skip(f"Could not load HuggingFace model: {e}")
+        raise pytest.skip.Exception(f"Could not load HuggingFace model: {e}") from e
 
 
 class TestAgainstHuggingFace:
