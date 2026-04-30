@@ -1,17 +1,37 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+//
+// Two-stage logit: clamp -> intermediate CB -> 1/(1-x) divide -> log.
 
 #include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/rsub.h"
-#include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary.hpp"
+
+namespace {
+template <compute_kernel_lib::Dst Slot>
+struct ClampOp : compute_kernel_lib::UnaryOp<ClampOp<Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = false;
+    uint32_t min_val;
+    uint32_t max_val;
+    ALWI static void init() { ckernel::clamp_tile_init(); }
+    ALWI void call(uint32_t dst) const { ckernel::clamp_tile(dst, min_val, max_val); }
+};
+
+template <compute_kernel_lib::Dst Slot>
+struct RsubOp : compute_kernel_lib::UnaryOp<RsubOp<Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = false;
+    uint32_t scalar;
+    ALWI static void init() { ckernel::rsub_tile_init(); }
+    ALWI void call(uint32_t dst) const { ckernel::rsub_tile(dst, scalar); }
+};
+}  // namespace
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -22,56 +42,33 @@ void kernel_main() {
     constexpr auto cb_output = tt::CBIndex::c_2;
     constexpr auto cb_tmp0 = tt::CBIndex::c_1;
 
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
-    experimental::CircularBuffer cb_tmp(cb_tmp0);
+    ckernel::compute_kernel_hw_startup(cb_input, cb_output);
+    ckernel::init_sfpu(cb_input, cb_output);
 
-    init_sfpu(cb_input, cb_output);
+    using compute_kernel_lib::CopyTile;
+    using compute_kernel_lib::DivBinary;
+    using compute_kernel_lib::Dst;
+    using compute_kernel_lib::eltwise_chain;
+    using compute_kernel_lib::eltwise_pipeline;
+    using compute_kernel_lib::Log;
+
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-        cb_tmp.reserve_back(1);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_input);
-        copy_tile(cb_input, 0, 0);
+        // Stage 1: optional clamp -> cb_tmp0 (single-tile pipeline).
 #ifdef CLAMP
-        clamp_tile_init();
-        clamp_tile(0, packed_scalar1, packed_scalar2);
+        eltwise_pipeline<cb_tmp0>(
+            1, eltwise_chain(CopyTile<cb_input>{}, ClampOp<Dst::D0>{{}, packed_scalar1, packed_scalar2}));
+#else
+        eltwise_pipeline<cb_tmp0>(1, eltwise_chain(CopyTile<cb_input>{}));
 #endif
-        tile_regs_commit();
-        tile_regs_wait();
 
-        pack_tile(0, cb_tmp0);
-        tile_regs_release();
-
-        cb_tmp.push_back(1);
-        cb_tmp.wait_front(1);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_tmp0);
-        copy_tile(cb_tmp0, 0, 0);
-        copy_tile(cb_tmp0, 0, 1);
-
-        rsub_tile_init();
-        rsub_tile(0, 0x3F800000u);  // 1.0 - x
-
-        div_binary_tile_init();
-        div_binary_tile(1, 0, 0);
-
-        log_tile_init();
-        log_tile(0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        cb_tmp.pop_front(1);
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
+        // Stage 2: D0 = rsub(x, 1.0) = 1-x; D1 = x; D0 = div(D1, D0) = x/(1-x); log(D0).
+        eltwise_pipeline<cb_output>(
+            1,
+            eltwise_chain(
+                CopyTile<cb_tmp0, Dst::D0>{},
+                CopyTile<cb_tmp0, Dst::D1>{},
+                RsubOp<Dst::D0>{{}, 0x3F800000u},  // 1.0f
+                DivBinary<Dst::D1, Dst::D0, Dst::D0>{},
+                Log<>{}));
     }
 }
