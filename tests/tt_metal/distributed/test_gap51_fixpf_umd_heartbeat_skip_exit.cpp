@@ -174,7 +174,6 @@ TEST_F(UmdHeartbeatSkipExitFixture, UmdHeartbeatSkipsMetalExitSignal) {
     ::kill(pred_pid, SIGKILL);
     ::waitpid(pred_pid, nullptr, 0);
 
-    const size_t mmio_chips = 1;  // Approximation for T3K/N300.
     const size_t eth_cores_per_chip = 6;
     log_info(
         tt::LogTest,

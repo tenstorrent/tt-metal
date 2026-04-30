@@ -49,6 +49,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
