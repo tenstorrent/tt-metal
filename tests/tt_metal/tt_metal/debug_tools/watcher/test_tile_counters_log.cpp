@@ -63,8 +63,8 @@ void RunTest(
     CoreRangeSet core_range_set(CoreRange(logical_core, logical_core));
 
     // DFB config: 1 DM producer -> 4 NEO unpacker consumers
-    // use_remapper: true -> blocked (remapper enabled), false -> strided (bypass mode)
-    dfb::AccessPattern cap = use_remapper ? dfb::AccessPattern::BLOCKED : dfb::AccessPattern::STRIDED;
+    // use_remapper: true -> all (remapper enabled), false -> strided (bypass mode)
+    dfb::AccessPattern cap = use_remapper ? dfb::AccessPattern::ALL : dfb::AccessPattern::STRIDED;
     experimental::dfb::DataflowBufferConfig dfb_config{
         .entry_size = TILE_SIZE,
         .num_entries = NUM_ENTRIES_PER_DFB,

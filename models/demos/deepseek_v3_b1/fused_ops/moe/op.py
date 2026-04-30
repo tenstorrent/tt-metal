@@ -61,7 +61,7 @@ class MoeSem:
     EXPERT_SCALE_MCAST_RECEIVER = 9
     INDEX_MCAST_RECEIVER = 10
     DOWN_PROJ_MCAST_RECEIVER = 11
-    REDUCE_WORKER_FABRIC_BASE = 12  # 12, 13, 14, 15 per worker slot
+    REDUCE_WORKER_FABRIC_BASE = 12  # Shared worker->fabric ready semaphore (legacy name retained)
     REDUCE_SYNC = 16
     REDUCE_AGG_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
@@ -1252,7 +1252,7 @@ class MoeRoutedExpertOp:
             )
 
             reduce_payload_size_bytes = reduce_shard_elements * reduce_element_size
-            reduce_packet_header_size = 96
+            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
             # Worker cores = gate_proj cores (DRAM bank cores)
@@ -4020,7 +4020,6 @@ class MoeOp:
                 ("reduce_output_core_noc_x", output_core_phys.x),
                 ("reduce_output_core_noc_y", output_core_phys.y),
                 ("reduce_num_workers", reduce_params["num_workers_per_column"]),
-                ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                 ("reduce_total_num_workers", reduce_params["num_workers"]),
                 ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_sockets else 0),
                 ("reduce_forward_metadata_size_bytes", self._forward_metadata_size_bytes),
@@ -4069,11 +4068,8 @@ class MoeOp:
             ]
         )
 
-        # Fabric semaphore addresses (worker→fabric signaling on fabric cores)
-        # Global semaphores at indices REDUCE_WORKER_FABRIC_BASE + 0..3
-        reduce_worker_fabric_sem_addrs = [
-            self.sem_addrs[MoeSem.REDUCE_WORKER_FABRIC_BASE + i] for i in range(reduce_params["num_workers_per_column"])
-        ]
+        # Shared worker→fabric ready semaphore consumed by the ready-mask drain loop.
+        reduce_worker_fabric_ready_sem_addr = self.sem_addrs[MoeSem.REDUCE_WORKER_FABRIC_BASE]
 
         # Per-core runtime args for reduce worker and fabric cores
         # Persistent-signal sync: first worker (shard_idx==0) coordinates persistent signaling
@@ -4154,7 +4150,7 @@ class MoeOp:
                         fabric_core_phys.x,
                         fabric_core_phys.y,
                         slot_idx,
-                        reduce_worker_fabric_sem_addrs[slot_idx],
+                        reduce_worker_fabric_ready_sem_addr,
                         dst_l1_addr,
                         dst_sem_addr,
                         out_tensor.buffer_address(),
@@ -4174,9 +4170,9 @@ class MoeOp:
                 )
             )
 
-        # Fabric core per-core args (worker sem addrs first, then persistent args if applicable)
+        # Fabric core per-core args start with the shared ready semaphore address.
         for fc_idx, fc in enumerate(reduce_params["fabric_cores"]):
-            fc_args = list(reduce_worker_fabric_sem_addrs)
+            fc_args = [reduce_worker_fabric_ready_sem_addr]
             if persistent_enable_root1 and fc_idx == 0:
                 fc_args.extend(
                     [
@@ -4391,12 +4387,13 @@ class MoeOp:
                     bcast_writer_rt_args_ref = kernel.runtime_args[bcast_worker_core.x][bcast_worker_core.y]
                     payload = []
                     for dst_node in self.bcast_dst_nodes:
-                        payload.append(int(dst_node.mesh_id))
-                        payload.append(int(dst_node.chip_id))
                         setup_args = ttnn.setup_fabric_connection(
                             self.bcast_fabric_node_id, dst_node, 0, program, bcast_worker_core
                         )
                         payload.extend(setup_args)
+                    for dst_node in self.bcast_dst_nodes:
+                        payload.append(int(dst_node.mesh_id))
+                        payload.append(int(dst_node.chip_id))
                     bcast_writer_rt_args_ref.extend([len(payload)] + payload)
                     break
 
