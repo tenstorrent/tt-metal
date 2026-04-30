@@ -27,7 +27,14 @@ import ttnn
 # ---- Prefill sequence-length bucketing ----
 # Sequences are padded to the nearest bucket so the same JIT-compiled kernel
 # (and optionally the same trace) can be reused across similar-length inputs.
-PREFILL_BUCKETS = [128, 256, 512, 1024, 2048, 4096]
+PREFILL_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192]
+# Default warmup bucket sizes. Capped at 4096 because:
+# - 8192 trace reserves ~720 MB permanently, which with 5 GB weights causes OOM
+#   when the vision backbone (30 frames) runs during inference.
+# - Sequences padded to 8192 compile their kernels lazily on first use and run
+#   in eager mode (no trace), which is still fast after the first compile.
+DEFAULT_WARMUP_BUCKETS = [128, 256, 512, 1024, 2048, 4096]
+MAX_TRACE_BUCKET = 4096
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -357,6 +364,31 @@ class TtMolmo2Model(LightweightModule):
 
         return [_tt(cos_1), _tt(sin_1)]
 
+    def reset_kv_cache(self, user_id: int = 0):
+        """Zero-fill the KV cache for the given user slot.
+
+        Call this between inference requests to ensure each new input starts
+        from a clean state and avoids stale data from previous prefills.
+        The decode traces are NOT reset — they are safely reused across calls
+        because the stable input buffers (tok_id, cur_pos, cos, sin) are
+        always updated before each execute_trace.
+        """
+        cfg = self.configuration
+        zeros_k = torch.zeros(1, cfg.n_local_kv_heads, cfg.max_seq_len, cfg.head_dim, dtype=torch.bfloat16)
+        zeros_k_tt = ttnn.from_torch(
+            zeros_k.to(float),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        for layer in self.layers:
+            attn = layer.attention
+            ttnn.fill_cache(attn.layer_past[0], zeros_k_tt, user_id)
+            ttnn.fill_cache(attn.layer_past[1], zeros_k_tt, user_id)
+        ttnn.deallocate(zeros_k_tt)
+
     # ------------------------------------------------------------------ #
     # Prefill trace helpers
     # ------------------------------------------------------------------ #
@@ -422,7 +454,7 @@ class TtMolmo2Model(LightweightModule):
 
         return trace_id, trace_logits
 
-    def warmup_all_buckets(self, bucket_sizes=None, use_trace: bool = True):
+    def warmup_all_buckets(self, bucket_sizes=None, use_trace: bool = False):
         """Pre-warm (and optionally trace-capture) all prefill bucket sizes.
 
         Two-phase approach (required by TTNN):
@@ -434,44 +466,29 @@ class TtMolmo2Model(LightweightModule):
             use_trace: if True, capture prefill traces; if False, just warm up kernels
         """
         if bucket_sizes is None:
-            bucket_sizes = PREFILL_BUCKETS
+            bucket_sizes = DEFAULT_WARMUP_BUCKETS
 
-        valid = [b for b in bucket_sizes if b <= self.configuration.max_seq_len]
+        valid = [b for b in bucket_sizes if b <= self.configuration.max_seq_len and b <= MAX_TRACE_BUCKET]
         print(f"[prefill warmup] buckets={valid} use_trace={use_trace}", flush=True)
 
-        # Phase 1: allocate ALL trace tensors first
-        all_tt = {b: self._allocate_prefill_trace_tensors(b) for b in valid}
-
-        # Phase 2: warm-up (+ optional trace capture) per bucket
-        for b in valid:
-            print(f"  bucket {b} ...", flush=True)
-            if use_trace:
+        if use_trace:
+            # Phase 1: allocate ALL trace tensors first (before any trace capture)
+            all_tt = {b: self._allocate_prefill_trace_tensors(b) for b in valid}
+            # Phase 2: capture traces for each bucket
+            for b in valid:
+                print(f"  bucket {b} ...", flush=True)
                 trace_id, trace_logits = self._capture_prefill_trace(all_tt[b])
                 self._prefill_traces[b] = (trace_id, all_tt[b], trace_logits)
-            else:
-                # Warm-up only — suppress deallocations so stable buffer survives
-                from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
+        else:
+            # JIT kernels compile lazily on first use — no explicit warmup needed.
+            # The first forward_prefill call for each bucket size will compile and
+            # cache the TTNN kernels automatically.  Attempting to drive warmup via
+            # forward_prefill(dummy_ids) can fail with storage.cpp:169 (typecast
+            # bfloat8_b constraint) when the device is freshly initialised.
+            print(f"[prefill warmup] use_trace=False — kernels compile on first real use", flush=True)
 
-                rot_mats = self._get_rot_mats_prefill(b)
-                tok = trace_capture_run_begin()
-                try:
-                    x = all_tt[b]["hidden"]
-                    for layer in self.layers:
-                        x = layer.forward(x, rot_mats=rot_mats, mode="prefill", attn_mask=None)
-                    x_norm = self.ln_f(x, mode=Mode.PREFILL)
-                    logits = ttnn.linear(
-                        x_norm,
-                        self.lm_head,
-                        dtype=ttnn.bfloat16,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        compute_kernel_config=self.configuration.compute_kernel_config_hifi2_fp16,
-                    )
-                    ttnn.deallocate(logits)
-                finally:
-                    trace_capture_run_end(tok)
-
-        n = len(self._prefill_traces) if use_trace else 0
-        print(f"[prefill warmup] done — {n} traces captured", flush=True)
+        n = len(self._prefill_traces)
+        print(f"[prefill warmup] done — {n} traces, {len(valid) - n} JIT-compiled", flush=True)
 
     # ------------------------------------------------------------------ #
     # Decode trace helpers
@@ -755,26 +772,32 @@ class TtMolmo2Model(LightweightModule):
         # Reshape to [1, 1, S, dim] for decoder
         x_ttnn = ttnn.reshape(x_ttnn, [1, 1, S, self.configuration.dim])
 
-        # ---- Pad to nearest prefill bucket ----
+        # ---- Route to trace or eager ----
         padded_S = get_padded_prefill_len(S)
-        if padded_S > S:
-            pad_rows = padded_S - S
-            pad_t = ttnn.from_torch(
-                torch.zeros(1, 1, pad_rows, self.configuration.dim, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            x_ttnn = ttnn.concat([x_ttnn, pad_t], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(pad_t)
 
         # ---- Prefill trace (causal-only, no image mask) ----
+        # Padding is only applied when the trace exists for padded_S.
+        # Eager path uses the actual sequence length S to avoid concat issues
+        # with non-tile-aligned tensors.
         if padded_S in self._prefill_traces:
             trace_id, trace_tt, trace_x_norm = self._prefill_traces[padded_S]
-            ttnn.copy(x_ttnn, trace_tt["hidden"])
-            ttnn.deallocate(x_ttnn)
+            # Pad x_ttnn to padded_S before copying into the stable trace buffer
+            if padded_S > S:
+                pad_t = ttnn.from_torch(
+                    torch.zeros(1, 1, padded_S - S, self.configuration.dim, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                x_padded = ttnn.concat([x_ttnn, pad_t], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(pad_t)
+                ttnn.deallocate(x_ttnn)
+            else:
+                x_padded = x_ttnn
+            ttnn.copy(x_padded, trace_tt["hidden"])
+            ttnn.deallocate(x_padded)
             ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
             # trace_x_norm is [1, 1, padded_S, 4096] — slice to last REAL token, apply lm_head
             x_norm_cpu = ttnn.to_torch(ttnn.get_device_tensors(trace_x_norm)[0]).float()
@@ -800,19 +823,14 @@ class TtMolmo2Model(LightweightModule):
             ttnn.deallocate(logits)
             return logits_cpu  # [1, 1, vocab_size]
 
-        # ---- Eager path (no trace for this bucket, or first run) ----
-        # Build mask only in eager mode (traced path uses causal-only attention)
+        # ---- Eager path (no trace — use actual sequence length S, no padding) ----
+        # Running with S avoids ttnn.concat on non-tile-aligned tensors.
+        # JIT kernels compile for S on first call; subsequent same-S calls reuse them.
         attn_mask = None
         if token_type_ids is not None:
-            # Pad token_type_ids to match padded_S (pad positions = text tokens = 0)
-            if padded_S > S:
-                pad_tti = torch.zeros(B, padded_S - S, dtype=token_type_ids.dtype)
-                tti_padded = torch.cat([token_type_ids, pad_tti], dim=1)
-            else:
-                tti_padded = token_type_ids
-            attn_mask = build_molmo2_prefill_mask(padded_S, tti_padded.long(), self.mesh_device, dtype=ttnn.bfloat8_b)
+            attn_mask = build_molmo2_prefill_mask(S, token_type_ids.long(), self.mesh_device, dtype=ttnn.bfloat8_b)
 
-        rot_mats = self._get_rot_mats_prefill(padded_S)
+        rot_mats = self._get_rot_mats_prefill(S)
 
         for layer in self.layers:
             x_ttnn = layer.forward(
@@ -838,8 +856,8 @@ class TtMolmo2Model(LightweightModule):
 
         logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float().squeeze(0)
         ttnn.deallocate(logits)
-        # Slice to last real token if we padded
-        return logits_cpu[:, S - 1 : S, :] if padded_S > S else logits_cpu  # [1, 1, vocab] or [1, S, vocab]
+        # Eager path uses actual S — return last token's logits [1, 1, vocab]
+        return logits_cpu[:, S - 1 : S, :]
 
     def forward_decode_step(self, new_token_id: int, current_pos: int) -> torch.Tensor:
         """Single-token decode using the filled KV cache.
@@ -924,10 +942,12 @@ class TtMolmo2Model(LightweightModule):
         B, S = input_ids.shape
         padded_S = get_padded_prefill_len(S)
 
-        # ---- Lazy prefill warmup for this bucket (if not pre-warmed) ----
-        if padded_S not in self._prefill_traces:
-            print(f"  [prefill] warming up bucket {padded_S} (lazy)...", flush=True)
-            self.warmup_all_buckets(bucket_sizes=[padded_S], use_trace=True)
+        # ---- Reset KV cache for clean state before each request ----
+        self.reset_kv_cache(user_id=user_id)
+
+        # No lazy warmup here — forward_prefill runs in eager mode for new bucket sizes
+        # (JIT compiles on first use). Calling warmup_all_buckets from forward_prefill
+        # would cause recursion. Pre-warm explicitly via warmup_all_buckets() before tests.
 
         # ---- TTNN prefill (uses trace if warmed) ----
         logits = self.forward_prefill(
