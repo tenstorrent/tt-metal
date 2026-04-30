@@ -115,7 +115,7 @@ def extract_hidden_states():
     ref_text = "Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you."
     text = "Hello, this is a test of the text to speech system."
 
-    wavs, sr = model.generate_voice_clone(
+    wavs, _ = model.generate_voice_clone(
         text=text,
         language="English",
         ref_audio=ref_audio,

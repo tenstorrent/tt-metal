@@ -63,7 +63,7 @@ def build_icl_embedding(state_dict, ref_codes: torch.Tensor, target_text: str):
     # Use zero speaker embedding (placeholder)
     speaker_embedding = torch.zeros(1, 1, 2048)
 
-    inputs_embeds, trailing_text, tts_pad = create_icl_embedding(
+    inputs_embeds, _, _ = create_icl_embedding(
         target_text=target_text,
         ref_text=ref_text,
         ref_codes=ref_codes,

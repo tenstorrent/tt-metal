@@ -109,7 +109,7 @@ def _compute_mel_scipy(audio: torch.Tensor, n_mels: int = 128, sample_rate: int 
     hop_length = 256
     win_length = 1024
 
-    f, t, Zxx = signal.stft(waveform, fs=sample_rate, nperseg=win_length, noverlap=win_length - hop_length)
+    _, _, Zxx = signal.stft(waveform, fs=sample_rate, nperseg=win_length, noverlap=win_length - hop_length)
     power_spec = np.abs(Zxx) ** 2
 
     def hz_to_mel(hz):

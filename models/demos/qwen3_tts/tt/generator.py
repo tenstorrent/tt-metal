@@ -400,7 +400,7 @@ class Qwen3TTSGenerator:
 
         # Update RoPE tensors for new position
         position_ids = torch.tensor([position])
-        talker_cos_host, talker_sin_host = get_rope_tensors(
+        _, _ = get_rope_tensors(
             None,  # Host only
             self.talker_config.head_dim,
             1,

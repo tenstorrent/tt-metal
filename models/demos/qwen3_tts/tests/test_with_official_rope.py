@@ -209,7 +209,7 @@ def run_test(device):
         weight_dtype=ttnn.bfloat16,
     )
 
-    output_tt, _kv_cache = layer(input_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None)
+    output_tt, _ = layer(input_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None)
     output_torch = ttnn.to_torch(output_tt).squeeze(1)[:, :seq_len, :]
 
     pcc_layer0_mrope = compute_pcc(layer_output, output_torch)
@@ -229,7 +229,7 @@ def run_test(device):
     ttnn.deallocate(input_tt)
 
     input_tt = ttnn.from_torch(input_4d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_std_tt, _kv_cache = layer(input_tt, cos_std_tt, sin_std_tt, trans_mat, attention_mask=None, kv_cache=None)
+    output_std_tt, _ = layer(input_tt, cos_std_tt, sin_std_tt, trans_mat, attention_mask=None, kv_cache=None)
     output_std_torch = ttnn.to_torch(output_std_tt).squeeze(1)[:, :seq_len, :]
 
     pcc_layer0_std = compute_pcc(layer_output, output_std_torch)
@@ -272,7 +272,7 @@ def run_test(device):
             weight_dtype=ttnn.bfloat16,
         )
 
-        hidden_tt, _kv_cache = layer(hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None)
+        hidden_tt, _ = layer(hidden_tt, cos_tt, sin_tt, trans_mat, attention_mask=None, kv_cache=None)
 
         if i in [0, 1, 5, 10, 15, 20, 27]:
             temp_torch = ttnn.to_torch(hidden_tt).squeeze(1)[:, :seq_len, :]

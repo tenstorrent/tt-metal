@@ -125,7 +125,7 @@ def extract_qk_tensors():
     text = "Hello, this is a test of the text to speech system."
 
     try:
-        wavs, sr = model.generate_voice_clone(
+        wavs, _ = model.generate_voice_clone(
             text=text,
             language="English",
             ref_audio=ref_audio,

@@ -141,7 +141,7 @@ def main():
     talker.model.forward = patched_forward
 
     # Run generation
-    wavs, sr = model.generate_voice_clone(
+    wavs, _ = model.generate_voice_clone(
         text=target_text,
         language="English",
         ref_audio=ref_audio_path,
@@ -223,18 +223,6 @@ def main():
 
     # Start with official input embeds
     hidden_states = official_input_embeds.clone()
-
-    # Get tts_pad embed for streaming mode
-    text_embed_weight = main_dict["talker.model.text_embedding.weight"]
-    text_proj_fc1_weight = main_dict["talker.text_projection.linear_fc1.weight"]
-    text_proj_fc1_bias = main_dict["talker.text_projection.linear_fc1.bias"]
-    text_proj_fc2_weight = main_dict["talker.text_projection.linear_fc2.weight"]
-    text_proj_fc2_bias = main_dict["talker.text_projection.linear_fc2.bias"]
-
-    def project_text(text_embeds):
-        h = F.linear(text_embeds, text_proj_fc1_weight, text_proj_fc1_bias)
-        h = F.silu(h)
-        return F.linear(h, text_proj_fc2_weight, text_proj_fc2_bias)
 
     # NOTE: Testing without tts_pad addition to see if that's the source of divergence
     # Add tts_pad to last position (streaming mode)

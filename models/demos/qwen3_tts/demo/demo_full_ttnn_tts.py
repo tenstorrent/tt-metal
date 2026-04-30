@@ -218,7 +218,7 @@ def encode_reference_audio(
         check=True,
         capture_output=True,
     )
-    audio_data, sr = sf.read(tmp_wav)
+    audio_data, _ = sf.read(tmp_wav)
     import os
 
     os.unlink(tmp_wav)

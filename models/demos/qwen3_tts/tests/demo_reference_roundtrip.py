@@ -56,7 +56,7 @@ def compute_mel_spectrogram(audio: torch.Tensor, n_mels: int = 128, sample_rate:
     win_length = 1024
 
     # Compute STFT
-    f, t, Zxx = signal.stft(waveform, fs=sample_rate, nperseg=win_length, noverlap=win_length - hop_length)
+    _, _, Zxx = signal.stft(waveform, fs=sample_rate, nperseg=win_length, noverlap=win_length - hop_length)
 
     # Power spectrogram
     power_spec = np.abs(Zxx) ** 2

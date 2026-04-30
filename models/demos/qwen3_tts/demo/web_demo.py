@@ -158,7 +158,7 @@ def generate(ref_audio_path, ref_text: str, target_text: str):
             t_icl = time.time() - t0
 
             # 4. Run inference (zero compile / trace overhead)
-            codes, inf_timings, perf_text_core = run_inference(
+            codes, _, perf_text_core = run_inference(
                 ctx=_ctx,
                 model=_model,
                 device=_device,

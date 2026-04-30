@@ -65,13 +65,6 @@ def main():
     def project_to_code_predictor(x):
         return F.linear(x, mtp_proj_weight, mtp_proj_bias)
 
-    # Get code predictor embeddings
-    code_pred_embeds = []
-    for i in range(15):
-        key = f"codec_embedding.{i}.weight"
-        if key in code_predictor_weights:
-            code_pred_embeds.append(code_predictor_weights[key])
-
     lm_heads = []
     for i in range(15):
         key = f"lm_head.{i}.weight"
@@ -121,7 +114,7 @@ def main():
 
     code_predictor.model.forward = capture_cp_forward
 
-    wavs, sr = model.generate_voice_clone(
+    model.generate_voice_clone(
         text=target_text,
         language="English",
         ref_audio=ref_audio_path,
