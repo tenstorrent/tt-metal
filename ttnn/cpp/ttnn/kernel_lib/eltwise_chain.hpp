@@ -259,6 +259,9 @@ struct TernaryOp {
     static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
     static constexpr uint32_t in2 = static_cast<uint32_t>(In2);
     static constexpr uint32_t out = static_cast<uint32_t>(Out);
+    // max(in0, in1, in2, out): pairwise reductions, all expressed via ternaries.
+    static constexpr uint32_t max_dst =
+        ((in0 > in1 ? in0 : in1) > (in2 > out ? in2 : out)) ? (in0 > in1 ? in0 : in1) : (in2 > out ? in2 : out);
     static constexpr bool is_copy_tile_op = false;
     static constexpr bool clashes_with_fpu = false;
     static constexpr bool clobbers_sfpu_lut = false;

@@ -29,6 +29,25 @@
  * `compute_kernel_api/eltwise_unary/...h` and `compute_kernel_api.h`.
  */
 
+// Additional headers for ops below
+#include "api/compute/eltwise_unary/negative.h"
+
+namespace compute_kernel_lib {
+
+// =============================================================================
+// Negative — flips sign. Trivial init (SFPU type register only).
+// =============================================================================
+
+template <Approx ApproxMode = Approx::Exact, Dst Slot = Dst::D0>
+struct Negative : UnaryOp<Negative<ApproxMode, Slot>, Slot> {
+    static constexpr bool clobbers_sfpu_lut = false;
+
+    ALWI static void init() { ckernel::negative_tile_init(); }
+    ALWI static void call(uint32_t dst) { ckernel::negative_tile(dst); }
+};
+
+}  // namespace compute_kernel_lib
+
 namespace compute_kernel_lib {
 
 // =============================================================================

@@ -7,6 +7,7 @@
 
 #include "api/compute/eltwise_unary/gelu.h"
 #include "api/compute/eltwise_unary/tanh_derivative.h"
+#include "api/compute/logsigmoid.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
@@ -47,6 +48,23 @@ struct GeluDerivative : UnaryOp<GeluDerivative<Slot>, Slot> {
 
     ALWI static void init() { ckernel::gelu_derivative_tile_init(); }
     ALWI static void call(uint32_t dst) { ckernel::gelu_derivative_tile(dst); }
+};
+
+// =============================================================================
+// LogSigmoid — fused 2-DEST kernel: out = log(sigmoid(in0)) = -log(1 + exp(-in0))
+// LLK signature: `logsigmoid_tile(idst_in0, idst_in1, idst_out)` where In1 is
+// expected to hold exp(-x). Caller composes the chain:
+//   CopyTile<cb_x, D0>  CopyTile<cb_x, D1, NoWaitNoPop>  Negative<D1>
+//   Exp<.., D1>  LogSigmoid<D0, D1, D0>
+// =============================================================================
+
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct LogSigmoid : BinaryOp<LogSigmoid<In0, In1, Out>, In0, In1, Out> {
+    // Programs SFPU LUT for the log path — same chain trait as Log/Exp.
+    static constexpr bool clobbers_sfpu_lut = true;
+
+    ALWI static void init() { ckernel::logsigmoid_tile_init(); }
+    ALWI static void call(uint32_t i0, uint32_t i1, uint32_t out_idx) { ckernel::logsigmoid_tile(i0, i1, out_idx); }
 };
 
 }  // namespace compute_kernel_lib

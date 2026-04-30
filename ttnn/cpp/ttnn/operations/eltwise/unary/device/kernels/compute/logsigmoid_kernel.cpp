@@ -4,13 +4,12 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/logsigmoid.h"
-#include "api/compute/eltwise_unary/negative.h"
-#include "experimental/circular_buffer.h"
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -18,37 +17,25 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
+    ckernel::compute_kernel_hw_startup(cb_input, cb_output);
+    ckernel::init_sfpu(cb_input, cb_output);
 
-    init_sfpu(cb_input, cb_output);
-
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-
-        tile_regs_acquire();
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);
-        copy_tile(cb_input, 0, 1);
-
-        negative_tile_init();
-        negative_tile(1);
-
-        exp_tile_init<true>();
-        exp_tile<true>(1);
-
-        logsigmoid_tile_init();
-        logsigmoid_tile(0, 1, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
-    }
+    // Fan-out (lessons §3.5): one CB tile drives both D0 (kept) and D1
+    // (Negative → Exp → fed as second operand to LogSigmoid). The helper
+    // dedups same-CB wait/pop (lessons §3.6) so the cb_input is waited and
+    // popped exactly once per iteration regardless of the two CopyTile
+    // elements.
+    compute_kernel_lib::eltwise_pipeline<cb_output>(
+        num_tiles,
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::CopyTile<cb_input, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::CopyTile<cb_input, compute_kernel_lib::Dst::D1>{},
+            compute_kernel_lib::Negative<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D1>{},
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Fast,
+                compute_kernel_lib::Approx::Fast,
+                compute_kernel_lib::FP32DestAcc::Off,
+                compute_kernel_lib::Dst::D1>{},
+            compute_kernel_lib::
+                LogSigmoid<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{}));
 }
