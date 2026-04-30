@@ -301,7 +301,7 @@ class ZImageTransformerTTNN(LightweightModule):
         ttnn.deallocate(x_2d, False)
 
         # Q: reshape → QK norm → RoPE
-        q = ttnn.reshape(q_2d, [1, seq_len, HEADS_PER_DEV, HEAD_DIM], memory_config=ACT_MEM)
+        q = ttnn.reshape(q_2d, [1, seq_len, HEADS_PER_DEV, HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(q_2d, False)
         old_q = q
         q = self._qk_norm(old_q, self.weights[f"{block_prefix}.attention.norm_q.weight"], seq_len, HEADS_PER_DEV)
@@ -311,7 +311,7 @@ class ZImageTransformerTTNN(LightweightModule):
         ttnn.deallocate(old_q, False)
 
         # K: same
-        k = ttnn.reshape(k_2d, [1, seq_len, HEADS_PER_DEV, HEAD_DIM], memory_config=ACT_MEM)
+        k = ttnn.reshape(k_2d, [1, seq_len, HEADS_PER_DEV, HEAD_DIM], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(k_2d, False)
         old_k = k
         k = self._qk_norm(old_k, self.weights[f"{block_prefix}.attention.norm_k.weight"], seq_len, HEADS_PER_DEV)
@@ -321,7 +321,7 @@ class ZImageTransformerTTNN(LightweightModule):
         ttnn.deallocate(old_k, False)
 
         # V: nlp_create_qkv_heads handles head-reshape in one fused op
-        v_4d = ttnn.reshape(v_2d, [1, 1, seq_len, N], memory_config=ACT_MEM)
+        v_4d = ttnn.reshape(v_2d, [1, 1, seq_len, N], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(v_2d, False)
         old_v_4d = v_4d
         v_4d = self._ensure_tile(old_v_4d)
@@ -332,7 +332,7 @@ class ZImageTransformerTTNN(LightweightModule):
             num_heads=HEADS_PER_DEV,
             num_kv_heads=0,
             transpose_k_heads=False,
-            memory_config=ACT_MEM,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, HEADS_PER_DEV, seq, HEAD_DIM] BF16
         ttnn.deallocate(v_4d, False)
 
