@@ -137,6 +137,40 @@ Don't ship `Reconfig=true/false` template params. `DestReuseReconfig::None / Inp
 
 `BinaryOutputPolicy::PerTile` is default. `BinaryDataFormatReconfig::INPUT_AND_OUTPUT` (the safest, no-skip mode) is default. Defaults are what gets typed when nobody is paying attention; pick the slow-but-correct one.
 
+### 2.7 CB indexing modes — constrained by the wait shape
+
+Every chain element that reads from a CB (CopyTile, `binary_op` A/B operands, `DestReuseOp` CB side, any future CB-input op) must support the four indexing patterns kernels actually use:
+
+| Index mode | Tile read each iteration | Used for |
+|---|---|---|
+| First-tile (default) | always tile `0` of the CB | streaming consume — wait/pop advances the front, tile `0` is the new tile |
+| Block-iter `0..N-1` | tile `i` where `i` is the per-tile loop index | block-at-a-time access after `WaitUpfrontPopAtEnd`, or any pre-waited region walked in order |
+| Pinned `k` | fixed compile-time/runtime index, same every iteration | scalars, broadcast-once operands, mask tiles, persistent constants |
+| Absolute | caller-supplied runtime index (arbitrary tile inside the waited window) | indexed reads driven by reduction/coordinate state, gather-style patterns |
+
+Indexing is **not** orthogonal to wait/pop — the wait shape determines which tiles are guaranteed present. The cartesian product:
+
+| Wait/Pop policy ↓  /  Index → | FirstTile | BlockIter `0..N-1` | Pinned `k` | Absolute `idx` |
+|---|---|---|---|---|
+| `WaitAndPop` (wait 1, pop 1)              | ✓                  | ✗ only tile 0 waited       | ✓ iff `k == 0`                        | ✗ no stable window beyond 0 |
+| `WaitNoPop` (wait 1, no pop)              | ✓ tile 0 persistent | ✗ only tile 0 waited       | ✓ iff `k == 0`                        | ✗ same reason |
+| `NoWaitPop` (no wait, pop 1)              | ✓                  | ✗ pop advances front       | ✓ iff `k == 0`                        | ✗ same reason |
+| `NoWaitNoPop` (caller-owned window)       | ✓                  | ✓ caller waited block      | ✓ if `k` ∈ caller's window            | ✓ if `idx` ∈ caller's window |
+| `WaitUpfrontPopAtEnd(N)` (wait N, pop N)  | ✓                  | ✓ canonical use            | ✓ iff `k < N`                         | ✓ iff `idx < N` |
+
+Two observations from the matrix:
+
+1. The four "single-tile-window" policies (`WaitAndPop`, `WaitNoPop`, `NoWaitPop`) admit only `FirstTile` (or `Pinned k=0`, which is the same tile). `BlockIter` and `Absolute` are structurally unsafe under them — pop-per-tile or wait-of-1 invalidate any index ≠ 0.
+2. `BlockIter` and `Absolute` only become legal when the wait shape stages a multi-tile window: explicit `WaitUpfrontPopAtEnd(N)`, or `NoWaitNoPop` where the caller staged it externally.
+
+Surface as a small enum (`CbIndexMode::FirstTile / BlockIter / Pinned / Absolute`) on the element, plus a runtime `cb_tile_idx_` field for `Pinned` / `Absolute`. `FirstTile` and `BlockIter` need no field. Mode is per-CB-operand — `binary_op` lets A and B pick independently (e.g. `A=BlockIter, B=Pinned` for `block * scalar` under `WaitUpfrontPopAtEnd`).
+
+Validation:
+
+- The chain combinator `static_assert`s the illegal cells whenever both axes are compile-time (most common case — index mode is a template param, wait policy is a template param). A `WaitAndPop` element instantiated with `BlockIter` or `Absolute` fails to compile.
+- For runtime-supplied indices (`Pinned k`, `Absolute idx`), the `WaitUpfrontPopAtEnd(N)` path runtime-`ASSERT`s `idx < N`; the single-tile-window policies runtime-`ASSERT` the index is `0` (per §4.1).
+- `NoWaitNoPop` is the only escape hatch — caller asserts the window externally; helper trusts it - this can be unsafe, and shouldn't be default.
+
 ---
 
 ## 3. Composition
@@ -163,15 +197,25 @@ chain_is_hoist_safe_v<Chain> = has_load && !has_non_load_fpu_clash && loads_shar
 
 The pipeline picks fast / slow / illegal paths from these traits. The chain author writes simple constructors; the optimization decisions are deduced.
 
-### 3.4 Hoist init based on hardware state each element touches
+### 3.4 Init hoisting is opt-in, narrowly scoped, never the default
 
-Each chain element's `init()` programs specific hardware state — unpack MOP, math MOP, ADDR_MOD, srca/srcb format reconfig, packer reconfig, etc. Hoisting an `init()` out of the per-tile loop is safe only when no other element in the chain runs an `init()` (or `exec()`) that clobbers that same state between iterations. The decision is per-piece-of-hardware-state, not per-chain-shape:
+Per-tile init is the default. Hoisting `init()` out of the loop is a perf optimization with a tight precondition set — get any condition wrong and the chain silently produces wrong output. The default path runs every element's `init()` + `exec()` every tile; readers can answer "what runs per tile" by reading the chain.
 
-- A `CopyTile`'s `init()` programs `copy_tile_to_dst_init_short` (unpack MOP) + optional srca reconfig. Hoist it iff no later element reprograms unpack MOP or srca format.
-- An FPU dest-reuse element's `init()` programs `binary_dest_reuse_tiles_init`, which clobbers unpack MOP. A chain mixing it with a `CopyTile` cannot hoist the `CopyTile` init across iterations — the dest-reuse step in iteration `i` invalidates it for iteration `i+1`.
-- A purely-SFPU element's `init()` programs SFPU MOPs only and does not touch unpack/math FPU state, so it neither blocks hoisting nor needs hoisting itself.
+Hoisting is only allowed when **all** of the following hold:
 
-Encode each element's "what hardware state I touch in init/exec" as a static-constexpr trait (`clashes_with_fpu`, plus finer-grained traits if needed: `clobbers_unpack_mop`, `reconfigs_srca`, etc.). The chain combinator decides hoisting by looking at which traits the elements expose, not by inferring from the chain's shape. Wrong output from an over-eager hoist is not a perf optimization — when in doubt, init per tile.
+1. Chain shape is exactly `CopyTile + 1 SFPU op` (one CB load + one SFPU compute). Longer chains, multiple CopyTiles, or any FPU-clobbering element disqualify.
+2. No element between iterations reprograms hardware state the hoisted `init()` set up — for the `CopyTile + 1 SFPU` shape this reduces to "the SFPU op doesn't touch unpack MOP / srca format," which is the common case but still must be validated by the SFPU op's traits.
+
+Each chain element's `init()` programs specific hardware state — unpack MOP, math MOP, ADDR_MOD, srca/srcb format reconfig, packer reconfig, etc. Encode "what hardware state I touch in init/exec" as static-constexpr traits (`clashes_with_fpu`, plus finer-grained traits if needed: `clobbers_unpack_mop`, `reconfigs_srca`, etc.). The chain combinator computes a conservative `chain_is_hoist_safe_v<Chain>` that requires all three conditions above; if any fails, init runs per tile.
+
+Examples:
+
+- `CopyTile + Exp` (single input) — hoist-safe. Both inits hoisted out, loop runs `exec` only.
+- `CopyTile + Exp + Sqrt` — chain length > 2, **not** hoist-safe even though all SFPU, **is** hoist safe for copy tile.
+- `CopyTile<cbA> + CopyTile<cbB> + Add` — multiple CB inputs, **not** hoist-safe. Init per tile.
+- `CopyTile + DestReuseOp` — FPU dest-reuse clobbers unpack MOP each iteration, **not** hoist-safe.
+
+Wrong output from an over-eager hoist is not a perf optimization. When in doubt, init per tile.
 
 ### 3.5 Fan-out is N CopyTiles, one per DEST slot
 
@@ -315,31 +359,56 @@ Add a dedicated test variant per srcB path the helper supports, or document expl
 
 ## 9. Eltwise-specific migration enablers
 
-The features below were each driven by a specific blocked kernel. The pattern: real kernel can't migrate → identify the missing primitive → small CRTP/policy addition → kernel migrates. Not features added speculatively.
+The pattern is fixed: real kernel can't migrate → identify the missing primitive (op struct, policy, reconfig path, index mode) → small CRTP/policy addition → kernel migrates. Not features added speculatively. Don't enumerate the historical fixes here — they rot the moment the helper grows or kernels rename.
 
-| Feature | Triggered by | Enables |
-|---|---|---|
-| `FillScalar<Slot>{value}`, `FillConst<Bits, Slot>` | `hardshrink` | runtime/compile-time `fill_tile` in chain |
-| `TanhDerivative<Approx, Slot>` | `tanh_bw` | `1 - tanh²` numerically-stable form |
-| `Logsigmoid<In0, In1, Out>` (3-DST binary) | `logsigmoid` | exp(-x) and x in two DEST slots, fused output |
-| `CopyDest<Src, Dst, DF>` | `gelu_backward` | save tanh result before squaring |
-| `WaitUpfrontPopAtEnd` CopyTilePolicy | `tanh_bw`, `gelu_poly` | bulk-wait + indexed CopyTile + bulk-pop |
-| `CopyTileReconfig::Input`, `DestReuseReconfig::Input` | mixed-dtype paths | per-element srca/srcb format reconfig |
-| `BinaryDataFormatReconfig::SRCA_ONLY` etc. | small-window perf tuning | partial unpacker reconfig |
-| `Max`, `Min` | `moreh_adam` AMSGRAD | binary SFPU max/min |
-| `Mask<DF>`, `MaskPosInf<>` | softmax / moreh masking | attention masking with correct DataSlot+1 contract |
+Track open work in a `feature_gap_map` keyed by `GAP-N`. Each gap entry pins:
 
-Eltwise helper roadmap: track open gaps in a `feature_gap_map` keyed by GAP-N, each gap pinning the list of blocked kernels and the fix complexity. Close gaps by yield (kernels-unblocked-per-LOC).
+- The missing primitive (policy / reconfig path / index mode).
+- The list of currently blocked kernels.
+- Fix complexity (LOC, new template params, new test variants).
+- Whether the gap is real (per §11.3) or fix-and-continue (per §11.2 — missing op struct alone is not a gap).
+
+Close gaps by yield: kernels-unblocked-per-LOC. The gap map is the only roadmap; closed entries get deleted, not archived in the doc.
 
 ---
 
 ## 10. Things to avoid in the eltwise helper
 
 - **Auto fast paths.** Single-op fast paths in chains, auto-batching, auto-merge of same-CB CopyTiles. Make optimizations explicit, never silent.
+- **Default init hoisting.** Hoisting is opt-in and gated on the strict precondition set in §3.4 (chain = `CopyTile + 1 SFPU op`, single CB input, no clobbering element). Never the default — wrong output is not a perf win.
 - **Lambda/functor PostOp.** One dispatch path through `binary_op`. Single ops wrap in `eltwise_chain`.
 - **Hidden broadcast inference.** `BroadcastDim` is always passed explicitly by the caller — the helper does NOT default-pick based on operand shape. Every value of the enum (e.g. `NONE` for no broadcast, `ROW` / `COL` for 1-D broadcasts, `SCALAR` for a 1×1 tile, plus any others the helper supports) is a distinct dispatch path the caller chooses; "infer it from `Ht`/`Wt`" is forbidden.
 - **Mid-loop dtype swaps without policy support.** Helpers do one entry-time reconfig. If the kernel switches dtypes mid-loop, that path stays raw or grows a mid-chain reinit policy.
 - **Skipping `fp32_dest_acc_en=True` testing.** Every binary migration runs against `fp32_dest_acc_en ∈ {False, True}` and any mixed-dtype combo the original supported.
-- **Hand-coding around a missing op struct in a kernel.** Add the op struct to the helper, rebuild, then migrate. The kernel never gets a workaround copy of the LLK call.
+- **Hand-coding around a missing op struct in a kernel.** Add the op struct to the helper, rebuild, then migrate (see §11.2 — missing op struct is fix-first, not a blocker). The kernel never gets a workaround copy of the LLK call.
 
 Migration-pipeline rules (test-change approvals, partial-migration log format, untestable-locally handoff, HQ doc audit, Phase-2 handoff) live in [llk_helpers_hq.md → Pipeline Self-Maintenance](llk_helpers_hq.md#pipeline-self-maintenance). General helper-design rules (helper owns CB lifecycle, DEST capacity is compile-time) live in [llk_helpers_hq.md → Helper Design Principles](llk_helpers_hq.md#helper-design-principles-general).
+
+---
+
+## 11. Migration triage — what to skip, what to fix-and-continue
+
+A kernel showing up in the survey is not automatically a migration target. Triage before touching it:
+
+### 11.1 Skip macro-injection kernels
+
+Kernels that build their compute path via `#define`-macro injection — single source file compiled once per op via per-op compile flags (`#define ELTWISE_OP add_tiles`, `#define SFPU_INIT exp_tile_init`, etc.) — are out of scope for eltwise-helper migration. The helper produces a typed chain at compile time; macro-injection produces an opaque text substitution at preprocess time. Fitting one inside the other either re-implements the macro dispatch as templates (huge change, often per-op) or strips the dispatch entirely (breaks every consumer flag). Neither belongs in a per-kernel migration PR.
+
+Mark macro-injection kernels `skipped:macro-injection` in the survey and move on. Revisit only as a separate workstream that converts the dispatch surface itself, not as part of the eltwise migration sweep.
+
+### 11.2 Missing op struct ≠ blocker
+
+If the only thing standing between a kernel and the helper is a missing op struct (the LLK call exists, the SFPU/FPU primitive exists, no new policy is needed — just no `Foo {}` in the helper headers yet), that is **not** a blocker. The fix is:
+
+1. Add the op struct to the appropriate `eltwise_*` header (4 lines via the CRTP base, per §1.1).
+2. Rebuild.
+3. Continue the migration in the same PR.
+
+Real blockers are missing **policies** (cumulative wait, in-DEST hold, mid-loop dtype reconfig, a wait/pop combination not in §2.1) or missing **primitives** (a hardware op nobody has wrapped yet). A missing op struct is template boilerplate, recorded under §9's enabler table, not in the gap map.
+
+### 11.3 Genuine blockers
+
+- Missing policy (see §2.1, §3.7, §10 mid-loop dtype).
+- Missing primitive — LLK call doesn't exist yet.
+- Index mode the helper doesn't support (per §2.7) — add the mode rather than skipping, unless the mode itself requires new primitives.
+- Macro-injection (per §11.1) — the only "skip permanently" category.
