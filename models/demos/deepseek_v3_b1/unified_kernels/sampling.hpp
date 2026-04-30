@@ -1210,7 +1210,7 @@ struct TopKSampling {
 
                     cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                     cb_pop_front(CTArgs::topk_out_indices_cb, 1);
-                } 
+                }
             }
             if constexpr (IsActiveCore && (CTArgs::scores_cb_id != 0xFFFFFFFF)) {
                 cb_pop_front(CTArgs::scores_cb_id, CTArgs::scores_num_pages);
@@ -1295,7 +1295,7 @@ struct TopKSampling {
 
                             cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                             cb_pop_front(CTArgs::topk_out_indices_cb, 1);
-                        } 
+                        }
 
                     }
 
@@ -1335,7 +1335,7 @@ struct TopKSampling {
 
                             cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                             cb_pop_front(CTArgs::topk_out_indices_cb, 1);
-                        } 
+                        }
                     }
                 }
 

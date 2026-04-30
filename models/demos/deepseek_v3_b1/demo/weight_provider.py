@@ -361,7 +361,9 @@ class SyntheticWeightProvider:
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
         g = torch.Generator().manual_seed(42)
-        emb_w = torch.randn(LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16)
+        emb_w = torch.randn(
+            LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE, generator=g, dtype=torch.bfloat16
+        )
         # emb_w = torch.zeros(
         #     (LogicalModelDimensions.VOCAB_SIZE, LogicalModelDimensions.HIDDEN_SIZE), dtype=torch.bfloat16
         # )
@@ -374,10 +376,10 @@ class SyntheticWeightProvider:
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         g = torch.Generator().manual_seed(42)
         hidden = LogicalModelDimensions.HIDDEN_SIZE
-        lm_w = torch.randn(
-            LogicalModelDimensions.VOCAB_SIZE, hidden, generator=g, dtype=torch.bfloat16
-        ) / (hidden ** 0.5)
-        norm_w = torch.ones(hidden, dtype=torch.bfloat16) / (hidden ** 0.5)
+        lm_w = torch.randn(LogicalModelDimensions.VOCAB_SIZE, hidden, generator=g, dtype=torch.bfloat16) / (
+            hidden**0.5
+        )
+        norm_w = torch.ones(hidden, dtype=torch.bfloat16) / (hidden**0.5)
         return prepare_lm_head_weights(
             {
                 "lm_head.weight": lm_w,
