@@ -233,18 +233,18 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const uint32_t param_in_addr = param_in.buffer()->address();
-    const uint32_t grad_addr = grad.buffer()->address();
-    const uint32_t exp_avg_in_addr = exp_avg_in.buffer()->address();
-    const uint32_t exp_avg_sq_in_addr = exp_avg_sq_in.buffer()->address();
+    auto* const param_in_buf = param_in.buffer();
+    auto* const grad_buf = grad.buffer();
+    auto* const exp_avg_in_buf = exp_avg_in.buffer();
+    auto* const exp_avg_sq_in_buf = exp_avg_sq_in.buffer();
     const uint32_t max_exp_avg_sq_in_addr =
-        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer()->address() : 0;
+        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer()->address() : 0u;
 
-    const uint32_t param_out_addr = param_out.buffer()->address();
-    const uint32_t exp_avg_out_addr = exp_avg_out.buffer()->address();
-    const uint32_t exp_avg_sq_out_addr = exp_avg_sq_out.buffer()->address();
+    auto* const param_out_buf = param_out.buffer();
+    auto* const exp_avg_out_buf = exp_avg_out.buffer();
+    auto* const exp_avg_sq_out_buf = exp_avg_sq_out.buffer();
     const uint32_t max_exp_avg_sq_out_addr =
-        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().buffer()->address() : 0;
+        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().buffer()->address() : 0u;
     float beta1_exponent = std::pow(beta1, step);
     float beta2_exponent = std::pow(beta2, step);
 
@@ -268,42 +268,39 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                param_in_addr,
-                grad_addr,
-                exp_avg_in_addr,
-                exp_avg_sq_in_addr,
-                max_exp_avg_sq_in_addr,
-                f2u_lr,
-                f2u_beta1,
-                f2u_beta2,
-                f2u_eps,
-                f2u_weight_decay,
-                f2u_beta1_exponent,
-                f2u_beta2_exponent,
-                step,
-                static_cast<uint32_t>(amsgrad),
-                num_tiles_per_core,
-                tile_offset});
+            {param_in_buf,
+             grad_buf,
+             exp_avg_in_buf,
+             exp_avg_sq_in_buf,
+             max_exp_avg_sq_in_addr,
+             f2u_lr,
+             f2u_beta1,
+             f2u_beta2,
+             f2u_eps,
+             f2u_weight_decay,
+             f2u_beta1_exponent,
+             f2u_beta2_exponent,
+             step,
+             static_cast<uint32_t>(amsgrad),
+             num_tiles_per_core,
+             tile_offset});
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                param_out_addr,
-                exp_avg_out_addr,
-                exp_avg_sq_out_addr,
-                max_exp_avg_sq_out_addr,
-                num_tiles_per_core,
-                tile_offset});
+            {param_out_buf,
+             exp_avg_out_buf,
+             exp_avg_sq_out_buf,
+             max_exp_avg_sq_out_addr,
+             num_tiles_per_core,
+             tile_offset});
 
         // compute — runtime args go to the correct kernel descriptor
-        KernelDescriptor::CoreRuntimeArgs compute_rt{step};
         if (core_group_1.contains(core)) {
-            compute_desc_1.runtime_args.emplace_back(core, std::move(compute_rt));
+            compute_desc_1.emplace_runtime_args(core, {step});
         } else {
-            compute_desc_2.runtime_args.emplace_back(core, std::move(compute_rt));
+            compute_desc_2.emplace_runtime_args(core, {step});
         }
 
         tile_offset += num_tiles_per_core;
