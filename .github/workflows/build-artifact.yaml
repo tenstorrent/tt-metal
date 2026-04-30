@@ -276,6 +276,7 @@ jobs:
 
   find-existing-build:
     if: ${{ inputs.use-artifacts-from-run == '' }}
+    needs: [parse-platform, determine-python-version]
     name: "🔍 Find existing build for this SHA"
     runs-on: ubuntu-latest
     outputs:
@@ -298,6 +299,9 @@ jobs:
           tracy: ${{ inputs.tracy }}
           distributed: ${{ inputs.distributed }}
           check-wheel: ${{ inputs.build-wheel }}
+          python-version: ${{ needs.determine-python-version.outputs.python-version }}
+          architecture: ${{ inputs.architecture }}
+          toolchain: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
 
   # =============================================================================
   # ARCHITECTURE NOTE: Docker Image Caching
