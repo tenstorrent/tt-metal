@@ -26,7 +26,7 @@ import torch
 import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole
-from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator
+from models.demos.multimodal.gemma3.tt.gemma_e2e_model import GemmaMultimodalGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode

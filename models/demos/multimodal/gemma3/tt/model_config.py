@@ -117,6 +117,19 @@ class ModelArgs(TTModelArgs):
             self.optimizations.set_decoder_conf(decoder_id, fixed_conf)
         self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
+    def get_max_prefill_chunk_size(self):
+        model_overrides = {
+            "gemma-3-4b": {"P150": 128},
+            "medgemma-4b": {"P150": 128},
+            "gemma-3-27b": {"P150": 128},
+            "medgemma-27b": {"P150": 128},
+        }
+        model_name = self.base_model_name
+        device_name = self.device_name
+        if model_name in model_overrides and device_name in model_overrides[model_name]:
+            return model_overrides[model_name][device_name] * 1024
+        return super().get_max_prefill_chunk_size()
+
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
         force_fixed_k_chunk = getattr(self, "force_fixed_decode_k_chunk", False)
