@@ -129,7 +129,12 @@ NLPConcatHeadsProgramFactory::cached_program_t NLPConcatHeadsProgramFactory::cre
     tt::tt_metal::CBHandle cb_src0 = 0, cb_out = 0;
     uint32_t cb_src0_num_tiles = per_tensor_tiles;
     if (!in_sharded) {
-        cb_src0_num_tiles *= 2;  // double buffer
+        // Only double-buffer if both copies fit in L1. Large attention configs (e.g.
+        // 128 heads x 128-dim) overflow L1 with double buffering. The kernel reads one
+        // tile at a time via cb_reserve_back/push_back so it is correct with any CB size.
+        if (2 * cb_src0_num_tiles * single_tile_size <= a.device()->l1_size_per_core()) {
+            cb_src0_num_tiles *= 2;
+        }
     }
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(cb_src0_num_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
