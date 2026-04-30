@@ -109,10 +109,28 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    // Reduce only works with tile layout, so we need to tilize the input tensor if necessary
-    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-    auto tilized_input = ttnn::tilize_with_val_padding(
-        input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
+    const bool use_rm_dense_w = reduce_dim == tt::tt_metal::ReduceOpDim::W &&
+                                input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                                input_tensor.logical_shape().rank() == 4 &&
+                                (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+                                 input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32);
+
+    TT_FATAL(
+        !(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && !use_rm_dense_w),
+        "ROW_MAJOR input is only supported for 4D W-reduce on BFLOAT16/FLOAT32 (dense path). "
+        "Use TILE layout for other reduction modes.");
+
+    if (input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        TT_FATAL(reduce_dim == tt::tt_metal::ReduceOpDim::W, "ROW_MAJOR dense path only implements W-dim reduce");
+    }
+
+    // Reduce only works with tile layout on the classic path; dense path keeps row-major input.
+    Tensor tilized_input = input_tensor;
+    if (!use_rm_dense_w) {
+        auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+        tilized_input = ttnn::tilize_with_val_padding(
+            input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
+    }
 
     // GMPOOL applies exp2(floor(log2(|s|))) of the scalar (only the exponent), so for
     // MAX/MIN with non-unity scalar we instead reduce with scaler=1.0 and apply the user
@@ -171,7 +189,8 @@ Tensor reduce(
             config,
             sub_core_grids,
             negate,
-            /*post_mul_scaler=*/1.0f);
+            /*post_mul_scaler=*/1.0f,
+            /*row_major_w_dense_path=*/false);
 
         if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
             return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
@@ -187,7 +206,8 @@ Tensor reduce(
             config,
             sub_core_grids,
             negate,
-            /*post_mul_scaler=*/post_mul);
+            /*post_mul_scaler=*/post_mul,
+            /*row_major_w_dense_path=*/false);
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
@@ -206,7 +226,8 @@ Tensor reduce(
         config,
         sub_core_grids,
         negate,
-        /*post_mul_scaler=*/post_mul);
+        /*post_mul_scaler=*/post_mul,
+        /*row_major_w_dense_path=*/use_rm_dense_w);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

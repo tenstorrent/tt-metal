@@ -54,6 +54,12 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     const tt::tt_metal::MemoryConfig& input_mem_config,
     tt::tt_metal::ReduceOpDim reduce_dim);
 
+/// Row-major output spec for interleaved buffers (used by dense W-reduce path).
+tt::tt_metal::TensorSpec build_reduce_output_row_major_tensor_spec(
+    const tt::tt_metal::Shape& output_shape,
+    tt::tt_metal::DataType output_dtype,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
+
 // Enforces the documented contract that, for reduction-style ops, any sharded
 // participant (input or output) must live in L1.  Sharded layouts and DRAM
 // buffers use disjoint coordinate spaces (worker cores vs DRAM bank cores), so

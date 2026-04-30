@@ -9,6 +9,8 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <ttnn/tensor/layout/tensor_layout.hpp>
+#include <ttnn/tensor/layout/page_config.hpp>
 
 namespace ttnn::prim {
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
@@ -112,6 +114,18 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     TT_FATAL(mem_layout == TensorMemoryLayout::INTERLEAVED, "Unexpected memory layout: {}", mem_layout);
     // Interleaved tensor: tensor_spec already has everything we need.
     return tensor_spec;
+}
+
+tt::tt_metal::TensorSpec build_reduce_output_row_major_tensor_spec(
+    const tt::tt_metal::Shape& output_shape,
+    tt::tt_metal::DataType output_dtype,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    using namespace tt::tt_metal;
+    TT_FATAL(
+        output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Dense row-major reduce output currently supports INTERLEAVED layout only, got {}",
+        output_mem_config.memory_layout());
+    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), output_mem_config));
 }
 
 void validate_reduce_sharded_buffer_types(

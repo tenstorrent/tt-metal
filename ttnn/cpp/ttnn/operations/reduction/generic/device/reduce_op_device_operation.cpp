@@ -13,6 +13,9 @@ namespace ttnn::prim {
 ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
+    if (operation_attributes.row_major_w_dense_path) {
+        return ReduceMultiCoreWRmProgramFactory{};
+    }
     auto parallelization_strategy = get_parallelization_strategy(tensor_args, operation_attributes.dim);
 
     switch (parallelization_strategy) {
@@ -35,12 +38,32 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
-    TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
-    TT_FATAL(
-        tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-            tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
-        "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
-        tensor_args.dtype());
+    if (operation_attributes.row_major_w_dense_path) {
+        TT_FATAL(
+            operation_attributes.dim == tt::tt_metal::ReduceOpDim::W,
+            "row_major_w_dense_path only supports W-dim reduce, got dim {}",
+            operation_attributes.dim);
+        TT_FATAL(tensor_args.layout() == Layout::ROW_MAJOR, "row_major_w_dense_path requires ROW_MAJOR input");
+        TT_FATAL(
+            tensor_args.logical_shape().rank() == 4,
+            "row_major_w_dense_path requires 4D input, got rank {}",
+            tensor_args.logical_shape().rank());
+        TT_FATAL(!operation_attributes.negate, "row_major_w_dense_path does not support negate (min-reduce) yet");
+        TT_FATAL(
+            tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32,
+            "row_major_w_dense_path only supports BFLOAT16 and FLOAT32, got {}",
+            tensor_args.dtype());
+        TT_FATAL(
+            !tensor_args.memory_config().is_sharded() && !operation_attributes.output_mem_config.is_sharded(),
+            "row_major_w_dense_path only supports interleaved (non-sharded) tensors for now");
+    } else {
+        TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
+        TT_FATAL(
+            tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
+                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
+            "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
+            tensor_args.dtype());
+    }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
     const auto device_grid_size = tensor_args.device()->compute_with_storage_grid_size();
     TT_FATAL(
@@ -136,6 +159,10 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             break;
     }
 
+    if (operation_attributes.row_major_w_dense_path) {
+        return build_reduce_output_row_major_tensor_spec(
+            output_shape, operation_attributes.output_dtype, operation_attributes.output_mem_config);
+    }
     return build_reduce_output_tensor_spec(
         output_shape,
         operation_attributes.output_dtype,
@@ -163,6 +190,7 @@ ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         operation_attributes.sub_core_grids,
         operation_attributes.negate,
         operation_attributes.post_mul_scaler,
+        operation_attributes.row_major_w_dense_path,
         program_factory.index(),
         tensor_args.dtype(),
         tensor_args.memory_config(),
@@ -180,7 +208,8 @@ ttnn::Tensor reduce(
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool negate,
-    float post_mul_scaler) {
+    float post_mul_scaler,
+    bool row_major_w_dense_path) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -191,7 +220,8 @@ ttnn::Tensor reduce(
             compute_kernel_config,
             sub_core_grids,
             negate,
-            post_mul_scaler},
+            post_mul_scaler,
+            row_major_w_dense_path},
         input_tensor);
 }
 

@@ -28,6 +28,9 @@ struct ReduceParams {
     // kernel, gated by the REDUCE_POST_MUL define. When `post_mul_scaler == 1.0f`, the
     // post-multiplication path is disabled and the existing reduce-only flow runs unchanged.
     float post_mul_scaler{1.0f};
+    // Dense row-major path for W-reduce on 4D tensors: input/output avoid tile face padding by
+    // tilizing per row inside compute (see ReduceMultiCoreWRmProgramFactory).
+    bool row_major_w_dense_path{false};
 };
 
 }  // namespace ttnn::prim
