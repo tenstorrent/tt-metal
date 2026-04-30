@@ -17,20 +17,27 @@ from models.demos.qwen3_tts.tt.mlp import MLP
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 
 _DECODE_SHARDED = os.environ.get("QWEN3_TTS_DECODE_SHARDED", "0") == "1"
+_PREFILL_OPTI = os.environ.get("QWEN3_TTS_PREFILL_OPTI", "0") == "1"
+_PREFILL_SEQ = 128
 
 
-def _build_sharded_rmsnorm_configs(device, dim: int, num_cores: int):
+def _build_sharded_rmsnorm_configs(device, dim: int, num_cores: int, m: int = 32):
     """Build (input_memcfg, program_config) for a width-sharded multi-core RMSNorm
-    on a [1,1,1,dim] tensor.  num_cores must divide dim/TILE."""
+    on a [1,1,m,dim] tensor.  m and dim/TILE must both divide cleanly.
+
+    m=32   → decode (single-token, padded to 1 tile)
+    m=128  → prefill ISL=128 (4 tiles)
+    """
     TILE = 32
+    assert m % TILE == 0, f"m={m} must be a multiple of TILE={TILE}"
     assert (dim // TILE) % num_cores == 0, f"dim_tiles={dim // TILE} must be divisible by num_cores={num_cores}"
     block_w = (dim // num_cores) // TILE
+    block_h = m // TILE
     subblock_w = 4
     while subblock_w > 1 and block_w % subblock_w != 0:
         subblock_w -= 1
     compute_grid = device.compute_with_storage_grid_size()
-    # Sharded layernorm requires a rectangular core grid (cpp:173).
-    # Pick (cols, rows) such that cols*rows == num_cores, both ≤ compute_grid.
+    # Sharded layernorm requires a rectangular core grid.
     cols = min(compute_grid.x, num_cores)
     while num_cores % cols != 0:
         cols -= 1
@@ -42,12 +49,12 @@ def _build_sharded_rmsnorm_configs(device, dim: int, num_cores: int):
     in_memcfg = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(grid, (TILE, dim // num_cores), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(grid, (m, dim // num_cores), ttnn.ShardOrientation.ROW_MAJOR),
     )
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
         subblock_w=subblock_w,
-        block_h=1,
+        block_h=block_h,
         block_w=block_w,
         inplace=False,
     )
@@ -140,11 +147,19 @@ class DecoderLayer(LightweightModule):
         # CodePredictor (hidden=1024): 32 cores.
         self._decode_ln_in_memcfg = None
         self._decode_ln_progcfg = None
+        self._prefill_ln_in_memcfg = None
+        self._prefill_ln_progcfg = None
         if _DECODE_SHARDED:
             dim_tiles = hidden_size // 32
             ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
             self._decode_ln_in_memcfg, self._decode_ln_progcfg = _build_sharded_rmsnorm_configs(
-                device, hidden_size, ln_num_cores
+                device, hidden_size, ln_num_cores, m=32
+            )
+        if _PREFILL_OPTI:
+            dim_tiles = hidden_size // 32
+            ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
+            self._prefill_ln_in_memcfg, self._prefill_ln_progcfg = _build_sharded_rmsnorm_configs(
+                device, hidden_size, ln_num_cores, m=_PREFILL_SEQ
             )
 
     def forward(
@@ -188,20 +203,43 @@ class DecoderLayer(LightweightModule):
             - output: tensor of shape [batch, 1, seq_len, hidden_size]
             - updated_kv_cache: tuple of (k_cache, v_cache) or None
         """
+        # Resolve which sharded layernorm configs to use (decode-style or prefill-ISL=128).
+        seq_len_at_entry = x.shape[-2]
+        prefill_path = (
+            _PREFILL_OPTI
+            and mode == "prefill"
+            and seq_len_at_entry == _PREFILL_SEQ
+            and self._prefill_ln_in_memcfg is not None
+        )
+        decode_path = _DECODE_SHARDED and mode == "decode" and self._decode_ln_in_memcfg is not None
+        ln_in_memcfg = self._prefill_ln_in_memcfg if prefill_path else self._decode_ln_in_memcfg
+        ln_progcfg = self._prefill_ln_progcfg if prefill_path else self._decode_ln_progcfg
+
         # Pre-norm attention
         residual = x
         residual_sharded = None
-        if _DECODE_SHARDED and mode == "decode" and self._decode_ln_in_memcfg is not None:
-            # Convert x to sharded once and reuse it as residual_sharded later
-            # (RMSNorm with inplace=False writes to a fresh output buffer; the input
-            # buffer is preserved). Saves one DRAM→L1 reshard per layer.
-            residual_sharded = ttnn.to_memory_config(x, self._decode_ln_in_memcfg)
+        if decode_path and ln_in_memcfg is not None:
+            # Decode: keep the chain sharded — wo is DRAM-sharded and consumes sharded
+            # input directly. Reuse the sharded `x` buffer as `residual_sharded`.
+            residual_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
             x = self.input_layernorm(
                 residual_sharded,
-                program_config=self._decode_ln_progcfg,
-                memory_config=self._decode_ln_in_memcfg,
+                program_config=ln_progcfg,
+                memory_config=ln_in_memcfg,
             )
-            # do NOT deallocate residual_sharded — used for first residual add below
+        elif prefill_path and ln_in_memcfg is not None:
+            # Prefill: matmul kernel inherits the input's shard grid → fewer cores.
+            # Convert layernorm output back to L1_INTERLEAVED so the matmul picks its
+            # default 96/128-core grid. Sharded layernorm itself is still ~3x faster.
+            x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+            x_normed = self.input_layernorm(
+                x_sharded,
+                program_config=ln_progcfg,
+                memory_config=ln_in_memcfg,
+            )
+            ttnn.deallocate(x_sharded)
+            x = ttnn.to_memory_config(x_normed, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_normed)
         else:
             x = self.input_layernorm(x)
         x, updated_kv_cache = self.attention(
@@ -241,19 +279,33 @@ class DecoderLayer(LightweightModule):
         # First residual add: result feeds the post_attention_layernorm + MLP. Force L1
         # so we don't pay a DRAM write+read for the intermediate. Without this override,
         # ttnn.add inherits DRAM from `residual` (which is the DRAM-backed layer input).
+        # When prefill_path engaged, residual_sharded was created above for the
+        # input_layernorm — release it now (caller of this branch already deallocated
+        # in the decode_path branch above).
+        if residual_sharded is not None:
+            ttnn.deallocate(residual_sharded)
         x = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Pre-norm MLP
         residual = x  # now in L1
-        if _DECODE_SHARDED and mode == "decode" and self._decode_ln_in_memcfg is not None:
-            x_sharded = ttnn.to_memory_config(x, self._decode_ln_in_memcfg)
-            # Same: layernorm output sharded layout matches MLP gate/up matmul in0.
+        if decode_path and ln_in_memcfg is not None:
+            x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
             x = self.post_attention_layernorm(
                 x_sharded,
-                program_config=self._decode_ln_progcfg,
-                memory_config=self._decode_ln_in_memcfg,
+                program_config=ln_progcfg,
+                memory_config=ln_in_memcfg,
             )
             ttnn.deallocate(x_sharded)
+        elif prefill_path and ln_in_memcfg is not None:
+            x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+            x_normed = self.post_attention_layernorm(
+                x_sharded,
+                program_config=ln_progcfg,
+                memory_config=ln_in_memcfg,
+            )
+            ttnn.deallocate(x_sharded)
+            x = ttnn.to_memory_config(x_normed, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_normed)
         else:
             x = self.post_attention_layernorm(x)
         x = self.mlp(x, mode=mode)
