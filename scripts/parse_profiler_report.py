@@ -107,6 +107,38 @@ from pathlib import Path
 
 # Operations to zero out as outliers (they skew timing data)
 OUTLIER_OPS = {"DramPrefetcherOperation", "EmbeddingsDeviceOperation"}
+SAFE_OUTPUT_BASE_DIR = Path(__file__).resolve().parents[1]
+
+
+def _resolve_safe_repo_path(path_arg, *, must_exist: bool) -> Path:
+    """Resolve and validate a path under the safelisted repo root."""
+    requested = Path(path_arg)
+    if requested.is_absolute():
+        resolved = requested.resolve(strict=must_exist)
+    else:
+        resolved = (SAFE_OUTPUT_BASE_DIR / requested).resolve(strict=must_exist)
+
+    try:
+        resolved.relative_to(SAFE_OUTPUT_BASE_DIR)
+    except ValueError as exc:
+        raise ValueError(f"path must be within {SAFE_OUTPUT_BASE_DIR}: {path_arg}") from exc
+
+    return resolved
+
+
+def resolve_safe_output_dir(output_dir_arg: str) -> Path:
+    """Resolve and validate output dir under the safelisted repo root."""
+    return _resolve_safe_repo_path(output_dir_arg, must_exist=False)
+
+
+def resolve_safe_csv_file(csv_file_arg: str) -> Path:
+    """Resolve and validate csv input file under the safelisted repo root."""
+    csv_path = _resolve_safe_repo_path(csv_file_arg, must_exist=True)
+    if not csv_path.is_file():
+        raise ValueError(f"csv file is not a regular file: {csv_file_arg}")
+    if csv_path.suffix.lower() != ".csv":
+        raise ValueError(f"input file must be a .csv file: {csv_file_arg}")
+    return csv_path
 
 
 def extract_op_name(full_name: str) -> str:
@@ -362,7 +394,8 @@ def write_csv(data: list, output_path: Path, phase_label: str = None):
         "DRAM_BW_UTIL%",
     ]
 
-    with open(output_path, "w", newline="") as f:
+    safe_output_path = _resolve_safe_repo_path(output_path, must_exist=False)
+    with safe_output_path.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(columns)
         for row in data:
@@ -380,7 +413,7 @@ def write_csv(data: list, output_path: Path, phase_label: str = None):
                     values.append(str(val))
             writer.writerow(values)
 
-    print(f"Wrote {len(data)} rows to {output_path}")
+    print(f"Wrote {len(data)} rows to {safe_output_path}")
 
 
 def main():
@@ -405,19 +438,20 @@ def main():
         "--output-dir",
         type=str,
         default=".",
-        help="Directory to write prefill.csv and decode.csv (default: current directory)",
+        help=f"Directory to write prefill.csv and decode.csv under {SAFE_OUTPUT_BASE_DIR} (default: repo root)",
     )
 
     args = parser.parse_args()
 
-    csv_path = Path(args.csv_file)
-    if not csv_path.exists():
-        print(f"Error: File not found: {csv_path}")
+    try:
+        csv_path = resolve_safe_csv_file(args.csv_file)
+    except ValueError as e:
+        print(f"Error: {e}")
         sys.exit(1)
 
     # Parse the CSV
     data = []
-    with open(csv_path, "r") as f:
+    with csv_path.open("r") as f:
         reader = csv.DictReader(f)
         for row in reader:
             # Skip host-only entries (no device ID or no core count)
@@ -461,7 +495,11 @@ def main():
         display_data = [("Prefill", prefill_data), ("Decode", decode_data)]
 
     # Prepare output directory
-    output_dir = Path(args.output_dir)
+    try:
+        output_dir = resolve_safe_output_dir(args.output_dir)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for phase_label, phase_data in display_data:
