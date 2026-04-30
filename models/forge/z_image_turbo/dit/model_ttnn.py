@@ -191,18 +191,19 @@ class ZImageTransformerTTNN(LightweightModule):
             )
 
     def _prep_parallel_weights(self):
-        """Pre-transpose to_out, w1/w2/w3 weights for minimal_matmul."""
-        suffixes = (
-            "attention.to_out.0.weight",
-            "feed_forward.w1.weight",
-            "feed_forward.w2.weight",
-            "feed_forward.w3.weight",
-        )
+        """Pre-transpose to_out, w1/w2/w3 weights for minimal_matmul. MLP weights → BFP8."""
+        mlp_suffixes = ("feed_forward.w1.weight", "feed_forward.w2.weight", "feed_forward.w3.weight")
+        all_suffixes = mlp_suffixes + ("attention.to_out.0.weight",)
         for key in list(self.weights):
-            if any(key.endswith(s) for s in suffixes) and len(self.weights[key].shape) == 2:
-                self.weights[key + "_mmT"] = ttnn.permute(
-                    self.weights[key], [1, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
+            if any(key.endswith(s) for s in all_suffixes) and len(self.weights[key].shape) == 2:
+                wT = ttnn.permute(self.weights[key], [1, 0], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if any(key.endswith(s) for s in mlp_suffixes):
+                    self.weights[key + "_mmT"] = ttnn.typecast(
+                        wT, ttnn.DataType.BFLOAT8_B, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+                    ttnn.deallocate(wT, False)
+                else:
+                    self.weights[key + "_mmT"] = wT
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
