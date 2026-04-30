@@ -272,6 +272,21 @@ class TtMolmo2Model(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
+        # ------------------------------------------------------------------ #
+        # Decode trace state (populated lazily on first generate() call)
+        # ------------------------------------------------------------------ #
+        self._decode_trace_id = None
+        self._decode_trace_tensors = None  # dict: tok_id, cur_pos, cos, sin
+        self._decode_trace_output = None  # stable logits buffer (read after execute_trace)
+
+        # CPU decode cache: block weights pulled from device once and reused.
+        # Populated lazily; eliminates the ~20s block-weight pull overhead on
+        # subsequent generate() calls.
+        self._cpu_block_weights = None
+        self._cpu_emb = None
+        self._cpu_ln_f_w = None
+        self._cpu_lm_head_w = None
+
     # ------------------------------------------------------------------ #
     # Rope helpers
     # ------------------------------------------------------------------ #
@@ -318,6 +333,155 @@ class TtMolmo2Model(LightweightModule):
             )
 
         return [_tt(cos_1), _tt(sin_1)]
+
+    # ------------------------------------------------------------------ #
+    # Decode trace helpers
+    # ------------------------------------------------------------------ #
+
+    def _allocate_decode_trace_tensors(self):
+        """Pre-allocate stable on-device buffers for trace capture/replay.
+
+        ALL buffers are allocated here, before trace capture, so that no
+        device allocation is needed during execute_trace (which would corrupt
+        trace-reserved memory regions).
+        """
+        cfg = self.configuration
+        head_dim = cfg.head_dim
+
+        def _tt(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+            return ttnn.from_torch(
+                t,
+                dtype=dtype,
+                layout=layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        # Token ID input for embedding (inside trace) — [1, 1, 1] uint32
+        tok_id = _tt(torch.zeros(1, 1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # Current decode position — [1] int32
+        cur_pos = _tt(torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # RoPE cos/sin for current position — [1, 1, 1, head_dim]
+        cos_buf = _tt(torch.zeros(1, 1, 1, head_dim, dtype=torch.bfloat16))
+        sin_buf = _tt(torch.zeros(1, 1, 1, head_dim, dtype=torch.bfloat16))
+        return {"tok_id": tok_id, "cur_pos": cur_pos, "cos": cos_buf, "sin": sin_buf}
+
+    def _capture_decode_trace(self, tt, prefill_seq_len: int):
+        """Warm-up + trace capture for single-token decode.
+
+        Embedding is computed INSIDE the trace so that layer.forward's
+        ttnn.deallocate(x) never touches the stable tok_id input buffer.
+        The trace reads: tok_id, cur_pos, cos, sin — all pre-allocated stable
+        device buffers that are updated before each execute_trace call.
+
+        Args:
+            tt: dict from _allocate_decode_trace_tensors()
+            prefill_seq_len: position after prefill (first decode position)
+
+        Returns:
+            (trace_id, trace_logits_output) — logits is the stable trace output.
+        """
+        from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
+
+        cfg = self.configuration
+
+        def _upload(t_cpu, dtype, layout, device_buf):
+            """Upload a CPU tensor into a pre-allocated device buffer in-place."""
+            staging = ttnn.from_torch(
+                t_cpu,
+                dtype=dtype,
+                layout=layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy(staging, device_buf)
+            ttnn.deallocate(staging)
+
+        # Seed stable buffers with valid initial values (pre-trace — allocation is safe here)
+        _upload(torch.zeros(1, 1, 1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, tt["tok_id"])
+        _upload(torch.tensor([prefill_seq_len], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, tt["cur_pos"])
+        cos_p = self._cos_hf[prefill_seq_len : prefill_seq_len + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        sin_p = self._sin_hf[prefill_seq_len : prefill_seq_len + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        _upload(cos_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["cos"])
+        _upload(sin_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["sin"])
+
+        def _forward_decode(tok_id_t, cur_pos_t, cos_t, sin_t):
+            """Single decode step: embedding → 36 layers → ln_f → lm_head.
+
+            Embedding is the FIRST op so layer.forward's ttnn.deallocate(x)
+            acts on the embedding output (trace-internal), never on tok_id_t.
+            """
+            x = ttnn.embedding(tok_id_t, self.embedding)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            x = ttnn.reshape(x, [1, 1, 1, cfg.dim])
+            rot_mats = [cos_t, sin_t]
+            for layer in self.layers:
+                x = layer.forward(x, current_pos=cur_pos_t, rot_mats=rot_mats, mode="decode")
+            x = self.ln_f(x, mode=Mode.PREFILL)
+            return ttnn.linear(
+                x,
+                self.lm_head,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=cfg.compute_kernel_config_hifi2_fp16,
+            )
+
+        # ---- Warm-up (compile) pass — not traced ----
+        logits_warmup = _forward_decode(tt["tok_id"], tt["cur_pos"], tt["cos"], tt["sin"])
+        ttnn.deallocate(logits_warmup)
+
+        # ---- Trace capture (all ops including embedding inside the trace) ----
+        tok = trace_capture_run_begin()
+        try:
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            trace_logits = _forward_decode(tt["tok_id"], tt["cur_pos"], tt["cos"], tt["sin"])
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        finally:
+            trace_capture_run_end(tok)
+
+        return trace_id, trace_logits
+
+    def _execute_decode_trace(self, token_id: int, position: int) -> torch.Tensor:
+        """Update stable input buffers and execute the captured decode trace.
+
+        Each update allocates a small staging tensor, copies into the stable buffer
+        in-place (ttnn.copy requires both to be device tensors), then frees staging.
+        This follows the same pattern used by the reference demo generator.
+
+        Returns logits [vocab_size] on CPU.
+        """
+        tt = self._decode_trace_tensors
+
+        def _upload(t_cpu, dtype, layout, device_buf):
+            staging = ttnn.from_torch(
+                t_cpu,
+                dtype=dtype,
+                layout=layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy(staging, device_buf)
+            ttnn.deallocate(staging)
+
+        # Update token ID ([1, 1, 1] uint32)
+        _upload(torch.tensor([[[token_id]]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, tt["tok_id"])
+        # Update position ([1] int32)
+        _upload(torch.tensor([position], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, tt["cur_pos"])
+        # Update RoPE cos/sin for this position ([1, 1, 1, head_dim])
+        cos_p = self._cos_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        sin_p = self._sin_hf[position : position + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        _upload(cos_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["cos"])
+        _upload(sin_p, ttnn.bfloat16, ttnn.TILE_LAYOUT, tt["sin"])
+
+        # Replay the captured trace — reads from the stable buffers updated above
+        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=True)
+
+        # Read logits from the trace output buffer (written by lm_head inside trace)
+        logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(self._decode_trace_output)[0]).float()
+        return logits_cpu.squeeze(0).squeeze(0).squeeze(0)  # [vocab_size]
 
     # ------------------------------------------------------------------ #
     # Vision backbone
@@ -564,26 +728,97 @@ class TtMolmo2Model(LightweightModule):
         temperature: float = 1.0,
         user_id: int = 0,
     ) -> torch.Tensor:
-        """Full autoregressive generate: TTNN prefill then CPU decode.
+        """Full autoregressive generate: TTNN prefill + CPU reference decode.
 
-        Phase 1 decode uses reference PyTorch (avoids TTNN decode-mode
-        HEIGHT_SHARDED shape issues). KV cache is pulled from device to CPU
-        after prefill — ~200 MB for S=2701, negligible overhead.
+        CPU decode uses float32 reference ops for numerical correctness over
+        long sequences where bfloat16 TTNN SDPA may produce different logits.
+        Block weights are pulled from device once and cached for speed.
         """
-        import sys as _sys
-
-        _sys.path.insert(
-            0,
-            "/home/ttuser/.cache/huggingface/hub/models--allenai--Molmo2-8B/"
-            "snapshots/e28fa28597e5ec5e0cca2201dd8ab33d48bc4a1b",
+        return self._generate_cpu_decode(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            pooled_patches_idx=pooled_patches_idx,
+            token_type_ids=token_type_ids,
+            max_new_tokens=max_new_tokens,
+            eos_token_id=eos_token_id,
+            temperature=temperature,
+            user_id=user_id,
         )
+
+    def _build_cpu_block_weights(self):
+        """Extract and reconstruct per-block CPU weights from TTNN device tensors.
+
+        Called once; result cached in self._cpu_block_weights.
+        """
+        cfg = self.configuration
+        q_per_dev = cfg.n_heads // cfg.num_devices * cfg.head_dim
+        kv_per_dev = cfg.n_kv_heads // cfg.num_devices * cfg.head_dim
+        qkv_chunk = q_per_dev + 2 * kv_per_dev
+
+        print("  [decode] pulling block weights to CPU...", flush=True)
+        block_weights = []
+        for layer in self.layers:
+            attn = layer.attention
+            ffn = layer.feed_forward
+
+            wqkv_full = torch.cat(
+                [ttnn.to_torch(t).float().squeeze(0).squeeze(0) for t in ttnn.get_device_tensors(attn.wqkv)],
+                dim=-1,
+            )
+            wq_cols, wk_cols, wv_cols = [], [], []
+            for di in range(cfg.num_devices):
+                s = di * qkv_chunk
+                wq_cols.append(wqkv_full[:, s : s + q_per_dev])
+                wk_cols.append(wqkv_full[:, s + q_per_dev : s + q_per_dev + kv_per_dev])
+                wv_cols.append(wqkv_full[:, s + q_per_dev + kv_per_dev : s + qkv_chunk])
+            att_proj_weight = torch.cat(
+                [torch.cat(wq_cols, dim=-1).T, torch.cat(wk_cols, dim=-1).T, torch.cat(wv_cols, dim=-1).T],
+                dim=0,
+            )
+
+            wo_cpu = ttnn.to_torch(ttnn.get_device_tensors(attn.wo)[0]).float().squeeze(0).squeeze(0)
+            q_norm_w = ttnn.to_torch(ttnn.get_device_tensors(attn.q_norm.weight)[0]).float().reshape(-1)
+            k_norm_w = ttnn.to_torch(ttnn.get_device_tensors(attn.k_norm.weight)[0]).float().reshape(-1)
+
+            w1_full = ttnn.to_torch(ttnn.get_device_tensors(ffn.w1)[0]).float().squeeze(0).squeeze(0)
+            w3_full = ttnn.to_torch(ttnn.get_device_tensors(ffn.w3)[0]).float().squeeze(0).squeeze(0)
+            w2_full = ttnn.to_torch(ttnn.get_device_tensors(ffn.w2)[0]).float().squeeze(0).squeeze(0)
+
+            block_weights.append(
+                {
+                    "attn_norm": ttnn.to_torch(ttnn.get_device_tensors(layer.attention_norm.weight)[0])
+                    .float()
+                    .reshape(-1),
+                    "ff_norm": ttnn.to_torch(ttnn.get_device_tensors(layer.ff_norm.weight)[0]).float().reshape(-1),
+                    "att_proj": att_proj_weight,
+                    "attn_out": wo_cpu.T,
+                    "q_norm": q_norm_w,
+                    "k_norm": k_norm_w,
+                    "ff_proj": torch.cat([w3_full.T, w1_full.T], dim=0),
+                    "ff_out": w2_full.T,
+                }
+            )
+        print(f"  [decode] {len(block_weights)} block weight sets ready", flush=True)
+        return block_weights
+
+    def _generate_cpu_decode(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values=None,
+        pooled_patches_idx=None,
+        token_type_ids=None,
+        max_new_tokens: int = 128,
+        eos_token_id: int = None,
+        temperature: float = 1.0,
+        user_id: int = 0,
+    ) -> torch.Tensor:
+        """Fallback: TTNN prefill + CPU reference decode. Kept for debugging."""
         import torch.nn.functional as F
 
-        from models.demos.molmo2.reference.functional import build_rope_cache, rmsnorm
+        from models.demos.molmo2.reference.functional import rmsnorm
 
         B, S = input_ids.shape
 
-        # ---- TTNN prefill: fills device KV cache ----
         logits = self.forward_prefill(
             input_ids=input_ids,
             pixel_values=pixel_values,
@@ -594,21 +829,7 @@ class TtMolmo2Model(LightweightModule):
         next_token = _sample(logits[0, -1], temperature)
         generated_ids = [next_token]
 
-        # ---- Pull state dict for CPU decode (weights already on CPU) ----
-        # We reconstruct on-the-fly since we only need a few layers at a time.
-        # For efficiency, cache the block weights CPU-side.
-        if not hasattr(self, "_cpu_sd"):
-            # Pull the raw weights that were used to build the model
-            # We can reconstruct them from the TTNN tensors, but it's easier
-            # to just reload from HF — the state dict is already in memory.
-            # (self._raw_sd was set during __init__ if we cache it)
-            self._cpu_sd = None  # will be populated lazily
-
-        # ---- Build CPU KV cache from device ----
-        # Each layer's KV cache holds positions 0..S-1.
-        # Shape on device: [1, n_local_kv_heads=1, max_seq_len, head_dim=128]
-        # We pull only the filled slice [0..S].
-        print(f"  [decode] pulling KV cache from device (S={S})...", flush=True)
+        print(f"  [cpu_decode] pulling KV cache from device (S={S})...", flush=True)
         cpu_kv = []  # list of (k_cpu, v_cpu) per layer, shape [1, 8, S, 128]
 
         for layer in self.layers:
@@ -652,76 +873,11 @@ class TtMolmo2Model(LightweightModule):
 
         cos_full, sin_full = build_rope_cache(S + max_new_tokens + 1, cfg.head_dim, cfg.rope_theta, torch.device("cpu"))
 
-        # Pull block weights to CPU (attention + MLP)
-        print("  [decode] pulling block weights to CPU...", flush=True)
-        block_weights = []
-        q_per_dev = cfg.n_heads // cfg.num_devices * cfg.head_dim  # 512
-        kv_per_dev = cfg.n_kv_heads // cfg.num_devices * cfg.head_dim  # 128
-        qkv_chunk = q_per_dev + 2 * kv_per_dev  # 768
+        # Pull block weights to CPU (once; cached for subsequent calls)
+        if self._cpu_block_weights is None:
+            self._cpu_block_weights = self._build_cpu_block_weights()
+        block_weights = self._cpu_block_weights
 
-        for i, layer in enumerate(self.layers):
-            attn = layer.attention
-            ffn = layer.feed_forward
-
-            # wqkv: ShardTensor2dMesh(dims=(2,3)) — device i has [4096, 768]
-            # Layout per device: [wq_i.T(512), wk_i.T(128), wv_i.T(128)]
-            # Gather 8 shards along dim -1 → [4096, 6144] interleaved
-            wqkv_full = torch.cat(
-                [ttnn.to_torch(t).float().squeeze(0).squeeze(0) for t in ttnn.get_device_tensors(attn.wqkv)], dim=-1
-            )  # [4096, 6144]
-
-            # De-interleave: reconstruct [wq_full, wk_full, wv_full] from interleaved shards
-            wq_cols, wk_cols, wv_cols = [], [], []
-            for di in range(cfg.num_devices):
-                s = di * qkv_chunk
-                wq_cols.append(wqkv_full[:, s : s + q_per_dev])
-                wk_cols.append(wqkv_full[:, s + q_per_dev : s + q_per_dev + kv_per_dev])
-                wv_cols.append(wqkv_full[:, s + q_per_dev + kv_per_dev : s + qkv_chunk])
-            att_proj_weight = torch.cat(
-                [
-                    torch.cat(wq_cols, dim=-1).T,  # [4096, 4096] → [4096, 4096]
-                    torch.cat(wk_cols, dim=-1).T,  # [4096, 1024] → [1024, 4096]
-                    torch.cat(wv_cols, dim=-1).T,  # [4096, 1024] → [1024, 4096]
-                ],
-                dim=0,
-            )  # [6144, 4096]
-
-            # wo: replicated — device 0 has full [1,1,4096,4096] = attn_out.weight.T
-            # F.linear(x, W) = x @ W.T; need W = attn_out.weight → use wo_cpu.T
-            wo_cpu = ttnn.to_torch(ttnn.get_device_tensors(attn.wo)[0]).float().squeeze(0).squeeze(0)
-            wo_weight = wo_cpu.T  # [4096, 4096] = attn_out.weight
-
-            q_norm_w = ttnn.to_torch(ttnn.get_device_tensors(attn.q_norm.weight)[0]).float().reshape(-1)
-            k_norm_w = ttnn.to_torch(ttnn.get_device_tensors(attn.k_norm.weight)[0]).float().reshape(-1)
-
-            # MLP: all weights REPLICATED — use device 0 only
-            # w1 stores w_gate.T [4096, 12288]; w3 stores w_value.T [4096, 12288]
-            # w2 stores ff_out.T [12288, 4096]
-            w1_full = ttnn.to_torch(ttnn.get_device_tensors(ffn.w1)[0]).float().squeeze(0).squeeze(0)  # [4096, 12288]
-            w3_full = ttnn.to_torch(ttnn.get_device_tensors(ffn.w3)[0]).float().squeeze(0).squeeze(0)  # [4096, 12288]
-            w2_full = ttnn.to_torch(ttnn.get_device_tensors(ffn.w2)[0]).float().squeeze(0).squeeze(0)  # [12288, 4096]
-
-            # Reconstruct reference text_mlp format:
-            #   ff_proj [24576, 4096] = [value, gate] stacked (value=w3_full.T, gate=w1_full.T)
-            #   ff_out  [4096, 12288] = w2_full.T
-            ff_proj = torch.cat([w3_full.T, w1_full.T], dim=0)  # [24576, 4096]
-            ff_out = w2_full.T  # [4096, 12288]
-
-            attn_norm_w = ttnn.to_torch(ttnn.get_device_tensors(layer.attention_norm.weight)[0]).float().reshape(-1)
-            ff_norm_w = ttnn.to_torch(ttnn.get_device_tensors(layer.ff_norm.weight)[0]).float().reshape(-1)
-
-            block_weights.append(
-                {
-                    "attn_norm": attn_norm_w,
-                    "ff_norm": ff_norm_w,
-                    "att_proj": att_proj_weight,
-                    "attn_out": wo_weight,
-                    "q_norm": q_norm_w,
-                    "k_norm": k_norm_w,
-                    "ff_proj": ff_proj,
-                    "ff_out": ff_out,
-                }
-            )
         print("  [decode] block weights ready, starting decode loop...", flush=True)
 
         import torch.nn.functional as _F

@@ -152,13 +152,15 @@ class TtMolmo2TextAttention(LightweightModule):
         self.k_norm = _rmsnorm("k_norm")
 
         # ------------------------------------------------------------------ #
-        # KV cache — stored as bfloat8_b (matches the typecast before fill_cache)
+        # KV cache — bfloat16 for SDPA precision with long sequences.
+        # bfloat8_b KV + bfloat16 SDPA caused logit flips for video (S≈2701).
+        # Memory: 2× vs bfloat8_b (≈648 MB/device for max_seq=36864), fits in 12 GB.
         # ------------------------------------------------------------------ #
         cache_k = torch.zeros(self.max_batch_size, self.n_local_kv_heads, self.max_seq_len, self.head_dim)
         self.layer_past = [
             ttnn.as_tensor(
                 kv,
-                dtype=ttnn.bfloat8_b,  # must match k_8b / v_8b fill dtype
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -277,53 +279,31 @@ class TtMolmo2TextAttention(LightweightModule):
         )
         ttnn.deallocate(q)
 
-        # Phase 1: CPU round-trip to concatenate heads, bypassing TTNN reshape constraints.
-        print(
-            f"[DBG_SDPA] attn_out.shape={attn_out.shape} dev0_shape={ttnn.get_device_tensors(attn_out)[0].shape}",
-            flush=True,
+        # Convert SDPA output [1, batch, n_local_heads, head_dim] to HEIGHT_SHARDED
+        # for nlp_concat_heads_decode (requires num_cores == batch_size).
+        sdpa_batch = attn_out.shape[1]
+        sdpa_grid_x = min(8, sdpa_batch)
+        sdpa_grid_y = (sdpa_batch + sdpa_grid_x - 1) // sdpa_grid_x
+        sdpa_shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(32, self.padded_head_dim),
+            core_grid=ttnn.CoreGrid(y=sdpa_grid_y, x=sdpa_grid_x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
-        attn_cpu = ttnn.to_torch(ttnn.get_device_tensors(attn_out)[0]).float()
-        ttnn.deallocate(attn_out)
-        # attn_cpu may be [1, n_local_heads, batch_padded, head_dim]
-        # Flatten to [1, 1, batch_padded, n_local_heads*head_dim]
-        s = attn_cpu.shape
-        attn_flat = attn_cpu.reshape(s[0], 1, s[2], s[1] * s[3]).to(torch.bfloat16)
-        attn_out_cat = ttnn.from_torch(
-            attn_flat,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+        attn_out = ttnn.to_memory_config(attn_out, sdpa_shard_cfg)
 
-        # Assemble full attention output from all devices (each device has different heads).
-        # wqkv is column-parallel: device i has heads i*n_local...(i+1)*n_local.
-        # Pull each device's [1,1,batch,n_local*head_dim] and concat → [1,1,batch,4096].
-        device_tensors = ttnn.get_device_tensors(attn_out_cat)
-        parts = [ttnn.to_torch(t).float() for t in device_tensors]
-        print(f"[DBG2] n_devices={self.num_devices} len(parts)={len(parts)} part_shape={parts[0].shape}", flush=True)
-        attn_full = torch.cat(parts, dim=-1).to(torch.bfloat16)  # [1,1,batch,4096]
-        attn_gathered = ttnn.from_torch(
-            attn_full,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        ttnn.deallocate(attn_out_cat)
+        # [1, batch, n_local_heads, head_dim] → [1, 1, batch, n_local_heads * head_dim]
+        attn_out = ttnn.experimental.nlp_concat_heads_decode(attn_out, num_heads=self.n_local_heads)
 
-        print(f"[DBG_DEC] attn_gathered={attn_gathered.shape} wo={self.wo.shape}", flush=True)
-        out = ttnn.linear(
-            attn_gathered,
-            self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-            dtype=ttnn.bfloat16,
-        )
-        ttnn.deallocate(attn_gathered)
-        return out
+        # nlp_concat_heads_decode may tile-pad the batch dim; slice back to actual batch.
+        if attn_out.shape[2] != self.max_batch_size:
+            attn_out = ttnn.to_memory_config(attn_out, ttnn.DRAM_MEMORY_CONFIG)
+            attn_out = attn_out[:, :, : self.max_batch_size, :]
+
+        # AllGather local-head outputs across T3K devices, then apply wo.
+        # Each device produced [1, 1, batch, n_local_heads*head_dim]; after gather → [1,1,batch,4096].
+        return self._gather_and_project(attn_out, seq_len=1)
 
     # ------------------------------------------------------------------ #
     # Prefill (full sequence)
@@ -385,15 +365,11 @@ class TtMolmo2TextAttention(LightweightModule):
         ttnn.deallocate(q_rotated)
         ttnn.deallocate(k_rotated)
 
-        # KV cache fill: store bfloat8_b copies for memory efficiency
+        # KV cache fill: bfloat16 (cache dtype matches; no typecast needed)
         keys = kv_cache[0] if kv_cache else self.layer_past[0]
         values = kv_cache[1] if kv_cache else self.layer_past[1]
-        k_8b = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
-        v_8b = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
-        ttnn.fill_cache(keys, k_8b, user_id % self.max_batch_size)
-        ttnn.fill_cache(values, v_8b, user_id % self.max_batch_size)
-        ttnn.deallocate(k_8b)
-        ttnn.deallocate(v_8b)
+        ttnn.fill_cache(keys, k, user_id % self.max_batch_size)
+        ttnn.fill_cache(values, v, user_id % self.max_batch_size)
 
         # SDPA: is_causal and attn_mask are mutually exclusive in TTNN SDPA.
         # When a custom mask is provided (image-bidir override), it already encodes
