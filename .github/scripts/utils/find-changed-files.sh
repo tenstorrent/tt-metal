@@ -20,7 +20,6 @@ TTTRAIN_CHANGED=false
 TOOLS_CHANGED=false
 ANY_CODE_CHANGED=false
 DOCS_CHANGED=false
-MODEL_CHARTS_CHANGED=false
 MODELS_CHANGED=false
 BUILD_WORKFLOWS_CHANGED=false
 LLK_WORMHOLE_CHANGED=false
@@ -131,9 +130,6 @@ while IFS= read -r FILE; do
             ;;
         docs/**|**/*.rst|**/*.md)
             DOCS_CHANGED=true
-            if [[ "$FILE" == "README.md" || "$FILE" == "models/README.md" ]]; then
-               MODEL_CHARTS_CHANGED=true
-            fi
             ;;
         models/**)
             MODELS_CHANGED=true
