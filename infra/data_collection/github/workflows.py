@@ -37,61 +37,69 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     def parse_ts(line):
         try:
             line = line.strip()
-
-            # Only accept proper GitHub timestamps at start
             if not timestamp_pattern.match(line):
                 return None
 
             ts = line.split(" ")[0].replace("z", "Z")
-
-            # Remove Z
             ts = ts[:-1]
 
-            # Fix GitHub fractional seconds (7 digits → 6)
             if "." in ts:
                 base, frac = ts.split(".")
                 ts = f"{base}.{frac[:6]}"
 
             return datetime.fromisoformat(ts)
-
-        except Exception:
+        except:
             return None
 
     def strip_ansi(text):
         return re.sub(r'\x1B[@-_][0-?]*[ -/]*[@-~]', '', text)
 
-    with open(log_file, "r") as f:
-        log = f.read()
+    def split_attempts(lines):
+        attempts = []
+        current_block = []
+        current_ts = None
 
-    log = strip_ansi(log)
+        for line in lines:
+            ts = parse_ts(line)
+            if ts:
+                current_ts = ts
+
+            if "===== START of output =====" in line:
+                current_block = []
+                continue
+
+            if "===== END of output =====" in line:
+                if current_block and current_ts:
+                    attempts.append((current_block, current_ts))
+                current_block = []
+                continue
+
+            if current_block is not None:
+                current_block.append(line)
+
+        return attempts
+
+    with open(log_file, "r") as f:
+        log = strip_ansi(f.read())
+
     lines = log.splitlines()
 
     capturing = False
     reset_lines = []
-    pre_reset_buffer = []
-    last_seen_ts = None
 
     for line in lines:
-        line_clean = line.strip()
-        lower = line_clean.lower()
+        lower = line.lower()
 
-        ts = parse_ts(line)
-        if ts:
-            last_seen_ts = ts
-
-        pre_reset_buffer.append((line, last_seen_ts))
-        if len(pre_reset_buffer) > 20:
-            pre_reset_buffer.pop(0)
-
-        if "tt-smi reset" in lower:
+        if "starting tt-smi reset" in lower:
             capturing = True
-            reset_lines.extend(pre_reset_buffer)
-            logger.info(f"FOUND RESET LINE: {line_clean}")
 
         if capturing:
-            reset_lines.append((line, last_seen_ts))
+            reset_lines.append(line)
 
-        if capturing and "tt-smi reset was successful" in lower.replace(".", ""):
+        if capturing and (
+            "tt-smi reset was successful" in lower
+            or "runner will now shutdown" in lower
+        ):
             break
 
     if not reset_lines:
@@ -103,16 +111,10 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
             "error_summary": "No tt-smi reset found",
         }
 
-    joined = "\n".join([l for (l, _) in reset_lines]).lower()
+    joined = "\n".join(reset_lines).lower()
 
     if "tt-smi reset was successful" in joined:
-
-        ts_list = [ts for (_, ts) in reset_lines if ts]
-
-        print("\nDEBUG TIMESTAMPS:")
-        for (l, ts) in reset_lines:
-            if ts:
-                print("OK:", ts, "|", l)
+        ts_list = [parse_ts(l) for l in reset_lines if parse_ts(l)]
 
         duration = None
         if len(ts_list) >= 2:
@@ -127,6 +129,38 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
             "total_reset_time_sec": duration,
             "error_summary": None,
         }
+
+    attempts = split_attempts(reset_lines)
+
+    total_time = 0
+
+    for i in range(len(attempts)):
+        _, ts = attempts[i]
+
+        if i < len(attempts) - 1:
+            next_ts = attempts[i + 1][1]
+            duration = (next_ts - ts).total_seconds()
+        else:
+            duration = 5  # fallback
+
+        total_time += duration
+
+    # extract error summary
+    error_lines = []
+    for line in reset_lines:
+        lower = line.lower()
+        if "error" in lower or "failed" in lower:
+            error_lines.append(line.strip())
+
+    error_summary = "\n".join(error_lines[:5]) if error_lines else None
+
+    return {
+        "final_status": "FAILURE",
+        "num_reset_attempts": len(attempts),
+        "num_reset_retries": len(attempts) - 1,
+        "total_reset_time_sec": total_time,
+        "error_summary": error_summary,
+    }
 
 def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int):
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
