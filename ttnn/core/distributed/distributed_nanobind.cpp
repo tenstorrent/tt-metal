@@ -263,6 +263,29 @@ void py_module(nb::module_& mod) {
             })
         .def("get_fabric_node_id", &MeshDevice::get_fabric_node_id, nb::arg("coord"))
         .def(
+            "is_fabric_degraded",
+            [](const MeshDevice& self) {
+                for (auto* dev : self.get_devices()) {
+                    if (dev->is_fabric_relay_path_broken() ||
+                        dev->is_fabric_channels_not_ready_for_traffic()) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            R"doc(
+              Returns True if any sub-device has a broken fabric relay path or channels not
+              ready for traffic after a degraded-cluster fabric init.
+
+              Use this as a skip guard in tests that require a healthy T3K fabric
+              (e.g. tests that dispatch AllGather to non-MMIO devices):
+
+              .. code-block:: python
+
+                  if mesh_device.is_fabric_degraded():
+                      pytest.skip("cluster degraded — fabric broken on >=1 device")
+            )doc")
+        .def(
             "create_submesh",
             &MeshDevice::create_submesh,
             nb::arg("submesh_shape"),

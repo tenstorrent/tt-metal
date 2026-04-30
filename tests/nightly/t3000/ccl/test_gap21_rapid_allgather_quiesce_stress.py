@@ -66,6 +66,16 @@ def test_rapid_allgather_quiesce_stress(mesh_device):
             f"Need >= 4 devices for non-MMIO relay path stress; have {num_devices}"
         )
 
+    # FIX RY (#42429): skip if fabric init detected a degraded cluster (broken relay
+    # path or channels not ready on any device).  Running AllGather on a degraded
+    # cluster hangs waiting on a non-MMIO CQ that has no dispatch firmware.
+    if mesh_device.is_fabric_degraded():
+        pytest.skip(
+            "FIX RY (#42429): fabric degraded on >=1 device "
+            "(fabric_relay_path_broken or channels_not_ready_for_traffic) — "
+            "skipping GAP-21 AllGather stress to avoid hang"
+        )
+
     logger.info(
         f"GAP-21: starting {_NUM_CYCLES} AllGather+quiesce cycles on "
         f"{num_devices}-device mesh"
