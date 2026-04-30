@@ -119,7 +119,7 @@ def _apply_fast_activations_patch():
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
-        packer_l1_acc=True,
+        packer_l1_acc=False,
     )
 
 
