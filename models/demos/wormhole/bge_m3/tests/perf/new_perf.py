@@ -7,6 +7,10 @@ Focused BGE-M3 performance test.
 Runs only batch=1, data-parallel=1, input sequence length=512.
 When run under Tracy, the measured inference forward emits `start`/`stop`
 signposts so reports can exclude compile/warmup.
+
+This harness mirrors the optimized fixed-input runner path from `perf.py`:
+precompute position IDs and the rank-4 additive attention mask outside the
+signposted forward so the profile reflects the trace-replay serving path.
 """
 
 import pytest
@@ -52,6 +56,30 @@ def to_ttnn_ids(ids: torch.Tensor, mesh_device) -> ttnn.Tensor:
     )
 
 
+def to_ttnn_additive_attention_mask(additive_mask: torch.Tensor, mesh_device, dtype: ttnn.DataType) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        additive_mask.to(torch.bfloat16),
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def build_position_ids(input_ids: torch.Tensor, pad_token_id: int) -> torch.Tensor:
+    """XLM-RoBERTa-compatible padding-aware position IDs."""
+    mask = (input_ids != int(pad_token_id)).to(torch.int64)
+    incremental_indices = torch.cumsum(mask, dim=1) * mask
+    return (incremental_indices + int(pad_token_id)).to(torch.int64)
+
+
+def build_additive_attention_mask(attention_mask: torch.Tensor, seq_len: int) -> torch.Tensor:
+    """Build pre-expanded `[B, 1, S, S]` additive SDPA mask from HF `{0, 1}` mask."""
+    keep = attention_mask.to(torch.bfloat16)
+    additive = (1.0 - keep) * -100000.0
+    return additive.unsqueeze(1).unsqueeze(1).expand(-1, -1, int(seq_len), -1).contiguous()
+
+
 def mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
     mask = attention_mask.unsqueeze(-1).to(last_hidden_state.dtype)
     summed = (last_hidden_state * mask).sum(dim=1)
@@ -76,13 +104,20 @@ def run_forward(
     input_ids,
     attention_mask,
     token_type_ids,
+    position_ids,
+    model_attention_mask,
     profiler=None,
     step_name=None,
     emit_tracy_signposts=False,
 ):
     tt_input_ids = to_ttnn_ids(input_ids, mesh_device)
-    tt_attention_mask = to_ttnn_ids(attention_mask, mesh_device)
+    tt_attention_mask = to_ttnn_additive_attention_mask(
+        model_attention_mask,
+        mesh_device,
+        dtype=getattr(model, "_mask_dtype", ttnn.bfloat16),
+    )
     tt_token_type_ids = to_ttnn_ids(token_type_ids, mesh_device)
+    tt_position_ids = to_ttnn_ids(position_ids, mesh_device)
 
     if profiler is not None and step_name is not None:
         profiler.start(step_name)
@@ -94,7 +129,7 @@ def run_forward(
             input_ids=tt_input_ids,
             attention_mask=tt_attention_mask,
             token_type_ids=tt_token_type_ids,
-            position_ids=None,
+            position_ids=tt_position_ids,
         )
         ttnn.synchronize_device(mesh_device)
     finally:
@@ -140,10 +175,22 @@ def test_embedding_perf(mesh_device, batch_size, seq_len, num_iterations, data_p
     logger.info(f"Model built in {profiler.get_duration('build_model'):.1f}s")
 
     input_ids, attention_mask, token_type_ids = generate_synthetic_inputs(tokenizer)
+    position_ids = build_position_ids(input_ids, model_args.pad_token_id)
+    model_attention_mask = build_additive_attention_mask(attention_mask, seq_len)
     total_input_tokens = batch_size * seq_len
 
     logger.info("Compiling (first forward)...")
-    embeddings = run_forward(model, mesh_device, input_ids, attention_mask, token_type_ids, profiler, "compile_prefill")
+    embeddings = run_forward(
+        model,
+        mesh_device,
+        input_ids,
+        attention_mask,
+        token_type_ids,
+        position_ids,
+        model_attention_mask,
+        profiler,
+        "compile_prefill",
+    )
     logger.info(f"Compile forward: {profiler.get_duration('compile_prefill'):.2f}s")
 
     logger.info(f"Running {num_iterations} benchmark iteration...")
@@ -155,6 +202,8 @@ def test_embedding_perf(mesh_device, batch_size, seq_len, num_iterations, data_p
             input_ids,
             attention_mask,
             token_type_ids,
+            position_ids,
+            model_attention_mask,
             profiler,
             f"inference_prefill_{i}",
             emit_tracy_signposts=(i == 0),
@@ -243,10 +292,22 @@ if __name__ == "__main__":
         profiler = BenchmarkProfiler()
         _model_args, model, tokenizer = build_model(device)
         input_ids, attention_mask, token_type_ids = generate_synthetic_inputs(tokenizer)
+        position_ids = build_position_ids(input_ids, _model_args.pad_token_id)
+        model_attention_mask = build_additive_attention_mask(attention_mask, SEQ_LEN)
         total_input_tokens = BATCH_SIZE * SEQ_LEN
 
         logger.info("Compile run...")
-        _ = run_forward(model, device, input_ids, attention_mask, token_type_ids, profiler, "compile_prefill")
+        _ = run_forward(
+            model,
+            device,
+            input_ids,
+            attention_mask,
+            token_type_ids,
+            position_ids,
+            model_attention_mask,
+            profiler,
+            "compile_prefill",
+        )
 
         logger.info(f"Benchmarking {args.iterations} iteration...")
         times = []
@@ -257,6 +318,8 @@ if __name__ == "__main__":
                 input_ids,
                 attention_mask,
                 token_type_ids,
+                position_ids,
+                model_attention_mask,
                 profiler,
                 f"inference_{i}",
                 emit_tracy_signposts=(i == 0),
