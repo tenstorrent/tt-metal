@@ -128,6 +128,58 @@ Two T3K-specific findings worth flagging:
    The relative *improvement* of hybrid over Track A holds on both
    platforms; the optimal W is platform-dependent.
 
+### Needle-in-haystack (`test_needle_in_haystack.py`, 2026-04-30)
+
+End-to-end prefill + TQ-migrate + decode pipeline. Builds a haystack of
+geography filler + a unique needle sentence inserted at depth d, ends with
+"What is the secret access code?", checks whether the decoded output
+contains the needle value (`banana-7421`).
+
+| Platform | Length | Mode | Depth | Result |
+|---|---:|---|---:|---|
+| N150 | 4K | Track A | 0.5 | PASS |
+| N150 | 4K | Hybrid W=128 | 0.5 | PASS |
+| N150 | 16K | Track A | 0.5 | DRAM OOM |
+| T3K | 4K | Track A | 0.5 | PASS |
+| T3K | 32K | Track A | 0.5 | PASS |
+| T3K | 64K | Track A | 0.5 | PASS (clean: `banana-7421.<\|eot_id\|>`) |
+| T3K | 128K | Track A | 0.5 | PASS |
+| T3K | 128K | Hybrid W=128 | 0.5 | PASS |
+
+**Findings:**
+
+1. **3-bit TQ alone retrieves needles at full 128 K** on T3K — Track A is
+   sufficient for mid-context retrieval. The W-sweep accuracy gap (Track A
+   88.9 % → Hybrid W=64 94.1 % top-1) does *not* show up here because
+   needle retrieval is a point measurement and the needle at depth 0.5 is
+   far from the question, so both modes use TQ for it. The recency window
+   helps when the answer relies on recent FP context — needle-at-depth-0.5
+   doesn't exercise that.
+
+2. **N150 single-chip can't run 16 K** — at 16 K the model + paged
+   layer_past + TQ index/norm cache + activations exceed 12 GB DRAM. The
+   existing `migrate_prefill_kv_to_turbo_quant` in `eval_e2e_prefill.py`
+   needs 2 GB contiguous; even an interleaved one-layer-at-a-time migrate
+   couldn't squeeze in. T3K (8-chip sharded DRAM) handles up to 128 K.
+
+3. **Two infra additions worth keeping:**
+   - `migrate_prefill_kv_interleaved` in `test_needle_in_haystack.py`:
+     processes one layer at a time, peak DRAM growth bounded to one
+     tensor's worth. Slower than the batched migrate (potential
+     fragmentation, slower decode) but works at long context.
+   - `populate_fp_ring_from_prefill` in `test_needle_in_haystack.py`:
+     after prefill+migrate, copies the last W prompt positions from
+     layer_past (paged BF8) into the FP ring buffer. Required for hybrid
+     to have a non-empty recent window at decode start.
+
+**To make the test discriminate Track A from Hybrid**, would need:
+- A *harder* retrieval (multi-needle with distractors, verbatim long-span
+  recall, cross-document reasoning), or
+- A retrieval where the answer depends on the last W tokens (e.g.,
+  needle in the question itself, or chain-of-thought that references
+  recent generation). For the current single-needle-at-depth-0.5 test,
+  3-bit TQ is sufficient at 128K.
+
 ## 🚀 RESUME HERE — TurboQuant 128K plan complete (2026-04-29)
 
 Status of the **TurboQuant 128K — Two-Track Comparison** plan:
