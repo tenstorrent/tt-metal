@@ -10,11 +10,13 @@ namespace dfb {
 
 enum AccessPattern : uint8_t {
     STRIDED,
-    BLOCKED,
+    ALL,
     UNKNOWN,
 };
 
 constexpr uint8_t NUM_DFBS = 32;
+// Pack TRISC stores only active logical DFBs in a compact local array to reduce local-memory pressure.
+constexpr uint8_t MAX_ACTIVE_DFBS_PACK = 16;
 
 constexpr uint8_t NUM_TENSIX = 4;
 constexpr uint8_t NUM_TILE_COUNTERS_PER_TENSIX = 32;
@@ -97,7 +99,7 @@ struct dfb_initializer_per_risc_t {  // 44 bytes
     struct {
         uint8_t num_tcs_to_rr : 4;   // 0..8, number of TCs to round-robin (max 4 but keeping space)
         uint8_t tc_init_done : 1;
-        uint8_t broadcast_tc : 1;    // DM-DM BLOCKED: producer posts to all TCs instead of round-robin
+        uint8_t broadcast_tc : 1;    // DM-DM ALL: producer posts to all TCs instead of round-robin
         uint8_t reserved : 2;
     } __attribute__((packed)) num_tcs_and_init;
     struct {

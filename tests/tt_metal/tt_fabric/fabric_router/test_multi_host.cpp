@@ -5,8 +5,11 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <array>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 #include <tt_stl/span.hpp>
 #include <cstring>

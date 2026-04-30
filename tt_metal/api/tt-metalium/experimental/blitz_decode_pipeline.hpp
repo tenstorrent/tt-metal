@@ -17,6 +17,6 @@ struct BlitzDecodePipelineStage {
     ::tt::tt_metal::distributed::MeshCoordinate exit_node_coord;
 };
 
-std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline();
+std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initialize_loopback = true);
 
 }  // namespace tt::tt_metal::experimental::blitz

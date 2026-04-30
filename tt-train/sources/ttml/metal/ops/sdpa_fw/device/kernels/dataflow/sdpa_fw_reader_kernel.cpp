@@ -27,12 +27,13 @@ void kernel_main() {
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
 #endif
 
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);              // num tile in inner dim in query (d/TILE_W)
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);               // (S / TILE_H)
-    constexpr uint32_t q_heads = get_compile_time_arg_val(2);          // num of heads in query
-    constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // num of heads per group
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);      // num tile in inner dim in query/key (d_qk/TILE_W)
+    constexpr uint32_t vWt = get_compile_time_arg_val(1);      // num tile in inner dim in value (d_v/TILE_W)
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);       // (S / TILE_H)
+    constexpr uint32_t q_heads = get_compile_time_arg_val(3);  // num of heads in query
+    constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // num of heads per group
     constexpr uint32_t pairs_per_seq = Ht / 2;
-    constexpr auto query_args = TensorAccessorArgs<4>();
+    constexpr auto query_args = TensorAccessorArgs<5>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
 
@@ -67,14 +68,16 @@ void kernel_main() {
         const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;
         const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
         const uint32_t kv_group_idx = q_head_idx / heads_per_group;
-        const uint32_t kv_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
+        const uint32_t key_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
+        const uint32_t value_offset = (batch_idx * num_of_groups + kv_group_idx) * vWt * Ht;
         const uint32_t q_row_tile = global_row_idx % Ht;
         const uint32_t num_kv_tiles_to_read = q_row_tile + 1;
 
         for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
-            const uint32_t kv_start_idx = kv_offset + h * qWt;
-            read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
-            read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
+            const uint32_t key_start_idx = key_offset + h * qWt;
+            read_tiles_by_row(cb_key, key_address_generator, key_start_idx, qWt, tile_bytes, qWt);
+            const uint32_t value_start_idx = value_offset + h * vWt;
+            read_tiles_by_row(cb_value, value_address_generator, value_start_idx, vWt, tile_bytes, vWt);
         }
     };
 
@@ -109,8 +112,10 @@ void kernel_main() {
         // calculate which group of K and V we need to read for this head of Q
         const uint32_t kv_group_idx = q_head_idx / heads_per_group;
 
-        const uint32_t kv_offset =
-            (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;  // jump to start of relevant batch/group of K and V
+        const uint32_t key_offset =
+            (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;  // jump to start of relevant batch/group of K
+        const uint32_t value_offset =
+            (batch_idx * num_of_groups + kv_group_idx) * vWt * Ht;  // jump to start of relevant batch/group of V
 
         // q_row_tile = position within sequence (0 to Ht-1)
         const uint32_t q_row_tile = global_row_idx % Ht;
@@ -128,8 +133,8 @@ void kernel_main() {
 #endif
 
         for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
-            const uint32_t kv_start_idx = kv_offset + h * qWt;  // jump to the next row
-            read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
+            const uint32_t key_start_idx = key_offset + h * qWt;  // jump to the next row of K
+            read_tiles_by_row(cb_key, key_address_generator, key_start_idx, qWt, tile_bytes, qWt);
 
 #ifdef USE_ATTN_MASK
             // read one tile of attn_mask for current row of K and V
@@ -137,7 +142,8 @@ void kernel_main() {
             read_one_tile(cb_attn_mask, mask_address_generator, mask_offset + h);
 #endif
             // Note: For CAUSAL_MASK, the mask tile is generated once by writer and reused by compute
-            read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
+            const uint32_t value_start_idx = value_offset + h * vWt;  // jump to the next row of V
+            read_tiles_by_row(cb_value, value_address_generator, value_start_idx, vWt, tile_bytes, vWt);
         }
     }
 #endif

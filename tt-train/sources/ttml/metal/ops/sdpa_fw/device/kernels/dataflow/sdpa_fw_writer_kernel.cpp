@@ -19,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);      // number of tiles in inner dimension
+    constexpr uint32_t vWt = get_compile_time_arg_val(0);      // number of tiles in output/value inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
     constexpr uint32_t pairs_per_seq = Ht / 2;
@@ -52,7 +52,7 @@ void kernel_main() {
     generate_causal_mask_tile(cb_attn_mask);
 #endif
 
-    const uint32_t tiles_per_head = qWt;
+    const uint32_t tiles_per_head = vWt;
     constexpr uint32_t kIntermediateTilesPerRow = 1U;
 
 #ifdef BALANCED_PARALLELISM
