@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -197,19 +198,10 @@ def run(
 
     import math
 
-    # The framework expands input_a_shape to the GLOBAL shape (mesh-shard
-    # factor already applied along the shard axis). The trace records arg1/
-    # arg2 as PER-CHIP target shapes, so torch.reshape would fail on numel.
-    # Scale the target shapes by the input's shard factor along the matching
-    # dim so the torch reference matches the kernel's reassembled output.
-    # The framework expands input_a_shape to GLOBAL but the trace records
-    # tgt_shape/arg2 as PER-CHIP. The kernel reshapes per-chip then the
-    # reassembler concats along the output shard axis. Faithfully reproducing
-    # that here (split → per-chip reshape → concat) is required because
-    # torch.reshape on the global tensor produces a different elementwise
-    # ordering when the per-chip reshape mixes the shard axis with other dims.
-    _shard_axis, _shard_factor = _input_shard_axis_and_factor(input_a_tensor_placement)
-
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology. ttnn.reshape runs per-chip with the per-chip
+    # target shape, and the gathered output is the per-chip reshape tiled
+    # along the shard axis — reconcile_golden_to_actual handles that below.
     def _per_chip_reshape(per_chip_input):
         per_chip_numel = per_chip_input.numel()
         per_chip_tgt_numel = math.prod(tgt_shape)
@@ -222,24 +214,10 @@ def run(
             return out[slices]
         return torch.reshape(per_chip_input, tgt_shape)
 
-    # The torch golden is only used for PCC; the trace-validation goal is for
-    # ttnn.reshape to be called with the master arg0 below. If the per-chip
-    # reshape can't be computed (e.g., target shape is global but input was
-    # already sharded by the framework), keep going with a dummy golden so
-    # ttnn.reshape still executes and the trace is captured.
     try:
-        if _shard_factor > 1 and _shard_axis is not None:
-            n_in = torch_input.ndim
-            in_axis = _shard_axis if _shard_axis >= 0 else _shard_axis + n_in
-            chunks = torch.chunk(torch_input, _shard_factor, dim=in_axis)
-            per_chip_outs = [_per_chip_reshape(c) for c in chunks]
-            # Output preserves the same negative-index shard axis as the input
-            # (typical for ttnn.reshape; e.g. Shard(-1) → Shard(-1)).
-            torch_output = torch.cat(per_chip_outs, dim=_shard_axis)
-        else:
-            torch_output = _per_chip_reshape(torch_input)
+        torch_output = _per_chip_reshape(torch_input)
     except RuntimeError:
-        torch_output = torch_input  # placeholder; PCC will likely fail but trace will capture
+        torch_output = torch_input  # placeholder; trace still captured even if PCC fails
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -286,5 +264,7 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)
     return [pcc, e2e_perf]

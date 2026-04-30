@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, parse_dtype
@@ -197,5 +198,9 @@ def run(
     else:
         pcc_threshold = 0.999
 
+    if is_mesh_device:
+        torch_output_tensor_f32 = reconcile_golden_to_actual(
+            torch_output_tensor_f32, output_tensor_f32, input_a_tensor_placement
+        )
     pcc = check_with_pcc(torch_output_tensor_f32, output_tensor_f32, pcc_threshold)
     return [pcc, e2e_perf]

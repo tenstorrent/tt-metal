@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -151,18 +152,11 @@ def run(
             slices.append(slice(start, end))
         else:
             slices.append(slice(start, end, step))
-    # Per-chip slice + concat along the input shard axis. The trace records
-    # slice_start/end as per-chip values; the kernel slices each chip
-    # independently and the mesh assembler concats along the shard axis.
-    _slc_shard_axis, _slc_shard_factor = _slice_input_shard_axis_and_factor(input_a_tensor_placement)
-    if _slc_shard_factor > 1 and _slc_shard_axis is not None:
-        n_in = torch_input_tensor_a.ndim
-        chunk_axis = _slc_shard_axis if _slc_shard_axis >= 0 else _slc_shard_axis + n_in
-        chunks = torch.chunk(torch_input_tensor_a, _slc_shard_factor, dim=chunk_axis)
-        per_chip = [c[tuple(slices)] for c in chunks]
-        torch_output_tensor = torch.cat(per_chip, dim=_slc_shard_axis)
-    else:
-        torch_output_tensor = torch_input_tensor_a[tuple(slices)]
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology and slices it independently. The gathered output
+    # is the per-chip slice tiled along the shard axis — handled by
+    # reconcile_golden_to_actual after mesh_tensor_to_torch.
+    torch_output_tensor = torch_input_tensor_a[tuple(slices)]
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -203,5 +197,7 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

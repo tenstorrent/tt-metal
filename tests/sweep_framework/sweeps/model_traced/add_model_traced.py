@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     broadcast_torch_inputs_to_global,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -228,6 +229,15 @@ def run(
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
+
+    # V2 traced configs store per-chip input shapes; when both inputs share that
+    # shape broadcast_torch_inputs_to_global is a no-op, so torch_output_tensor
+    # stays per-chip while mesh_tensor_to_torch returns the gathered global.
+    # Tile golden up to match using whichever input placement carries the shard.
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
 
     # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)

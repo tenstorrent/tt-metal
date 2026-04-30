@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -197,47 +198,16 @@ def run(
     _scat_in_axis_norm = (
         (_scat_in_axis if _scat_in_axis >= 0 else _scat_in_axis + n_in) if _scat_in_axis is not None else None
     )
-    _per_chip_dim_size = (
-        shape[dim] // _scat_in_factor if _scat_in_factor > 1 and _scat_in_axis_norm == _dim_norm else shape[dim]
-    )
-    torch_index_tensor = torch.randint(0, _per_chip_dim_size, index_shape, dtype=torch.int64)
+    # In trace-validation mode, create_tensor_on_mesh routes shard placements
+    # through replicate_with_topology, so every chip receives the FULL per-chip
+    # input/index/src and computes a full scatter. The gathered result is the
+    # per-chip scatter tiled along the shard axis — handled by reconcile_golden_to_actual.
+    torch_index_tensor = torch.randint(0, shape[dim], index_shape, dtype=torch.int64)
     torch_src_tensor = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), src_dtype)(
         src_shape
     )
     torch_src_tensor_for_golden = torch_src_tensor.to(torch_input_tensor.dtype)
-
-    def _chunk_or_replicate(t, factor, axis, factor_dim_norm):
-        if factor <= 1 or axis is None or factor_dim_norm is None:
-            return [t] * max(factor, 1)
-        return list(torch.chunk(t, factor, dim=factor_dim_norm))
-
-    if _scat_in_factor > 1 and _scat_in_axis_norm is not None and _dim_norm == _scat_in_axis_norm:
-        n_chips = _scat_in_factor
-        in_chunks = list(torch.chunk(torch_input_tensor, n_chips, dim=_scat_in_axis_norm))
-        idx_axis_norm = (
-            (_scat_idx_axis if _scat_idx_axis >= 0 else _scat_idx_axis + torch_index_tensor.ndim)
-            if _scat_idx_axis is not None
-            else None
-        )
-        src_axis_norm = (
-            (_scat_src_axis if _scat_src_axis >= 0 else _scat_src_axis + torch_src_tensor_for_golden.ndim)
-            if _scat_src_axis is not None
-            else None
-        )
-        idx_chunks = (
-            list(torch.chunk(torch_index_tensor, n_chips, dim=idx_axis_norm))
-            if _scat_idx_factor == n_chips and idx_axis_norm is not None
-            else [torch_index_tensor] * n_chips
-        )
-        src_chunks = (
-            list(torch.chunk(torch_src_tensor_for_golden, n_chips, dim=src_axis_norm))
-            if _scat_src_factor == n_chips and src_axis_norm is not None
-            else [torch_src_tensor_for_golden] * n_chips
-        )
-        per_chip = [torch.scatter(in_c, dim, ix_c, sr_c) for in_c, ix_c, sr_c in zip(in_chunks, idx_chunks, src_chunks)]
-        torch_output_tensor = torch.cat(per_chip, dim=_scat_in_axis_norm)
-    else:
-        torch_output_tensor = torch.scatter(torch_input_tensor, dim, torch_index_tensor, torch_src_tensor_for_golden)
+    torch_output_tensor = torch.scatter(torch_input_tensor, dim, torch_index_tensor, torch_src_tensor_for_golden)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -299,5 +269,7 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

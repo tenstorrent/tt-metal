@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -149,17 +150,9 @@ def run(
     # wide. Mirror the kernel: chunk along the shard axis, run torch.topk on
     # each chunk, and concat the values along that same axis.
     _topk_shard_axis, _topk_shard_factor = _topk_input_shard_axis_and_factor(input_a_tensor_placement)
-    if _topk_shard_factor > 1 and _topk_shard_axis is not None:
-        n_in = torch_input_tensor_a.ndim
-        chunk_axis = _topk_shard_axis if _topk_shard_axis >= 0 else _topk_shard_axis + n_in
-        chunks = torch.chunk(torch_input_tensor_a, _topk_shard_factor, dim=chunk_axis)
-        per_chip = [torch.topk(c, k_val, dim=dim_val, largest=largest, sorted=sorted_flag) for c in chunks]
-        torch_values = torch.cat([pv for pv, _ in per_chip], dim=_topk_shard_axis)
-        torch_indices = torch.cat([pi for _, pi in per_chip], dim=_topk_shard_axis)
-    else:
-        torch_values, torch_indices = torch.topk(
-            torch_input_tensor_a, k_val, dim=dim_val, largest=largest, sorted=sorted_flag
-        )
+    torch_values, torch_indices = torch.topk(
+        torch_input_tensor_a, k_val, dim=dim_val, largest=largest, sorted=sorted_flag
+    )
     torch_output_tensor = torch_values
 
     is_host = storage_type and "HOST" in str(storage_type)
@@ -228,5 +221,7 @@ def run(
     output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import master config loader for traced model configurations
@@ -166,14 +167,11 @@ def run(
     # Sharded-aware reference: when input is sharded along hidden_dim, the
     # kernel runs per-chip with per_chip head_dim = global / mesh_factor and
     # the mesh assembler concats Q outputs along the input shard axis.
-    _qkvd_shard_axis, _qkvd_shard_factor = _qkvd_input_shard_axis_and_factor(input_a_tensor_placement)
-    if len(shape) == 4 and _qkvd_shard_factor > 1 and _qkvd_shard_axis is not None:
-        n_in = torch_input_tensor_a.ndim
-        chunk_axis = _qkvd_shard_axis if _qkvd_shard_axis >= 0 else _qkvd_shard_axis + n_in
-        chunks = torch.chunk(torch_input_tensor_a, _qkvd_shard_factor, dim=chunk_axis)
-        per_chip_q = [_qkvd_per_chip_q(c, num_heads, num_kv_heads) for c in chunks]
-        torch_output_tensor = torch.cat(per_chip_q, dim=_qkvd_shard_axis)
-    elif len(shape) == 4:
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology. The op runs per-chip and the gathered output is
+    # the per-chip Q tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
+    if len(shape) == 4:
         seq_len = shape[1]
         batch = shape[2]
         hidden_dim = shape[3]
@@ -221,5 +219,7 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - using proper torch reference from unit test
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     return [pcc, e2e_perf]

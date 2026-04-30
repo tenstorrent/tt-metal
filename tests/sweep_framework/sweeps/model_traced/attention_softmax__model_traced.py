@@ -9,6 +9,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
@@ -204,6 +205,10 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Check PCC - using 0.999 as in transformer sweep test
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     # Return result in the format expected by sweeps_runner

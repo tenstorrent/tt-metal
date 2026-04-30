@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     replicate_with_topology,
     mesh_tensor_to_torch,
     get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 # Import master config loader for traced model configurations
@@ -311,31 +312,13 @@ def run(
     torch_k_golden = torch_k_for_golden.to(torch.float32)
     torch_v_golden = torch_v_for_golden.to(torch.float32)
 
-    # PyTorch reference. At runtime Q/K/V are sharded on the same axis (Shard(d))
-    # and each chip computes SDPA on its per-chip slice; mesh_tensor_to_torch
-    # then concatenates the per-chip outputs along that axis. Mirror that
-    # slice-then-concat behavior in the golden so PCC tracks the actual op.
-    _sdpa_axis, _sdpa_factor = _sdpa_input_shard_axis_and_factor(input_a_tensor_placement)
-    if _sdpa_factor > 1 and _sdpa_axis is not None:
-        _ax_q = _sdpa_axis if _sdpa_axis >= 0 else _sdpa_axis + torch_q_golden.ndim
-        # Same Shard axis for K/V (verified by V2 placements). If absent, fall
-        # back to the same dim relative to K/V tensors.
-        _ax_k = _sdpa_axis if _sdpa_axis >= 0 else _sdpa_axis + torch_k_golden.ndim
-        _ax_v = _sdpa_axis if _sdpa_axis >= 0 else _sdpa_axis + torch_v_golden.ndim
-        q_chunks = torch.chunk(torch_q_golden, _sdpa_factor, dim=_ax_q)
-        k_chunks = torch.chunk(torch_k_golden, _sdpa_factor, dim=_ax_k)
-        v_chunks = torch.chunk(torch_v_golden, _sdpa_factor, dim=_ax_v)
-        per_chip = [
-            torch.nn.functional.scaled_dot_product_attention(
-                q, k, v, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
-            )
-            for q, k, v in zip(q_chunks, k_chunks, v_chunks)
-        ]
-        torch_output_golden = torch.cat(per_chip, dim=_ax_q)
-    else:
-        torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
-            torch_q_golden, torch_k_golden, torch_v_golden, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
-        )
+    # Trace-validation mode: every chip receives the FULL per-chip Q/K/V via
+    # replicate_with_topology and runs SDPA on them. The gathered output is the
+    # per-chip SDPA tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
+    torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
+        torch_q_golden, torch_k_golden, torch_v_golden, attn_mask=None, dropout_p=0.0, is_causal=bool(is_causal)
+    )
 
     # Check for attention_sink named tensor kwarg (pre-allocated tensor)
     attention_sink_info = extract_named_tensor_kwargs(kwargs, "attention_sink")
@@ -435,6 +418,10 @@ def run(
     # the unmodeled attention_sink scalar. Cap at 0.95 to flag regressions
     # without rejecting that noise. TODO: model attention_sink in the golden.
     pcc_threshold = min(pcc_threshold, 0.95)
+    if is_mesh_device:
+        torch_output_golden = reconcile_golden_to_actual(
+            torch_output_golden, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
     pcc = check_with_pcc(torch_output_golden, output_tensor, pcc_threshold)
 
     return [pcc, e2e_perf]

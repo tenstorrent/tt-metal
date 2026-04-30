@@ -15,6 +15,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import master config loader for traced model configurations
@@ -334,7 +335,10 @@ def run(
     if len(shape_a) == 4:
         # ttnn paged_sdpa_decode returns logical shape (B, H_q, num_users, D);
         # mesh_tensor_to_torch strips the tile-pad, so do not pad the golden.
-        _, _factor = _paged_sdpa_input_shard_axis_and_factor(input_a_tensor_placement)
+        # Trace-validation mode: every chip receives the FULL per-chip Q/K/V via
+        # replicate_with_topology and runs paged-SDPA on them. Pass factor=1 so
+        # the golden does NOT chunk; reconcile_golden_to_actual handles the
+        # shard-axis tile of the gathered output.
         _sliding_window = kwargs.get("sliding_window_size")
         if _sliding_window == "__ABSENT__":
             _sliding_window = None
@@ -346,7 +350,7 @@ def run(
             torch_input_e,
             num_users=shape_a[2],
             padded_users=shape_a[2],
-            factor=_factor,
+            factor=1,
             sliding_window_size=_sliding_window,
         ).to(torch_input_a.dtype)
     else:
@@ -505,5 +509,9 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     return [pcc, e2e_perf]

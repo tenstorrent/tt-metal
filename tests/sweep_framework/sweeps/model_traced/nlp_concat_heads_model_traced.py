@@ -15,6 +15,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 # Import master config loader for traced model configurations
@@ -133,14 +134,11 @@ def run(
     # the kernel runs this per-chip and the mesh assembler concats along the
     # input shard axis; concat-of-per-chip differs element-wise from the
     # global op, so we mirror the kernel.
-    _nch_shard_axis, _nch_shard_factor = _nch_input_shard_axis_and_factor(input_a_tensor_placement)
-    if len(shape) == 4 and _nch_shard_factor > 1 and _nch_shard_axis is not None:
-        n_in = torch_input_tensor_a.ndim
-        chunk_axis = _nch_shard_axis if _nch_shard_axis >= 0 else _nch_shard_axis + n_in
-        chunks = torch.chunk(torch_input_tensor_a, _nch_shard_factor, dim=chunk_axis)
-        per_chip = [_nch_per_chip_concat_heads(c) for c in chunks]
-        torch_output_tensor = torch.cat(per_chip, dim=_nch_shard_axis)
-    elif len(shape) == 4:
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology and runs nlp_concat_heads on it. The gathered
+    # output is the per-chip result tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
+    if len(shape) == 4:
         torch_output_tensor = _nch_per_chip_concat_heads(torch_input_tensor_a)
     else:
         torch_output_tensor = torch_input_tensor_a.clone()
@@ -189,5 +187,7 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     return [pcc, e2e_perf]

@@ -23,6 +23,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import extract_named_tensor_kwargs
@@ -345,6 +346,10 @@ def run(
         e2e_perf = stop_measuring_time(start_time)
 
         if output_tensor is not None:
+            if is_mesh_device:
+                torch_output = reconcile_golden_to_actual(
+                    torch_output, output_tensor, input_a_tensor_placement, kwargs.get("input_b_tensor_placement", None)
+                )
             pcc = check_with_pcc(torch_output, output_tensor, 0.999)
         else:
             pcc = (False, "Output tensor is None")

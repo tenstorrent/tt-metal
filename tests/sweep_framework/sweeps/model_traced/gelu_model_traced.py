@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
@@ -140,6 +141,8 @@ def run(
     if output_tensor.shape != torch_output_tensor.shape:
         output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

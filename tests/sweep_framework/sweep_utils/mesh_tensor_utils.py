@@ -376,15 +376,16 @@ def create_tensor_on_mesh(
     # shape, so delegate to replicate_with_topology, which keeps .shape =
     # input shape and stamps the correct sharded topology metadata.
     if tensor_placement:
-        _placement_str = str(tensor_placement.get('placement', ''))
-        if 'PlacementShard' in _placement_str:
+        _placement_str = str(tensor_placement.get("placement", ""))
+        if "PlacementShard" in _placement_str:
             try:
                 actual_mesh = mesh_device.shape
                 _ar, _ac = actual_mesh[0], actual_mesh[1]
             except Exception:
                 _ar, _ac = 1, 1
             import ast as _ast0
-            _ms_raw = tensor_placement.get('mesh_device_shape', '[1, 1]')
+
+            _ms_raw = tensor_placement.get("mesh_device_shape", "[1, 1]")
             if isinstance(_ms_raw, str):
                 try:
                     _ms_raw = _ast0.literal_eval(_ms_raw)
@@ -857,3 +858,87 @@ def broadcast_torch_inputs_to_global(
             else:
                 return torch_a, torch_b
     return new_a, new_b
+
+
+def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[Dict]) -> torch.Tensor:
+    """Expand a per-chip torch tensor to its global shape based on placement.
+
+    For each PlacementShard(d) entry in `placement` paired with a factor N from
+    `distribution_shape`, repeat the tensor along dim d by N. PlacementReplicate
+    entries are no-ops. Returns the input unchanged when placement is missing
+    or has no Shard entries.
+
+    This mirrors the gather semantics of mesh_tensor_to_torch: a sweep that
+    generates a per-chip golden via torch.op(per_chip_a, per_chip_b) needs the
+    result tiled along the sharded dims so it matches the gathered global
+    output shape used for PCC.
+    """
+    if not isinstance(tensor_placement, dict):
+        return torch_tensor
+
+    plac_val = tensor_placement.get("placement")
+    dist_val = tensor_placement.get("distribution_shape")
+    if plac_val is None or dist_val is None:
+        return torch_tensor
+
+    if isinstance(plac_val, (list, tuple)):
+        plac_parts = [str(x).strip().strip("'") for x in plac_val]
+    else:
+        s = str(plac_val).strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        plac_parts = [x.strip().strip("'") for x in s.split(",")]
+
+    plac_entries = []
+    for x in plac_parts:
+        if not x:
+            continue
+        if x.startswith("PlacementShard("):
+            plac_entries.append(("S", int(x[len("PlacementShard(") : -1])))
+        elif x.startswith("PlacementReplicate"):
+            plac_entries.append(("R", None))
+        else:
+            plac_entries.append(("?", None))
+
+    if isinstance(dist_val, (list, tuple)):
+        dist_factors = [int(x) for x in dist_val]
+    else:
+        s = str(dist_val).strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        dist_factors = [int(x.strip()) for x in s.split(",") if x.strip()]
+
+    ndim = torch_tensor.ndim
+    out = torch_tensor
+    for (kind, dim), n in zip(plac_entries, dist_factors):
+        if kind != "S" or dim is None or n <= 1:
+            continue
+        d = dim if dim >= 0 else dim + ndim
+        if not (0 <= d < ndim):
+            continue
+        repeats = [1] * out.ndim
+        repeats[d] = n
+        out = out.repeat(*repeats)
+    return out
+
+
+def reconcile_golden_to_actual(
+    torch_golden: torch.Tensor,
+    actual_global: torch.Tensor,
+    *placements: Optional[Dict],
+) -> torch.Tensor:
+    """Tile a per-chip torch golden along sharded dims so it matches the gathered actual shape.
+
+    Iterates the supplied placements (typically input_a_tensor_placement and
+    input_b_tensor_placement). Each call to tile_torch_to_global tiles by Shard
+    factors. Stops as soon as the golden's shape matches the actual gathered
+    output. No-op when shapes already match or no Shard entries are present.
+    """
+    if torch_golden.shape == actual_global.shape:
+        return torch_golden
+    out = torch_golden
+    for plac in placements:
+        if out.shape == actual_global.shape:
+            break
+        out = tile_torch_to_global(out, plac)
+    return out

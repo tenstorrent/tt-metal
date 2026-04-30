@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -126,15 +127,11 @@ def run(
     # reassembler concats along the same negative shard axis as the input.
     # That differs from torch.permute on the global tensor when the input's
     # shard dim is moved to a non-trailing position by the permutation.
-    _shard_axis, _shard_factor = _permute_input_shard_axis_and_factor(input_a_tensor_placement)
-    if _shard_factor > 1 and _shard_axis is not None:
-        n_in = torch_input.ndim
-        in_axis = _shard_axis if _shard_axis >= 0 else _shard_axis + n_in
-        chunks = torch.chunk(torch_input, _shard_factor, dim=in_axis)
-        per_chip_outs = [torch.permute(c, dims) for c in chunks]
-        torch_output = torch.cat(per_chip_outs, dim=_shard_axis)
-    else:
-        torch_output = torch.permute(torch_input, dims)
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology. ttnn.permute runs per-chip; gathered output is
+    # the per-chip permute tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
+    torch_output = torch.permute(torch_input, dims)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -165,5 +162,7 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)
     return [pcc, e2e_perf]

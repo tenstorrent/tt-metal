@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import master config loader for traced model configurations
@@ -143,6 +144,8 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC
+    if is_mesh_device:
+        ref_q = reconcile_golden_to_actual(ref_q, q_torch, input_a_tensor_placement)
     pcc = check_with_pcc(ref_q, q_torch, 0.999)
 
     return [pcc, e2e_perf]
