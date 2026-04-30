@@ -88,7 +88,7 @@ std::vector<multihost::Rank> get_ranks_for_mesh_id(
 
 template <typename OperationType, typename... Args>
 void execute_with_timeout(OperationType&& operation, Args&&... args) {
-    const auto timeout = std::chrono::duration<float>(10.0f);
+    const auto timeout = std::chrono::duration<float>(30.0f);
 
     std::atomic<bool> completed{false};
     std::atomic<bool> failed{false};
