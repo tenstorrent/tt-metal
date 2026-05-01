@@ -23,6 +23,10 @@ on:
           - mistral-7b
           - gemma-3-4b
           - gemma-3-27b
+          - gemma-4-e2b
+          - gemma-4-e4b
+          - gemma-4-26b-a4b
+          - gemma-4-31b
           - mixtral-8x7b
           - shallow-unet
           # gpt-oss-20b: disabled — segfaulting on CI
@@ -34,7 +38,8 @@ on:
         options:
           - all
           - "wh_n150 (N150)"
-          - "wh_llmbox_perf (T3000)"
+          - "wh_llmbox (T3000)"
+          - "wh_llmbox_perf (T3000 perf-grade)"
       platform:
         required: false
         type: choice
@@ -81,7 +86,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_llmbox_perf"
+          ALL_SKUS="wh_n150,wh_llmbox,wh_llmbox_perf"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"

@@ -29,7 +29,7 @@ from ...tests.test_factory import (
 @parametrize_batch_seq(
     configs=[(1, 1), (1, 32), (1, 128), (1, 1024)], ids=["decode", "prefill_32", "prefill_128", "prefill_1024"]
 )
-def test_experts(batch_size, seq_len, mesh_device):
+def test_experts(batch_size, seq_len, mesh_device, reset_seeds):
     """Test MoE experts against HF reference.
 
     1x1: Uses reduced experts (8) and bfloat16 weights for fast single-card test.
