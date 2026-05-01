@@ -56,6 +56,8 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensu
 
     # Input shape should match context_dim
     torch_input = torch.randn(batch_size, 1, rows, model_args.hf_config.vision_config.hidden_size)
+    ref_dtype = next(reference_model.parameters()).dtype
+    torch_input = torch_input.to(ref_dtype)
     reference_output = reference_model(torch_input)
 
     tt_input = ttnn.from_torch(

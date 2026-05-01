@@ -32,7 +32,7 @@ namespace ckernel {
 // clang-format on
 ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb, call_line);
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
 }
 
@@ -67,7 +67,8 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
 
         // Datacopy
         for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
-            MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id, icb)));
+            MATH(
+                (llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id, icb)));
         }
 
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
