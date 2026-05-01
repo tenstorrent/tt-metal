@@ -886,6 +886,50 @@ def test_decoder(
     logger.info(f"✓ Tests completed successfully: {', '.join(tested_modules)}")
 
 
+@parametrize_mesh_with_fabric([(1, 1)])
+@pytest.mark.parametrize(
+    "batch_size",
+    [1, 4, 32],
+    ids=["b1", "b4", "b32"],
+)
+@pytest.mark.parametrize(
+    "layer_idx",
+    [0],
+    ids=["layer_0"],
+)
+def test_experts_batched_decode(mesh_device, device_params, batch_size, layer_idx, test_thresholds, reset_seeds):
+    """
+    Drive batched-decode support for the low-latency experts path on 1x1 mesh.
+
+    test_decoder skips B>1 on 1x1, so this dedicated test exercises B in
+    {1, 4, 32} against the same reference and lets us iterate on
+    experts/decode.py:decode_forward in isolation. Decode mode only
+    (seq_len=1); throughput experts and EP are not in scope here.
+    """
+    seq_len = 1
+
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    pcc_thresholds = test_thresholds[setup["model_args"].model_name]["decode"]
+    config = setup["config"]
+    config._attn_implementation = "eager"
+
+    reference_layer = setup_reference_layer(setup, layer_idx=layer_idx)
+    decoder_layer = setup_decoder_layer(setup, reference_layer, batch_size, seq_len, layer_idx=layer_idx)
+    assert (
+        not decoder_layer.mlp.use_throughput_experts
+    ), "test_experts_batched_decode targets the low-latency experts path"
+
+    run_experts_component(
+        mesh_device,
+        (batch_size, seq_len, config.hidden_size),
+        config,
+        reference_layer,
+        decoder_layer,
+        is_decode=True,
+        pcc_threshold=pcc_thresholds["experts"],
+    )
+
+
 def run_model_forward_test(
     mesh_device,
     config,
