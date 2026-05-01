@@ -312,9 +312,6 @@ struct FlashMLADecode {
             if (is_mcast_sender && BRISC_MCAST_LOOPS > 0) {
                 noc_semaphore_set(mcast_semaphore_ptr, MCAST_VALID);
             } else if (!is_mcast_sender) {
-                uint32_t num_k_chunk_iters =
-                    (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
-                unified_kernels::unicast_atomic_inc_increment_counters<false>(num_k_chunk_iters, ATOMIC_NOC_INDEX);
                 unified_kernels::unicast_atomic_inc_set_state<false, true, true, false, write_at_cmd_buf>(
                     sender_receiver_ready_noc_addr, 1, 31, ATOMIC_NOC_INDEX);
             }
@@ -391,6 +388,7 @@ struct FlashMLADecode {
 
                         noc_semaphore_wait(ncrisc_brisc_sync_curr_ptr, 0);
                         *k_write_curr_ptr_shared = k_write_ptr;
+                        noc_semaphore_set(ncrisc_brisc_sync_curr_ptr, 1);
                         for (uint32_t i = 0; i < NUM_TRIDS && pages_issued < args.k_num_pages; ++i) {
                             noc_async_read_set_trid(curr_trid, READ_NOC_INDEX);
                             noc_async_read_one_packet_with_state_with_trid(
@@ -403,8 +401,7 @@ struct FlashMLADecode {
 
                         while (pages_completed < args.k_num_pages) {
                             noc_async_read_barrier_with_trid(wait_trid, READ_NOC_INDEX);
-                            *ncrisc_brisc_sync_curr_ptr += 1;
-                            pages_completed++;
+                            noc_semaphore_set(ncrisc_brisc_sync_curr_ptr, ++pages_completed + 1);
 
                             if (pages_issued < args.k_num_pages) {
                                 noc_async_read_set_trid(curr_trid, READ_NOC_INDEX);
@@ -424,7 +421,7 @@ struct FlashMLADecode {
                     } else {
                         DeviceZoneScopedN("mcast-receiver-signal-ready");
                         unified_kernels::
-                            unicast_atomic_inc_with_state<false, false, false, true, false, write_at_cmd_buf>(
+                            unicast_atomic_inc_with_state<false, false, false, true, true, write_at_cmd_buf>(
                                 0, 0, 31, ATOMIC_NOC_INDEX);
 
                         noc_semaphore_wait(mcast_semaphore_ptr, MCAST_VALID);
@@ -488,9 +485,6 @@ struct FlashMLADecode {
                         noc_semaphore_inc_multicast(
                             q_input_mcast_sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC_INDEX, q_mcast_vc);
                         mask_last_chunk(args.cb_mask, args.k_chunk_size, cur_pos, k_chunk_end, k_num_chunks);
-                        // This is needed because we need to wait for all transactions before resetting the trids
-                        // Could move it later but don't think it makes much difference
-                        noc_async_atomic_barrier(MCAST_NOC_INDEX);
                     } else {
                         const uint64_t sender_receiver_ready_noc_addr = get_noc_addr(
                             args.mcast_start_x,
@@ -499,7 +493,6 @@ struct FlashMLADecode {
                             ATOMIC_NOC_INDEX);
                         noc_semaphore_inc(sender_receiver_ready_noc_addr, 1, ATOMIC_NOC_INDEX);
                         mask_last_chunk(args.cb_mask, args.k_chunk_size, cur_pos, k_chunk_end, k_num_chunks);
-                        noc_async_atomic_barrier(ATOMIC_NOC_INDEX);
                         noc_semaphore_wait(q_input_mcast_semaphore_ptr, 1);
                     }
                 } else if (k_chunk_start == k_chunk_end) {
@@ -559,10 +552,16 @@ struct FlashMLADecode {
                     DeviceZoneScopedN("mcast-sender-multicast");
 
                     // TODO: Make compile time
+                    noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, 1);
                     mcast_increment_counters_runtime<false>(
                         args.num_mcast_dests, args.k_num_pages + 1, MCAST_NOC_INDEX);
-                    mcast_send_set_state_runtime<false, false, true, false, true, false, write_cmd_buf>(
-                        0, mcast_noc_addr, k_page_size, args.num_mcast_dests, MCAST_NOC_INDEX);
+
+                    invalidate_l1_cache();
+                    uint32_t page_addr = *k_write_curr_ptr_shared;
+
+                    uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
+                    mcast_send_set_state_runtime<false, false, true, true, true, false, write_cmd_buf>(
+                        page_addr, mcast_dest_addr, k_page_size, args.num_mcast_dests, MCAST_NOC_INDEX);
                     if constexpr (!mcast_is_shared_write_cmd_buf) {
                         mcast_send_set_state_runtime<false, false, true, true, true, false, write_reg_cmd_buf>(
                             args.mcast_semaphore_addr,
@@ -571,15 +570,7 @@ struct FlashMLADecode {
                             args.num_mcast_dests,
                             MCAST_NOC_INDEX);
                     }
-
-                    noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, 1);
-                    invalidate_l1_cache();
-                    uint32_t page_addr = *k_write_curr_ptr_shared;
-
-                    uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
-                    mcast_send_set_state_runtime<false, false, false, true, false, false, write_cmd_buf>(
-                        page_addr, mcast_dest_addr, 0, args.num_mcast_dests, MCAST_NOC_INDEX);
-
+                    noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, 2);
                     noc_semaphore_wait(receiver_ready_semaphore_ptr, args.num_mcast_dests);
                     noc_semaphore_set(receiver_ready_semaphore_ptr, 0);
 
@@ -590,7 +581,7 @@ struct FlashMLADecode {
                         mcast_dest_addr = mcast_noc_addr | page_addr;
                         mcast_send_set_state_runtime<false, false, false, true, false, false, write_cmd_buf>(
                             page_addr, mcast_dest_addr, 0, args.num_mcast_dests, MCAST_NOC_INDEX);
-                        noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, page + 1);
+                        noc_semaphore_wait_min(ncrisc_brisc_sync_curr_ptr, page + 2);
                         mcast_send_issue_txn<write_cmd_buf>(MCAST_NOC_INDEX);
                     }
 
@@ -609,6 +600,15 @@ struct FlashMLADecode {
                     std::swap(k_write_curr_ptr_shared, k_write_next_ptr_shared);
                 }
                 noc_async_write_barrier(MCAST_NOC_INDEX);
+            }
+
+            // Defer the Q-input signal barrier until the K streaming/mcast work has completed.
+            if (is_output_core) {
+                if (is_mcast_sender) {
+                    noc_async_atomic_barrier(MCAST_NOC_INDEX);
+                } else {
+                    noc_async_atomic_barrier(ATOMIC_NOC_INDEX);
+                }
             }
 
             // =================================================================
