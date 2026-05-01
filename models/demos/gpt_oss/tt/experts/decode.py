@@ -38,10 +38,18 @@ def decode_forward(
         Expert output [1, batch, 1, hidden_size]
     """
     activation_dtype = ttnn.bfloat8_b
-    batch_dim = 1
-    seq_dim = 2
-    batch_size = hidden_states.shape[batch_dim]
-    seq_len = hidden_states.shape[seq_dim]
+    # Decode hands us hidden_states with the token (batch) dim in either dim 1
+    # (the unit-test convention, [1, B, 1, H]) or dim 2 (the demo / attention
+    # convention, [1, 1, B, H]). Normalize to [1, B, 1, H] so the sparse matmul
+    # sees B as a batched dim and the [B, num_experts] sparsity volume matches
+    # batch_length_A * batch_length_B.
+    if hidden_states.shape[1] == 1 and hidden_states.shape[2] != 1:
+        hidden_states = ttnn.reshape(
+            hidden_states,
+            (1, hidden_states.shape[2], 1, hidden_states.shape[-1]),
+        )
+    batch_size = hidden_states.shape[1]
+    seq_len = hidden_states.shape[2]
 
     if seq_len != 1:
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
@@ -181,12 +189,14 @@ def decode_forward(
             ccl_manager,
         )
 
-    # Final reshape
-    # Note: reshape typically returns a view, so we don't deallocate the original
+    # Final reshape: emit [1, 1, B, hidden] to match the canonical decode
+    # layout used by attention output and consumed downstream by the residual
+    # add + RMSNorm. (Pre-batched-decode this returned [1, B, 1, hidden] but
+    # for B=1 the two are indistinguishable.)
     next_states = ttnn.reshape(
         next_states,
-        (1, batch_size, seq_len, config.hidden_size),
-        (1, batch_size, max(32, seq_len), config.hidden_size),
+        (1, 1, batch_size * seq_len, config.hidden_size),
+        (1, 1, max(32, batch_size * seq_len), config.hidden_size),
     )
 
     return next_states
