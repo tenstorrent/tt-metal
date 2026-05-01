@@ -105,7 +105,7 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     // This factory's compute kernel (bmm_large_block_zm.cpp) always compiles with
-    // ROW_MAJOR_OUTPUT=1 (line 144 below). The helper then reserves/pushes out_cb per
+    // TILE_PACK_ROW_MAJOR=1 (line 144 below). The helper then reserves/pushes out_cb per
     // M-row-group on the last K-block — smaller than the full out_block — so a shared
     // out/interm0 L1 region lets the partial non-last interm data at L1 positions
     // 0..row_group-1 be overwritten by out_cb writes before the reload has consumed
@@ -148,7 +148,7 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .compile_args = compute_kernel_args,
-            .defines = {{"ROW_MAJOR_OUTPUT", "1"}},
+            .defines = {{"TILE_PACK_ROW_MAJOR", "1"}},
             .named_compile_args = {
                 {"cb_in0", tt::CBIndex::c_0},
                 {"cb_in1", tt::CBIndex::c_1},

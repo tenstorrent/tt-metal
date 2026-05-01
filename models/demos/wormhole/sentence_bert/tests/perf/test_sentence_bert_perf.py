@@ -14,7 +14,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, expected_perf,test",
     [
-        # 460.0 was the pre-row_major_output baseline. Raised to 546.5 after the
+        # 460.0 was the pre-tile_pack_row_major baseline. Raised to 546.5 after the
         # ff2/qkv subblock upgrade in models/demos/wormhole/sentence_bert/ttnn/common.py
         # (commit 0a421bb6a56) which dropped matmul time -21.4% and lifted total
         # device-kernel samples/sec from ~460 to ~546.5. Locks the win in as the

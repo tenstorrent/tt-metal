@@ -25,7 +25,7 @@ ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     per_core_N=16,
     transpose_mcast=False,
     fused_activation=(ttnn.UnaryOpType.GELU, True),
-    row_major_output=True,
+    tile_pack_row_major=True,
 )
 
 ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -37,7 +37,7 @@ ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     per_core_N=12,
     transpose_mcast=False,
     fused_activation=None,
-    row_major_output=True,
+    tile_pack_row_major=True,
 )
 
 query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -49,7 +49,7 @@ query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgra
     per_core_N=12,
     transpose_mcast=False,
     fused_activation=None,
-    row_major_output=True,
+    tile_pack_row_major=True,
 )
 
 self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -61,7 +61,7 @@ self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     per_core_N=4,
     transpose_mcast=False,
     fused_activation=None,
-    row_major_output=True,
+    tile_pack_row_major=True,
 )
 pre_softmax_config = ttnn.MatmulMultiCoreReuseProgramConfig(
     compute_with_storage_grid_size=(6, 8),

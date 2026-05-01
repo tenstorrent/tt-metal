@@ -72,7 +72,7 @@ void kernel_main() {
     // Don't need batch; same as batch from READER args
 
     // Output block width in tiles. Equals out_block_w / in1_per_core_w / the bias block
-    // width. Used by the FUSE_BIAS path for the in3 block, and by the ROW_MAJOR_OUTPUT
+    // width. Used by the FUSE_BIAS path for the in3 block, and by the TILE_PACK_ROW_MAJOR
     // path to compute the row-group size. Always populated by the factory (no
     // placeholder), so kernels can read it regardless of build flags.
     constexpr uint32_t in1_block_w = get_compile_time_arg_val(17);
@@ -156,13 +156,13 @@ void kernel_main() {
 
 #ifndef OUT_SHARDED
                 // WRITER — layout of tiles arriving from compute depends on factory intent:
-                //   ROW_MAJOR_OUTPUT defined  → compute packs per M-row-group in row-major
+                //   TILE_PACK_ROW_MAJOR defined  → compute packs per M-row-group in row-major
                 //                               order; one CB push carries out_subblock_h
                 //                               rows of in1_block_w tiles laid out row-first.
                 //                               Writer walks rows then N-subblocks, so padded
                 //                               subblocks on the right are absorbed into the
                 //                               row-group pop (no separate per-row pad pop).
-                //   ROW_MAJOR_OUTPUT undefined → compute packs sequentially per subblock;
+                //   TILE_PACK_ROW_MAJOR undefined → compute packs sequentially per subblock;
                 //                                writer reads subblock-by-subblock (legacy).
                 uint32_t num_blocks_h_dim_ = bh >= last_num_blocks_h_dim - 1 ? last_num_blocks_h_dim : num_blocks_h_dim;
                 uint32_t num_blocks_w_dim_ = bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
@@ -175,7 +175,7 @@ void kernel_main() {
                     out_num_nonzero_subblocks_w_ = out_last_num_nonzero_subblocks_w;
                 }
                 uint32_t out_tensor_sbh_start_tile_id = out_tensor_current_w_dim_block_tile_id;
-#ifdef ROW_MAJOR_OUTPUT
+#ifdef TILE_PACK_ROW_MAJOR
                 constexpr uint32_t out_row_group_tiles = out_subblock_h * in1_block_w;
                 constexpr uint32_t out_row_stride_bytes = in1_block_w * output_single_tile_size_bytes;
 
@@ -279,7 +279,7 @@ void kernel_main() {
                     }
                     out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                 }
-#endif  // ROW_MAJOR_OUTPUT
+#endif  // TILE_PACK_ROW_MAJOR
         // Pop row(s) of fully padded subblocks
                 if (bh == num_blocks_h_dim_ - 1) {
                     cb_out.wait_front(padded_block_tiles_h_skip);

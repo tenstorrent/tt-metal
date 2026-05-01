@@ -29,7 +29,7 @@ namespace ttnn::operations::matmul::auto_tune {
 // invariants:
 //   subblock_w_eq_per_core_n_required: the subblock-major writer requires
 //       out_subblock_w == per_core_N (single N-subblock per row-group) OR
-//       out_subblock_h == 1. Relax this by setting row_major_output=true on
+//       out_subblock_h == 1. Relax this by setting tile_pack_row_major=true on
 //       the emitted program_config and passing false here — the row-major
 //       writer path absolute-offsets every pack and has no such limit.
 //   subblock_h_eq_per_core_m_required: symmetric constraint used by 1D

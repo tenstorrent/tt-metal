@@ -578,9 +578,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
                         // The subblock-major writer requires the CB layout to match row-major
                         // order, which holds only when out_subblock_w == per_core_N (single
-                        // N-subblock) or out_subblock_h == 1. row_major_output enables the
+                        // N-subblock) or out_subblock_h == 1. tile_pack_row_major enables the
                         // absolute-offset pack path that decouples these.
-                        if (!program_config.row_major_output) {
+                        if (!program_config.tile_pack_row_major) {
                             TT_FATAL(
                                 program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
                                 "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to "
@@ -659,9 +659,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         uint32_t per_core_N = program_config.per_core_N;
 
                         TT_FATAL(N == per_core_N, "Error: N must be equal to per_core_N.");
-                        // See equivalent site in the sharded-output 2D path above — row_major_output
+                        // See equivalent site in the sharded-output 2D path above — tile_pack_row_major
                         // gate removes the subblock-major layout constraint.
-                        if (!program_config.row_major_output) {
+                        if (!program_config.tile_pack_row_major) {
                             TT_FATAL(
                                 program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
                                 "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to "
@@ -965,9 +965,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         attributes.output_mem_config.memory_layout());
                     uint32_t per_core_N = program_config.per_core_N;
 
-                    // See equivalent sites in the 1D config block — row_major_output gate
+                    // See equivalent sites in the 1D config block — tile_pack_row_major gate
                     // removes the subblock-major layout constraint for the 2D BLOCK_SHARDED path.
-                    if (!program_config.row_major_output) {
+                    if (!program_config.tile_pack_row_major) {
                         TT_FATAL(
                             program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
                             "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");

@@ -25,10 +25,10 @@ void kernel_main() {
     experimental::CircularBuffer out_buf(cb_out);
     experimental::CircularBuffer interm_buf(cb_intermed0);
 
-    // Factories that emit ROW_MAJOR_OUTPUT want absolute-offset packing so writers
+    // Factories that emit TILE_PACK_ROW_MAJOR want absolute-offset packing so writers
     // read tiles in row-major order. Multicast factories (no define) use sequential pack.
     constexpr compute_kernel_lib::OutputLayout output_layout =
-#ifdef ROW_MAJOR_OUTPUT
+#ifdef TILE_PACK_ROW_MAJOR
         compute_kernel_lib::OutputLayout::RowMajor;
 #else
         compute_kernel_lib::OutputLayout::SubblockMajor;

@@ -395,15 +395,15 @@ create_program_dram_sharded(
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
-    // ROW_MAJOR_OUTPUT: compute packs tiles at absolute CB offsets row-first. Factory
+    // TILE_PACK_ROW_MAJOR: compute packs tiles at absolute CB offsets row-first. Factory
     // enforces per_core_M = 1 → out_subblock_h = 1, so the pack LLK takes the
     // pack_tile_block fast path and produces the same layout as the legacy subblock-major
     // path. The output width may be padded above the in1 shard width (per_core_N_compute
     // vs per_core_N_in1_sender) after the subblock-growth adjustment at lines ~153-170;
     // the compute kernel threads out_block_w (padded) to the helper as out_row_width to
     // keep row-major reserve/push aligned with the actual pack stride.
-    mm_kernel_defines["ROW_MAJOR_OUTPUT"] = "1";
-    mm_kernel_in1_sender_writer_defines["ROW_MAJOR_OUTPUT"] = "1";
+    mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+    mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
@@ -547,7 +547,7 @@ create_program_dram_sharded(
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
 
-    // This factory unconditionally emits ROW_MAJOR_OUTPUT=1 on the compute kernel
+    // This factory unconditionally emits TILE_PACK_ROW_MAJOR=1 on the compute kernel
     // (see mm_kernel_defines setup above), so the helper reserves/pushes out_cb
     // per M-row-group. The shared out/interm0 L1 region would let out_cb writes
     // overlap with interm0 partials that haven't yet been reloaded — force

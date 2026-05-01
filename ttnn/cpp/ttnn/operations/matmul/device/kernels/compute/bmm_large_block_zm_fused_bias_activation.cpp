@@ -15,7 +15,7 @@
  *      - in0_transpose: TransposePreKBlock functor transposes input before each K-block.
  *      - SFPU activation (no bias): PostComputeFn applies per sub-block on last K-block.
  *      - PACK_RELU (no bias): helper enables relu on last K-block output.
- *      - ROW_MAJOR_OUTPUT (factory-emitted define): helper does absolute-offset pack.
+ *      - TILE_PACK_ROW_MAJOR (factory-emitted define): helper does absolute-offset pack.
  *      - SKIP_COMPUTE (microbench define): helper elides inner matmul LLK call.
  *   2. Bias addition (add_bias_bcast_rows helper): reads partials, adds row-broadcast
  *      bias, optionally applies SFPU activation, packs to output. Caller owns bias
@@ -134,9 +134,9 @@ void kernel_main() {
         false;
 #endif
 
-    // ROW_MAJOR_OUTPUT: factory opts in to absolute-offset packing; writers read row-major.
+    // TILE_PACK_ROW_MAJOR: factory opts in to absolute-offset packing; writers read row-major.
     constexpr OutputLayout output_layout =
-#ifdef ROW_MAJOR_OUTPUT
+#ifdef TILE_PACK_ROW_MAJOR
         OutputLayout::RowMajor;
 #else
         OutputLayout::SubblockMajor;

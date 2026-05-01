@@ -1,14 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
-# Phase-2 targeted coverage for row_major_output on mcast factories.
+# Phase-2 targeted coverage for tile_pack_row_major on mcast factories.
 # Configs intentionally pick subblocks that the legacy FATAL rejected
 # (out_subblock_w != per_core_N AND out_subblock_h != 1) to confirm the gate
 # is in place and the absolute-offset pack + row-group writer produce correct
@@ -19,7 +19,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 # previously broken (PCC ~0.9) because the 2D / 1D mcast and non-mcast
 # factories shared the out_cb and interm0_cb L1 region, and the row-major
 # per-row-group reserve on out_cb would overwrite interm0's unconsumed
-# partials. The factories now force separate regions when row_major_output
+# partials. The factories now force separate regions when tile_pack_row_major
 # is set.
 
 
@@ -28,6 +28,33 @@ def _dtype_pcc(dtype, k_tiles):
     if dtype == ttnn.bfloat8_b and k_tiles > 16:
         return 0.97
     return 0.99
+
+
+def _check_matmul(torch_out, out, in_dtype, k_tiles):
+    # Mirror test_matmul.py's bf16/bf8 atol/rtol/Frobenius scaling so allclose +
+    # Frobenius pass alongside PCC. ULP off — bfp/bf16 matmul output isn't ULP-stable.
+    pcc = _dtype_pcc(in_dtype, k_tiles)
+    k = k_tiles * 32
+    if in_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            torch_out,
+            out,
+            atol=0.004 * k,
+            rtol=0.624 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=pcc,
+            check_ulp=False,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_out,
+            out,
+            atol=0.004 * k,
+            rtol=0.227 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=pcc,
+            check_ulp=False,
+        )
 
 
 def _input_a_block_sharded(m, k, grid_xy):
@@ -53,7 +80,7 @@ def _input_a_block_sharded(m, k, grid_xy):
 )
 @pytest.mark.parametrize("out_sharded", [False, True], ids=["dram_out", "l1_sharded_out"])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["in1_bf16", "in1_bfp8"])
-def test_mcast_2d_row_major_output_no_bias(device, out_subblock_h, out_subblock_w, out_sharded, in1_dtype):
+def test_mcast_2d_tile_pack_row_major_no_bias(device, out_subblock_h, out_subblock_w, out_sharded, in1_dtype):
     # M=256 (8 tiles) x K=256 (8 tiles) x N=256 (8 tiles), 2x2 grid.
     # Per-core: M=4, N=4 tiles. in0_block_w=4 → 2 K-block iterations.
     m_tiles, k_tiles, n_tiles = 8, 8, 8
@@ -106,7 +133,7 @@ def test_mcast_2d_row_major_output_no_bias(device, out_subblock_h, out_subblock_
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=True,
-        row_major_output=True,
+        tile_pack_row_major=True,
     )
 
     out_t = ttnn.matmul(
@@ -118,7 +145,7 @@ def test_mcast_2d_row_major_output_no_bias(device, out_subblock_h, out_subblock_
         compute_kernel_config=compute_kernel_config,
     )
     out = ttnn.to_torch(out_t)
-    assert_with_pcc(torch_out, out, _dtype_pcc(in1_dtype, k_tiles))
+    _check_matmul(torch_out, out, in1_dtype, k_tiles)
 
 
 # -------- 2D mcast: FUSE_BIAS across all supported subblocks --------------
@@ -135,7 +162,7 @@ def test_mcast_2d_row_major_output_no_bias(device, out_subblock_h, out_subblock_
     ids=["subblk_2x2", "subblk_4x2", "subblk_1x4", "subblk_1x2"],
 )
 @pytest.mark.parametrize("out_sharded", [False, True], ids=["dram_out", "l1_sharded_out"])
-def test_mcast_2d_row_major_output_fuse_bias(device, out_subblock_h, out_subblock_w, out_sharded):
+def test_mcast_2d_tile_pack_row_major_fuse_bias(device, out_subblock_h, out_subblock_w, out_sharded):
     m_tiles, k_tiles, n_tiles = 8, 8, 8
     m, k, n = m_tiles * 32, k_tiles * 32, n_tiles * 32
     grid_xy = (2, 2)
@@ -198,7 +225,7 @@ def test_mcast_2d_row_major_output_fuse_bias(device, out_subblock_h, out_subbloc
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=True,
-        row_major_output=True,
+        tile_pack_row_major=True,
     )
 
     out_t = ttnn.linear(
@@ -211,7 +238,7 @@ def test_mcast_2d_row_major_output_fuse_bias(device, out_subblock_h, out_subbloc
         compute_kernel_config=compute_kernel_config,
     )
     out = ttnn.to_torch(out_t)
-    assert_with_pcc(torch_out, out, 0.99)
+    _check_matmul(torch_out, out, ttnn.bfloat16, k_tiles)
 
 
 # -------- 1D mcast_in0: WIDTH_SHARDED output ------------------------------
@@ -227,7 +254,7 @@ def test_mcast_2d_row_major_output_fuse_bias(device, out_subblock_h, out_subbloc
     ],
     ids=["subblk_2x2", "subblk_4x2", "subblk_1x4", "subblk_1x2"],
 )
-def test_mcast_1d_mcast_in0_row_major_output(device, out_subblock_h, out_subblock_w):
+def test_mcast_1d_mcast_in0_tile_pack_row_major(device, out_subblock_h, out_subblock_w):
     # 1D mcast_in0: A is width-sharded, B comes via mcast, output width-sharded.
     # Shape: M=128 (4 tiles), K=256 (8 tiles), N=256 (8 tiles), grid (2, 1).
     # Per-core M=4, per_core_N=4 tiles. With out_subblock_w=2 → in1_num_subblocks=2.
@@ -281,7 +308,7 @@ def test_mcast_1d_mcast_in0_row_major_output(device, out_subblock_h, out_subbloc
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
-        row_major_output=True,
+        tile_pack_row_major=True,
     )
 
     out_mem = ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1)
@@ -294,7 +321,7 @@ def test_mcast_1d_mcast_in0_row_major_output(device, out_subblock_h, out_subbloc
         compute_kernel_config=compute_kernel_config,
     )
     out = ttnn.to_torch(out_t)
-    assert_with_pcc(torch_out, out, 0.99)
+    _check_matmul(torch_out, out, ttnn.bfloat16, k_tiles)
 
 
 @pytest.mark.parametrize(
@@ -307,9 +334,9 @@ def test_mcast_1d_mcast_in0_row_major_output(device, out_subblock_h, out_subbloc
     ],
     ids=["subblk_2x2", "subblk_4x2", "subblk_1x4", "subblk_1x2"],
 )
-def test_mcast_1d_mcast_in0_row_major_output_dram(device, out_subblock_h, out_subblock_w):
-    # Same shape as test_mcast_1d_mcast_in0_row_major_output but with DRAM-interleaved
-    # output — exercises the writer kernel's Phase-1 #ifdef ROW_MAJOR_OUTPUT path
+def test_mcast_1d_mcast_in0_tile_pack_row_major_dram(device, out_subblock_h, out_subblock_w):
+    # Same shape as test_mcast_1d_mcast_in0_tile_pack_row_major but with DRAM-interleaved
+    # output — exercises the writer kernel's Phase-1 #ifdef TILE_PACK_ROW_MAJOR path
     # directly (not the OUT_SHARDED short-wait).
     m_tiles, k_tiles, n_tiles = 4, 8, 8
     m, k, n = m_tiles * 32, k_tiles * 32, n_tiles * 32
@@ -361,7 +388,7 @@ def test_mcast_1d_mcast_in0_row_major_output_dram(device, out_subblock_h, out_su
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
-        row_major_output=True,
+        tile_pack_row_major=True,
     )
 
     out_t = ttnn.matmul(
@@ -373,14 +400,14 @@ def test_mcast_1d_mcast_in0_row_major_output_dram(device, out_subblock_h, out_su
         compute_kernel_config=compute_kernel_config,
     )
     out = ttnn.to_torch(out_t)
-    assert_with_pcc(torch_out, out, 0.99)
+    _check_matmul(torch_out, out, ttnn.bfloat16, k_tiles)
 
 
 # -------- Multi-row subblock + in1_num_subblocks > 2 regression guard -----
 # Previously produced PCC ~0.9 because out_cb and interm0_cb shared the same
 # L1 region in the mcast factories. Row-major's per-row-group reserve on
 # out_cb landed on top of interm0's unconsumed subblocks. Fixed by gating
-# the shared-region CB path on !row_major_output in 2D / 1D / non-mcast
+# the shared-region CB path on !tile_pack_row_major in 2D / 1D / non-mcast
 # factories; these cases must stay green as a regression guard.
 
 
@@ -440,7 +467,7 @@ def test_multi_row_wide_n_shared_cb_guard(device, out_subblock_h, out_subblock_w
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=True,
-        row_major_output=True,
+        tile_pack_row_major=True,
     )
 
     out_t = ttnn.matmul(
@@ -452,7 +479,7 @@ def test_multi_row_wide_n_shared_cb_guard(device, out_subblock_h, out_subblock_w
         compute_kernel_config=compute_kernel_config,
     )
     out = ttnn.to_torch(out_t)
-    assert_with_pcc(torch_out, out, 0.99)
+    _check_matmul(torch_out, out, ttnn.bfloat16, k_tiles)
 
 
 # -------- 2D mcast: fused ReLU activation, no bias ------------------------
@@ -466,7 +493,7 @@ def test_multi_row_wide_n_shared_cb_guard(device, out_subblock_h, out_subblock_w
     ],
     ids=["subblk_2x2", "subblk_4x2"],
 )
-def test_mcast_2d_row_major_output_with_activation(device, out_subblock_h, out_subblock_w):
+def test_mcast_2d_tile_pack_row_major_with_activation(device, out_subblock_h, out_subblock_w):
     m_tiles, k_tiles, n_tiles = 8, 8, 8
     m, k, n = m_tiles * 32, k_tiles * 32, n_tiles * 32
     grid_xy = (2, 2)
@@ -511,7 +538,7 @@ def test_mcast_2d_row_major_output_with_activation(device, out_subblock_h, out_s
         transpose_mcast=False,
         fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         fuse_batch=True,
-        row_major_output=True,
+        tile_pack_row_major=True,
     )
 
     out_t = ttnn.matmul(
@@ -525,4 +552,4 @@ def test_mcast_2d_row_major_output_with_activation(device, out_subblock_h, out_s
         compute_kernel_config=compute_kernel_config,
     )
     out = ttnn.to_torch(out_t)
-    assert_with_pcc(torch_out, out, 0.99)
+    _check_matmul(torch_out, out, ttnn.bfloat16, k_tiles)

@@ -424,7 +424,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     // Writer reads tiles in row-major order per row-group, matching the absolute-offset
     // pack strategy this factory enables on the compute side. Other factories that share
     // this writer source don't emit the define and rely on the subblock-order path.
-    reader_writer_defines.emplace_back("ROW_MAJOR_OUTPUT", "1");
+    reader_writer_defines.emplace_back("TILE_PACK_ROW_MAJOR", "1");
 
     // Blackhole intermediate CB read workaround
     bool in0_needs_intermediate_cb_read = false;
@@ -477,7 +477,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
     // Compute defines
     KernelDescriptor::Defines compute_defines;
-    compute_defines.emplace_back("ROW_MAJOR_OUTPUT", "1");
+    compute_defines.emplace_back("TILE_PACK_ROW_MAJOR", "1");
     if (packer_l1_acc_en) {
         compute_defines.emplace_back("PACKER_L1_ACC", "1");
     }
@@ -675,7 +675,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         in1_is_sharded ? in1_buffer : nullptr));
 
     // CB 4 (output) and CB 5 (K-block partials). Default layout overlays both
-    // indices on the same L1 bytes: the row_major_output helper pops partials
+    // indices on the same L1 bytes: the tile_pack_row_major helper pops partials
     // from c_5 before packing the final output to c_4, so only one view holds
     // live data at a time. This halves the output+partials L1 footprint vs
     // separate CBs and is load-bearing on wormhole_b0 (L1 = 1,499,136 B) —

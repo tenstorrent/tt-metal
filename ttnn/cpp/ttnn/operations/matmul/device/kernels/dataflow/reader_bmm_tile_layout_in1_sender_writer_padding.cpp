@@ -602,14 +602,14 @@ void kernel_main() {
 
 #ifndef OUT_SHARDED
                     // WRITER — layout of tiles arriving from compute depends on factory intent:
-                    //   ROW_MAJOR_OUTPUT defined  → compute packs per M-row-group in row-major
+                    //   TILE_PACK_ROW_MAJOR defined  → compute packs per M-row-group in row-major
                     //                               order; one CB push carries out_subblock_h
                     //                               rows of in1_block_w tiles laid out row-first
                     //                               across all N-subblocks. Writer walks rows
                     //                               then N-subblocks, so padded subblocks on
                     //                               the right are absorbed into the row-group
                     //                               pop (no separate per-row pad pop).
-                    //   ROW_MAJOR_OUTPUT undefined → compute packs sequentially per subblock;
+                    //   TILE_PACK_ROW_MAJOR undefined → compute packs sequentially per subblock;
                     //                                writer reads subblock-by-subblock and
                     //                                writes at subblock offsets (legacy).
                     uint32_t num_blocks_w_dim_ =
@@ -620,7 +620,7 @@ void kernel_main() {
                         out_num_nonzero_subblocks_w_ = out_last_num_nonzero_subblocks_w;
                     }
                     uint32_t out_tensor_sbh_start_tile_id = out_tensor_current_w_dim_block_tile_id;
-#ifdef ROW_MAJOR_OUTPUT
+#ifdef TILE_PACK_ROW_MAJOR
                     constexpr uint32_t out_row_group_tiles = out_subblock_h * in1_block_w;
                     constexpr uint32_t out_row_stride_bytes = in1_block_w * output_single_tile_size_bytes;
 
@@ -725,7 +725,7 @@ void kernel_main() {
                         }
                         out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                     }
-#endif  // ROW_MAJOR_OUTPUT
+#endif  // TILE_PACK_ROW_MAJOR
         // Pop row(s) of fully padded subblocks
                     if (bh == num_blocks_h_dim - 1) {
                         cb_out.wait_front(padded_block_tiles_h_skip);
