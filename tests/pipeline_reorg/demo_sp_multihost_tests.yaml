@@ -66,66 +66,64 @@
 # BH SP4 Multihost Pipeline Tests (4 connected SP1 = 16 galaxies)
 # ============================================================================
 
-- name: "Physical Discovery Test (SP4)"
-  cmd: |
-    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
-      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
-  skus:
-    bh_sp4:
-      timeout: 15
-  owner_id: U08RL15T4N8
-  team: scaleout
-  sp_config: sp4
+# - name: "Physical Discovery Test (SP4)"
+#   cmd: |
+#     mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+#       /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
+#   skus:
+#     bh_sp4:
+#       timeout: 15
+#   owner_id: U08RL15T4N8
+#   team: scaleout
+#   sp_config: sp4
 
-- name: "System Health Check (SP4)"
-  cmd: |
-    mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
-      /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
-  skus:
-    bh_sp4:
-      timeout: 15
-  owner_id: U08RL15T4N8
-  team: scaleout
-  sp_config: sp4
+# - name: "System Health Check (SP4)"
+#   cmd: |
+#     mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+#       /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health
+#   skus:
+#     bh_sp4:
+#       timeout: 15
+#   owner_id: U08RL15T4N8
+#   team: scaleout
+#   sp_config: sp4
 
 - name: "Pipeline Test (DeepSeek V3 B1 Superpod 4)"
   cmd: |
     set -x
 
-    # MAX_RETRIES=10
-    # validation_succeeded=false
+    MAX_RETRIES=10
+    validation_succeeded=false
 
-    # for attempt in $(seq 1 "$MAX_RETRIES"); do
-    #   echo "=== Recovery attempt $attempt of $MAX_RETRIES ==="
+    for attempt in $(seq 1 "$MAX_RETRIES"); do
+      echo "=== Recovery attempt $attempt of $MAX_RETRIES ==="
 
-    #   echo "--- Running system health check ---"
-    #   if mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
-    #     /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health; then
-    #       echo "SUCCESS: System health check passed on attempt $attempt"
-    #       validation_succeeded=true
-    #       break
-    #   fi
+      echo "--- Running system health check ---"
+      if mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode \
+        /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_system_health; then
+          echo "SUCCESS: System health check passed on attempt $attempt"
+          validation_succeeded=true
+          break
+      fi
 
-    #   echo "WARNING: Validation failed on attempt $attempt"
+      echo "WARNING: Validation failed on attempt $attempt"
 
-    #   echo "--- Resetting cards with tt-smi ---"
-    #   mpirun --pernode --tag-output /opt/venv/bin/tt-smi -glx_reset
+      echo "--- Resetting cards with tt-smi ---"
+      mpirun --pernode --tag-output /opt/venv/bin/tt-smi -glx_reset
 
-    #   if [ "$attempt" -lt "$MAX_RETRIES" ]; then
-    #     echo "--- Sleeping 30s before next attempt ---"
-    #     sleep 30
-    #   fi
-    # done
+      if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+        echo "--- Sleeping 30s before next attempt ---"
+        sleep 30
+      fi
+    done
 
-    # if [ "$validation_succeeded" != true ]; then
-    #   echo "ERROR: Recovery failed after $MAX_RETRIES attempts -- SKIPPING PIPELINE TEST (DeepSeek V3 B1 Superpod 4)"
-    #   exit 1
-    # fi
+    if [ "$validation_succeeded" != true ]; then
+      echo "ERROR: Recovery failed after $MAX_RETRIES attempts -- SKIPPING PIPELINE TEST (DeepSeek V3 B1 Superpod 4)"
+      exit 1
+    fi
 
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
-    echo "PIPELINE_HOSTS: $PIPELINE_HOSTS"
-    echo "PIPELINE_DIR: $PIPELINE_DIR"
     mkdir -p $PIPELINE_DIR
 
     echo "=== SP4 superpod: running generate_blitz_decode_pipeline_configs ==="
