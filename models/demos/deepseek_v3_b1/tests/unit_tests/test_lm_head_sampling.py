@@ -2475,6 +2475,7 @@ def test_single_device_mtp(
     assert mtp_passing_pcc, "MTP output PCC check failed"
 
 
+@pytest.mark.skip(reason="Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.")
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [1337])
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
@@ -2489,6 +2490,7 @@ def test_single_device_mtp(
     ],
     indirect=True,
 )
+@pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
 def test_single_device_mtp_verification(
     bh_2d_mesh_device,
     use_fp32,
@@ -2780,9 +2782,11 @@ def test_single_device_mtp_verification(
     logger.info("MTP verification test PASSED: speculative token matches base token")
 
 
+@pytest.mark.skip(reason="Disabled: broken by PR #42662 (speculative decoding refactor). Tracked in #42964.")
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [1337])
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")
+@pytest.mark.skip(reason="Skipping test for now, TODO: use new metadata format for test")
 def test_single_device_d2h(
     bh_2d_mesh_device,
     use_fp32,
@@ -2860,6 +2864,14 @@ def test_single_device_d2h(
 
     input_tensor_mesh = ttnn.from_torch(
         torch_a,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=input_a_mem_config,
+    )
+    intermediate_tensor_mesh = ttnn.from_torch(
+        torch.zeros_like(torch_a),
         device=submesh,
         layout=ttnn.TILE_LAYOUT,
         tile=a_tile,

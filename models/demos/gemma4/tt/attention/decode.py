@@ -123,16 +123,25 @@ def decode_forward(
     # 6. SDPA (scale=1.0)
     sliding_window = config.sliding_window if config.is_sliding else None
 
-    # For large head_dim (e.g. 512 on global layers), use a smaller compute grid
-    # to avoid L1 overflow on mesh devices where fabric reserves L1 space
-    sdpa_program_config = None
+    # Always pass an SDPAProgramConfig so num_cores_per_head stays within
+    # MAX_TREE_REDUCTION_ROUNDS=6 (=> 64 cores/head). With program_config=None,
+    # the SDPA op falls back to the full device grid, which exceeds 64 cores
+    # on Blackhole (>=110 cores) when num_kv_heads is small. The struct's
+    # default max_cores_per_head_batch=16 caps the per-head reduction tree.
     if config.head_dim >= 512:
-        sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
-            q_chunk_size=32,
-            k_chunk_size=64,
-            exp_approx_mode=False,
-        )
+        # Global layers: smaller grid — head_dim=512 needs more L1 per core.
+        sdpa_grid = ttnn.CoreCoord(8, 4)
+    else:
+        # Sliding layers: use the full device compute grid.
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
+
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_grid,
+        q_chunk_size=32,
+        k_chunk_size=64,
+        exp_approx_mode=False,
+    )
 
     if page_table is not None:
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(

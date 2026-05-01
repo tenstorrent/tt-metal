@@ -91,6 +91,9 @@ class ComputeNode:
         else:
             self.data_copy_type = data_copy_type
 
+        if self.src_a is None and self.src_b is None:
+            return
+
     def unpack(
         self,
         operation: "FusedOperation",
@@ -106,6 +109,7 @@ class ComputeNode:
             PerfRunType.MATH_ISOLATE,
         )
         if not skip_init:
+            code += config.sentinel.configure_unpack(config, operation, self)
             code += self.unpacker().init(operation, config, self, block)
 
         code += self.unpacker().loop.unpack_loop(operation, config, self, block)
@@ -130,6 +134,7 @@ class ComputeNode:
             PerfRunType.L1_CONGESTION,
         )
         if not skip_init:
+            code += config.sentinel.configure_math(config, operation, self)
             code += self.fpu.init(operation, config, self, block)
 
         code += self.fpu.loop.math_loop(operation, config, self, block)

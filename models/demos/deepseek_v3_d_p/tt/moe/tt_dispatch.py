@@ -3,12 +3,35 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Expert-centric MoE Dispatch Module (TTNN Implementation)
+MoE Dispatch Module (TTNN Implementation)
 
-This module implements token dispatching for Mixture-of-Experts (MoE) layers using TTNN.
+This module routes input tokens to the experts that are supposed to process them.
+It sits between TtMoERoutingSetup (which computes where each source device should write)
+and TtRoutedExpert (which processes the tokens after they arrive).
 
-This is a TTNN wrapper around the prefill_dispatch operation, which performs the same
-logic as the PyTorch reference implementation but on Tenstorrent hardware.
+For each token and each of its top-k experts, the dispatch kernel:
+  1. Looks up which destination device hosts that expert via the expert_dispatch_table.
+  2. Reads the write position (global_dispatch_offset) for this source device and expert
+     from tt_expert_offsets (produced by TtMoERoutingSetup).
+  3. Writes the token embedding into the destination device's local dispatch buffer at that
+     position: locally via NOC if the expert is on the same device, or remotely via fabric
+     if it is on a different device in the dispatch group.
+  4. Writes a metadata entry alongside each token recording:
+       [0] linearized_mesh_coord  — source device coordinate
+       [1] token_idx              — original token index within the source device's sequence
+       [2] topk_idx               — which top-k slot this routing corresponds to
+       [3] routed_expert          — global expert ID
+       [4] weight                 — router weight for this (token, expert) pair
+
+Each destination device accumulates an expert-centric dispatch buffer from all source
+devices. The buffer is flat: all experts_per_chip experts share a single token
+dimension of total capacity max_dispatch_buffer_token_size, packed dynamically with
+each expert's region starting at a TILE_HEIGHT-aligned offset. The per-device shape is:
+  dispatched_buffer: (1, 1, max_dispatch_buffer_token_size, emb_dim)
+  metadata:          (1, 1, max_dispatch_buffer_token_size, metadata_len=5)
+
+TtCombineModule reads from these buffers using the same offsets to reconstruct the
+original token ordering after expert processing.
 """
 
 import torch
@@ -19,7 +42,13 @@ from models.common.lightweightmodule import LightweightModule
 
 
 class TtDispatchModule(LightweightModule):
-    """Expert-centric MoE dispatch module."""
+    """TTNN wrapper around the prefill_dispatch device operation.
+
+    Routes input tokens to destination devices based on top-k expert indices and writes
+    them into flat dispatch buffers. Produces dispatched_buffer and metadata tensors
+    consumed by TtRoutedExpert and TtCombineModule respectively.
+    See module docstring for full dispatch buffer layout details.
+    """
 
     def __init__(
         self,
@@ -29,7 +58,7 @@ class TtDispatchModule(LightweightModule):
         num_routed_experts: int,
         num_experts_per_tok: int,
         metadata_len: int,
-        max_dispatched_tokens_per_expert: int,
+        max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         emb_dim: int = 7 * 1024,
         cluster_axis: int = 0,
@@ -40,11 +69,21 @@ class TtDispatchModule(LightweightModule):
         Initialize dispatch module with configuration parameters.
 
         Args:
-            dispatch_group_size: Number of chips in each dispatch group
-            experts_per_chip: Number of experts per chip
-            num_routed_experts: Total number of routed experts across all chips
-            metadata_len: Length of metadata per token (stores: chip, token, topk_idx, routed_expert, weight)
-            max_dispatched_tokens_per_expert: Maximum number of tokens that can be dispatched to each expert
+            mesh_device: TTNN mesh device.
+            dispatch_group_size: Number of devices in each dispatch group (mesh rows for cluster_axis=0).
+            experts_per_chip: Number of experts hosted on each destination device.
+            num_routed_experts: Total number of routed experts across all devices.
+            num_experts_per_tok: Number of experts each token is routed to (top-k).
+            metadata_len: Number of fields in per-token metadata (5: chip, token, topk_idx,
+                routed_expert, weight).
+            max_dispatch_buffer_token_size: Total token capacity of the flat dispatch
+                buffer per chip. Tokens that would push the total past this cap are
+                silently dropped by the kernel (prevents out-of-bounds DRAM writes).
+            seq_len_per_chip: Number of tokens on each source device.
+            emb_dim: Embedding dimension of each token.
+            cluster_axis: Mesh axis along which dispatch communicates (0 = SP/dispatch axis).
+            num_links: Number of fabric links for remote token writes.
+            topology: Fabric topology for remote token writes.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -53,7 +92,7 @@ class TtDispatchModule(LightweightModule):
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
         self.metadata_len = metadata_len
-        self.max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert
+        self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
         self.seq_len_per_chip = seq_len_per_chip
         self.cluster_axis = cluster_axis
         self.num_links = num_links
@@ -88,6 +127,8 @@ class TtDispatchModule(LightweightModule):
             device=mesh_device,
             dtype=ttnn.int32,
         )
+        # To be consistent with the moe_routing_setup output, we squeeze expert_offsets to have 2D per device shape: (1, num_routed_experts)
+        result = ttnn.squeeze(result, 0)
         logger.debug(f"[shard_expert_offsets] OUTPUT: result.shape={result.shape}")
         return result
 
@@ -150,23 +191,40 @@ class TtDispatchModule(LightweightModule):
         tt_expert_dispatch_table: ttnn.Tensor,
     ):
         """
-        Route tokens from their original positions to expert-specific buffers distributed across chips.
+        Route input tokens to destination device dispatch buffers based on top-k expert indices.
 
-        Simulates MoE dispatch: each token is routed to multiple experts based on router indices.
-        Tokens are gathered into per-expert buffers with metadata tracking their origin for later recombination.
+        For each token on each source device, the kernel looks up the destination device for
+        each of its top-k experts via tt_expert_dispatch_table, then writes the token embedding
+        at the position given by tt_expert_offsets in the destination device's flat dispatch
+        buffer. Writes to the local device use NOC; writes to remote devices use fabric.
+        A metadata entry is written alongside each token for later recombination by TtCombineModule.
 
         Args:
-            x: Input tensor of shape (dispatch_group_size, seq_len, emb_dim)
-            weights: Router weights of shape (dispatch_group_size, seq_len, num_experts_per_tok)
-            indices: Expert indices of shape (dispatch_group_size, seq_len, num_experts_per_tok)
-            tt_expert_offsets: Base offset for each expert from each chip (TTNN tensor)
-                Shape: (dispatch_group_size, num_routed_experts) - use shard_expert_offsets() to create
-            tt_expert_dispatch_table: Expert dispatch table mapping expert ID to chip ID (TTNN tensor)
-                Shape: (num_dispatch_groups, num_routed_experts) - use shard_expert_dispatch_table() to create
+            x: Input token embeddings.
+                Shape per device: (1, seq_len_per_chip, emb_dim)
+            weights: Router weights for each token's top-k experts.
+                Shape per device: (1, seq_len_per_chip, num_experts_per_tok)
+            indices: Top-k expert indices for each token.
+                Shape per device: (1, seq_len_per_chip, num_experts_per_tok)
+            tt_expert_offsets: Starting token index per source device per expert in the
+                destination device's flat dispatch buffer. Produced by TtMoERoutingSetup.forward().
+                Shape per device: (1, num_routed_experts)
+            tt_expert_dispatch_table: Maps each expert ID to the destination chip ID within the
+                dispatch group. Produced by shard_expert_dispatch_table().
+                Shape per device: (1, num_routed_experts)
+                Values >= 0 are destination chip IDs; -1 means the expert is not present in
+                this dispatch group.
 
         Returns:
-            dispatched_buffer: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
-            metadata: Metadata tensor of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
+            dispatched_buffer: Flat expert-centric token buffer on each destination device.
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, emb_dim)
+                Token at index i belongs to the expert whose region covers index i; regions are
+                TILE_HEIGHT-aligned and laid out by the expert region offsets from offset_cumsum.
+            metadata: Per-token metadata written alongside dispatched_buffer.
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5),
+                int32, ROW_MAJOR.
+                Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
+                Used by TtCombineModule to route processed tokens back to their origin.
         """
         logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
@@ -178,7 +236,7 @@ class TtDispatchModule(LightweightModule):
         logger.debug(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
         logger.debug(f"  num_routed_experts={self.num_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
         logger.debug(
-            f"  metadata_len={self.metadata_len}, max_dispatched_tokens_per_expert={self.max_dispatched_tokens_per_expert}"
+            f"  metadata_len={self.metadata_len}, max_dispatch_buffer_token_size={self.max_dispatch_buffer_token_size}"
         )
         logger.debug(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
 
@@ -196,7 +254,7 @@ class TtDispatchModule(LightweightModule):
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,
             metadata_len=self.metadata_len,
-            max_dispatched_tokens_per_expert=self.max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size=self.max_dispatch_buffer_token_size,
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,

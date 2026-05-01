@@ -208,7 +208,6 @@ class LMHeadSampling:
     def _build_reduce_brisc_per_core_args(enable, rp, device_role, device, device_idx):
         if not enable:
             return []
-        role_name = {MESH_LEAF: "LEAF", MESH_ROOT3: "ROOT3", MESH_ROOT2: "ROOT2", MESH_ROOT1: "ROOT1"}
         intermediate_base = rp["intermediate_per_device"][device_idx].buffer_address()
         payload = rp["payload_size_bytes"]
         if device_role == MESH_LEAF:
@@ -233,7 +232,7 @@ class LMHeadSampling:
                         int(fc_phys.x),
                         int(fc_phys.y),
                         slot,
-                        rp["wf_sem_addrs"][slot],
+                        rp["wf_ready_sem_addr"],
                         int(dst_l1),
                         int(dst_sem),
                         int(out_addr),
@@ -242,7 +241,7 @@ class LMHeadSampling:
                 )
             )
         for fc in rp["fabric_cores"]:
-            args.append((fc, list(rp["wf_sem_addrs"])))
+            args.append((fc, [rp["wf_ready_sem_addr"]]))
         return args
 
     @staticmethod
@@ -670,7 +669,7 @@ class LMHeadSampling:
             reduce_compute_tile_size = 32 * 32 * reduce_element_size
             reduce_num_tiles = (reduce_shard_elements + 32 * 32 - 1) // (32 * 32)
 
-            reduce_packet_header_size = 96
+            reduce_packet_header_size = ttnn.get_tt_fabric_packet_header_size_bytes()
             reduce_slot_size_bytes = reduce_packet_header_size + reduce_payload_size_bytes
 
             # Worker cores = eh_matmul cores (same on every device)
@@ -708,11 +707,8 @@ class LMHeadSampling:
             reduce_wf_sem_cores = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
             )
-            reduce_wf_sems = [
-                ttnn.create_global_semaphore(mesh_device, reduce_wf_sem_cores, 0)
-                for _ in range(reduce_num_workers_per_column)
-            ]
-            reduce_wf_sem_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in reduce_wf_sems]
+            reduce_wf_ready_sem = ttnn.create_global_semaphore(mesh_device, reduce_wf_sem_cores, 0)
+            reduce_wf_ready_sem_addr = int(ttnn.get_global_semaphore_address(reduce_wf_ready_sem))
 
             reduce_params = dict(
                 sem_addrs=reduce_sem_addrs,
@@ -730,7 +726,7 @@ class LMHeadSampling:
                 core_to_slot=reduce_core_to_slot,
                 core_to_shard=reduce_core_to_shard,
                 output_core=reduce_output_core,
-                wf_sem_addrs=reduce_wf_sem_addrs,
+                wf_ready_sem_addr=reduce_wf_ready_sem_addr,
                 root_coord=reduce_root_coord,
             )
 
@@ -1331,7 +1327,6 @@ class LMHeadSampling:
                     ("reduce_output_core_noc_x", reduce_output_core_phys_x),
                     ("reduce_output_core_noc_y", reduce_output_core_phys_y),
                     ("reduce_num_workers", reduce_params["num_workers_per_column"] if enable_reduce_to_one else 0),
-                    ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"] if enable_reduce_to_one else 0),
                     # [Reduce] Pre-reduce gate: BRISC on argmax_final_core signals 2 fabric cores after sampling
                     ("reduce_fc_noc_0_x", reduce_fc_nocs[0][0]),
                     ("reduce_fc_noc_0_y", reduce_fc_nocs[0][1]),

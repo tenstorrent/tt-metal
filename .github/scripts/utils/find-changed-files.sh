@@ -56,16 +56,16 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/.github/**|tt_metal/tt-llk/tests/requirements.txt)
             LLK_CI_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_wormhole_b0/**)
+        tt_metal/tt-llk/tt_llk_wormhole_b0/**|tt_metal/hw/ckernels/wormhole_b0/**)
             LLK_WORMHOLE_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_blackhole/**)
+        tt_metal/tt-llk/tt_llk_blackhole/**|tt_metal/hw/ckernels/blackhole/**)
             LLK_BLACKHOLE_CHANGED=true
             ;;
         tt_metal/tt-llk/common/**)
             LLK_COMMON_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/tt-llk/tests/sources/quasar/**|tt_metal/tt-llk/tests/python_tests/quasar/**)
+        tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/tt-llk/tests/sources/quasar/**|tt_metal/tt-llk/tests/python_tests/quasar/**|tt_metal/hw/ckernels/quasar/**)
             LLK_QUASAR_CHANGED=true
             ;;
         tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)

@@ -116,12 +116,14 @@ def test_mochi_diffusers_pipeline():
         [(1, 8), 1, 0, (1, 8), 0, 1, 1],
         [(2, 4), 0, 1, (1, 8), 0, 1, 1],  # VAE mesh shape = (1, 8) is more memory efficient.
         [(4, 8), 1, 0, (4, 8), 0, 1, 4],  # note sp <-> tp switch for VAE for memory efficiency.
+        [(4, 8), 1, 0, (4, 8), 0, 1, 2],
     ],
     ids=[
         "dit_2x2sp0tp1_vae_1x4sp0tp1",
         "dit_1x8sp1tp0_vae_1x8sp0tp1",
         "dit_2x4sp0tp1_vae_1x8sp0tp1",
-        "dit_4x8sp1tp0_vae_4x8sp0tp1",
+        "dit_wh_4x8sp1tp0_vae_4x8sp0tp1",
+        "dit_bh_4x8sp1tp0_vae_4x8sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -157,7 +159,7 @@ def test_tt_mochi_pipeline(
         f"Creating TT Mochi pipeline with DiT mesh device shape {mesh_device.shape}, VAE mesh device shape {vae_mesh_shape}"
     )
     logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
-    logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
+    logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {vae_tp_axis}")
 
     # Create parallel config
     parallel_config = DiTParallelConfig(
@@ -166,18 +168,21 @@ def test_tt_mochi_pipeline(
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
 
-    if vae_mesh_shape[vae_sp_axis] == 1:
-        w_parallel_factor = 1
+    if vae_mesh_shape[0] > 1 and vae_mesh_shape[1] > 1:
+        # 2D mesh (e.g. Galaxy): separate H/W on different axes
+        vae_parallel_config = MochiVAEParallelConfig(
+            time_parallel=ParallelFactor(factor=1, mesh_axis=vae_tp_axis),
+            h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis], mesh_axis=vae_sp_axis),
+            w_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
+        )
     else:
-        w_parallel_factor = 2
-
-    vae_parallel_config = MochiVAEParallelConfig(
-        time_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
-        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=vae_sp_axis),
-        h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis] // w_parallel_factor, mesh_axis=vae_sp_axis),
-    )
-    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == vae_mesh_shape[vae_sp_axis]
-    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
+        # 1D mesh (e.g. T3K, N300): use time parallelism, no spatial
+        t_axis = 1 if vae_mesh_shape[1] > 1 else 0
+        vae_parallel_config = MochiVAEParallelConfig(
+            time_parallel=ParallelFactor(factor=vae_mesh_shape[t_axis], mesh_axis=t_axis),
+            h_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            w_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        )
 
     # Create the TT Mochi pipeline
     tt_pipe = TTMochiPipeline(

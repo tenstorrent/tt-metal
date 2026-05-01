@@ -117,7 +117,7 @@ class ModelOptimizations:
         70B+ models still use bfp4 MLPs and BFP8 attention in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name in ["Llama-3.1-70B", "Llama-3.2-90B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+        if base_model_name in ["Llama-3.1-70B", "Llama-3.2-90B", "DeepSeek-R1-Distill-Llama-70B"]:
             logger.info(
                 f"{model_name} is >70B and large models test insensitive precision, using BFP4 MLPs and BFP8 attention even in accuracy mode"
             )
@@ -133,6 +133,7 @@ class ModelOptimizations:
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
+                or base_model_name.startswith("Meta-Llama-3")
             ):
                 if model_name.startswith("phi-4"):
                     logger.info(
@@ -477,6 +478,11 @@ class ModelArgs:
         "Phi-4": "models/tt_transformers/model_params/phi-4",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
+        "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+        "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
+        "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
+        "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
+        "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -2318,12 +2324,13 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
+                "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
+                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
-                "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
+                "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None, "P150x8": 64},
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2415,7 +2422,7 @@ class ModelArgs:
             local_params = "LLAMA3_2_1B_PARAMS"
         elif "3.2-3B" in model_name:
             local_params = "LLAMA3_2_3B_PARAMS"
-        elif "3.1-8B" in model_name:
+        elif "3.1-8B" in model_name or "Meta-Llama-3-8B" in model_name:
             local_params = "LLAMA3_1_8B_PARAMS"
         elif "3.2-11B" in model_name:
             local_params = "LLAMA3_2_11B_PARAMS"
@@ -2591,8 +2598,13 @@ class ModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
+        # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
+        tile_size = 32
         if self.is_galaxy:
             self.padded_vocab_size = 128 * 1024
+        elif self.num_devices == 0:
+            # No mesh (e.g. reference-output generation): pad to tile_size only
+            self.padded_vocab_size = math.ceil(self.vocab_size / tile_size) * tile_size
         else:
             self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
@@ -2653,6 +2665,7 @@ class ModelArgs:
                 "Qwen2.5-VL-72B": 32,
                 "Qwen2.5-VL-32B": 16,
                 "Qwen2.5-72B": 32,
+                "Qwen2.5-32B": 16,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
             }.get(self.base_model_name, 0)
@@ -3428,6 +3441,12 @@ class ModelArgs:
             "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
             "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
             "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
+            "Qwen2.5-VL-32B": "Qwen/Qwen2.5-VL-32B-Instruct",
+            "Qwen2.5-VL-72B": "Qwen/Qwen2.5-VL-72B-Instruct",
+            "Qwen3-VL-32B": "Qwen/Qwen3-VL-32B-Instruct",
+            "Qwen2.5-32B-Instruct": "Qwen/Qwen2.5-32B-Instruct",
+            "Llama-3-8B": "meta-llama/Llama-3-8B",
+            "Meta-Llama-3-8B": "meta-llama/Meta-Llama-3-8B",
             "Llama-3.1-8B": "meta-llama/Llama-3.1-8B-Instruct",
             "Llama-3.1-70B": "meta-llama/Llama-3.1-70B-Instruct",
             "Llama-3.2-1B": "meta-llama/Llama-3.2-1B-Instruct",
@@ -3478,6 +3497,8 @@ class ModelArgs:
                     fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
                 elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
                     fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
+                elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
+                    fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
                 elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
                     fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
                 elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:

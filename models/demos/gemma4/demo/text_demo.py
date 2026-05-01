@@ -13,6 +13,7 @@ Usage:
     pytest models/demos/gemma4/demo/text_demo.py -v --timeout=600 -k "test_demo"
 """
 
+import gc
 import os
 import time
 
@@ -262,6 +263,7 @@ def run_generation(
                 page_table=page_table_tt,
                 kv_cache=tt_kv_cache,
                 sampling_on_device=on_device_sampling,
+                pli_combined=device_inputs.get("pli"),
             )
 
         def _inputs_to_device(inputs):
@@ -288,86 +290,108 @@ def run_generation(
         )
         profiler.start(f"inference_decode", iteration=prompt_idx)
 
-        # ── Main decode loop (mode-agnostic) ──────────────────────────────
-        for step in range(max_new_tokens - 1):
-            if iteration == 0:
-                profiler.start(f"compile_decode", iteration=prompt_idx)
-            else:
-                profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
+        # Disable Python GC during decode to avoid pause spikes; collect once before.
+        # The decode loop, trace capture, and trace execution all sit inside a try
+        # so that GC is always restored and any captured trace is always released
+        # — otherwise an exception leaves GC disabled for the rest of the pytest
+        # worker (contaminating unrelated tests) and leaks the trace handle.
+        gc.collect()
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
 
-            inputs_h = _make_decode_inputs(next_token, current_pos)
+        try:
+            # ── Main decode loop (mode-agnostic) ──────────────────────────────
+            for step in range(max_new_tokens - 1):
+                if iteration == 0:
+                    profiler.start(f"compile_decode", iteration=prompt_idx)
+                else:
+                    profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
 
-            if enable_decode_trace and trace_id is not None:
-                # ── Traced execution: copy inputs and replay ──
-                _copy_inputs_to_trace(inputs_h)
-                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-                decode_logits = trace_output
+                t_make_start = time.perf_counter()
+                inputs_h = _make_decode_inputs(next_token, current_pos)
+                t_make_end = time.perf_counter()
 
-            elif enable_decode_trace and iteration == 0:
-                # ── Iteration 0: compile run + trace capture ──
-                # 1. Compile run (un-traced)
-                inputs_d = _inputs_to_device(inputs_h)
-                decode_logits, _ = _fwd(inputs_d)
+                if enable_decode_trace and trace_id is not None:
+                    # ── Traced execution: copy inputs and replay ──
+                    _copy_inputs_to_trace(inputs_h)
+                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                    decode_logits = trace_output
+                    t_enq_end = time.perf_counter()
+
+                elif enable_decode_trace and iteration == 0:
+                    # ── Iteration 0: compile run + trace capture ──
+                    # 1. Compile run (un-traced)
+                    inputs_d = _inputs_to_device(inputs_h)
+                    decode_logits, _ = _fwd(inputs_d)
+                    next_token = _extract_token(decode_logits)
+                    generated_tokens.append(next_token)
+                    current_pos += 1
+                    profiler.end(f"compile_decode", iteration=prompt_idx)
+                    decode_iteration_time = profiler.get_duration("compile_decode", iteration=prompt_idx)
+                    logger.debug(
+                        f"Iteration {iteration} (compile): {1000*decode_iteration_time:.0f}ms @ "
+                        f"{1/decode_iteration_time:.1f} tok/s/user"
+                    )
+                    iteration += 1
+
+                    # 2. Capture trace with fresh device buffers
+                    logger.info("Capturing decode trace...")
+                    inputs_h2 = _make_decode_inputs(next_token, current_pos)
+                    trace_device_inputs = _inputs_to_device(inputs_h2)
+
+                    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                    trace_output, _ = _fwd(trace_device_inputs)
+                    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+                    logger.info("Decode trace captured")
+
+                    # 3. Execute trace for current iteration
+                    profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
+                    _copy_inputs_to_trace(inputs_h2)
+                    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                    decode_logits = trace_output
+                    t_enq_end = time.perf_counter()
+
+                else:
+                    # ── No tracing: straightforward forward ──
+                    inputs_d = _inputs_to_device(inputs_h)
+                    decode_logits, _ = _fwd(inputs_d)
+                    t_enq_end = time.perf_counter()
+
                 next_token = _extract_token(decode_logits)
+                t_sync_end = time.perf_counter()
                 generated_tokens.append(next_token)
                 current_pos += 1
-                profiler.end(f"compile_decode", iteration=prompt_idx)
-                decode_iteration_time = profiler.get_duration("compile_decode", iteration=prompt_idx)
+
+                if iteration == 0:
+                    profiler.end(f"compile_decode", iteration=prompt_idx)
+                    decode_iteration_time = profiler.get_duration("compile_decode", iteration=prompt_idx)
+                else:
+                    profiler.end(f"inference_decode_time_{iteration}", iteration=prompt_idx)
+                    decode_iteration_time = profiler.get_duration(
+                        f"inference_decode_time_{iteration}", iteration=prompt_idx
+                    )
+
+                tokens_per_second_per_user = 1 / decode_iteration_time
+                host_inputs_ms = 1000 * (t_make_end - t_make_start)
+                copy_enq_ms = 1000 * (t_enq_end - t_make_end)
+                exec_sync_ms = 1000 * (t_sync_end - t_enq_end)
                 logger.debug(
-                    f"Iteration {iteration} (compile): {1000*decode_iteration_time:.0f}ms @ "
-                    f"{1/decode_iteration_time:.1f} tok/s/user"
+                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ "
+                    f"{tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput) "
+                    f"| host_inputs={host_inputs_ms:.1f}ms copy+enq={copy_enq_ms:.1f}ms exec+sync={exec_sync_ms:.1f}ms"
                 )
+
                 iteration += 1
 
-                # 2. Capture trace with fresh device buffers
-                logger.info("Capturing decode trace...")
-                inputs_h2 = _make_decode_inputs(next_token, current_pos)
-                trace_device_inputs = _inputs_to_device(inputs_h2)
+                # Check for EOS
+                if next_token == tokenizer.eos_token_id:
+                    break
 
-                trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                trace_output, _ = _fwd(trace_device_inputs)
-                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-                logger.info("Decode trace captured")
-
-                # 3. Execute trace for current iteration
-                profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
-                _copy_inputs_to_trace(inputs_h2)
-                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-                decode_logits = trace_output
-
-            else:
-                # ── No tracing: straightforward forward ──
-                inputs_d = _inputs_to_device(inputs_h)
-                decode_logits, _ = _fwd(inputs_d)
-
-            next_token = _extract_token(decode_logits)
-            generated_tokens.append(next_token)
-            current_pos += 1
-
-            if iteration == 0:
-                profiler.end(f"compile_decode", iteration=prompt_idx)
-                decode_iteration_time = profiler.get_duration("compile_decode", iteration=prompt_idx)
-            else:
-                profiler.end(f"inference_decode_time_{iteration}", iteration=prompt_idx)
-                decode_iteration_time = profiler.get_duration(
-                    f"inference_decode_time_{iteration}", iteration=prompt_idx
-                )
-
-            tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.debug(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ "
-                f"{tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
-
-            iteration += 1
-
-            # Check for EOS
-            if next_token == tokenizer.eos_token_id:
-                break
-
-        # Release trace
-        if trace_id is not None:
-            ttnn.release_trace(mesh_device, trace_id)
+        finally:
+            if gc_was_enabled:
+                gc.enable()
+            if trace_id is not None:
+                ttnn.release_trace(mesh_device, trace_id)
 
         profiler.end(f"inference_decode", iteration=prompt_idx)
 

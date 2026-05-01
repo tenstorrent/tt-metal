@@ -12,6 +12,7 @@ from helpers.llk_params import (
     ApproximationMode,
     BroadcastType,
     ClearFP32DstAcc,
+    DataFormat,
     DestSync,
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
@@ -20,6 +21,7 @@ from helpers.llk_params import (
     ReduceDimension,
     ReducePool,
     Transpose,
+    UnpackToDest,
 )
 from pydantic import (
     BaseModel,
@@ -140,11 +142,11 @@ class FpuMathSchema(BaseModel):
     reduce_pool: Optional[ReducePool] = None
     reduce_dim: Optional[ReduceDimension] = None
     enforce_fp32_accumulation: Optional[EnforceFP32Accumulation] = None
-    clear_fp32_dst_acc: Optional[ClearFP32DstAcc] = None
     acc_to_dest: Optional[AccToDest] = None
     unpack_transpose_within_face: Transpose = Transpose.No
     unpack_transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
+    unpack_to_dest: UnpackToDest = UnpackToDest.No
     src_a: str = Field(..., min_length=1)
     src_b: str = Field(..., min_length=1)
 
@@ -264,9 +266,19 @@ class FpuMathSchema(BaseModel):
                 f"reuse_dest: only for Eltwise operations, not '{self.operation.value}'"
             )
 
+        if (
+            self.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
+            and self.acc_to_dest != AccToDest.Yes
+        ):
+            raise ValueError(
+                "reuse_dest DEST_TO_SRCA requires acc_to_dest: true. "
+                "The LLK unpacker routes L1 data to srcB only when acc_to_dest is enabled; "
+                "without it, L1 data goes to srcA and gets overwritten by dest, leaving srcB as zeros."
+            )
+
         return self
 
-    def to_compute_node(self, operands):
+    def to_compute_node(self, operands, output):
         src_a = operands.get(self.src_a)
         src_b = operands.get(self.src_b)
 
@@ -275,6 +287,16 @@ class FpuMathSchema(BaseModel):
             and src_a.dimensions[1] != src_b.dimensions[0]
         ):
             raise ValueError("Matmul: incompatible dimensions for src_a and src_b")
+
+        if (
+            src_a.data_format == DataFormat.Int32
+            and self.unpack_to_dest != UnpackToDest.Yes
+        ):
+            raise ValueError(
+                f"src_a format {src_a.data_format} requires unpack_to_dest: Yes. "
+                f"SrcA/SrcB registers are 19-bit wide and cannot hold 32-bit integers; "
+                f"they must be unpacked directly to DEST."
+            )
 
         if self.operation.is_eltwise():
             fpu = EltwiseFpu(self.operation.to_math_operation())
@@ -288,6 +310,13 @@ class FpuMathSchema(BaseModel):
             fpu = ReduceBlockMaxFpu()
         else:
             raise ValueError(f"Unknown FPU operation: {self.operation}")
+
+        clear_fp32_dst_acc = (
+            ClearFP32DstAcc.Yes
+            if self.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
+            or self.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCB
+            else ClearFP32DstAcc.No
+        )
 
         kwargs = {}
         if self.unpacker:
@@ -308,10 +337,12 @@ class FpuMathSchema(BaseModel):
             kwargs["math_fidelity"] = self.math_fidelity
         if self.enforce_fp32_accumulation:
             kwargs["enforce_fp32_accumulation"] = self.enforce_fp32_accumulation
-        if self.clear_fp32_dst_acc:
-            kwargs["clear_fp32_dst_acc"] = self.clear_fp32_dst_acc
+        if clear_fp32_dst_acc:
+            kwargs["clear_fp32_dst_acc"] = clear_fp32_dst_acc
         if self.acc_to_dest:
             kwargs["acc_to_dest"] = self.acc_to_dest
+        if self.unpack_to_dest:
+            kwargs["unpack_to_dest"] = self.unpack_to_dest
 
         return ComputeNode(fpu=fpu, src_a=src_a, src_b=src_b, sfpu=None, **kwargs)
 
@@ -347,7 +378,7 @@ class UnarySfpuMathSchema(BaseModel):
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     fill_const_value: float = 1.0
 
-    def to_compute_node(self, operands):
+    def to_compute_node(self, operands, output):
 
         sfpu = UnarySfpu(
             self.operation.to_math_operation(),
@@ -373,7 +404,7 @@ class BinarySfpuMathSchema(BaseModel):
     src2_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
 
-    def to_compute_node(self, operands):
+    def to_compute_node(self, operands, output):
 
         sfpu = BinarySfpu(
             self.operation.to_math_operation(),
@@ -419,7 +450,7 @@ class OperationSchema(BaseModel):
 
     def to_fused_operation(self, operands):
         output = operands.get(name=self.output)
-        math_ops = [m.to_compute_node(operands) for m in self.math]
+        math_ops = [m.to_compute_node(operands, output) for m in self.math]
         output.is_output = True
 
         max_out_dims = self._calculate_max_output_dimensions(operands)
