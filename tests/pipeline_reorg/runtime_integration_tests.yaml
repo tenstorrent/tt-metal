@@ -114,8 +114,9 @@
   team: runtime
 
 # --- Sweep Tests ---
+# NOTE: erfc filtered — ttnn.erfc dropped fast_and_approximate_mode in #42737 (Apr 24); test still passes the kwarg. Re-enable once test or API is updated.
 - name: runtime_fd_python_sweep
-  cmd: pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv
+  cmd: pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv -k 'not (test_run_eltwise_erf_ops and erfc)'
   skus:
     wh_n150_civ2:
       timeout: 45

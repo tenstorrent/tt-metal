@@ -279,10 +279,11 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
     const std::size_t q_heads = Q_split.shape()[1];
     const std::size_t kv_heads = K_split.shape()[1];
     const std::size_t S = Q_split.shape()[2];
-    const std::size_t Dh = Q_split.shape()[3];
+    const std::size_t Dh_qk = Q_split.shape()[3];  // Q/K head dim (used for QK^T dot product)
+    const std::size_t Dh_v = V_split.shape()[3];   // V head dim (can differ, determines output width)
 
-    // Output in SPLIT format (B, H, S, Dh) - heads NOT fused
-    xt::xarray<float> Out = xt::xarray<float>::from_shape({B, q_heads, S, Dh});
+    // Output in SPLIT format (B, H, S, Dh_v) - heads NOT fused, output width matches V
+    xt::xarray<float> Out = xt::xarray<float>::from_shape({B, q_heads, S, Dh_v});
     std::fill(Out.begin(), Out.end(), 0.0F);
 
     // Intermediates: (B, q_heads, S, 32) - logsumexp at col 0, rest zero-padded
@@ -295,7 +296,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
         return (h * kv_heads) / q_heads;
     };
 
-    const float scale = 1.0F / std::sqrt(static_cast<float>(Dh));
+    const float scale = 1.0F / std::sqrt(static_cast<float>(Dh_qk));
     std::vector<float> scores_row(S);
 
     for (std::size_t b = 0; b < B; ++b) {
@@ -307,7 +308,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                 float rmax = -INFINITY;
                 for (std::size_t j = 0; j < S; ++j) {
                     float dot = 0.0f;
-                    for (std::size_t t = 0; t < Dh; ++t) {
+                    for (std::size_t t = 0; t < Dh_qk; ++t) {
                         dot += Q_split(b, h, i, t) * K_split(b, g, j, t);
                     }
                     const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,S)
@@ -324,14 +325,14 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                 // Store intermediate: logsumexp = max + log(sum_exp)
                 Intermediates(b, h, i, 0) = rmax + std::log(denom);
 
-                // out_i[h] = sum_j softmax_ij * V[j] - store in SPLIT format (B, H, S, Dh)
-                for (std::size_t t = 0; t < Dh; ++t) {
+                // out_i[h] = sum_j softmax_ij * V[j] - store in SPLIT format (B, H, S, Dh_v)
+                for (std::size_t t = 0; t < Dh_v; ++t) {
                     float acc = 0.0F;
                     for (std::size_t j = 0; j < S; ++j) {
                         float w = std::exp(scores_row[j] - rmax) / denom;
                         acc += w * V_split(b, g, j, t);
                     }
-                    Out(b, h, i, t) = acc;  // Store in split format (B, H, S, Dh)
+                    Out(b, h, i, t) = acc;  // Store in split format (B, H, S, Dh_v)
                 }
             }
         }
@@ -462,6 +463,8 @@ struct SDPATestConfig {
     uint32_t sequence_length;
     uint32_t query_dim;
     uint32_t key_value_dim;
+    uint32_t value_dim =
+        0U;  // 0 means same as key_value_dim (for backward compat); total V dim = num_key_heads * head_dim_v
     uint32_t num_query_heads;
     uint32_t num_key_heads;
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;  // default: causal mask
@@ -476,9 +479,17 @@ struct SDPATestConfig {
 void run_sdpa_test(const SDPATestConfig& config) {
     using namespace ttml;
 
+    ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
+    ASSERT_GT(config.num_key_heads, 0U) << "num_key_heads must be greater than zero";
+    const uint32_t effective_value_dim = config.value_dim > 0 ? config.value_dim : config.key_value_dim;
+    ASSERT_EQ(config.query_dim % config.num_query_heads, 0U) << "query_dim must be divisible by num_query_heads";
+    ASSERT_EQ(config.key_value_dim % config.num_key_heads, 0U) << "key_value_dim must be divisible by num_key_heads";
+    ASSERT_EQ(effective_value_dim % config.num_key_heads, 0U) << "value_dim must be divisible by num_key_heads";
+
     // Generate already split-by-heads tensors directly
     const uint32_t head_dim_q = config.query_dim / config.num_query_heads;
     const uint32_t head_dim_kv = config.key_value_dim / config.num_key_heads;
+    const uint32_t head_dim_v = effective_value_dim / config.num_key_heads;
 
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
@@ -492,7 +503,9 @@ void run_sdpa_test(const SDPATestConfig& config) {
 
     xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
 
-    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
+    const std::array<std::size_t, 4> value_shape{
+        config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
@@ -859,4 +872,99 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
             }
         }
     }
+}
+
+// =============================================================================
+// DIFFERENT INNER DIM TESTS - V head dim differs from Q/K head dim
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_CausalMask_SmallV) {
+    // Q/K head_dim=64, V head_dim=32 (V smaller than Q/K)
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,      // 2 heads * 64 dim per head
+        .key_value_dim = 128U,  // 2 heads * 64 dim per head (K)
+        .value_dim = 64U,       // 2 heads * 32 dim per head (V)
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_CausalMask_SmallV"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_CausalMask_LargeV) {
+    // Q/K head_dim=32, V head_dim=64 (V larger than Q/K)
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 64U,      // 2 heads * 32 dim per head
+        .key_value_dim = 64U,  // 2 heads * 32 dim per head (K)
+        .value_dim = 128U,     // 2 heads * 64 dim per head (V)
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_CausalMask_LargeV"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_ArbitraryMask) {
+    // Q/K head_dim=64, V head_dim=32 with arbitrary mask
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,      // 2 heads * 64 dim per head
+        .key_value_dim = 128U,  // 2 heads * 64 dim per head (K)
+        .value_dim = 64U,       // 2 heads * 32 dim per head (V)
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .test_name = "DifferentVDim_ArbitraryMask"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_GQA) {
+    // GQA with different V dim: Q has 4 heads, KV has 2 heads
+    // Q/K head_dim=64, V head_dim=32
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 256U,      // 4 heads * 64 dim per head
+        .key_value_dim = 128U,  // 2 heads * 64 dim per head (K)
+        .value_dim = 64U,       // 2 heads * 32 dim per head (V)
+        .num_query_heads = 4U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_GQA_4Q_2KV"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_SingleTile) {
+    // Minimum viable: Q/K head_dim=64, V head_dim=32, single tile seq
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 32U,
+        .query_dim = 64U,      // 1 head * 64 dim
+        .key_value_dim = 64U,  // 1 head * 64 dim (K)
+        .value_dim = 32U,      // 1 head * 32 dim (V)
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_SingleTile"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_MultiBatch) {
+    // Multi-batch with different V dim
+    SDPATestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 128U,
+        .query_dim = 128U,      // 2 heads * 64 dim per head
+        .key_value_dim = 128U,  // 2 heads * 64 dim per head (K)
+        .value_dim = 64U,       // 2 heads * 32 dim per head (V)
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "DifferentVDim_MultiBatch"};
+    run_sdpa_test(config);
 }

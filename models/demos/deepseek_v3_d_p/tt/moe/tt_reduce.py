@@ -8,6 +8,7 @@ Post-Combine Reduction Module (TTNN Implementation)
 This module implements the reduction operation after MoE combine using TTNN.
 It performs:
 1. Fused weighted sum over topk dimension (multiply + reduce in a single kernel)
+   - Skips non-local experts using dispatch table (~75% compute savings on TP4)
 2. Reduce-scatter across chips to get TP-sharded output
 
 After MoE combine, each chip has sparse tensor [seq_len, topk, emb_dim]
@@ -59,6 +60,8 @@ class TtReduceModule(LightweightModule):
         self,
         combine_output: ttnn.Tensor,
         weights: Optional[ttnn.Tensor] = None,
+        indices: Optional[ttnn.Tensor] = None,
+        expert_dispatch_table: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Reduce combine output by summing topk and reduce-scattering.
@@ -69,6 +72,10 @@ class TtReduceModule(LightweightModule):
             weights: Optional gate weights.
                 Shape: [1, dispatch_group_size, seq_len, topk] or [..., topk, 1]
                 If provided, applies fused weighted sum: sum(weights * combine_output, dim=topk)
+            indices: Global expert IDs per token/slot, INT32.
+                Shape: [dispatch_group_size, seq_len, topk]
+            expert_dispatch_table: Dispatch table mapping expert ID to chip ID, INT32.
+                Shape: [num_routed_experts] (sharded per dispatch group)
 
         Returns:
             output: Per-chip tensor of shape [seq_len, emb_dim / num_chips_in_axis]
@@ -83,10 +90,13 @@ class TtReduceModule(LightweightModule):
                 weights = ttnn.unsqueeze(weights, dim=0)
 
             # Fused weighted sum: multiply by weights and reduce over topk in a single kernel
+            # Skips non-local experts using dispatch table + indices
             # Input: ROW_MAJOR, Output: TILE_LAYOUT
             summed = ttnn.experimental.deepseek_prefill.post_combine_reduce(
                 combine_output,
                 weights,
+                indices,
+                expert_dispatch_table,
                 expert_dim=self.topk_dim,
                 output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )

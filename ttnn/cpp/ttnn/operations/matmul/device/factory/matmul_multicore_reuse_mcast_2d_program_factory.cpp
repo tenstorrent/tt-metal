@@ -67,6 +67,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    bool row_broadcast_bias,
     CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
@@ -105,6 +106,15 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     const bool in1_is_height_sharded = in1_buffer->buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_buffer->buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+
+    TT_FATAL(
+        !(output_is_sharded && B > 1),
+        "Block-sharded output is incompatible with batch > 1 (B={}). The output CB is backed by the shard buffer "
+        "which only holds per_core_M * per_core_N = {} tiles, but the kernel would produce B * per_core_M * per_core_N "
+        "= {} tiles without draining. Use fuse_batch=True.",
+        B,
+        per_core_M * per_core_N,
+        B * per_core_M * per_core_N);
 
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
 
@@ -846,6 +856,9 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     // Create compute kernel
     // bool fp32_dest_acc_en = true;
@@ -1621,6 +1634,8 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
+    const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
+
     tt_metal::IDevice* device = a.device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
@@ -1764,6 +1779,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         output_data_format,
         untilize_out,
         fused_op_signaler,
+        row_broadcast_bias,
         sub_device_start_core);
 }
 

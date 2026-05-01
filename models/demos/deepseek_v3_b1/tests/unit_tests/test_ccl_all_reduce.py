@@ -19,16 +19,36 @@ from typing import Any, Optional
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
-from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    create_fabric_router_config,
+    get_env_int,
+    get_num_links_env_params,
+    run_trace_benchmark,
+)
 
 TEST_SENDER_CORE = ttnn.CoreCoord(0, 0)
 TEST_RECEIVER_CORE = ttnn.CoreCoord(0, 1)
-from models.perf.benchmarking_utils import BenchmarkProfiler
+
+ENV_NUM_LINKS = "CCL_ALL_REDUCE_NUM_LINKS"
+ENV_MAX_PAYLOAD_SIZE = "CCL_ALL_REDUCE_MAX_PAYLOAD_SIZE_BYTES"
+ALL_REDUCE_OUTPUT_WIDTH = 2048
+ALL_REDUCE_OUTPUT_SHAPE = [1, ALL_REDUCE_OUTPUT_WIDTH]
+ALL_REDUCE_INPUT_SHARD_SHAPE = (1, ALL_REDUCE_OUTPUT_WIDTH)
+
+
+def _get_intermediate_shape(input_shard_shape: tuple[int, int]) -> list[int]:
+    if input_shard_shape[0] != 1:
+        raise ValueError(f"Expected input_shard_shape height 1, got {input_shard_shape[0]}")
+    if input_shard_shape[1] % 32 != 0:
+        raise ValueError(f"Expected input_shard_shape width divisible by 32, got {input_shard_shape[1]}")
+    return [32, input_shard_shape[1] // 32]
+
+
+MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 
 
 @dataclass(frozen=True)
@@ -121,7 +141,7 @@ def build_all_reduce_test_inputs(
         mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config),
     )
 
-    intermediate_shape = [32, 224]
+    intermediate_shape = _get_intermediate_shape(input_shard_shape)
     intermediate_shard_spec = ttnn.ShardSpec(
         receiver_shard_grid,
         tuple(intermediate_shape),
@@ -167,8 +187,8 @@ def build_all_reduce_test_inputs(
     [
         (
             2,
-            [1, 7168],
-            (1, 7168),
+            ALL_REDUCE_OUTPUT_SHAPE,
+            ALL_REDUCE_INPUT_SHARD_SHAPE,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
     ],
@@ -176,14 +196,14 @@ def build_all_reduce_test_inputs(
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("num_links", get_num_links_env_params(ENV_NUM_LINKS, [2]))
 @pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
+            "fabric_router_config": create_fabric_router_config(MAX_PAYLOAD_SIZE),
             "trace_region_size": 573440,
         }
     ],
@@ -224,25 +244,13 @@ def test_ccl_all_reduce(
         semaphore_count=num_links + 1,
     )
 
-    logger.info(f"Running CCL all-reduce: num_devices={num_devices}")
-    profiler = BenchmarkProfiler()
-
-    logger.info("Compiling model")
-    ttnn_result = DeepseekMinimalAllReduce.op(
-        inputs.input_tensor_mesh,
-        inputs.intermediate_tensor_mesh,
-        cluster_axis=cluster_axis,
-        persistent_output_tensor=inputs.output_tensor_mesh,
-        residual_tensor_mesh=inputs.residual_tensor_mesh,
-        semaphores=inputs.semaphores[: num_links + 1],
-        num_links=num_links,
+    logger.info(
+        f"Running CCL all-reduce: num_devices={num_devices}, num_links={num_links}, "
+        f"max_payload_size_bytes={MAX_PAYLOAD_SIZE}"
     )
-    ttnn.synchronize_device(submesh)
 
-    logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for i in range(num_warmup_iter):
-        ttnn_result = DeepseekMinimalAllReduce.op(
+    def run_all_reduce():
+        return DeepseekMinimalAllReduce.op(
             inputs.input_tensor_mesh,
             inputs.intermediate_tensor_mesh,
             cluster_axis=cluster_axis,
@@ -251,41 +259,14 @@ def test_ccl_all_reduce(
             semaphores=inputs.semaphores[: num_links + 1],
             num_links=num_links,
         )
-    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(submesh)
 
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for i in range(num_iter):
-        ttnn_result = DeepseekMinimalAllReduce.op(
-            inputs.input_tensor_mesh,
-            inputs.intermediate_tensor_mesh,
-            cluster_axis=cluster_axis,
-            persistent_output_tensor=inputs.output_tensor_mesh,
-            residual_tensor_mesh=inputs.residual_tensor_mesh,
-            semaphores=inputs.semaphores[: num_links + 1],
-            num_links=num_links,
-        )
-    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
-    ttnn.synchronize_device(submesh)
-
-    logger.info("Executing warmup trace...")
-    profiler.start("deepseek-all-reduce-warmup")
-    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
-    ttnn.release_trace(submesh, trace_id_warmup)
-    ttnn.synchronize_device(submesh)
-    profiler.end("deepseek-all-reduce-warmup")
-
-    logger.info("Starting Trace perf test...")
-    signpost("start")
-    profiler.start("deepseek-all-reduce-trace")
-
-    ttnn.execute_trace(submesh, trace_id, blocking=False)
-    ttnn.release_trace(submesh, trace_id)
-    ttnn.synchronize_device(submesh)
-
-    profiler.end("deepseek-all-reduce-trace")
-    signpost("stop")
+    ttnn_result = run_trace_benchmark(
+        submesh,
+        run_all_reduce,
+        num_warmup_iter=num_warmup_iter,
+        num_iter=num_iter,
+        profiler_name="deepseek-all-reduce",
+    )
 
     logger.info("Verifying all-reduce results...")
     output_tensor_torch = ttnn.to_torch(
@@ -323,8 +304,8 @@ def test_ccl_all_reduce(
     [
         (
             2,
-            [1, 7168],
-            (1, 7168),
+            ALL_REDUCE_OUTPUT_SHAPE,
+            ALL_REDUCE_INPUT_SHARD_SHAPE,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
     ],

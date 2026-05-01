@@ -16,56 +16,39 @@ Sharding: HEIGHT_SHARDED on the gather core for input/output,
           HEIGHT_SHARDED on the transport core for scratch.
 """
 
-import os
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_gather.op import DeepseekMinimalAllGather
-from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    create_fabric_router_config,
+    get_env_int,
+    get_num_links_env_params,
+    run_trace_benchmark,
+)
 
 GATHER_CORE = ttnn.CoreCoord(0, 0)
 TRANSPORT_CORE = ttnn.CoreCoord(0, 1)
 
 NUM_DEVICES = 4
 TILE_W = 32
+ALL_GATHER_NUM_LINKS = 1
 
 ENV_NUM_LINKS = "CCL_ALL_GATHER_NUM_LINKS"
 ENV_MAX_PAYLOAD_SIZE = "CCL_ALL_GATHER_MAX_PAYLOAD_SIZE_BYTES"
 
-
-def _parse_env_int(name: str, value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
-    if parsed <= 0:
-        raise ValueError(f"{name} must be > 0, got {parsed}")
-    return parsed
+MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 
 
-def _get_env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    if value is None or value.strip() == "":
-        return default
-    return _parse_env_int(name, value)
-
-
-def _get_num_links_params(defaults: list[int]) -> list[int]:
-    value = os.getenv(ENV_NUM_LINKS)
-    if value is None or value.strip() == "":
-        return defaults
-    return [_parse_env_int(ENV_NUM_LINKS, value)]
-
-
-MAX_PAYLOAD_SIZE = _get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
+def _validate_all_gather_num_links(num_links: int) -> None:
+    if num_links != ALL_GATHER_NUM_LINKS:
+        raise ValueError(f"CCL all-gather is single-link only, got {ENV_NUM_LINKS}={num_links}")
 
 
 @dataclass(frozen=True)
@@ -252,7 +235,7 @@ def _verify_per_slot_identity(submesh, ttnn_result, inputs, expected_slot_tensor
 
 
 @pytest.mark.parametrize("output_shape", [[1, 7168]])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", [ALL_GATHER_NUM_LINKS])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -315,7 +298,14 @@ def test_ccl_all_gather_deterministic_fill(
 
 
 @pytest.mark.parametrize("output_shape", [[1, 7168]])
-@pytest.mark.parametrize("num_links", _get_num_links_params([1]))
+@pytest.mark.parametrize(
+    "num_links",
+    get_num_links_env_params(
+        ENV_NUM_LINKS,
+        [ALL_GATHER_NUM_LINKS],
+        validate=_validate_all_gather_num_links,
+    ),
+)
 @pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
@@ -347,73 +337,35 @@ def test_ccl_all_gather(
     inputs = build_all_gather_test_inputs(mesh_device=submesh, output_shape=output_shape)
 
     logger.info(f"Running CCL all-gather: {NUM_DEVICES} devices, output_shape={output_shape}, num_links={num_links}")
-    profiler = BenchmarkProfiler()
 
-    logger.info("Compiling model")
-    ttnn_result = DeepseekMinimalAllGather.op(
-        inputs.input_tensor_mesh,
-        inputs.output_tensor_mesh,
-        inputs.scratch_tensor_mesh,
-        inputs.semaphores,
-        cluster_axis=0,
-        num_links=num_links,
+    def run_all_gather():
+        return DeepseekMinimalAllGather.op(
+            inputs.input_tensor_mesh,
+            inputs.output_tensor_mesh,
+            inputs.scratch_tensor_mesh,
+            inputs.semaphores,
+            cluster_axis=0,
+            num_links=num_links,
+        )
+
+    ttnn_result = run_trace_benchmark(
+        submesh,
+        run_all_gather,
+        num_warmup_iter=num_warmup_iter,
+        num_iter=num_iter,
+        profiler_name="deepseek-all-gather",
     )
-    ttnn.synchronize_device(submesh)
-
-    logger.info("Capturing warmup trace")
-    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for _ in range(num_warmup_iter):
-        ttnn_result = DeepseekMinimalAllGather.op(
-            inputs.input_tensor_mesh,
-            inputs.output_tensor_mesh,
-            inputs.scratch_tensor_mesh,
-            inputs.semaphores,
-            cluster_axis=0,
-            num_links=num_links,
-        )
-    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
-    ttnn.synchronize_device(submesh)
-
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
-    for _ in range(num_iter):
-        ttnn_result = DeepseekMinimalAllGather.op(
-            inputs.input_tensor_mesh,
-            inputs.output_tensor_mesh,
-            inputs.scratch_tensor_mesh,
-            inputs.semaphores,
-            cluster_axis=0,
-            num_links=num_links,
-        )
-    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
-    ttnn.synchronize_device(submesh)
-
-    logger.info("Executing warmup trace...")
-    profiler.start("deepseek-all-gather-warmup")
-    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
-    ttnn.release_trace(submesh, trace_id_warmup)
-    ttnn.synchronize_device(submesh)
-    profiler.end("deepseek-all-gather-warmup")
-
-    logger.info("Starting Trace perf test...")
-    signpost("start")
-    profiler.start("deepseek-all-gather-trace")
-    ttnn.execute_trace(submesh, trace_id, blocking=False)
-    ttnn.release_trace(submesh, trace_id)
-    ttnn.synchronize_device(submesh)
-    profiler.end("deepseek-all-gather-trace")
-    signpost("stop")
 
     _verify_all_gather_output(submesh, ttnn_result, inputs)
 
 
 # ---------------------------------------------------------------------------
-# Feature-matrix test (shape, num_links, chunk sizing)
+# Feature-matrix test (shape, single-link chunk sizing)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("output_shape", [[1, 896], [1, 7168]])
-@pytest.mark.parametrize("num_links", [1, 2])
+@pytest.mark.parametrize("num_links", [ALL_GATHER_NUM_LINKS])
 @pytest.mark.parametrize(
     "max_chunk_size_bytes",
     [

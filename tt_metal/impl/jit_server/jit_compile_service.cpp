@@ -31,7 +31,9 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
         TargetRecipe t;
         t.target_name = target.getTargetName().cStr();
         t.cflags = target.getCflags().cStr();
-        t.defines = target.getDefines().cStr();
+        for (auto define : target.getDefines()) {
+            t.defines.push_back(define.cStr());
+        }
         t.includes = target.getIncludes().cStr();
         t.compiler_opt_level = target.getCompilerOptLevel().cStr();
         for (auto src : target.getSrcs()) {

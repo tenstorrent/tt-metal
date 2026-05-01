@@ -610,3 +610,21 @@ def test_duration_captured(device, mode):
 
     assert found_function_end_with_duration, "Expected function_end nodes to have duration"
     assert found_capture_end_with_duration, "Expected capture_end node to have duration"
+
+
+def test_graph_capture_inactive_with_open_device(device):
+    """Regression: is_graph_capture_active() must return False when a device is open but no
+    capture has been started, True during capture, and False again after end_graph_capture() —
+    regardless of any background processors registered on device open.
+    """
+    assert (
+        not ttnn.graph.is_graph_capture_active()
+    ), "is_graph_capture_active() should be False with an open device and no active capture"
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    assert ttnn.graph.is_graph_capture_active(), "is_graph_capture_active() should be True during capture"
+
+    ttnn.graph.end_graph_capture()
+    assert (
+        not ttnn.graph.is_graph_capture_active()
+    ), "is_graph_capture_active() should be False after end_graph_capture()"

@@ -31,20 +31,19 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TileShape& tile
                                              ? p_elwise::SRCB_BCAST_COL
                                              : ((BROADCAST_TYPE == BroadcastType::ROW) ? p_elwise::SRCB_BCAST_ROW : p_elwise::SRCB_BCAST_ALL);
 
-    constexpr std::uint32_t EN_DST_ACC_EN = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
-    static_assert(!(EN_DST_ACC_EN && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
+    constexpr std::uint32_t EN_DST_ACC = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    static_assert(!(EN_DST_ACC && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
 
     const std::uint32_t MOP_OUTER_LOOP = tile_shape.num_faces;
     const std::uint32_t MOP_INNER_LOOP = num_eltwise_instrn_per_face;
 
-    constexpr static std::uint32_t eltwise_binary_op =
-        eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, EN_DST_ACC_EN, SRCB_BROADCAST_TYPE, ADDR_MOD_0>();
-    constexpr static std::uint32_t eltwise_binary_op_clr_srcAB_valid =
-        eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, EN_DST_ACC_EN, SRCB_BROADCAST_TYPE, ADDR_MOD_1>();
+    const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, SRCB_BROADCAST_TYPE, ADDR_MOD_0>(EN_DST_ACC);
+    const std::uint32_t eltwise_binary_op_clr_srcAB_valid =
+        eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_1>(EN_DST_ACC);
 
     constexpr std::uint32_t replay_buf_len = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
 
-    if constexpr (EN_DST_ACC_EN)
+    if constexpr (EN_DST_ACC)
     {
         load_replay_buf<0, replay_buf_len>(
             // Lambda function to load reply buffer
@@ -62,15 +61,15 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TileShape& tile
     ROW -> Unpacker unpacks 4 (default in 32x32 tile) faces: F0, F1, F0, F1, SrcB Inc = 0
     COL -> Unpacker unpacks 4 (default in 32x32 tile) faces: F0, F0, F2, F2, SrcB Inc += ELTWISE_MATH_ROWS
     */
-    ckernel_template temp = EN_DST_ACC_EN ? ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), eltwise_binary_op)
-                                          : ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, eltwise_binary_op);
+    ckernel_template temp = EN_DST_ACC ? ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), eltwise_binary_op)
+                                       : ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, eltwise_binary_op);
 
     // Only need to clear per face for ROW/COL, since SCALAR only has 1 face from the unpacker
     if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)
     {
         constexpr std::uint32_t ADDR_MOD = (BROADCAST_TYPE == BroadcastType::COL) ? ADDR_MOD_2 : ADDR_MOD_0;
-        constexpr static std::uint32_t eltwise_binary_op_clr_srcB =
-            eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCB_VLD, EN_DST_ACC_EN, SRCB_BROADCAST_TYPE, ADDR_MOD>();
+        const std::uint32_t eltwise_binary_op_clr_srcB =
+            eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD>(EN_DST_ACC);
         temp.set_last_inner_loop_instr(eltwise_binary_op_clr_srcB);
     }
 

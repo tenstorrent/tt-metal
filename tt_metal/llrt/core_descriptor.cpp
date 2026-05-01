@@ -209,7 +209,7 @@ const core_descriptor_t& get_core_descriptor_config(
 
     CoreCoord compute_grid_size;
     // When slow dispatch is on, use full logical grid (no dispatch cores to reserve)
-    if (!fast_dispatch && !env.get_rtoptions().get_simulator_enabled()) {
+    if (!fast_dispatch && !env.get_rtoptions().is_simulator_or_emulated()) {
         compute_grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
         log_info(
             tt::LogDevice,
@@ -237,7 +237,7 @@ const core_descriptor_t& get_core_descriptor_config(
     CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     // For mock devices, control plane doesn't exist, use empty set
     std::unordered_set<CoreCoord> logical_active_eth_cores;
-    if (env.get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+    if (!env.get_cluster().is_mock_or_emulated()) {
         logical_active_eth_cores = env.get_control_plane().get_active_ethernet_cores(device_id);
     }
 
@@ -258,7 +258,8 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        !dispatch_cores.empty() || env.get_rtoptions().get_simulator_enabled(), "Dispatch cores size must be positive");
+        !dispatch_cores.empty() || env.get_rtoptions().is_simulator_or_emulated(),
+        "Dispatch cores size must be positive");
 
     // Parse fabric_mux_cores
     std::vector<RelativeCoreCoord> fabric_mux_cores;

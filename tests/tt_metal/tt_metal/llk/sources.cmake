@@ -10,9 +10,11 @@ set(UNIT_TESTS_LLK_SRC
     test_fp8_typecast.cpp
     test_golden_impls.cpp
     test_mul_reduce_scalar.cpp
+    test_mxfp4_typecast.cpp
     test_pack_rows.cpp
     test_reconfig.cpp
     test_reduce.cpp
+    test_sfpu_binary_bcast.cpp
     test_sfpu_compute.cpp
     test_single_core_binary_compute.cpp
     test_single_core_matmul_compute.cpp

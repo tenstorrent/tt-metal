@@ -26,6 +26,7 @@ BUILD_WORKFLOWS_CHANGED=false
 LLK_WORMHOLE_CHANGED=false
 LLK_BLACKHOLE_CHANGED=false
 LLK_COMMON_CHANGED=false
+LLK_SFPI_CHANGED=false
 LLK_QUASAR_CHANGED=false
 LLK_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
@@ -37,13 +38,11 @@ while IFS= read -r FILE; do
         CMakeLists.txt|**/CMakeLists.txt|**/*.cmake)
             CMAKE_CHANGED=true
             ;;
-        tt_metal/sfpi-info.sh)
-            # Read in by a cmake file
+        tt_metal/sfpi-info.sh|tt_metal/sfpi-version)
+            # Read in by a cmake file; also pins the SFPI compiler used to build LLK
+            # device kernels, so any change must re-run LLK tests on all archs.
             CMAKE_CHANGED=true
-            ;;
-        tt_metal/sfpi-version)
-            # Read in by a cmake file
-            CMAKE_CHANGED=true
+            LLK_SFPI_CHANGED=true
             ;;
         .clang-tidy|**/.clang-tidy)
             CLANG_TIDY_CONFIG_CHANGED=true
@@ -57,16 +56,16 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/.github/**|tt_metal/tt-llk/tests/requirements.txt)
             LLK_CI_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_wormhole_b0/**)
+        tt_metal/tt-llk/tt_llk_wormhole_b0/**|tt_metal/hw/ckernels/wormhole_b0/**)
             LLK_WORMHOLE_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_blackhole/**)
+        tt_metal/tt-llk/tt_llk_blackhole/**|tt_metal/hw/ckernels/blackhole/**)
             LLK_BLACKHOLE_CHANGED=true
             ;;
         tt_metal/tt-llk/common/**)
             LLK_COMMON_CHANGED=true
             ;;
-        tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/tt-llk/tests/sources/quasar/**|tt_metal/tt-llk/tests/python_tests/quasar/**)
+        tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/tt-llk/tests/sources/quasar/**|tt_metal/tt-llk/tests/python_tests/quasar/**|tt_metal/hw/ckernels/quasar/**)
             LLK_QUASAR_CHANGED=true
             ;;
         tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
@@ -152,7 +151,7 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
 fi
 
 # LLK engine changes imply Metalium may be affected (LLK is compiled into device kernels)
-if [[ "$LLK_WORMHOLE_CHANGED" = true || "$LLK_BLACKHOLE_CHANGED" = true || "$LLK_COMMON_CHANGED" = true ]]; then
+if [[ "$LLK_WORMHOLE_CHANGED" = true || "$LLK_BLACKHOLE_CHANGED" = true || "$LLK_COMMON_CHANGED" = true || "$LLK_SFPI_CHANGED" = true ]]; then
     TTMETALIUM_CHANGED=true
     ANY_CODE_CHANGED=true
 fi
@@ -183,6 +182,7 @@ declare -A changes=(
     [llk-wormhole-changed]=$LLK_WORMHOLE_CHANGED
     [llk-blackhole-changed]=$LLK_BLACKHOLE_CHANGED
     [llk-common-changed]=$LLK_COMMON_CHANGED
+    [llk-sfpi-changed]=$LLK_SFPI_CHANGED
     [llk-quasar-changed]=$LLK_QUASAR_CHANGED
     [llk-tests-changed]=$LLK_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED

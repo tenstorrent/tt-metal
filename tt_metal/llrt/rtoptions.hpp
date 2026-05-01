@@ -348,6 +348,10 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
+    // Disable shared memory tracking for tt-smi
+    bool shm_tracking_disabled = false;
+    bool shm_verbose = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -432,6 +436,9 @@ public:
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
+    bool get_shm_verbose() const { return shm_verbose; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -630,6 +637,9 @@ public:
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
+    bool is_simulator_or_emulated() const {
+        return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
+    }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     bool get_erisc_iram_enabled() const {
@@ -721,17 +731,15 @@ public:
         }
         mock_cluster_desc_path =
             get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
-        // Set target device to Mock if simulator is not enabled
-        if (simulator_path.empty()) {
-            runtime_target_device_ = tt::TargetDevice::Mock;
-        }
+        // Mock mode always overrides the simulator: configure_mock_mode() is an explicit
+        // request for a fully mocked environment, so libttsim must not be used even if
+        // TT_METAL_SIMULATOR is set in the environment.
+        runtime_target_device_ = tt::TargetDevice::Mock;
     }
     void clear_mock_cluster_desc() {
         mock_cluster_desc_path.clear();
-        // Only reset to Silicon if simulator is not enabled
-        if (simulator_path.empty()) {
-            runtime_target_device_ = tt::TargetDevice::Silicon;
-        }
+        // Restore to Simulator if TT_METAL_SIMULATOR was set, otherwise Silicon.
+        runtime_target_device_ = simulator_path.empty() ? tt::TargetDevice::Silicon : tt::TargetDevice::Simulator;
     }
 
     // Target device accessor
