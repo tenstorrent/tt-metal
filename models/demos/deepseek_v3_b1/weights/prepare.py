@@ -1256,6 +1256,37 @@ def prepare_moe_routed_experts_bspm_tp8(
         bspm_data = load_bspm_for_layer(str(bspm_path))
         logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
 
+        # DEBUG: zero out N-columns with only 1 non-zero K-tile per TP device for
+        # down_proj. The LLK fmt=0 path leaves dst face slots uncleared; an
+        # isolated single fmt!=0 K writes into stale partial rows, then finalize
+        # ELWADDs them into the output → wild dst values. Forcing the isolated
+        # tile to bfp0 makes the entire column fmt=0, producing 0 output for
+        # that tile (small accuracy loss) and avoids the contamination.
+        _down_proj_idx = 2
+        _down_K = state_dict[_key(layer_idx, "mlp.experts.0.down_proj.weight")].shape[1]
+        _down_N = state_dict[_key(layer_idx, "mlp.experts.0.down_proj.weight")].shape[0]
+        _down_N_padded = ((_down_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        _tiles_h_full_d = _down_K // tile_w
+        _tiles_w_full_padded_d = _down_N_padded // tile_w
+        _tp_total = mesh_shape[0] * mesh_shape[1]
+        _K_tiles_per_device_d = _tiles_h_full_d // _tp_total
+        _BFP0_IDX = 3
+        _isolated_count = 0
+        for _e in range(bspm_data["n_experts"]):
+            _flat = bspm_data["codes"][_e, _down_proj_idx]
+            _codes_kn = np.ascontiguousarray(_flat.reshape(_tiles_w_full_padded_d, _tiles_h_full_d).T).copy()
+            for _tp_idx in range(_tp_total):
+                _k_start = _tp_idx * _K_tiles_per_device_d
+                _k_end = _k_start + _K_tiles_per_device_d
+                for _n in range(_tiles_w_full_padded_d):
+                    _col = _codes_kn[_k_start:_k_end, _n]
+                    _nz = np.where(_col != _BFP0_IDX)[0]
+                    if len(_nz) == 1:
+                        _codes_kn[_k_start + _nz[0], _n] = _BFP0_IDX
+                        _isolated_count += 1
+            bspm_data["codes"][_e, _down_proj_idx] = _codes_kn.T.flatten()
+        logger.info("  Zeroed {} isolated single-K tiles in down_proj (debug)", _isolated_count)
+
     # (proj_name, shard_dim, subblock_k, subblock_n) — must match the kernel's
     # DRAM read pattern in setup_matmul_expert_dram.
     # - gate/up use K-split (k_parallel_per_bank=2): subblock_k=112 = Kt//k_parallel

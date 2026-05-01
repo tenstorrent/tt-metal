@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
     extract_routed_expert_output,
 )
+from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
 from models.demos.deepseek_v3_b1.weights.prepare import (
     get_layer_raw_tensors,
     prepare_dense_layer_weights,
@@ -49,6 +50,29 @@ def _optional_bspm_dir():
     if not raw or not raw.strip():
         return None
     return Path(raw.strip()) / "deepseek-r1-0528"
+
+
+def _optional_real_weight_cache_config(submesh) -> CacheConfig | None:
+    """Build a TensorCache-backed CacheConfig for real HF weights when DEEPSEEK_V3_CACHE_PATH is set.
+
+    Cache hits skip BSPM compression, preprocess, and safetensors I/O — `raw_tensors` is a
+    lambda that's only called on miss. Restricted to real weights: random / rigged routing
+    paths mutate state_dict entries the cache can't see (it fingerprints by tensor name only).
+    """
+    cache_root = os.getenv("DEEPSEEK_V3_CACHE_PATH")
+    hf_model = os.getenv("DEEPSEEK_V3_HF_MODEL")
+    if not cache_root or not hf_model:
+        return None
+    hf_model_path = Path(hf_model).resolve()
+    return CacheConfig(
+        cache=TensorCache(Path(cache_root)),
+        context=CacheContext(
+            schema_version=1,
+            hf_model_id=hf_model_path.name,
+            hf_revision="local",
+            mesh_shape=(submesh.shape[0], submesh.shape[1]),
+        ),
+    )
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -410,6 +434,9 @@ def test_decoder(
         )
 
     logger.info("Preparing layer weights on device...")
+    cache_config = _optional_real_weight_cache_config(submesh) if use_real_weights else None
+    if cache_config is not None:
+        logger.info("Using weight cache at {}", os.environ["DEEPSEEK_V3_CACHE_PATH"])
     layer_weights = prepare_moe_layer_weights(
         submesh,
         state_dict,
@@ -418,6 +445,7 @@ def test_decoder(
         move_to_device=True,
         compressed_tp8=True,
         bspm_dir=_optional_bspm_dir(),
+        cache_config=cache_config,
     )
 
     logger.info("Creating decoder block tensors...")
@@ -435,6 +463,15 @@ def test_decoder(
         is_moe=True,
         validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
         torch_input=torch_input,
+    )
+
+    logger.info("Building routed-expert metadata bundle (shared across decoder + standalone MoE)...")
+    routed_expert_metadata = MoeOp.build_routed_expert_metadata(
+        submesh,
+        d["gate_proj_weights"],
+        d["up_proj_weights"],
+        d["down_proj_weights"],
+        enable_routing=True,
     )
 
     logger.info("Creating golden reference tensors...")
@@ -606,6 +643,7 @@ def test_decoder(
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
         forward_metadata=d["forward_metadata"],
+        routed_expert_metadata=routed_expert_metadata,
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
@@ -644,17 +682,20 @@ def test_decoder(
         logger.info(
             f"Running standalone MoeOp.op (enable_routing={enable_routing}, hardcoded={use_hardcoded_expert_index})..."
         )
-        moe_ref_semaphores = MoeOp.create_semaphores(submesh)
-        moe_ref_reduce_sems = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
         ttnn.synchronize_device(submesh)
 
+        # Reuse decoder's tensors and sems: decoder outputs (decoder_moe_output,
+        # ttnn_attention_output) have already been pulled to torch by this point, so
+        # standalone can write into the same gate-output / reduce buffers without
+        # clobbering anything still needed. The MoE protocol balances sems to 0 at end
+        # of run, and the routed_expert_metadata bundle is also shared.
         moe_ref_result = MoeOp.op(
             attention_block_output_tensor,
             gate_mm_weights_tensor=d["gate_mm_overlapped"],
             gate_bias_tensor=d["ttnn_gate_bias"],
             gate_indices_tensor=d["ttnn_gate_indices"],
-            gate_output_scores_tensor=d["moe_ref_gate_output_scores"],
-            gate_output_indices_tensor=d["moe_ref_gate_output_indices"],
+            gate_output_scores_tensor=d["gate_output_scores_tensor"],
+            gate_output_indices_tensor=d["gate_output_indices_tensor"],
             gate_proj_weights_tensor=d["gate_proj_weights"],
             up_proj_weights_tensor=d["up_proj_weights"],
             down_proj_weights_tensor=d["down_proj_weights"],
@@ -669,12 +710,13 @@ def test_decoder(
             sdpa_kv_cache_buffer=d["sdpa_kv_cache_buffer"],
             sdpa_out_interm_buffer=d["sdpa_out_interm_buffer"],
             num_iterations=1,
-            reduce_intermediate_tensors=d["moe_ref_reduce_intermediate"],
-            reduce_output_tensor=d["moe_ref_reduce_output"],
-            reduce_semaphores=moe_ref_reduce_sems,
+            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+            reduce_output_tensor=d["reduce_output_tensor"],
+            reduce_semaphores=reduce_semaphores,
             reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
-            semaphores=moe_ref_semaphores,
+            semaphores=moe_semaphores,
             noc_mode=noc_mode,
+            routed_expert_metadata=routed_expert_metadata,
         )
         ttnn.synchronize_device(submesh)
         logger.info("Standalone MoeOp.op completed.")

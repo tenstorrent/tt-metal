@@ -2456,6 +2456,34 @@ def test_benchmark_down_proj_gather_to_next(device):
     )
 
 
+def test_benchmark_down_proj_gather_to_next_subblock_k_1(device):
+    """Same shape as test_benchmark_down_proj_gather_to_next but with num_subblocks_k=8
+    (subblock_k=1) and bfp4/bfp2/bfp0 mixed precision — exercises the per-sb_k debug
+    dump path used to instrument the decoder MoE down_proj. Standalone PCC must still
+    pass with the finer subblock split before we trust the decoder dprint trace.
+    """
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=8,
+        sram_expert_ids=[],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=[2, 3, 4, 5, 6, 7, 1, 0],
+        formats_per_device=[["bfp4", "bfp2", "bfp0"]],
+        accum_experts=True,
+        primary_at_last_offset=True,
+        num_subblocks_k=8,
+        num_subblocks_n=2,
+        n_parallel_per_bank=2,
+        k_parallel_per_bank=1,
+        fmt_distribution="uniform",
+        fmt_ratios={"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3},
+        num_loop_iters=1,
+    )
+
+
 # ---------------------------------------------------------------------------
 # K-split + primary_at_last_offset benchmarks — gate/up MoE config
 # ---------------------------------------------------------------------------

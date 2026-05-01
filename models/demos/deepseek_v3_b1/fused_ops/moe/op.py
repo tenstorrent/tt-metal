@@ -1090,6 +1090,11 @@ class MoeRoutedExpertOp:
         cb_id_context=None,
         # Optional worker-core grid override (used to avoid overlap with external micro-ops).
         worker_core_grid=None,
+        # Optional pre-built routed-expert metadata bundle from
+        # MoeOp.build_routed_expert_metadata. When provided, skip the 3 inline
+        # setup_matmul_expert_dram calls and reuse the bundle's params dicts
+        # (shallow-copied so per-instance index_l1_addr patching doesn't bleed).
+        routed_expert_metadata=None,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
 
@@ -1436,15 +1441,26 @@ class MoeRoutedExpertOp:
             expert_scale_mcast_data_size_bytes = index_tile_size
 
         # ==================================================================
-        # MatmulExpertCompressedDRAM: gate_proj (Phase 1B)
+        # MatmulExpertCompressedDRAM: gate_proj + up_proj (Phase 1B)
         # Falls back to legacy setup_dram_matmul when ttnn.Tensor is passed
         # instead of a CompressedTensor list.
+        #
+        # When ``routed_expert_metadata`` is provided (built once via
+        # ``MoeOp.build_routed_expert_metadata``), skip the heavy
+        # ``setup_matmul_expert_dram`` calls and reuse its dicts directly. The
+        # bundle owns the fmt DRAM tensors, per-core L1 metadata tensors, and 5
+        # global semaphores per projection — all weight-derived and invariant
+        # across MoeOp instances. Shallow-copy the dicts so the per-instance
+        # ``index_l1_addr`` patch below doesn't bleed back into the bundle.
         # ==================================================================
-        mesh_device_for_matmul_expert = (
-            gate_proj_weights_tensor[0].get_data_tensors()[0].device()
-            if isinstance(gate_proj_weights_tensor, list)
-            else device
-        )
+        if not isinstance(gate_proj_weights_tensor, list) or not isinstance(up_proj_weights_tensor, list):
+            raise AssertionError(
+                "gate_proj/up_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer "
+                "supported after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
+                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
+                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
+            )
+        mesh_device_for_matmul_expert = gate_proj_weights_tensor[0].get_data_tensors()[0].device()
         # MoE routes top-8 of N_total experts → num_active_experts=8. Dense MLP has no
         # routing; cts_list contains exactly the experts to run (one CompressedTensor
         # per chunk from prepare_dense_routed_experts_compressed_tp8), so
@@ -1454,7 +1470,18 @@ class MoeRoutedExpertOp:
         # cb_index or index_l1_addr — every device runs the same [0..N-1] sequence
         # against its own TP-sliced weights.
         gate_up_num_active_experts = 8 if enable_routing else len(gate_proj_weights_tensor)
-        if isinstance(gate_proj_weights_tensor, list):
+        if routed_expert_metadata is not None:
+            assert routed_expert_metadata.get("enable_routing") == enable_routing, (
+                "routed_expert_metadata enable_routing mismatch: "
+                f"bundle={routed_expert_metadata.get('enable_routing')} vs caller={enable_routing}"
+            )
+            # K-split: 2 cores per bank split K; primary (= K-reducer at k_slice_idx=1)
+            # holds the full K matmul output; sender (= k_slice_idx=0) NOC-writes its
+            # partial to primary's cb_out and primary PACKs with l1_acc to sum. Shares
+            # cb_in1 with up_proj — both must use the same cores_per_bank/subblock_k.
+            gate_proj_params = dict(routed_expert_metadata["gate_proj_params"])
+            up_proj_params = dict(routed_expert_metadata["up_proj_params"])
+        else:
             # K-split: 2 cores per bank split K; primary (= K-reducer at k_slice_idx=1)
             # holds the full K matmul output; sender (= k_slice_idx=0) NOC-writes its
             # partial to primary's cb_out and primary PACKs with l1_acc to sum. Shares
@@ -1470,18 +1497,6 @@ class MoeRoutedExpertOp:
                 num_active_experts=gate_up_num_active_experts,
                 primary_worker_cores=gate_proj_worker_cores,
             )
-        else:
-            raise AssertionError(
-                "gate_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
-                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
-                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
-                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
-            )
-
-        # ==================================================================
-        # MatmulExpertCompressedDRAM: up_proj (Phase 1B)
-        # ==================================================================
-        if isinstance(up_proj_weights_tensor, list):
             # K-split: matches gate_proj's config exactly (shared cb_in1 + same 16-core grid).
             up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
@@ -1493,13 +1508,6 @@ class MoeRoutedExpertOp:
                 primary_at_last_offset=True,
                 num_active_experts=gate_up_num_active_experts,
                 primary_worker_cores=gate_proj_worker_cores,
-            )
-        else:
-            raise AssertionError(
-                "up_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
-                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
-                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
-                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
             )
 
         # ==================================================================
@@ -1568,11 +1576,21 @@ class MoeRoutedExpertOp:
 
         # ==================================================================
         # MatmulExpertCompressedDRAM: down_proj (Phase 1B)
+        # See gate/up note above on routed_expert_metadata.
         # ==================================================================
+        if not isinstance(down_proj_weights_tensor, list):
+            raise AssertionError(
+                "down_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
+                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
+                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
+                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
+            )
         # See gate/up note above: derive num_active_experts so dense MLP (one CT,
         # enable_routing=False) runs exactly one expert iteration per device.
         down_num_active_experts = 8 if enable_routing else len(down_proj_weights_tensor)
-        if isinstance(down_proj_weights_tensor, list):
+        if routed_expert_metadata is not None:
+            down_proj_params = dict(routed_expert_metadata["down_proj_params"])
+        else:
             down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
                 mesh_device=mesh_device_for_matmul_expert,
                 cts_list=down_proj_weights_tensor,
@@ -1587,13 +1605,6 @@ class MoeRoutedExpertOp:
                 num_active_experts=down_num_active_experts,
                 accum_experts=1,
                 primary_worker_cores=gate_proj_worker_cores,
-            )
-        else:
-            raise AssertionError(
-                "down_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
-                "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
-                "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
-                "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
             )
 
         # Wire index_l1_addr for MatmulExpertCompressedDRAM. The routing output
@@ -3487,6 +3498,90 @@ class MoeOp:
         return [ttnn.create_global_semaphore(device, available_cores, 0) for _ in range(MoeSem.NUM_SEMAPHORES)]
 
     # ------------------------------------------------------------------
+    # Routed-expert metadata bundle (allocates fmt DRAM tensors, per-core
+    # L1 offset/block-size tensors, and 5 global semaphores per projection)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def build_routed_expert_metadata(
+        mesh_device,
+        gate_proj_weights_tensor,
+        up_proj_weights_tensor,
+        down_proj_weights_tensor,
+        *,
+        enable_routing=True,
+        gate_proj_worker_cores=None,
+    ):
+        """Build the gate/up/down ``setup_matmul_expert_dram`` bundles once.
+
+        These bundles own the heaviest device allocations of MoE setup: per-projection
+        ``fmt_dram_tensor``, per-device per-core L1 ``offset_tensors`` /
+        ``block_size_tensors`` (created via ``upload_per_core_uint32/uint16_tensor``),
+        and 5 global semaphores per projection. The contents are fully determined by
+        the weights' DRAM addresses, the device's DRAM bank topology, and the kernel's
+        fixed tiling — i.e. invariant across every ``MoeOp`` instance that runs against
+        the same prepared weights.
+
+        Pass the returned dict as ``routed_expert_metadata=...`` to ``MoeOp.__init__``,
+        ``MoeOp.op``, or ``DecoderBlock.get_program_context`` to skip the rebuild. The
+        per-instance ``index_l1_addr`` (gate-output indices buffer address) is patched
+        on a shallow copy at consume time, so the bundle can be safely shared across
+        decoder + standalone ``MoeOp.op`` callers.
+        """
+        if gate_proj_worker_cores is None:
+            gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(
+                mesh_device, ttnn.NOC.NOC_0
+            )
+        mesh_device_for_matmul_expert = (
+            gate_proj_weights_tensor[0].get_data_tensors()[0].device()
+            if isinstance(gate_proj_weights_tensor, list)
+            else mesh_device
+        )
+
+        gate_up_num_active_experts = 8 if enable_routing else len(gate_proj_weights_tensor)
+        gate_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
+            mesh_device=mesh_device_for_matmul_expert,
+            cts_list=gate_proj_weights_tensor,
+            num_subblocks_k=4,
+            subblock_n=1,
+            cores_per_dram_bank=2,
+            k_parallel_per_bank=2,
+            primary_at_last_offset=True,
+            num_active_experts=gate_up_num_active_experts,
+            primary_worker_cores=gate_proj_worker_cores,
+        )
+        up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
+            mesh_device=mesh_device_for_matmul_expert,
+            cts_list=up_proj_weights_tensor,
+            num_subblocks_k=4,
+            subblock_n=1,
+            cores_per_dram_bank=2,
+            k_parallel_per_bank=2,
+            primary_at_last_offset=True,
+            num_active_experts=gate_up_num_active_experts,
+            primary_worker_cores=gate_proj_worker_cores,
+        )
+        down_num_active_experts = 8 if enable_routing else len(down_proj_weights_tensor)
+        down_proj_params = MoeRoutedExpertOp.setup_matmul_expert_dram(
+            mesh_device=mesh_device_for_matmul_expert,
+            cts_list=down_proj_weights_tensor,
+            num_subblocks_k=1,
+            subblock_n=7,
+            cores_per_dram_bank=2,
+            primary_at_last_offset=True,
+            num_active_experts=down_num_active_experts,
+            accum_experts=1,
+            primary_worker_cores=gate_proj_worker_cores,
+        )
+        return {
+            "gate_proj_params": gate_proj_params,
+            "up_proj_params": up_proj_params,
+            "down_proj_params": down_proj_params,
+            "gate_proj_worker_cores": gate_proj_worker_cores,
+            "enable_routing": enable_routing,
+        }
+
+    # ------------------------------------------------------------------
     # Shared utility setup APIs (used by both routed and shared experts)
     # ------------------------------------------------------------------
 
@@ -5180,6 +5275,7 @@ class MoeOp:
         persistent_mode=False,
         forward_metadata_size_bytes=0,
         metadata_l1_addr=0,
+        routed_expert_metadata=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -5230,6 +5326,7 @@ class MoeOp:
             semaphores=semaphores,
             cb_id_context=cb_id_context,
             worker_core_grid=worker_core_grid,
+            routed_expert_metadata=routed_expert_metadata,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
@@ -5644,6 +5741,8 @@ class MoeOp:
         # Per-worker downstream sockets for reduce workers to send reduced output
         downstream_sockets=None,
         cb_id_context=None,
+        # Pre-built routed-expert metadata bundle (see MoeOp.build_routed_expert_metadata).
+        routed_expert_metadata=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -5718,6 +5817,7 @@ class MoeOp:
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            routed_expert_metadata=routed_expert_metadata,
         )
 
         # ==================================================================

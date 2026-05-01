@@ -246,27 +246,6 @@ def create_decoder_block_tensors(
             tile=tile_1x16,
             mesh_mapper=mesh_mapper,
         )
-        moe_ref_gate_output_scores = None
-        moe_ref_gate_output_indices = None
-        if validate_debug_tensors:
-            moe_ref_gate_output_scores = ttnn.from_torch(
-                torch.zeros((1, 16), dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=submesh,
-                memory_config=gate_output_mem_config,
-                tile=tile_1x16,
-                mesh_mapper=mesh_mapper,
-            )
-            moe_ref_gate_output_indices = ttnn.from_torch(
-                torch.zeros((1, 16), dtype=torch.uint16),
-                dtype=ttnn.uint16,
-                layout=ttnn.TILE_LAYOUT,
-                device=submesh,
-                memory_config=gate_output_mem_config,
-                tile=tile_1x16,
-                mesh_mapper=mesh_mapper,
-            )
 
     if forward_metadata:
         padding = DeepseekMetadata.aligned_size_bytes() // dtype_size(ttnn.bfloat16)
@@ -587,30 +566,6 @@ def create_decoder_block_tensors(
         mesh_mapper=reduce_mesh_mapper,
     )
 
-    # Standalone MoE reference reduce tensors (MoE only)
-    if is_moe:
-        moe_ref_reduce_intermediate = None
-        moe_ref_reduce_output = None
-        if validate_debug_tensors:
-            moe_ref_reduce_intermediate = ttnn.from_torch(
-                torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=submesh,
-                memory_config=intermediate_mem_config,
-                tile=tile_1x32,
-                mesh_mapper=reduce_mesh_mapper,
-            )
-            moe_ref_reduce_output = ttnn.from_torch(
-                torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=submesh,
-                memory_config=reduce_output_mem,
-                tile=tile_1x32,
-                mesh_mapper=reduce_mesh_mapper,
-            )
-
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
@@ -701,10 +656,6 @@ def create_decoder_block_tensors(
                 "ttnn_gate_indices": ttnn_gate_indices,
                 "gate_output_scores_tensor": gate_output_scores_tensor,
                 "gate_output_indices_tensor": gate_output_indices_tensor,
-                "moe_ref_gate_output_scores": moe_ref_gate_output_scores,
-                "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
-                "moe_ref_reduce_intermediate": moe_ref_reduce_intermediate,
-                "moe_ref_reduce_output": moe_ref_reduce_output,
             }
         )
     return result

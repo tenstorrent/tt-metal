@@ -202,6 +202,7 @@ class DecoderBlock:
         persistent_mode=False,
         is_torus=True,
         forward_metadata=False,
+        routed_expert_metadata=None,
     ):
         """Build io_tensors and mesh_program_descriptor without executing.
 
@@ -296,6 +297,7 @@ class DecoderBlock:
             is_torus=is_torus,
             forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,
             metadata_l1_addr=metadata_addr if forward_metadata else 0,
+            routed_expert_metadata=routed_expert_metadata,
         )
 
         moe._build_descriptors()

@@ -35,6 +35,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/debug/dprint_tensix.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
@@ -741,6 +742,112 @@ struct MatmulExpertCompressedDRAM {
                                     CTArgs::cb_in0, act_rd_ptr + sb_k * CTArgs::subblock_k * in0_page_size);
                             }));
 
+                            // DEBUG: on bank-7 receiver primary, dump cb_in0 (activations),
+                            // cb_in1 (raw weight bytes; mixed precision so can't decode), and
+                            // fmt metadata for the first DRAM expert (exp_i=0, ng=0, sb_k=0)
+                            // — the configuration where device 13 produces wild dst[2].
+                            if constexpr (CTArgs::primary_at_last_offset && CTArgs::is_in_bank_primary) {
+                                if (exp_i == 0 && ng == 0 && sb_k == 0) {
+                                    DPRINT_UNPACK({
+                                        // (0) Print the L1 byte addresses we're about to dump from,
+                                        // so we can compare across devices. If device 13's in0_addr
+                                        // or in1_addr differs from a clean device's, the matmul is
+                                        // reading from a different L1 region than we think.
+                                        uint32_t in0_addr = act_rd_ptr + sb_k * CTArgs::subblock_k * in0_page_size;
+                                        uint32_t in1_addr_for_print = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in1);
+                                        uint32_t fmt_addr_for_print =
+                                            CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size;
+                                        DPRINT << "[exp_i=0] addrs: in0=" << HEX() << in0_addr
+                                               << " in1=" << in1_addr_for_print << " fmt=" << fmt_addr_for_print
+                                               << " fmt_slot=" << fmt_slot << ENDL();
+
+                                        // (1) cb_in0 (activations) — full 8 K rows as decoded bf16.
+                                        // Each K row = 1x32 bf16 = 32 elements = 64 bytes. Use the
+                                        // DPRINT BF16() helper to render each uint16 directly as a
+                                        // bf16 float, no Python decoding needed.
+                                        volatile tt_l1_ptr uint16_t* in0_p_u16 =
+                                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in0_addr);
+                                        for (uint32_t row = 0; row < CTArgs::num_tiles_k; row++) {
+                                            DPRINT << "[exp_i=0] cb_in0 K=" << row << ":";
+                                            for (uint32_t i = 0; i < 32; i++) {
+                                                DPRINT << " " << BF16(in0_p_u16[row * 32 + i]);
+                                            }
+                                            DPRINT << ENDL();
+                                        }
+
+                                        // (1.5) cb_in1 RAW dump — 256 words = 1024 bytes from
+                                        // cb_in1's rd_ptr regardless of fmt. Independent of any
+                                        // tile-size computation, so even when fmt says "all zero"
+                                        // we still see what's actually in L1.
+                                        volatile tt_l1_ptr uint32_t* in1_raw_p =
+                                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_addr_for_print);
+                                        for (uint32_t blk = 0; blk < 16; blk++) {
+                                            DPRINT << "[exp_i=0] cb_in1 raw blk" << blk << ": ";
+                                            for (uint32_t i = 0; i < 16; i++) {
+                                                DPRINT << HEX() << in1_raw_p[blk * 16 + i] << " ";
+                                            }
+                                            DPRINT << ENDL();
+                                        }
+
+                                        // (2) cb_in1 — PER-K dump of tile (K, N=2) for all K rows.
+                                        // For dst[2], the matmul reads in1[K, N=2] for K=0..num_tiles_k-1.
+                                        // Walk fmt to find each K's tile-N=2 byte offset (N-major-within-K
+                                        // layout, 7 N tiles per K row). Dump that tile's full bytes.
+                                        // LLK fmt → bytes: {0:0, 1:320, 2:576, 3:1088}.
+                                        volatile tt_l1_ptr uint32_t* fmt_p =
+                                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                                CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
+
+                                        uint32_t walk_byte_off = 0;
+                                        for (uint32_t k = 0; k < CTArgs::num_tiles_k; k++) {
+                                            // Accumulate tile sizes for N=0, N=1 to reach (K=k, N=2).
+                                            for (uint32_t n = 0; n < 2; n++) {
+                                                uint32_t ti = 7 * k + n;
+                                                uint32_t fmt_w = fmt_p[ti / 10];
+                                                uint32_t f = (fmt_w >> (3 + 3 * (ti % 10))) & 0x3;
+                                                walk_byte_off += f == 0 ? 0 : f == 1 ? 320 : f == 2 ? 576 : 1088;
+                                            }
+                                            // Tile (K=k, N=2)
+                                            uint32_t target_ti = 7 * k + 2;
+                                            uint32_t target_w = fmt_p[target_ti / 10];
+                                            uint32_t target_f = (target_w >> (3 + 3 * (target_ti % 10))) & 0x3;
+                                            uint32_t target_sz = target_f == 0   ? 0
+                                                                 : target_f == 1 ? 320
+                                                                 : target_f == 2 ? 576
+                                                                                 : 1088;
+                                            DPRINT << "[exp_i=0 K=" << k << " N=2 fmt=" << target_f << " off=" << HEX()
+                                                   << walk_byte_off << " sz=" << target_sz << "]:";
+                                            if (target_sz > 0) {
+                                                volatile tt_l1_ptr uint32_t* tile_p =
+                                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                                        in1_addr_for_print + walk_byte_off);
+                                                for (uint32_t i = 0; i < target_sz / 4; i++) {
+                                                    DPRINT << " " << HEX() << tile_p[i];
+                                                }
+                                            }
+                                            DPRINT << ENDL();
+                                            // Advance through tile (K=k, N=2..6) so next iteration starts at K+1, N=0.
+                                            walk_byte_off += target_sz;
+                                            for (uint32_t n = 3; n < 7; n++) {
+                                                uint32_t ti = 7 * k + n;
+                                                uint32_t fmt_w = fmt_p[ti / 10];
+                                                uint32_t f = (fmt_w >> (3 + 3 * (ti % 10))) & 0x3;
+                                                walk_byte_off += f == 0 ? 0 : f == 1 ? 320 : f == 2 ? 576 : 1088;
+                                            }
+                                        }
+
+                                        // (3) fmt metadata — 64 words covers ~640 tile codes.
+                                        for (uint32_t blk = 0; blk < 4; blk++) {
+                                            DPRINT << "[exp_i=0] fmt blk" << blk << ": ";
+                                            for (uint32_t i = 0; i < 16; i++) {
+                                                DPRINT << HEX() << fmt_p[blk * 16 + i] << " ";
+                                            }
+                                            DPRINT << ENDL();
+                                        }
+                                    });
+                                }
+                            }
+
                             if (sb_k < CTArgs::num_subblocks_k - 1) {
                                 compressed_custom_mm_block<false>(
                                     CTArgs::cb_in0,
@@ -761,6 +868,19 @@ struct MatmulExpertCompressedDRAM {
 
                             fmt_meta_offset += meta_words_per_block;
                             cb_pop_front(CTArgs::cb_in1, tiles_per_block);
+                        }
+
+                        // DEBUG: post-finalize dst[2] dump. Production split_acc=true
+                        // with last-call finalize=true means dst[2] now holds the merged
+                        // bf16 result. MATH still owns dst (commit hasn't run). On dev 13
+                        // (all-bfp0 N=2 column on routed expert) this is where we expect
+                        // to see the wild e+21/e+31 values from MLA-leftover stale partial
+                        // rows that finalize ELWADD'd into dst[2].
+                        if constexpr (CTArgs::primary_at_last_offset && CTArgs::is_in_bank_primary) {
+                            if (exp_i == 0 && ng == 0) {
+                                DPRINT_MATH({ DPRINT << "[exp_i=0 ng=0 POST-FINALIZE] dst[2]:" << ENDL(); });
+                                dprint_tensix_dest_reg(2);
+                            }
                         }
 
                         tile_regs_commit();
@@ -822,12 +942,12 @@ struct MatmulExpertCompressedDRAM {
                 // wr_ptr) AND slot 0 (sender's NOC write) have landed in cb_out's L1.
                 if (num_dram_experts > 0) {
                     cb_push_back(CTArgs::cb_out, cb_out_num_pages);
+                    cb_wait_front(CTArgs::cb_out, cb_out_num_pages);
                 }
 
                 // pop_out: drain the final cb_out push (looping mode).
                 if constexpr (pop_out) {
                     if (num_dram_experts > 0) {
-                        cb_wait_front(CTArgs::cb_out, cb_out_num_pages);
                         cb_pop_front(CTArgs::cb_out, cb_out_num_pages);
                     }
                 }
