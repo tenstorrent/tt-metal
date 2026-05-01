@@ -169,7 +169,7 @@ inline void _calculate_typecast_fp32_to_int32_()
         TTI_SFPIADD(-31 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
         // exp += 8
         TTI_SFPIADD(8, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        // result = exman8(in) << (exp - 23)
+        // result = exman(in, sfpi::MantissaMode::ImplicitOne) << (exp - 23)
         TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
         // LaneEnabled = true
@@ -206,7 +206,7 @@ inline void _calculate_typecast_fp32_to_uint32_()
         TTI_SFPIADD(-32 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
         // exp += 9
         TTI_SFPIADD(9, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        // result = exman8(in) << (exp - 23)
+        // result = exman(in, sfpi::MantissaMode::ImplicitOne) << (exp - 23)
         TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
         // LaneEnabled = true
