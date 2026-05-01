@@ -14,9 +14,8 @@ using namespace tt::tt_metal;
 
 namespace {
 
-// Returns true if the tensor's padded shape does not divide evenly into its shard shape,
-// or if the sharded memory config has no concrete shard_spec. Conservatively returns true
-// for pathological inputs (rank < 2) so callers fall back to interleaved paths.
+// True if padded shape doesn't divide evenly into shard, or if the sharded config has no spec.
+// Conservatively true for rank < 2 so callers fall back to interleaved.
 bool is_unevenly_sharded(const TensorSpec& t) {
     if (!t.memory_config().is_sharded()) {
         return false;
@@ -38,9 +37,8 @@ bool is_unevenly_sharded(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
 }
 
-// True when a RM MemoryConfig's shard element count is not a multiple of the tile footprint.
-// Such shards cannot use the specialized native kernels (which assume whole-tile pages); the
-// interleaved factories handle them via TensorAccessorArgs instead.
+// RM shard element count not a tile multiple → native kernels can't use it (whole-tile pages
+// only); the interleaved TensorAccessor path handles such shards.
 bool rm_shard_elements_not_tile_aligned(const MemoryConfig& mc) {
     if (!mc.shard_spec().has_value()) {
         return false;
@@ -52,8 +50,8 @@ bool rm_shard_elements_not_tile_aligned(const MemoryConfig& mc) {
     return elems % tile_hw != 0;
 }
 
-// Side-level native eligibility: sharded, non-DRAM, non-BLOCK, and for ROW_MAJOR: shard-element
-// count is a whole multiple of tile_hw. Shared by the input and output checks below.
+// Per-side native eligibility: sharded, non-DRAM, non-BLOCK, and for RM: shard elements are a
+// tile_hw multiple.
 bool side_native(const MemoryConfig& mc, Layout layout) {
     if (!mc.is_sharded()) {
         return false;
@@ -81,16 +79,14 @@ bool is_native_transpose_sharding(
         return false;
     }
     if (!output_memory_config.has_value()) {
-        // Pre-derivation path: the output shard_spec is about to be synthesized from the input's,
-        // so there's nothing to compare on the output side yet. Input-only eligibility is enough.
+        // Pre-derivation: output spec will be synthesized from input — input eligibility suffices.
         return true;
     }
     if (!side_native(*output_memory_config, input_spec.layout())) {
         return false;
     }
-    // The sharded WH/HC program factories assume a single shared grid; only enforce when both
-    // shard_specs are concrete. During derive_effective_output_memory_config the output_mem_config
-    // may still carry no shard_spec, and its grid is implicitly the input's.
+    // Sharded WH/HC factories require a single shared grid; only enforce when both specs concrete
+    // (a missing output spec implicitly inherits the input grid).
     const auto& in_ss = input_spec.memory_config().shard_spec();
     const auto& out_ss = output_memory_config->shard_spec();
     return !(in_ss.has_value() && out_ss.has_value() && in_ss->grid != out_ss->grid);
@@ -98,13 +94,9 @@ bool is_native_transpose_sharding(
 
 std::optional<ShardSpec> adjust_shard_spec_to_shape(
     const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
-    // Volumes are accumulated in uint64_t to prevent overflow on large tensors (e.g. N*C*H
-    // products can exceed 2^32). Returning nullopt on non-exact division lets callers fall back
-    // gracefully (generate_transpose_shard_spec or interleaved) instead of crashing a valid user
-    // call, and avoids the silent-truncation pitfall of blind uint division.
-    // Transpose preserves rank, so callers must pass equal-rank shapes. Enforce this explicitly:
-    // mismatched ranks would silently produce inconsistent volume math (the two accumulation loops
-    // below run for different counts) and yield a valid-looking but wrong shard.
+    // uint64 accumulators avoid overflow on large tensors; nullopt on non-exact division lets
+    // callers fall back gracefully. Transpose preserves rank — mismatched ranks would yield
+    // inconsistent volume math, so enforce equality.
     TT_FATAL(
         from_shape.rank() == to_shape.rank(),
         "adjust_shard_spec_to_shape: from_shape rank ({}) and to_shape rank ({}) must match.",
@@ -129,23 +121,17 @@ std::optional<ShardSpec> adjust_shard_spec_to_shape(
         return std::nullopt;
     }
 
-    // Return the exact ratio-scaled shard without tile-size clamping. A naive
-    // `std::max(scaled, TILE_*)` clamp oversizes the shard whenever the target dim legitimately
-    // shrinks below a tile (e.g. WH on a tile-aligned height-sharded input where the new width
-    // becomes sub-tile) and then fills the grid with capacity for data that doesn't exist,
-    // producing silent correctness regressions. Callers that need tile-aligned shards post-check
-    // `shape[i] % TILE_*` and fall back to interleaved; callers targeting RM layouts tolerate
-    // sub-tile shards. This mirrors `unary_ng`/`binary_ng` semantics but avoids their latent
-    // clamp bug — harmless there because their shape ratios never shrink a dim.
+    // Exact ratio scale, no tile-size clamp: clamping oversizes shards when transpose legitimately
+    // shrinks a dim sub-tile, causing silent correctness bugs. Callers that need tile alignment
+    // post-check shape[i] % TILE_* and fall back; RM callers tolerate sub-tile shards.
     auto ret = shard_spec;
     ret.shape[0] = static_cast<uint32_t>(h_num / from_volume_except_width);
     ret.shape[1] = static_cast<uint32_t>(w_num / from_width);
     return ret;
 }
 
-// When the user requests a sharded output but no shard_spec, and the input is interleaved, we derive
-// a grid and shard shape using the full device compute grid, matching the shard math used elsewhere
-// for height/width/block cases.
+// Build a sharded spec over the full compute grid (used when no input shard_spec is available
+// to scale from, e.g. interleaved input + sharded output request).
 ShardSpec generate_transpose_shard_spec(
     const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, TensorMemoryLayout memory_layout) {
     auto* device = input_tensor.device();
@@ -153,10 +139,8 @@ ShardSpec generate_transpose_shard_spec(
     CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
     uint32_t num_cores = all_cores.num_cores();
 
-    // Accumulate in uint64 to match adjust_shard_spec_to_shape and avoid overflow on tensors whose
-    // product of leading dims exceeds 2^32 (e.g. large batch x seq_len x head_dim attention shapes).
-    // The final per-shard dims we hand back are still uint32 (the hardware/shard-spec representation),
-    // but the intermediate height computation uses the wider type.
+    // uint64 intermediates avoid overflow when leading-dim product exceeds 2^32; final shard
+    // dims are still uint32 (the hardware representation).
     uint64_t tensor_height = 1;
     for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
         tensor_height *= static_cast<uint64_t>(padded_out_shape[i]);
@@ -187,9 +171,8 @@ ShardSpec generate_transpose_shard_spec(
     return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
 }
 
-// Refreshes the runtime-tensor-shape common args on program cache hits. Strict equality between
-// destination and source lengths catches any drift in the TensorAccessorArgs footprint between
-// program creation and the cache hit (a >= check would leave stale trailing elements in dst).
+// Refresh runtime-tensor-shape common args on cache hits. Strict size equality detects any drift
+// in the TensorAccessorArgs footprint between program creation and reuse.
 void copy_transpose_common_runtime_args(const Buffer& buffer, std::span<std::uint32_t> dst) {
     const auto src =
         TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::RuntimeTensorShape).get_common_runtime_args();

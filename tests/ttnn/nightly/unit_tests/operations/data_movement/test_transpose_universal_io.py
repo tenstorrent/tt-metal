@@ -75,26 +75,34 @@ _TILE_HEIGHT = 32
 _TILE_WIDTH = 32
 
 
-def _assert_tile_aligned(shard_shape, layout, helper_name):
-    """For TILE_LAYOUT both shard dims must be a multiple of the tile size, otherwise
-    `TensorSpec` construction fails inside ttnn with `TT_FATAL @ tensor_layout.cpp:159`.
-    Surfacing the constraint here yields a clear test-side error for future call sites."""
+def _round_up(x, mult):
+    return ((x + mult - 1) // mult) * mult
+
+
+def _padded_hw(shape, layout):
+    """Return (total_height, width) using tile-padded dims for TILE_LAYOUT, logical for RM.
+    Pads each dim independently to match ttnn's per-dim tile padding (e.g. (2,3,71,79) →
+    total_h = 2*3*96 = 576, w = 96)."""
     if layout == ttnn.TILE_LAYOUT:
-        h, w = shard_shape
-        assert h % _TILE_HEIGHT == 0 and w % _TILE_WIDTH == 0, (
-            f"{helper_name}: shard_shape={shard_shape} must be a multiple of "
-            f"({_TILE_HEIGHT}, {_TILE_WIDTH}) for TILE_LAYOUT inputs"
-        )
+        return shape[0] * shape[1] * _round_up(shape[2], _TILE_HEIGHT), _round_up(shape[3], _TILE_WIDTH)
+    return shape[0] * shape[1] * shape[2], shape[3]
+
+
+def _tile_align(shard_shape, layout):
+    """Round shard dims up to the nearest tile for TILE_LAYOUT; pass through for ROW_MAJOR."""
+    h, w = shard_shape
+    if layout == ttnn.TILE_LAYOUT:
+        return (_round_up(h, _TILE_HEIGHT), _round_up(w, _TILE_WIDTH))
+    return (h, w)
 
 
 def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
-    """Create a 2x2 block-sharded MemoryConfig for the given 4D shape."""
+    """Create a 2x2 block-sharded MemoryConfig; shard rounded up to tile for TILE inputs."""
     compute_grid = device.compute_with_storage_grid_size()
     grid_x = min(2, compute_grid.x)
     grid_y = min(2, compute_grid.y)
-    total_height = shape[0] * shape[1] * shape[2]
-    shard_shape = (total_height // grid_y, shape[3] // grid_x)
-    _assert_tile_aligned(shard_shape, layout, "_block_shard_config")
+    total_h, w = _padded_hw(shape, layout)
+    shard_shape = _tile_align(((total_h + grid_y - 1) // grid_y, (w + grid_x - 1) // grid_x), layout)
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
         shard_shape,
@@ -104,25 +112,23 @@ def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
 
 
 def _height_shard_config(shape, device, num_cores=4, buffer_type=ttnn.BufferType.L1, layout=ttnn.TILE_LAYOUT):
-    """Create a height-sharded MemoryConfig for the given 4D shape."""
+    """Create a height-sharded MemoryConfig; shard rounded up to tile for TILE inputs."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
-    total_height = shape[0] * shape[1] * shape[2]
-    shard_shape = (total_height // num_cores, shape[3])
-    _assert_tile_aligned(shard_shape, layout, "_height_shard_config")
+    total_h, w = _padded_hw(shape, layout)
+    shard_shape = _tile_align(((total_h + num_cores - 1) // num_cores, w), layout)
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, shard_spec)
 
 
 def _width_shard_config(shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT):
-    """Create a width-sharded MemoryConfig for the given 4D shape."""
+    """Create a width-sharded MemoryConfig; shard rounded up to tile for TILE inputs."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
-    total_height = shape[0] * shape[1] * shape[2]
-    shard_shape = (total_height, shape[3] // num_cores)
-    _assert_tile_aligned(shard_shape, layout, "_width_shard_config")
+    total_h, w = _padded_hw(shape, layout)
+    shard_shape = _tile_align((total_h, (w + num_cores - 1) // num_cores), layout)
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -445,23 +451,43 @@ def test_transpose_universal_io_row_major(shape, dim0, dim1, input_factory, outp
     )
 
 
-# Interleaved input with irregular shapes (TILE and ROW_MAJOR) across WH/HC/CN.
-@pytest.mark.parametrize(
-    "shape, dim0, dim1",
-    [
-        # WH, last-two dims irregular
-        ((1, 1, 65, 97), 2, 3),
-        ((2, 3, 71, 79), 2, 3),
-        # HC, irregular C
-        ((1, 13, 47, 64), 1, 2),
-        ((1, 7, 33, 96), 1, 2),
-        # CN
-        ((3, 5, 32, 64), 0, 1),
-    ],
-)
+# Irregular logical shapes (last-two not tile multiples) across WH/HC/CN, both interleaved
+# and sharded. Sharded uses the rounded-up shard helpers (tile-aligned shards on irregular
+# logical shapes — per review).
+_IRREGULAR_SHAPES = [
+    ((1, 1, 65, 97), 2, 3),
+    ((2, 3, 71, 79), 2, 3),
+    ((1, 13, 47, 64), 1, 2),
+    ((1, 7, 33, 96), 1, 2),
+    ((3, 5, 32, 64), 0, 1),
+]
+
+
+@pytest.mark.parametrize("shape, dim0, dim1", _IRREGULAR_SHAPES)
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_transpose_irregular_shapes_interleaved(shape, dim0, dim1, input_layout, device):
     run_transpose_test(shape, dim0, dim1, device, input_layout=input_layout)
+
+
+@pytest.mark.parametrize("shape, dim0, dim1", _IRREGULAR_SHAPES)
+@pytest.mark.parametrize(
+    "shard_factory",
+    [
+        pytest.param(_block_shard_config, id="block"),
+        pytest.param(_height_shard_config, id="height"),
+        pytest.param(_width_shard_config, id="width"),
+    ],
+)
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_transpose_irregular_shapes_sharded(shape, dim0, dim1, shard_factory, input_layout, device):
+    run_transpose_test(
+        shape,
+        dim0,
+        dim1,
+        device,
+        input_layout=input_layout,
+        input_mem_config=shard_factory(shape, device, layout=input_layout),
+    )
 
 
 # ROW_MAJOR interleaved input → BLOCK/WIDTH sharded output without shard_spec.

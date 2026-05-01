@@ -19,11 +19,9 @@ namespace ttnn::prim {
 
 namespace {
 
-// Compute the output logical+padded shapes for a given transpose dim. The padded-shape semantics
-// mirror what the WH/HC/CN program factories expect (in particular, HC TILE rotates input's padded
-// H into output dim[1] and pads new dim[2] to TILE_HEIGHT based on the logical C). Keeping this in
-// a single helper ensures `derive_effective_output_memory_config` and `compute_output_specs` agree
-// on shape derivation.
+// Output logical+padded shapes per transpose dim. HC TILE: dim[1] = logical H (slot 1 isn't
+// tile-padded), dim[2] = round_up(logical C, TILE_HEIGHT). Shared by
+// derive_effective_output_memory_config and compute_output_specs.
 struct TransposedShapes {
     ttnn::Shape logical;
     ttnn::Shape padded;
@@ -60,11 +58,9 @@ TransposedShapes transposed_shapes(const Tensor& input_tensor, TransposeOpDim di
     return {output_shape, output_padded_shape};
 }
 
-// Derive the effective output MemoryConfig. When the user asks for a sharded output but omits
-// shard_spec, we synthesize one here so the rest of the op (select_program_factory,
-// compute_output_specs) can reason about a fully-specified config. When the input's shard spec
-// can't be scaled exactly to the output padded shape, fall back to generating a fresh spec over
-// the full compute grid instead of crashing.
+// Synthesize a shard_spec when the user asks for sharded output without one, so downstream
+// (select_program_factory, compute_output_specs) sees a fully-specified config. Falls back to a
+// fresh full-grid spec when input shard can't be scaled exactly.
 MemoryConfig derive_effective_output_memory_config(
     const TransposeDeviceOperation::operation_attributes_t& operation_attributes,
     const TransposeDeviceOperation::tensor_args_t& tensor_args) {
@@ -74,22 +70,16 @@ MemoryConfig derive_effective_output_memory_config(
     }
     const auto& input_tensor = tensor_args.input;
     const auto output_padded_shape = transposed_shapes(input_tensor, operation_attributes.dim).padded;
-    // Only reuse the input's shard_spec geometry when the requested output layout matches the
-    // input's layout: `adjust_shard_spec_to_shape` scales the input shard dims by the shape
-    // ratio, which preserves the sharding style (height/width/block) but doesn't convert
-    // between them. When the user asks for a different layout, fall through to
-    // `generate_transpose_shard_spec` which builds a fresh spec for the requested layout.
+    // adjust_shard_spec_to_shape preserves the sharding style — only reuse input geometry when
+    // requested output layout matches input's; otherwise generate_transpose_shard_spec builds fresh.
     if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
         input_tensor.memory_config().memory_layout() == output_mem_config.memory_layout()) {
         auto adjusted = adjust_shard_spec_to_shape(
             input_tensor.shard_spec().value(), input_tensor.padded_shape(), output_padded_shape);
         if (adjusted.has_value()) {
-            // For TILE layouts, the sharded WH/HC program factories require tile-aligned shard
-            // dims. `adjust_shard_spec_to_shape` may now return a sub-tile shard whenever the
-            // transpose legitimately shrinks a dim below TILE (previously a clamp silently
-            // oversized such shards, producing correctness bugs). Fall through to
-            // `generate_transpose_shard_spec` in that case instead of handing the sharded
-            // kernels an unusable spec.
+            // TILE sharded factories need tile-aligned shards; adjust_shard_spec_to_shape may now
+            // produce sub-tile when transpose legitimately shrinks a dim → fall through to
+            // generate_transpose_shard_spec rather than feeding an unusable spec.
             const bool tile_layout = input_tensor.layout() == Layout::TILE;
             const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
                                       adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
@@ -112,9 +102,8 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
     const auto& dim = operation_attributes.dim;
     bool is_row_major = input_tensor.layout() == Layout::ROW_MAJOR;
 
-    // When `native` is false, the specialized sharded WH/HC factories are skipped and we fall
-    // through to the interleaved factories, which use TensorAccessorArgs for transparent NOC-based
-    // access against either interleaved or sharded buffers.
+    // !native → fall through to interleaved factories (TensorAccessorArgs handles sharded buffers
+    // transparently via NOC).
     bool native = is_native_transpose_sharding(input_tensor.tensor_spec(), output_memory_config);
 
     uint32_t N = input_tensor.logical_shape()[0], C = input_tensor.logical_shape()[1];
