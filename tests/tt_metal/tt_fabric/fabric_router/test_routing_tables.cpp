@@ -2078,7 +2078,7 @@ void validate_sp5_blitz_decode_pipeline_stages(
 
 }  // namespace
 
-TEST_F(ControlPlaneFixture, SP5_TestBlitzDecodePipelineBuilder) {
+TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
