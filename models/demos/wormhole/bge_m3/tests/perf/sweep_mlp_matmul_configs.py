@@ -17,8 +17,16 @@ Examples:
     TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/sweep_mlp_matmul_configs.py \
     -sv -k test_bge_m3_mlp_matmul_config_sweep
 
+  BGE_M3_MLP_SWEEP_WORKLOAD=wi BGE_M3_MLP_SWEEP_DTYPES=bfp8,weight_bfp4,bfp4 \
+    TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/sweep_mlp_matmul_configs.py \
+    -sv -k test_bge_m3_mlp_matmul_config_sweep
+
   TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/sweep_mlp_matmul_configs.py \
     -sv -k test_bge_m3_wi_layout_sweep
+
+  BGE_M3_MLP_LAYOUT_SWEEP_WORKLOAD=wo TT_VISIBLE_DEVICES=0 \
+    pytest models/demos/wormhole/bge_m3/tests/perf/sweep_mlp_matmul_configs.py \
+    -sv -k test_bge_m3_mlp_layout_sweep
 
 For device-profiler timing, export the usual Tracy profiler vars before pytest:
   export TT_METAL_DEVICE_PROFILER=1
@@ -71,6 +79,14 @@ class Candidate:
     out_block_h: int | None = None
     out_block_w: int | None = None
     m_policy: str = "auto"
+
+
+@dataclass(frozen=True)
+class DTypeCandidate:
+    name: str
+    input_dtype: Any
+    weight_dtype: Any
+    output_dtype: Any
 
 
 @dataclass
@@ -126,6 +142,33 @@ def _env_int(name: str, default: int) -> int:
     if value is None:
         return default
     return int(value)
+
+
+def _dtype_candidates() -> tuple[DTypeCandidate, ...]:
+    value = os.environ.get("BGE_M3_MLP_SWEEP_DTYPES", "bfp8")
+    mapping = {
+        "bfp8": DTypeCandidate("bfp8", ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b),
+        # Most model-compatible BFP4 probe: keep activations/output BFP8, compress weights.
+        "weight_bfp4": DTypeCandidate("weight_bfp4", ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat8_b),
+        "bfp8_wbfp4": DTypeCandidate("weight_bfp4", ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat8_b),
+        # Aggressive probe: both matmul operands BFP4, but keep output BFP8 for downstream compatibility.
+        "bfp4": DTypeCandidate("bfp4", ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b),
+        "all_bfp4": DTypeCandidate("all_bfp4", ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat4_b),
+    }
+
+    candidates: list[DTypeCandidate] = []
+    for item in value.split(","):
+        key = item.strip().lower()
+        if not key:
+            continue
+        if key not in mapping:
+            raise ValueError(
+                f"Unsupported BGE_M3_MLP_SWEEP_DTYPES entry {item!r}. " f"Supported: {', '.join(sorted(mapping))}"
+            )
+        candidate = mapping[key]
+        if all(existing.name != candidate.name for existing in candidates):
+            candidates.append(candidate)
+    return tuple(candidates) or (mapping["bfp8"],)
 
 
 def _parse_grids() -> tuple[tuple[int, int], ...]:
@@ -212,6 +255,7 @@ def _candidate_program_config(workload: MLPWorkload, candidate: Candidate) -> An
 
 def _generate_candidates(workload: MLPWorkload) -> list[Candidate]:
     candidates = [Candidate(name="auto")]
+    candidates.extend(_priority_candidates(workload))
     k_tiles = math.ceil(workload.k / TILE_SIZE)
     n_tiles = math.ceil(workload.n / TILE_SIZE)
     seq_tiles = math.ceil(workload.m / TILE_SIZE)
@@ -252,7 +296,7 @@ def _generate_candidates(workload: MLPWorkload) -> list[Candidate]:
                             per_core_n=per_core_n,
                             m_policy=m_policy,
                         )
-                        candidates.append(base)
+                        _append_unique_candidate(candidates, base)
 
                         # For large B32 per-core M, explicit output block sizing can
                         # lower L1 pressure. Keep this separate so regressions are easy to attribute.
@@ -262,7 +306,8 @@ def _generate_candidates(workload: MLPWorkload) -> list[Candidate]:
                                     continue
                                 if out_block_h % out_subblock_h != 0:
                                     continue
-                                candidates.append(
+                                _append_unique_candidate(
+                                    candidates,
                                     Candidate(
                                         name=f"{base.name}_ob{out_block_h}x{per_core_n}",
                                         grid=grid,
@@ -274,13 +319,68 @@ def _generate_candidates(workload: MLPWorkload) -> list[Candidate]:
                                         out_block_h=out_block_h,
                                         out_block_w=per_core_n,
                                         m_policy=m_policy,
-                                    )
+                                    ),
                                 )
 
     limit = _env_int("BGE_M3_MLP_SWEEP_LIMIT", 24)
     if limit > 0:
         return candidates[:limit]
     return candidates
+
+
+def _append_unique_candidate(candidates: list[Candidate], candidate: Candidate) -> None:
+    if any(existing.name == candidate.name for existing in candidates):
+        return
+    candidates.append(candidate)
+
+
+def _priority_candidates(workload: MLPWorkload) -> list[Candidate]:
+    """Put the current full-model neighborhood before the broad generated grid search."""
+    seq_tiles = SEQ_LEN // TILE_SIZE
+    n_tiles = workload.n // TILE_SIZE
+
+    def sequence_candidate(
+        grid: tuple[int, int],
+        in0_block_w: int,
+        out_subblock_w: int,
+        name_suffix: str = "",
+    ) -> Candidate:
+        grid_x, grid_y = grid
+        per_core_m = math.ceil(seq_tiles / grid_y)
+        per_core_n = math.ceil(n_tiles / grid_x)
+        suffix = f"_{name_suffix}" if name_suffix else ""
+        return Candidate(
+            name=(
+                f"{workload.name}_priority_sequence_g{grid_x}x{grid_y}_"
+                f"in0w{in0_block_w}_sub1x{out_subblock_w}{suffix}"
+            ),
+            grid=grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            per_core_m=per_core_m,
+            per_core_n=per_core_n,
+            m_policy="sequence",
+        )
+
+    if workload.name == "wi":
+        return [
+            # Current full-model winner plus nearby lower/higher in0 blocking.
+            sequence_candidate((11, 10), 8, 3, "current"),
+            sequence_candidate((11, 10), 4, 3),
+            sequence_candidate((11, 10), 8, 2),
+            sequence_candidate((10, 10), 8, 4),
+            sequence_candidate((8, 10), 8, 4),
+        ]
+
+    return [
+        # Wo stayed on TTNN auto in the full model; these are local sequence-policy probes.
+        sequence_candidate((11, 10), 2, 3),
+        sequence_candidate((11, 10), 4, 3),
+        sequence_candidate((11, 10), 8, 3),
+        sequence_candidate((10, 10), 2, 4),
+        sequence_candidate((8, 10), 2, 4),
+    ]
 
 
 def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
@@ -302,6 +402,23 @@ def _wi_sequence_program_config() -> ttnn.MatmulMultiCoreReuseMultiCastProgramCo
         per_core_N=12,
         transpose_mcast=False,
         fused_activation=(ttnn.UnaryOpType.GELU, True),
+        fuse_batch=False,
+    )
+
+
+def _mlp_sequence_program_config(workload: MLPWorkload) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    if workload.name == "wi":
+        return _wi_sequence_program_config()
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(11, 10),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        per_core_M=2,
+        per_core_N=3,
+        transpose_mcast=False,
+        fused_activation=None,
         fuse_batch=False,
     )
 
@@ -497,13 +614,123 @@ def _wi_layout_candidates(mesh_device) -> list[LayoutCandidate]:
     return candidates
 
 
+def _wo_layout_candidates(mesh_device) -> list[LayoutCandidate]:
+    workload = _workloads()["wo"]
+    in0_shape = [BATCH_SIZE, 1, SEQ_LEN, INTERMEDIATE_SIZE]
+    out_shape = [BATCH_SIZE, 1, SEQ_LEN, HIDDEN_SIZE]
+    seq_pc = _mlp_sequence_program_config(workload)
+
+    width_grid = (8, 8)
+    dram_grid_x = mesh_device.dram_grid_size().x
+
+    def width_l1(shape: list[int], grid: tuple[int, int] = width_grid) -> ttnn.MemoryConfig:
+        return ttnn.create_sharded_memory_config(
+            shape,
+            core_grid=ttnn.CoreGrid(x=grid[0], y=grid[1]),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+    def dram_sharded_pc(per_core_m: int) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
+        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=1,
+            per_core_M=per_core_m,
+            per_core_N=HIDDEN_SIZE // (TILE_SIZE * dram_grid_x),
+            fused_activation=None,
+        )
+
+    candidates: list[LayoutCandidate] = []
+
+    def add_candidate(
+        name: str,
+        in0_factory,
+        in1_factory,
+        output_factory,
+        program_factory,
+        output_dtype: Any = ttnn.bfloat8_b,
+    ) -> None:
+        try:
+            candidates.append(
+                LayoutCandidate(
+                    name=name,
+                    in0_memory_config=in0_factory(),
+                    in1_memory_config=in1_factory(),
+                    output_memory_config=output_factory(),
+                    program_config=program_factory(),
+                    output_dtype=output_dtype,
+                )
+            )
+        except Exception as exc:
+            candidates.append(LayoutCandidate(name=name, construction_error=_short_error(exc)))
+
+    for prefix, program_factory in (
+        ("auto", lambda: None),
+        ("seq_pc", lambda: seq_pc),
+    ):
+        add_candidate(
+            f"{prefix}_in0_dram_in1_dram_out_dram",
+            lambda: ttnn.DRAM_MEMORY_CONFIG,
+            lambda: ttnn.DRAM_MEMORY_CONFIG,
+            lambda: ttnn.DRAM_MEMORY_CONFIG,
+            program_factory,
+        )
+        add_candidate(
+            f"{prefix}_in0_l1_in1_dram_out_dram",
+            lambda: ttnn.L1_MEMORY_CONFIG,
+            lambda: ttnn.DRAM_MEMORY_CONFIG,
+            lambda: ttnn.DRAM_MEMORY_CONFIG,
+            program_factory,
+        )
+        add_candidate(
+            f"{prefix}_in0_l1_in1_dram_out_l1",
+            lambda: ttnn.L1_MEMORY_CONFIG,
+            lambda: ttnn.DRAM_MEMORY_CONFIG,
+            lambda: ttnn.L1_MEMORY_CONFIG,
+            program_factory,
+        )
+
+    add_candidate(
+        "dram_sharded_w_in0_width_l1_out_width_l1_mseq",
+        lambda: width_l1(in0_shape),
+        lambda: _dram_width_sharded_weight_config(INTERMEDIATE_SIZE, HIDDEN_SIZE, dram_grid_x),
+        lambda: width_l1(out_shape),
+        lambda: dram_sharded_pc(SEQ_LEN // TILE_SIZE),
+    )
+    add_candidate(
+        "dram_sharded_w_in0_width_l1_out_width_l1_m1",
+        lambda: width_l1(in0_shape),
+        lambda: _dram_width_sharded_weight_config(INTERMEDIATE_SIZE, HIDDEN_SIZE, dram_grid_x),
+        lambda: width_l1(out_shape),
+        lambda: dram_sharded_pc(1),
+    )
+
+    return candidates
+
+
+def _mlp_layout_candidates(mesh_device, workload: MLPWorkload) -> list[LayoutCandidate]:
+    if workload.name == "wi":
+        return _wi_layout_candidates(mesh_device)
+    if workload.name == "wo":
+        return _wo_layout_candidates(mesh_device)
+    raise ValueError(f"Unsupported MLP layout workload: {workload.name}")
+
+
 def _run_wi_layout_candidate(mesh_device, candidate: LayoutCandidate, iterations: int) -> LayoutSweepResult:
+    return _run_mlp_layout_candidate(mesh_device, _workloads()["wi"], candidate, iterations)
+
+
+def _run_mlp_layout_candidate(
+    mesh_device,
+    workload: MLPWorkload,
+    candidate: LayoutCandidate,
+    iterations: int,
+) -> LayoutSweepResult:
     if candidate.construction_error:
         return LayoutSweepResult(candidate=candidate.name, status="reject", error=candidate.construction_error)
 
     torch.manual_seed(1234)
-    activation = torch.randn((BATCH_SIZE, 1, SEQ_LEN, HIDDEN_SIZE), dtype=torch.bfloat16)
-    weight = torch.randn((1, 1, HIDDEN_SIZE, INTERMEDIATE_SIZE), dtype=torch.bfloat16)
+    activation = torch.randn((BATCH_SIZE, 1, workload.m, workload.k), dtype=torch.bfloat16)
+    weight = torch.randn((1, 1, workload.k, workload.n), dtype=torch.bfloat16)
 
     try:
         prepare_start = time.perf_counter()
@@ -532,6 +759,7 @@ def _run_wi_layout_candidate(mesh_device, candidate: LayoutCandidate, iterations
             dtype=candidate.output_dtype,
             program_config=candidate.program_config,
             compute_kernel_config=_compute_kernel_config(),
+            activation=workload.default_activation if candidate.program_config is None else None,
         )
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(output)
@@ -545,6 +773,7 @@ def _run_wi_layout_candidate(mesh_device, candidate: LayoutCandidate, iterations
                 dtype=candidate.output_dtype,
                 program_config=candidate.program_config,
                 compute_kernel_config=_compute_kernel_config(),
+                activation=workload.default_activation if candidate.program_config is None else None,
             )
             ttnn.synchronize_device(mesh_device)
             ttnn.deallocate(output)
@@ -567,23 +796,30 @@ def _run_wi_layout_candidate(mesh_device, candidate: LayoutCandidate, iterations
         return LayoutSweepResult(candidate=candidate.name, status="reject", error=_short_error(exc))
 
 
-def _run_candidate(mesh_device, workload: MLPWorkload, candidate: Candidate, iterations: int) -> SweepResult:
+def _run_candidate(
+    mesh_device,
+    workload: MLPWorkload,
+    candidate: Candidate,
+    dtype_candidate: DTypeCandidate,
+    iterations: int,
+) -> SweepResult:
     torch.manual_seed(1234)
     activation = torch.randn((BATCH_SIZE, 1, workload.m, workload.k), dtype=torch.bfloat16)
     weight = torch.randn((1, 1, workload.k, workload.n), dtype=torch.bfloat16)
+    candidate_name = f"{candidate.name}_{dtype_candidate.name}"
 
     try:
         input_tensor = ttnn.from_torch(
             activation,
             device=mesh_device,
-            dtype=ttnn.bfloat8_b,
+            dtype=dtype_candidate.input_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         weight_tensor = ttnn.from_torch(
             weight,
             device=mesh_device,
-            dtype=ttnn.bfloat8_b,
+            dtype=dtype_candidate.weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -594,7 +830,7 @@ def _run_candidate(mesh_device, workload: MLPWorkload, candidate: Candidate, ite
             input_tensor,
             weight_tensor,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=dtype_candidate.output_dtype,
             program_config=program_config,
             compute_kernel_config=_compute_kernel_config(),
             activation=workload.default_activation if program_config is None else None,
@@ -608,7 +844,7 @@ def _run_candidate(mesh_device, workload: MLPWorkload, candidate: Candidate, ite
                 input_tensor,
                 weight_tensor,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=dtype_candidate.output_dtype,
                 program_config=program_config,
                 compute_kernel_config=_compute_kernel_config(),
                 activation=workload.default_activation if program_config is None else None,
@@ -625,7 +861,7 @@ def _run_candidate(mesh_device, workload: MLPWorkload, candidate: Candidate, ite
 
         return SweepResult(
             workload=workload.name,
-            candidate=candidate.name,
+            candidate=candidate_name,
             status="pass",
             host_us=host_us,
             device_us=device_us,
@@ -634,7 +870,7 @@ def _run_candidate(mesh_device, workload: MLPWorkload, candidate: Candidate, ite
     except Exception as exc:
         return SweepResult(
             workload=workload.name,
-            candidate=candidate.name,
+            candidate=candidate_name,
             status="reject",
             error=_short_error(exc),
         )
@@ -649,6 +885,7 @@ def _run_candidate(mesh_device, workload: MLPWorkload, candidate: Candidate, ite
 def test_bge_m3_mlp_matmul_config_sweep(mesh_device):
     workload_filter = os.environ.get("BGE_M3_MLP_SWEEP_WORKLOAD", "all")
     iterations = _env_int("BGE_M3_MLP_SWEEP_ITERS", 5)
+    dtype_candidates = _dtype_candidates()
     workloads = _workloads()
     selected = workloads.values() if workload_filter == "all" else [workloads[workload_filter]]
 
@@ -658,18 +895,22 @@ def test_bge_m3_mlp_matmul_config_sweep(mesh_device):
 
     for workload in selected:
         candidates = _generate_candidates(workload)
-        logger.info(f"Sweeping {workload.name}: {len(candidates)} candidates, iterations={iterations}")
+        logger.info(
+            f"Sweeping {workload.name}: {len(candidates)} candidates, "
+            f"dtypes={[candidate.name for candidate in dtype_candidates]}, iterations={iterations}"
+        )
         for candidate in candidates:
-            result = _run_candidate(mesh_device, workload, candidate, iterations)
-            print(result.to_csv_row(), flush=True)
-            if result.status != "pass":
-                continue
-            pass_count += 1
-            best = best_by_workload.get(workload.name)
-            if best is None or (
-                result.host_us is not None and best.host_us is not None and result.host_us < best.host_us
-            ):
-                best_by_workload[workload.name] = result
+            for dtype_candidate in dtype_candidates:
+                result = _run_candidate(mesh_device, workload, candidate, dtype_candidate, iterations)
+                print(result.to_csv_row(), flush=True)
+                if result.status != "pass":
+                    continue
+                pass_count += 1
+                best = best_by_workload.get(workload.name)
+                if best is None or (
+                    result.host_us is not None and best.host_us is not None and result.host_us < best.host_us
+                ):
+                    best_by_workload[workload.name] = result
 
     print("\n# Best host-time config per workload:", flush=True)
     for workload_name, result in sorted(best_by_workload.items()):
@@ -715,3 +956,49 @@ def test_bge_m3_wi_layout_sweep(mesh_device):
         )
 
     assert pass_count > 0, "No Wi layout sweep candidates compiled and ran"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_bge_m3_mlp_layout_sweep(mesh_device):
+    workload_filter = os.environ.get("BGE_M3_MLP_LAYOUT_SWEEP_WORKLOAD", "all")
+    iterations = _env_int("BGE_M3_MLP_LAYOUT_SWEEP_ITERS", 5)
+    workloads = _workloads()
+    selected = workloads.values() if workload_filter == "all" else [workloads[workload_filter]]
+    filter_text = os.environ.get("BGE_M3_MLP_LAYOUT_SWEEP_FILTER")
+
+    print("workload,candidate,status,prepare_us,host_us,device_us,core_count,error", flush=True)
+    best_by_workload: dict[str, LayoutSweepResult] = {}
+    pass_count = 0
+
+    for workload in selected:
+        candidates = _mlp_layout_candidates(mesh_device, workload)
+        if filter_text:
+            candidates = [candidate for candidate in candidates if filter_text in candidate.name]
+        logger.info(f"Sweeping {workload.name} layouts: {len(candidates)} candidates, iterations={iterations}")
+
+        for candidate in candidates:
+            result = _run_mlp_layout_candidate(mesh_device, workload, candidate, iterations)
+            print(f"{workload.name},{result.to_csv_row()}", flush=True)
+            if result.status != "pass":
+                continue
+            pass_count += 1
+            best = best_by_workload.get(workload.name)
+            if best is None or (
+                result.host_us is not None and best.host_us is not None and result.host_us < best.host_us
+            ):
+                best_by_workload[workload.name] = result
+
+    print("\n# Best host-time layout per workload:", flush=True)
+    for workload_name, result in sorted(best_by_workload.items()):
+        print(
+            f"# {workload_name}: {result.candidate} host_us={result.host_us:.2f} "
+            f"device_us={'' if result.device_us is None else f'{result.device_us:.2f}'} cores={result.core_count}",
+            flush=True,
+        )
+
+    assert pass_count > 0, "No MLP layout sweep candidates compiled and ran"
