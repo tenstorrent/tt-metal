@@ -736,7 +736,12 @@ ControlPlane::ControlPlane(
 void ControlPlane::initialize_fabric_context() {
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
         this->fabric_context_ = std::make_unique<FabricContext>(
-            *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
+            *this,
+            hal_,
+            cluster_.get().arch(),
+            cluster_.get().get_cluster_type(),
+            fabric_config_,
+            fabric_router_config_);
     }
 }
 
@@ -3290,7 +3295,7 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
         "tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto";
 
     // Get fabric type from config and map to cabling descriptor paths
-    FabricType fabric_type = get_fabric_type(fabric_config, this->cluster_.get().is_ubb_galaxy());
+    FabricType fabric_type = get_fabric_type(fabric_config, this->cluster_.get().get_cluster_type());
 
     static constexpr std::array<std::pair<FabricType, std::string_view>, 3> cabling_map = {
         {{FabricType::TORUS_X, X_TORUS_PATH},

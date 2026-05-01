@@ -214,7 +214,9 @@ private:
         const MeshCoordinateRange& mesh_coord_range,
         FabricType fabric_type) const;
     void initialize_from_mgd(
-        const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy);
+        const MeshGraphDescriptor& mgd,
+        std::optional<FabricConfig> fabric_config,
+        tt::tt_metal::ClusterType cluster_type);
 
     void add_to_connectivity(
         MeshId src_mesh_id,

@@ -333,7 +333,7 @@ void MetalEnvImpl::initialize_control_plane_impl() {
         this->construct_control_plane();
     } else {
         const auto cluster_type = get_cluster().get_cluster_type();
-        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, get_cluster().is_ubb_galaxy());
+        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type);
         std::filesystem::path mesh_graph_desc_path =
             tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
                 cluster_type, rtoptions_->get_root_dir(), fabric_type);

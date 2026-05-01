@@ -1627,7 +1627,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     tt::tt_fabric::FabricConfig fabric_config,
     tt::tt_fabric::FabricReliabilityMode reliability_mode) {
     // Come up with the biggest mesh that can be formed by the physical system descriptor based on number of chips
-    FabricType fabric_type = get_fabric_type(fabric_config, cluster.is_ubb_galaxy());
+    FabricType fabric_type = get_fabric_type(fabric_config, cluster.get_cluster_type());
 
     // Detect the number of connections per direction using the psd
     const auto number_of_connections = get_num_connections_per_direction(cluster, physical_system_descriptor);

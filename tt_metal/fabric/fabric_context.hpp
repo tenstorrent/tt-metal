@@ -42,7 +42,7 @@ public:
         const ControlPlane& control_plane,
         const tt_metal::Hal& hal,
         tt::ARCH arch,
-        bool is_ubb_galaxy,
+        tt::tt_metal::ClusterType cluster_type,
         tt::tt_fabric::FabricConfig fabric_config,
         const FabricRouterConfig& router_config = FabricRouterConfig{});
     ~FabricContext();
@@ -59,7 +59,7 @@ public:
     bool is_2D_routing_enabled() const { return is_2D_routing_enabled_; }
     bool is_bubble_flow_control_enabled() const { return bubble_flow_control_enabled_; }
     bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
-    bool is_ubb_galaxy() const { return is_ubb_galaxy_; }
+    tt::tt_metal::ClusterType cluster_type() const { return cluster_type_; }
 
     // ============ Mesh Type Queries ============
     // Stub: returns false for now (all meshes are compute meshes)
@@ -169,7 +169,7 @@ private:
     bool is_2D_routing_enabled_ = false;
     bool bubble_flow_control_enabled_ = false;
     bool tensix_enabled_ = false;
-    bool is_ubb_galaxy_ = false;
+    tt::tt_metal::ClusterType cluster_type_ = tt::tt_metal::ClusterType::INVALID;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_;
 
