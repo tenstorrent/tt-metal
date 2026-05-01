@@ -436,7 +436,7 @@ void run_single_core_broadcast(
         core,
         {
             (uint32_t)dram_buffer_dst_addr,
-            (uint32_t)0,  // unused
+            (uint32_t)0,  // dram bank id (currently always 0)
             (uint32_t)k_num_tiles_broadcast_test,
         });
 
