@@ -145,13 +145,20 @@ class ProgramConfig:
         # The sparse matmul kernel asserts `Kt % in0_block_w == 0`. Different
         # tp factors produce different Kt (e.g. down's K = intermediate/tp:
         # tp=8 → Kt=12, tp=1 → Kt=90), and the configured in0_block_w may not
-        # divide them all. Snap down to the largest divisor of Kt ≤ configured;
-        # when Kt is already divisible by the configured value this is a no-op
-        # (so existing Wormhole tunings are preserved).
+        # divide them all. Snap to the largest divisor of Kt that does not
+        # exceed the configured ceiling; when Kt is already divisible by the
+        # configured value this is a no-op (so existing Wormhole tunings are
+        # preserved). When Kt is prime (or coprime with every value ≤
+        # configured, e.g. Kt=23 on tp=4) the only divisor under the ceiling
+        # is 1, which collapses the matmul to a tile-by-tile inner loop and
+        # roughly halves prefill throughput. In that case fall back to Kt
+        # itself — always a divisor, and small enough to fit in L1 for the
+        # Kt range produced by realistic gpt-oss TP shardings (Kt ≤ ~90).
         if k is not None:
             Kt = int(math.ceil(k / 32))
             if Kt % in0_block_w != 0:
-                in0_block_w = max(d for d in range(1, in0_block_w + 1) if Kt % d == 0)
+                divisors = [d for d in range(2, in0_block_w + 1) if Kt % d == 0]
+                in0_block_w = max(divisors) if divisors else Kt
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
