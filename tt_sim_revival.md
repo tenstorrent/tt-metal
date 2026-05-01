@@ -144,14 +144,37 @@ Rank bindings file is incorrect. Tricky ->  using `generate_rank_bindings.py` an
 
 
 ### Noteable Open Branches
-
-1. `nzhao/debug-ttsim-multihost`
+1. `nzhao/debug-ttsim-multihost` (`tt-metal`)
 The current WIP debug branch. This branch points to a UMD submodule verison which refactors the underlying simulation chip to access the sim TLB. The refactor requires some amount of validation.
 
+Current state as of 01/05/26:
+
+WIP (DS multihost tests):
+
+Hitting the following:
+```
+ERROR: UnimplementedFunctionality: translate_pci_dma_addr: addr=0x72fa9b4f2000 size=4
+```
+
+For the following test:
+```
+tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_single_galaxy_cluster_desc_mapping.yaml --rank-binding /localdev/nzhao/tt-metal/bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--tag-output --allow-run-as-root" bash -c "source ./python_env/bin/activate && pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_pipeline_block_4stage_galaxy_1_iteration"
+```
+Issue recorded (here)[https://github.com/tenstorrent/ttsim-private/issues/345]
 
 
-2. `nzhao/strip-fabric-ccl-multidev-test`
+For single-stage multidevice test see (here)[https://github.com/tenstorrent/ttsim-private/issues/341]
+
+2. `nzhao/strip-fabric-ccl-multidev-test` (`tt-metal`)
 Minor adjustments off main to running following test:
 `TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_lb_2x4_cluster_desc_v2.yaml pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_multidevice`
 
 Removes inter-device communication to simplify test down to a single device. Ran with `ttsim-private` `main`. No sim issues here, only fails tensor assert (expectedly)
+
+
+3. `nzhao/eth-io-rebased-log-amoadd` (`ttsim-private`)
+Most recently rebased changes from `aho/eth-io` onto main.
+
+
+4. `nzhao/ttsim-multihost-communicator-refactor` (`tt-umd`)
+Refactor to allow for use of new UMD communicator impl. Pointed to by `nzhao/debug-ttsim-multihost` and contains most up-to-date progress from UMD perspective.
