@@ -7,6 +7,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
 from models.tt_transformers.tt.multimodal.llama_image_mlp import TtLlamaImageFeedForward
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
+from models.tt_transformers.tt.multimodal.tensor_utils import from_torch_host_to_device
 
 
 class TtLlamaImageTransformerBlock(LightweightModule):
@@ -71,7 +72,7 @@ class TtLlamaImageTransformerBlock(LightweightModule):
 
         if gated:
             # Gate tensors must be expanded to hidden dim or we get a PCC error
-            self.gate_attn = ttnn.as_tensor(
+            self.gate_attn = from_torch_host_to_device(
                 state_dict[f"{state_dict_prefix}gate_attn"].unsqueeze(0).expand(1, self.hidden_size),
                 dtype=ttnn.bfloat16,
                 device=self.mesh_device,
@@ -79,7 +80,7 @@ class TtLlamaImageTransformerBlock(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self.gate_ffn = ttnn.as_tensor(
+            self.gate_ffn = from_torch_host_to_device(
                 state_dict[f"{state_dict_prefix}gate_ffn"].unsqueeze(0).expand(1, self.hidden_size),
                 dtype=ttnn.bfloat16,
                 device=self.mesh_device,

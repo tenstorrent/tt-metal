@@ -25,7 +25,11 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_vision import (
     TtLlamaCrossAttentionTransformerVision,
 )
-from models.tt_transformers.tt.rope import get_rot_mats
+from models.tt_transformers.tt.multimodal.llama_rope import get_rot_mats
+from models.tt_transformers.tt.multimodal.tensor_utils import (
+    from_torch_host_to_device,
+    prepare_residual_tensor_prefill_host_to_device,
+)
 
 logger = logging.getLogger(__name__)
 MP_SCALE = 8
@@ -678,7 +682,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 "constant",
                 get_negative_inf_value(torch.float32),
             )
-            tt_xattn_mask = ttnn.from_torch(
+            tt_xattn_mask = from_torch_host_to_device(
                 xattn_mask,
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
@@ -697,7 +701,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             full_text_mask_expand_1NSH = full_text_mask.expand(
                 -1, self.configuration.n_heads // self.configuration.num_devices, -1, self.configuration.head_dim
             )
-            tt_full_text_mask_expand_1NSH = ttnn.from_torch(
+            tt_full_text_mask_expand_1NSH = from_torch_host_to_device(
                 full_text_mask_expand_1NSH,
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
@@ -709,7 +713,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_full_text_mask_expand_1NSH = ttnn.typecast(tt_full_text_mask_expand_1NSH, ttnn.bfloat4_b)
 
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, self.configuration.dim)
-            tt_full_text_mask_expand_11SD = ttnn.from_torch(
+            tt_full_text_mask_expand_11SD = from_torch_host_to_device(
                 full_text_mask_expand_11SD,
                 device=self.mesh_device,
                 dtype=ttnn.bfloat4_b,
@@ -720,7 +724,7 @@ class CrossAttentionTransformer(torch.nn.Module):
 
             if isinstance(cross_page_table, torch.Tensor):
                 # Support vLLM tensor cross_page_table input
-                cross_page_table = ttnn.as_tensor(
+                cross_page_table = from_torch_host_to_device(
                     cross_page_table,
                     device=self.mesh_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -735,9 +739,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_full_text_mask_expand_11SD = None
 
         h = torch.nn.functional.pad(h, (0, 0, 0, padded_seq_len - h.shape[1]), "constant", 0)
-        tt_h = self.configuration.prepare_residual_tensor_prefill(
-            h,
-        )
+        tt_h = prepare_residual_tensor_prefill_host_to_device(h, self.configuration)
         rot_mats = get_rot_mats(
             head_dim=self.configuration.head_dim,
             device=self.mesh_device,
@@ -748,7 +750,7 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         if isinstance(page_table, torch.Tensor):
             # Support vLLM tensor page_table input
-            page_table = ttnn.as_tensor(
+            page_table = from_torch_host_to_device(
                 page_table,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
