@@ -12,9 +12,11 @@
 //     cover all worker cores even when split_work_to_cores produces two work groups
 //     with different per-core row counts. The trade-off is the loss of compile-time
 //     loop unrolling for the outer `Ht` loop.
-//   - DataflowBuffers are bound by name (`dfb::input`, `dfb::scaler`, `dfb::output`).
-//     The compute_kernel_lib::reduce<> helper takes CB ids by value, and on Gen1 the
-//     DFB accessor id IS the underlying CB id, so we forward `dfb::*.id` directly.
+//   - DataflowBuffers are bound by name (`dfb::input`, `dfb::scaler`, `dfb::output`)
+//     and passed *as objects* (not raw ids) to compute_kernel_lib::reduce. The
+//     helper templates on the buffer type, so the same kernel source compiles for
+//     Gen1 (where DFB id == underlying CB id) and Gen2 (real DFB hardware).
+//     No `#ifdef ARCH_QUASAR` is required.
 
 #include <cstdint>
 
@@ -33,20 +35,22 @@ void kernel_main() {
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr uint32_t NC = get_arg(args::NC);
 
-    constexpr uint32_t cb_input = dfb::input.id;
-    constexpr uint32_t cb_scaler = dfb::scaler.id;
-    constexpr uint32_t cb_output = dfb::output.id;
+    // Typed dataflow-buffer wrappers. The compute_kernel_lib::reduce() helper
+    // is templated on the buffer type and works uniformly across Gen1/Gen2.
+    experimental::DataflowBuffer input_buf(dfb::input);
+    experimental::DataflowBuffer scaler_buf(dfb::scaler);
+    experimental::DataflowBuffer output_buf(dfb::output);
 
-    compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
+    compute_kernel_hw_startup(input_buf.get_id(), scaler_buf.get_id(), output_buf.get_id());
 
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        cb_input,
-        cb_scaler,
-        cb_output,
+        input_buf,
+        scaler_buf,
+        output_buf,
         compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},

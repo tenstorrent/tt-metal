@@ -7,10 +7,24 @@
 
 #include <cmath>
 #include "llk_defs.h"
-#include "experimental/circular_buffer.h"
+#include "experimental/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+
+// NOTE on buffer abstraction:
+// The scaler helpers below take the buffer id as a constexpr template parameter
+// (so the per-CB/DFB compile-time metadata — data format, tile r/c dim — can be
+// resolved at compile time). The runtime sync portion (reserve_back / push_back
+// / get_write_ptr) is wrapped in `experimental::DataflowBuffer` rather than
+// `experimental::CircularBuffer`. The DataflowBuffer wrapper is arch-agnostic:
+// on Gen1 (WH/BH) it forwards to the same circular_buffer_interface ops as
+// CircularBuffer; on Gen2 (Quasar) it drives the real DFB hardware. The same
+// helper source therefore compiles for both archs without any `#ifdef` paths.
+//
+// Callers using the legacy CB-id interface (`prepare_reduce_scaler<cb_id, ...>`)
+// keep working unchanged: on Gen1 the DFB id IS the CB id, and on Gen2 callers
+// pass a constexpr DFB accessor id (`dfb::scaler.id`).
 
 namespace dataflow_kernel_lib {
 
@@ -247,7 +261,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     // Unused for REDUCE_SCALAR (which always fills the full tile).
     constexpr uint32_t full_dim = (reduce_dim == ReduceDim::REDUCE_COL) ? tile_r_dim : tile_c_dim;
 
-    ::experimental::CircularBuffer cb(cb_id);
+    ::experimental::DataflowBuffer cb(cb_id);
 
     cb.reserve_back(1);
     uint32_t write_addr = cb.get_write_ptr();

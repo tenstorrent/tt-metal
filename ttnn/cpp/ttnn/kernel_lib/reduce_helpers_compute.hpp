@@ -148,11 +148,15 @@ struct ReduceInputBlockShape {
 /**
  * @brief Configuration for accumulation-style reductions
  *
- * Holds the static configuration for accumulation (CB and DST index).
+ * Holds the static configuration for accumulation (buffer id and DST index).
  * Does not hold iteration state - that's provided via Accumulate wrapper.
+ *
+ * NOTE: cb_accumulator stores a raw uint32_t buffer id. On Gen1 this is the CB id;
+ * on Gen2 (Quasar) it is the DFB id. Callers using the typed buffer wrappers
+ * pass `dfb::accumulator.id` (constexpr) or `cb.get_cb_id()` here.
  */
 struct AccumulationConfig {
-    // CB holding the running accumulator tile across reduce() iterations; see Accumulate below.
+    // Buffer holding the running accumulator tile across reduce() iterations; see Accumulate below.
     uint32_t cb_accumulator = 0;
     uint32_t dst_index = 0;  // DST register for accumulation (default: 0)
 
@@ -269,9 +273,18 @@ struct NoOp {
  * Before calling this function, you MUST initialize the compute kernel hardware by
  * calling compute_kernel_hw_startup() at the start of your kernel.
  *
- * IMPORTANT - SCALER CB REQUIREMENT:
- * The scaler CB (scaler_cb) must contain the scaling factor tile BEFORE calling
+ * IMPORTANT - SCALER BUFFER REQUIREMENT:
+ * The scaler buffer must contain the scaling factor tile BEFORE calling
  * this function. The function will wait for it automatically.
+ *
+ * BUFFER TYPE: each of input/scaler/output may be passed as any of:
+ *   - `uint32_t` (raw CB/DFB id) — backward-compatible Gen1 path,
+ *   - `experimental::CircularBuffer&` — Gen1 typed wrapper,
+ *   - `experimental::DataflowBuffer&` — Gen1/Gen2 typed wrapper (preferred).
+ * The internal sync ops (wait/pop/reserve/push) dispatch through the buffer's
+ * own methods, and LLK calls (reduce_init, reduce_tile, pack_tile, ...) take
+ * the buffer's `id()` directly. No `#ifdef ARCH_QUASAR` is required at any
+ * call site.
  *
  * INPUT POLICIES: See ReduceInputPolicy enum for detailed mode descriptions.
  * - Use BulkWaitBulkPop for optimal performance when wait/pop are symmetric with ReduceInputBlockShape.
@@ -369,12 +382,15 @@ template <
     ReduceDim reduce_dim,
     ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    typename InputBuf,
+    typename ScalerBuf,
+    typename OutputBuf,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
-    uint32_t input_cb_id,
-    uint32_t scaler_cb_id,
-    uint32_t output_cb_id,
+    InputBuf&& input_buf,
+    ScalerBuf&& scaler_buf,
+    OutputBuf&& output_buf,
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},

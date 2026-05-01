@@ -9,10 +9,12 @@
 //   - Runtime arguments (`args::dst_addr`, `args::num_pages`, `args::start_id`) are
 //     bound by name and threaded per-node via the host's ProgramRunParams.
 //   - The output dataflow buffer is bound by name (`dfb::output`).
-//   - Address generation uses `InterleavedAddrGenFast` for the same reason as the
-//     reader: Metal 2.0 ProgramSpec does not currently support the positional
-//     compile-time arguments that `TensorAccessorArgs<N>()` requires. Sharded outputs
-//     are therefore not supported by this Metal 2.0 writer yet.
+//   - Buffer sync (wait/pop) goes through `experimental::DataflowBuffer`, which is
+//     arch-agnostic.
+//
+// Arch coverage caveat: see the header of `reader_unary_reduce_universal_start_id_metal2.cpp`.
+// The address generator and `noc_async_write_tile` are Gen1-only; Quasar support for the
+// data path is blocked on the same TensorAccessor / Metal 2.0 CTA framework issue.
 
 #include <stdint.h>
 
@@ -29,20 +31,20 @@ void kernel_main() {
     constexpr uint32_t aligned_page_size = get_arg(args::aligned_page_size);
     constexpr bool is_dram = get_arg(args::is_dram) != 0;
 
-    experimental::DataflowBuffer cb_output(dfb::output);
+    experimental::DataflowBuffer output_buf(dfb::output);
 
     const InterleavedAddrGenFast<is_dram> s = {
         .bank_base_address = dst_addr,
         .page_size = aligned_page_size,
-        .data_format = get_dataformat(cb_output.get_id()),
+        .data_format = get_dataformat(output_buf.get_id()),
     };
 
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        cb_output.wait_front(onetile);
-        noc_async_write_tile(i, s, cb_output.get_read_ptr());
+        output_buf.wait_front(onetile);
+        noc_async_write_tile(i, s, output_buf.get_read_ptr());
         noc_async_writes_flushed();
-        cb_output.pop_front(onetile);
+        output_buf.pop_front(onetile);
     }
     noc_async_write_barrier();
 }

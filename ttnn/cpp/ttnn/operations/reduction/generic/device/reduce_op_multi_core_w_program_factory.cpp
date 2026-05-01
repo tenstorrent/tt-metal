@@ -19,6 +19,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <map>
 #include <string>
 #include <vector>
@@ -235,6 +236,16 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     using namespace tt;
     using namespace tt::tt_metal;
 
+    // #region agent log
+    {
+        std::ofstream log("/localdev/bbradel/tt-metal/.cursor/debug-43dce3.log", std::ios::app);
+        if (log.is_open()) {
+            log << R"({"sessionId":"43dce3","hypothesisId":"refactor-runtime","location":"reduce_op_multi_core_w_program_factory.cpp:create","message":"Buffer-agnostic ReduceMultiCoreWProgramFactory::create entered","data":{"negate":)"
+                << (operation_attributes.negate ? "true" : "false") << R"(}})" << "\n";
+        }
+    }
+    // #endregion
+
     const auto& a = tensor_args;
     auto& output = tensor_return_value;
 
@@ -332,12 +343,18 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     };
     reader.runtime_arguments_schema.named_runtime_args = {"src_addr", "num_tiles", "start_id"};
     reader.compiler_options.defines = reduce_defines;
+    // We provide both Gen1 and Gen2 DM configs so the same KernelSpec can target either
+    // arch. The kernel-side helper library (`dataflow_kernel_lib::prepare_reduce_scaler`,
+    // `experimental::DataflowBuffer`) is arch-agnostic; what isn't yet portable is the
+    // address generator (`InterleavedAddrGenFast` + `noc_async_read_tile`) — those are
+    // Gen1-only. See the kernel header and METAL2_MIGRATION_NOTES.md (#1, #13).
     reader.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
             m2::DataMovementConfiguration::Gen1DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::RISCV_1_default,
             },
+        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
     BindDFB(reader, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::PRODUCER);
     BindDFB(reader, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::PRODUCER);
@@ -360,6 +377,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
             },
+        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
     };
     BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
 
@@ -430,6 +448,17 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     auto run_params = BuildRunParams(shared, src_buffer->address(), dst_buffer->address());
     m2::SetProgramRunParameters(program, run_params);
+
+    // #region agent log
+    {
+        std::ofstream log("/localdev/bbradel/tt-metal/.cursor/debug-43dce3.log", std::ios::app);
+        if (log.is_open()) {
+            log << R"({"sessionId":"43dce3","hypothesisId":"refactor-runtime","location":"reduce_op_multi_core_w_program_factory.cpp:create:end","message":"ProgramSpec built and SetProgramRunParameters succeeded","data":{"num_cores":)"
+                << wd.num_cores << R"(,"Wt":)" << Wt << R"(,"dataflow_buffers":)" << spec.dataflow_buffers.size()
+                << R"(}})" << "\n";
+        }
+    }
+    // #endregion
 
     return cached_program_t{std::move(program), std::move(shared)};
 }

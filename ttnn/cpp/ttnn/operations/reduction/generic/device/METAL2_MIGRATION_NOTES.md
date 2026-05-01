@@ -285,7 +285,68 @@ based on processor class. The fix should either:
   - or formalize "the TRISC prolog must pre-include `api/compute/common.h`
     for compute Metal 2.0 kernels" in the generator.
 
-### 12. `program_id` / `unique_id` collision rules are not stated
+### 12. Helper-library buffer-type abstraction (and what's still arch-specific)
+
+The first port of the reduce kernels to Metal 2.0 left two kinds of code in the kernels:
+
+1. **Compute helper** (`compute_kernel_lib::reduce`) and **dataflow helper**
+   (`dataflow_kernel_lib::prepare_reduce_scaler`) took raw `uint32_t` CB ids and
+   internally constructed `experimental::CircularBuffer` to do reserve/push/wait/pop.
+2. **Kernel sources** extracted `dfb::*.id` to feed the helpers, and forwarded the
+   same id to the LLK calls (`reduce_init`, `reduce_tile`, `pack_tile`, ...).
+
+That worked on Gen1 only because the Gen1 invariant "DFB id == underlying CB id" makes
+the CB-typed wrapper indirectly drive the right hardware. On Quasar the same code would
+miss DFB hardware semantics.
+
+We refactored to remove the Gen1-only assumption from the helpers themselves:
+
+- New `kernel_lib::BufferRef<T>` adapter (`ttnn/cpp/ttnn/kernel_lib/buffer_helpers.hpp`)
+  normalizes any of `uint32_t` / `experimental::CircularBuffer&` /
+  `experimental::DataflowBuffer&` to a uniform `id() / wait_front / pop_front /
+  reserve_back / push_back` interface. Specializations dispatch at compile time.
+- `compute_kernel_lib::reduce()` is now templated on three buffer types and uses
+  `BufferRef` internally. Kernel code passes `experimental::DataflowBuffer` objects
+  directly (no more `dfb::*.id` extraction); legacy callers that pass `uint32_t`
+  continue to work via the `BufferRef<uint32_t>` specialization.
+- `dataflow_kernel_lib::prepare_reduce_scaler` keeps its constexpr `cb_id` template
+  parameter (used for compile-time format / tile-dim queries), but its runtime sync
+  side now goes through `experimental::DataflowBuffer` instead of
+  `experimental::CircularBuffer`. The DataflowBuffer wrapper is arch-agnostic: same
+  Gen1 behavior, plus correct Gen2 DFB driving.
+
+What this **does** unblock for Quasar:
+
+- The compute kernels (`reduce_metal2.cpp`, `reduce_w_neg_metal2.cpp`) compile
+  and execute the reduce flow without any `#ifdef ARCH_QUASAR` branches.
+- The host factory now sets both `gen1_data_movement_config` and
+  `gen2_data_movement_config` on the reader/writer KernelSpecs so the same
+  ProgramSpec lowers on both archs.
+
+What this **does not** yet unblock for Quasar:
+
+- The reader/writer **data path** still uses Gen1-only primitives:
+  `InterleavedAddrGenFast<...>` and `noc_async_read_tile / noc_async_write_tile`.
+  Porting requires either (a) the Metal 2.0 framework supporting positional CTAs
+  so `TensorAccessor` works (then `experimental::Noc::async_read(tensor_accessor,
+  dfb, ...)` lights up via the existing `noc_traits_t<DataflowBuffer>` specialization),
+  or (b) an upstream `noc_traits_t<InterleavedAddrGenFast<...>>` specialization so
+  the arch-agnostic `Noc` API can drive the older interleaved address gen. Neither
+  is in place today; tracked under shortcoming #1.
+- `MakeQuasarComputeConfig` in `tt_metal/impl/metal2_host_api/program_spec.cpp`
+  still sizes `unpack_modes` to `dfb_name_to_id.size()` (mirror of the Gen1 bug
+  patched as #10). Almost certainly broken once a Quasar compute kernel goes
+  through it; flagged as a follow-up.
+
+The guide should:
+- Have a "buffer-type abstraction" section showing the `BufferRef`-style pattern
+  (or whatever the framework owners settle on) so future helpers don't replicate
+  the CB-only assumption.
+- State explicitly that helpers must not directly construct
+  `experimental::CircularBuffer` if they want Gen2 coverage, and that
+  `experimental::DataflowBuffer` is the portable choice.
+
+### 13. `program_id` / `unique_id` collision rules are not stated
 
 `ProgramSpec::program_id`, `WorkUnitSpec::unique_id`, `KernelSpec::unique_id`,
 `DFBSpecName`, `SemaphoreSpecName` are all strings. Validation rejects
@@ -319,4 +380,5 @@ A short "naming and uniqueness" subsection would help.
 | 9 | Domain-specific scaler/post_mul convention easy to misapply | Low — op-specific |
 | 10 | **Upstream bug**: `MakeGen1ComputeConfig` undersizes `unpack_to_dest_mode` | **Critical — blocks all compute kernels** |
 | 11 | **Upstream bug**: TRISC prolog doesn't pre-include `api/compute/common.h` for Metal 2.0 compute kernels | **Critical — blocks all compute kernels** |
-| 12 | `unique_id` / `program_id` naming/uniqueness rules unstated | Low |
+| 12 | Helper libraries hard-coded to Gen1 CBs; needed buffer-type abstraction for Quasar | **High — blocks Quasar port of any helper-using kernel** |
+| 13 | `unique_id` / `program_id` naming/uniqueness rules unstated | Low |

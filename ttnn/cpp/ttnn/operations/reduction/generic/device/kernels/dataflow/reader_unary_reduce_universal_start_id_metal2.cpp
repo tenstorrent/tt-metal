@@ -11,11 +11,23 @@
 //     `args::start_id`); per-node values come from the host's ProgramRunParams.
 //   - The dataflow buffers are bound by name (`dfb::input`, `dfb::scaler`); placement
 //     is derived from kernel bindings, not specified per-CB on the host.
-//   - Address generation goes through `InterleavedAddrGenFast` rather than
-//     `TensorAccessor`, because Metal 2.0 ProgramSpec does not currently support the
-//     positional compile-time arguments that `TensorAccessorArgs<N>()` reads from.
-//     Sharded buffers are therefore not supported by this Metal 2.0 reader yet; the
-//     host factory enforces this.
+//   - Buffer sync (reserve/push) goes through `experimental::DataflowBuffer`, which is
+//     arch-agnostic (Gen1 forwards to circular_buffer_interface, Gen2 drives real DFB
+//     hardware). `prepare_reduce_scaler` is parameterized on the buffer id, which on
+//     Gen1 is the CB id and on Gen2 is the DFB id — both resolve at compile time from
+//     `dfb::scaler.id`.
+//
+// Arch coverage caveat:
+//   Address generation goes through `InterleavedAddrGenFast` and `noc_async_read_tile`,
+//   which are part of the Gen1 dataflow API. Quasar support for the reader/writer
+//   data path requires either:
+//     (a) the Metal 2.0 framework supporting the positional CTAs that `TensorAccessor`
+//         needs (so we could use `experimental::Noc::async_read(tensor_accessor, dfb,
+//         ...)` which has noc_traits specializations on both archs), or
+//     (b) a `noc_traits_t<InterleavedAddrGenFast<...>>` specialization upstream so the
+//         arch-agnostic `experimental::Noc` API can drive interleaved address gen.
+//   Neither is in place today; the host factory still routes to the Gen1 DM config.
+//   See METAL2_MIGRATION_NOTES.md (#1) for the framework-level discussion.
 
 #include <stdint.h>
 
@@ -34,29 +46,31 @@ void kernel_main() {
     constexpr uint32_t aligned_page_size = get_arg(args::aligned_page_size);
     constexpr bool is_dram = get_arg(args::is_dram) != 0;
 
-    // Dataflow buffers (named bindings).
-    experimental::DataflowBuffer cb_input(dfb::input);
+    // Dataflow-buffer wrapper for the input. Arch-agnostic on the sync side (Gen1
+    // forwards to circular_buffer_interface, Gen2 drives real DFB hardware).
+    experimental::DataflowBuffer input_buf(dfb::input);
 
-    // Fill the scaler tile via the helper. The helper template is parameterized on the
-    // scaler CB id; on Gen1 the DFB accessor id is the underlying CB id, so we can
-    // forward `dfb::scaler.id` directly.
-    constexpr uint32_t scaler_cb_id = dfb::scaler.id;
+    // Fill the scaler tile. The helper is templated on the scaler buffer id (CB id
+    // on Gen1, DFB id on Gen2 — both constexpr through `dfb::scaler.id`) and uses
+    // the arch-agnostic DataflowBuffer wrapper internally.
+    constexpr uint32_t scaler_buf_id = dfb::scaler.id;
     const float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<scaler_cb_id, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    dataflow_kernel_lib::prepare_reduce_scaler<scaler_buf_id, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    // Page-size and data-format come from the input DFB metadata (host-side data_format
-    // is set on the DataflowBufferSpec; on Gen1 this round-trips through the CB).
+    // Page-size and data-format come from the input buffer metadata (host-side
+    // data_format is set on the DataflowBufferSpec; on Gen1 this round-trips through
+    // the underlying CB).
     const InterleavedAddrGenFast<is_dram> s = {
         .bank_base_address = src_addr,
         .page_size = aligned_page_size,
-        .data_format = get_dataformat(cb_input.get_id()),
+        .data_format = get_dataformat(input_buf.get_id()),
     };
 
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_tiles; ++i) {
-        cb_input.reserve_back(onetile);
-        noc_async_read_tile(i, s, cb_input.get_write_ptr());
+        input_buf.reserve_back(onetile);
+        noc_async_read_tile(i, s, input_buf.get_write_ptr());
         noc_async_read_barrier();
-        cb_input.push_back(onetile);
+        input_buf.push_back(onetile);
     }
 }
