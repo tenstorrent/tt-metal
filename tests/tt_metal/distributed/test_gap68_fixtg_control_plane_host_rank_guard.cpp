@@ -253,7 +253,6 @@ TEST_F(FixTgControlPlaneHostRankGuardFixture, ConfigureRoutingTablesHostRankNull
 
     if (testee_pid == 0) {
         bool caught_bad_optional = false;
-        bool caught_fixtg_warning = false;
 
         try {
             tt_fabric::SetFabricConfig(
@@ -291,7 +290,6 @@ TEST_F(FixTgControlPlaneHostRankGuardFixture, ConfigureRoutingTablesHostRankNull
         } catch (const std::exception& e) {
             const std::string msg = e.what();
             if (msg.find("FIX TG") != std::string::npos) {
-                caught_fixtg_warning = true;
                 fprintf(
                     stderr,
                     "GAP-68 TESTEE: caught exception with FIX TG context: %s\n",

@@ -271,8 +271,6 @@ TEST_F(FixTf2dFabricHeaderArgsGuardFixture, NoForwardingDirectionGivesContextOnC
 
     if (testee_pid == 0) {
         bool caught_bad_optional = false;
-        bool caught_fixtf_fatal  = false;
-        bool created_ok          = false;
 
         try {
             tt_fabric::SetFabricConfig(
@@ -284,7 +282,6 @@ TEST_F(FixTf2dFabricHeaderArgsGuardFixture, NoForwardingDirectionGivesContextOnC
                 DEFAULT_TRACE_REGION_SIZE,
                 /*num_command_queues=*/1);
             dev->close();
-            created_ok = true;
             fprintf(stderr, "GAP-67 TESTEE: MeshDevice created cleanly (cluster healthy).\n");
         } catch (const std::bad_optional_access& e) {
             // Regression: FIX TF missing — raw .value() threw bad_optional_access
@@ -300,8 +297,6 @@ TEST_F(FixTf2dFabricHeaderArgsGuardFixture, NoForwardingDirectionGivesContextOnC
         } catch (const std::exception& e) {
             const std::string msg = e.what();
             if (msg.find("FIX TF") != std::string::npos) {
-                // FIX TF working: TT_FATAL fired with FIX TF context
-                caught_fixtf_fatal = true;
                 fprintf(
                     stderr,
                     "GAP-67 TESTEE: caught FIX TF TT_FATAL (expected when inter-mesh broken): %s\n",
