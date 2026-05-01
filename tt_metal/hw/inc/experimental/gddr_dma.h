@@ -41,9 +41,10 @@ static inline __attribute__((always_inline)) void dma_check_stream_(uint8_t stre
 #endif
 }
 
-static inline __attribute__((always_inline)) void dma_check_size_aligned_16_(uint32_t size_bytes) {
+static inline __attribute__((always_inline)) void dma_check_transfer_size_(uint32_t size_bytes) {
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
     ASSERT((size_bytes & 0xF) == 0, DebugAssertTripped);
+    ASSERT(size_bytes <= 262128u, DebugAssertTripped);  // 14-bit transfer_size_words field
 #endif
 }
 
@@ -115,7 +116,7 @@ inline __attribute__((always_inline)) void dma_set_burst_size(uint8_t burst_size
 inline __attribute__((always_inline)) void dma_async_read(
     uint8_t stream, uint64_t src_gddr, uint32_t dst_l1, uint32_t size_bytes) {
     dma_check_stream_(stream);
-    dma_check_size_aligned_16_(size_bytes);
+    dma_check_transfer_size_(size_bytes);
 
     DmaTxqTransferAttrs_u attrs = {.val = DmaTxqTransferAttrs_DEFAULT};
     attrs.f.transfer_size_words = size_bytes >> 4;
@@ -141,7 +142,7 @@ inline __attribute__((always_inline)) void dma_async_read(
 inline __attribute__((always_inline)) void dma_async_write(
     uint8_t stream, uint32_t src_l1, uint64_t dst_gddr, uint32_t size_bytes) {
     dma_check_stream_(stream);
-    dma_check_size_aligned_16_(size_bytes);
+    dma_check_transfer_size_(size_bytes);
 
     DmaTxqTransferAttrs_u attrs = {.val = DmaTxqTransferAttrs_DEFAULT};
     attrs.f.transfer_size_words = size_bytes >> 4;
@@ -169,6 +170,19 @@ inline __attribute__((always_inline)) void dma_async_read_barrier(uint8_t stream
     do {
         status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
     } while (status.val & DmaTxqStatus_READ_MASK);
+}
+
+/**
+ * @brief Wait for all outstanding writes on the given stream to complete.
+ *
+ * @param stream  TX stream (0 or 1).
+ */
+inline __attribute__((always_inline)) void dma_async_write_barrier(uint8_t stream) {
+    dma_check_stream_(stream);
+    volatile DmaTxqStatus_u status;
+    do {
+        status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
+    } while (status.val & DmaTxqStatus_WRITE_MASK);
 }
 
 /**
@@ -231,19 +245,6 @@ inline __attribute__((always_inline)) uint8_t dma_writes_outstanding(uint8_t str
     DmaTxqStatus_u status;
     status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
     return static_cast<uint8_t>(status.f.num_writes_outstanding);
-}
-
-/**
- * @brief Wait for all outstanding writes on the given stream to complete.
- *
- * @param stream  TX stream (0 or 1).
- */
-inline __attribute__((always_inline)) void dma_async_write_barrier(uint8_t stream) {
-    dma_check_stream_(stream);
-    volatile DmaTxqStatus_u status;
-    do {
-        status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
-    } while (status.val & DmaTxqStatus_WRITE_MASK);
 }
 
 #endif  // COMPILE_FOR_DRISC

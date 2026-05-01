@@ -274,7 +274,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
 
     // Kernel writes timing immediately after the data buffer in DRISC L1
     uint64_t timing_noc_addr = drisc_l1_noc_addr_ + static_cast<uint64_t>(bytes_per_iter);
-    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1e6;
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
     uint64_t max_cycles = 0;
 
     // Verify all DRISCs writes to DRAM and calculate
@@ -283,15 +283,15 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
         for (uint32_t col = 0; col < num_banks; col++) {
             uint32_t dram_channel =
                 device_->dram_channel_from_logical_core(CoreCoord{col, 0});  // channel maps by bank (col)
+            // Verify the last chunk written; all chunks hold identical data so one read suffices.
+            // ReadFromDeviceDRAMChannel is slow (host-device round-trip); avoid reading all iters.
             std::vector<uint32_t> result(bytes_per_iter / sizeof(uint32_t));
-            for (uint32_t i = 0; i < iters; i++) {
-                tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
-                    device_,
-                    dram_channel,
-                    dram_unreserved_base_ + bytes_per_iter * i + total_bytes_per_core * row,
-                    bytes_per_iter,
-                    result);
-            }
+            tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
+                device_,
+                dram_channel,
+                dram_unreserved_base_ + bytes_per_iter * (iters - 1) + total_bytes_per_core * row,
+                bytes_per_iter,
+                result);
             EXPECT_EQ(result, data) << "Data mismatch on DRAM from core (bank=" << col << ", endpoint=" << row << ")";
             CoreCoord virtual_core = device_->virtual_core_from_logical_core({col, row}, CoreType::DRAM);
             max_cycles = std::max(max_cycles, read_timing_cycles(virtual_core, timing_noc_addr));
@@ -359,7 +359,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
 
     // Kernel writes timing immediately after the data buffer in DRISC L1.
     uint64_t timing_noc_addr = drisc_l1_noc_addr_ + static_cast<uint64_t>(bytes_per_iter);
-    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1e6;
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
     uint64_t max_cycles = 0;
 
     // Verify all reads into DRISC L1 over DMA from DRAM are correct
@@ -600,7 +600,7 @@ TEST_P(DramKernelDRISCGDDRBWSweepFixture, DRISCDMAUcastToTensix) {
     CoreCoord dram_virtual = device_->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
     // Kernel writes timing immediately after the data buffer in DRISC L1.
     uint64_t timing_noc_addr = drisc_l1_noc_addr_ + static_cast<uint64_t>(bytes_per_iter);
-    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1e6;
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1000000u;
     uint64_t cycles = read_timing_cycles(dram_virtual, timing_noc_addr);
 
     log_info(
