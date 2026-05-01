@@ -31,6 +31,7 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 namespace {
 
 using test_helpers::BindDFBToKernel;
+using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
@@ -305,6 +306,121 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);
+}
+
+// ============================================================================
+// Named Args Loopback — Compute Producer
+// ============================================================================
+//
+// Companion test for NamedArgsLoopback that exercises the named-args surface
+// from the COMPUTE compile path (TRISC_UNPACK / TRISC_MATH / TRISC_PACK).
+// The named-args helpers reach a compute kernel via a completely different
+// include chain than a DM kernel.
+//
+// Pipeline:
+//   Compute kernel (TRISC) — produces out_dfb. Reads named RTAs/CRTAs/CTAs +
+//       RTA/CRTA varargs; writes the XOR sum of all of them into the first
+//       uint32_t of every entry, zeros the rest.
+//   DM Consumer (NCRISC) — out_dfb → DRAM output. Positional varargs only.
+//
+// The kernel does NOT use the unpack/math/pack tile pipeline — just raw L1 writes
+// from PACK after reserve_back. This is a plumbing test only; didn't want to
+// tangle with type conversions....
+//
+// Verification: the host arranges every named arg + every vararg so their XOR
+// equals a known target. Output DRAM should contain {target, 0, 0, …} per
+// entry, exactly. A wrong offset on any accessor → wrong sum → test fails on
+// the byte-for-byte compare.
+
+TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries_in_dfb = 4;
+    constexpr uint32_t num_transfers = 8;
+    constexpr uint32_t total_bytes = entry_size * num_transfers;
+
+    const NodeCoord node{0, 0};
+
+    InterleavedBufferConfig dram_config{
+        .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
+    auto output_buffer = CreateBuffer(dram_config);
+
+    ProgramSpec spec;
+    spec.program_id = "named_args_loopback_compute";
+
+    // Compute kernel: produces out_dfb. The kernel under test — exercises every
+    // named-arg accessor (RTA / CRTA / two CTAs) plus RTA + CRTA varargs.
+    auto compute = MakeMinimalComputeKernel("compute");
+    compute.source =
+        KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/compute/named_args_loopback_compute.cpp"};
+    compute.runtime_arguments_schema.named_runtime_args = {"input_offset"};
+    compute.runtime_arguments_schema.named_common_runtime_args = {"num_tiles"};
+    compute.runtime_arguments_schema.num_runtime_varargs = 2;
+    compute.runtime_arguments_schema.num_common_runtime_varargs = 1;
+    compute.compile_time_arg_bindings = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
+
+    // Consumer: NCRISC reads out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp
+    // verbatim (positional varargs only).
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    consumer.source =
+        KernelSpec::SourceFilePath{"tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp"};
+    consumer.runtime_arguments_schema.num_runtime_varargs = 3;
+
+    auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, num_entries_in_dfb);
+    out_dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(compute, "out_dfb", "out_dfb", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "out_dfb", "a_dfb_named_bob", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {compute, consumer};
+    spec.dataflow_buffers = {out_dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute", "consumer"})};
+
+    Program program = MakeProgramFromSpec(spec);
+
+    // Pick non-trivial bits so a wrong-offset read is unlikely to coincidentally
+    // produce the same XOR. The compute kernel's sum is:
+    //   magic ^ entry_size ^ num_tiles ^ input_offset ^ va0 ^ va1 ^ cv0
+    // Solve for cv0 to make the sum equal kTargetXorSum.
+    constexpr uint32_t kTargetXorSum = 0xDEADBEEFu;
+    constexpr uint32_t kMagic = 0xCAFE0001u;
+    constexpr uint32_t kInputOffset = 0x12345678u;
+    constexpr uint32_t kVararg0 = 0xAAAA1111u;
+    constexpr uint32_t kVararg1 = 0xBBBB2222u;
+    constexpr uint32_t kCommonVararg0 =
+        kTargetXorSum ^ kMagic ^ entry_size ^ num_transfers ^ kInputOffset ^ kVararg0 ^ kVararg1;
+
+    ProgramRunParams params;
+    params.kernel_run_params = {
+        ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = "compute",
+            .named_runtime_args = {{.node = node, .args = {{"input_offset", kInputOffset}}}},
+            .named_common_runtime_args = {{"num_tiles", num_transfers}},
+            .runtime_varargs = {{node, {kVararg0, kVararg1}}},
+            .common_runtime_varargs = {kCommonVararg0},
+        },
+        ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = "consumer",
+            .runtime_varargs = {{node, {output_buffer->address(), 0u, num_transfers}}},
+        },
+    };
+    SetProgramRunParameters(program, params);
+
+    detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> output_data;
+    detail::ReadFromBuffer(output_buffer, output_data);
+
+    constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+    std::vector<uint32_t> expected(total_bytes / sizeof(uint32_t), 0u);
+    for (uint32_t e = 0; e < num_transfers; ++e) {
+        expected[e * words_per_entry] = kTargetXorSum;
+    }
+
+    ASSERT_EQ(output_data.size(), expected.size());
+    EXPECT_EQ(output_data, expected);
 }
 
 // ============================================================================

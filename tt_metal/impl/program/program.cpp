@@ -67,7 +67,6 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
-#include "tile.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -1534,44 +1533,17 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
     }
 }
 
-void detail::ProgramImpl::set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
+void detail::ProgramImpl::set_cb_data_fmt_and_tile(
+    const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
     // ZoneScoped;
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
-                build_options.set_cb_dataformat_all_cores(
-                    static_cast<CBIndex>(buffer_index), circular_buffer->data_format(buffer_index));
-            }
-        }
-    }
-}
-
-void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
-    for (const auto& logical_cr : crs) {
-        const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
-        for (const auto& circular_buffer : cbs_on_core) {
-            for (auto buffer_index : circular_buffer->buffer_indices()) {
-                auto tile = circular_buffer->tile(buffer_index);
-                if (tile.has_value()) {
-                    build_options.set_cb_tile_dims_all_cores(
-                        static_cast<CBIndex>(buffer_index),
-                        tile->get_num_faces(),
-                        tile->get_partial_face(),
-                        tile->get_face_shape()[0],
-                        tile->get_narrow_tile(),
-                        tile->get_tile_shape()[0],
-                        tile->get_tile_shape()[1]);
-                    build_options.set_cb_tile_size_all_cores(
-                        static_cast<CBIndex>(buffer_index),
-                        tile->get_tile_size(circular_buffer->data_format(buffer_index)));
-                } else {
-                    Tile t;
-                    build_options.set_cb_tile_size_all_cores(
-                        static_cast<CBIndex>(buffer_index),
-                        t.get_tile_size(circular_buffer->data_format(buffer_index)));
-                }
+                build_options.set_cb_data_fmt_and_tile(
+                    static_cast<CBIndex>(buffer_index),
+                    circular_buffer->data_format(buffer_index),
+                    circular_buffer->tile(buffer_index));
             }
         }
     }
@@ -1943,10 +1915,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         if (this->compiled_.empty()) {
             this->set_remote_circular_buffer_init(kernel);
         }
-        this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
-        this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
-        this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
-        this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
+        this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
+        this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
 
         auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 
