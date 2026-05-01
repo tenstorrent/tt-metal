@@ -44,7 +44,7 @@ pytest-benchmark==5.2.3
 jsbeautifier==1.14.7
 datasets==2.9.0
 pyarrow==20.0.0
-torch==2.7.1 ; platform_machine == 'aarch64'
+torch==2.8.0 ; platform_machine == 'aarch64'
 networkx==3.1
 torchvision==0.22.1 ; platform_machine == 'aarch64'
 torchmetrics==1.3.1
@@ -103,5 +103,5 @@ mmcv-full==1.7.2 #Required for UniAD model
 
 # CPU-only torch for x86_64 to avoid installing CUDA dependencies on dev machines
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.7.1 ; platform_machine == 'x86_64'
+torch==2.8.0 ; platform_machine == 'x86_64'
 torchvision==0.22.1 ; platform_machine == 'x86_64'
