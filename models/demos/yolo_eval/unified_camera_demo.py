@@ -47,7 +47,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from aiohttp import web
-from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription
+from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEMO_DIR = Path(__file__).resolve().parent / "demo"
@@ -639,13 +639,16 @@ async def api_config_handler(req: web.Request) -> web.Response:
 async def offer_handler(req: web.Request) -> web.Response:
     body = await req.json()
     offer = RTCSessionDescription(sdp=body["sdp"], type=body["type"])
-    # No STUN server — the browser and supervisor reach each other via the
-    # host candidate (direct LAN/loopback). Including a public STUN URL
-    # makes aioice schedule retries that produce noisy
-    # `Exception in callback Transaction.__retry() … InvalidStateError`
-    # tracebacks when the host can't reach Google's STUN endpoint
-    # (firewalled UDP, offline LAN, etc.). Empty iceServers is fine.
-    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
+    # STUN server is required — without it, browsers can produce a
+    # DataChannel-only SDP that aiortc rejects with
+    # "ICE username fragment or password is missing", and the whole
+    # peer-connection state goes connecting → failed → closed. The
+    # noisy `Transaction.__retry() … InvalidStateError` log spam from
+    # aioice when STUN is unreachable is benign; the real handshake
+    # completes via host candidates regardless.
+    pc = RTCPeerConnection(
+        configuration=RTCConfiguration(iceServers=[RTCIceServer(urls="stun:stun.l.google.com:19302")])
+    )
     hub: IngressHub = req.app["hub"]
     hub.pcs.add(pc)
 
