@@ -2054,8 +2054,7 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
     }
 }
 
-void ProgramImpl::generate_trace_dispatch_commands(
-    distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
     uint64_t device_hash =
