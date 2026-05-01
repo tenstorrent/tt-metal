@@ -196,7 +196,7 @@
 
 ## Session 7 — 2026-05-01
 
-**Status**: tt-inference-server integration complete — 95/100 accuracy via OpenAI API
+**Status**: tt-inference-server integration complete — 98/100 accuracy via OpenAI API
 **PCC**: All 8 unit tests PASS (unchanged from session 6)
 **Block Hash**: COMPLETE
 
@@ -223,6 +223,13 @@ mask; without them, accuracy drops to 68%.
 (including frame markers) as `video_input_ids` in the BatchFeature. The PromptReplacement
 uses this sequence as the replacement content, giving S=2701 matching the demo exactly.
 
+#### token_type_ids: Frame Markers Fix
+Include <im_start> (151936) and <im_end> (151937) in token_type_ids reconstruction.
+The HF processor marks all three as type=1 (N_frames × 83 positions). Without markers,
+the 2 frame boundary tokens per frame had causal-only attention — each marker could not
+see the patches of the same frame ahead of it, breaking the bidirectional image attention
+the model was trained with. Adding them: 98/100 (+3 from 95/100).
+
 #### KV Cache Precision
 Changed attention.py KV cache dtype from bfloat8_b → bfloat16 for better SDPA precision.
 
@@ -235,9 +242,9 @@ other S values with different SDPA program config). Using `forward_decode_step` 
 | Configuration | Accuracy | Notes |
 |--------------|----------|-------|
 | Patches-only (no frame markers) | 68% | Default PromptReplacement path |
-| **Full sequence (with frame markers)** | **95%** | video_input_ids fix |
+| **Full sequence (with frame markers)** | **98%** | video_input_ids fix |
 | Session 6 demo (direct) | 98% | HF processor + CPU float32 decode |
 
-**95/100 PASS** via tt-inference-server OpenAI API
+**98/100 PASS** via tt-inference-server OpenAI API
 - Average latency: 6.4s per test (5.3s prefill + 1.1s decode @ 16 tokens)
 - 5 remaining failures at indices 22, 26, 55, 56, 76
