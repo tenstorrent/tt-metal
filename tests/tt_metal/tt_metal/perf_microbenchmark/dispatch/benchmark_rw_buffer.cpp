@@ -64,15 +64,10 @@ static constexpr uint32_t ElementSize = sizeof(ElementType);
 
 static const std::vector<int64_t> PAGE_SIZE_ARGS = benchmark::CreateRange(32, 2048, 2);
 static constexpr uint64_t max_transfer_size{8 * GB};
-static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {
-    1 * GB,
-    2 * GB,
-    4 * GB,
-    8 * GB,
-};
+static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {64 * MB};
 
-static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM}; //, BufferType::L1};
-static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0}; //, 1};
+static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
+static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
 
 // For sharded benchmarks: fixed page size and contiguity control
 static constexpr int64_t FIXED_PAGE_SIZE = 1024;
@@ -356,7 +351,7 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
         ReplicatedBufferConfig{transfer_size},
         DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
         mesh_device.get());
-    std::vector<ElementType> host_buffer;
+    std::vector<ElementType> host_buffer(transfer_size / ElementSize);
 
     for ([[maybe_unused]] auto _ : state) {
         // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard
