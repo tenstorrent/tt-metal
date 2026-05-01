@@ -19,9 +19,8 @@ void kernel_main() {
     const uint32_t b_addr = get_arg_val<uint32_t>(1);
     const uint32_t tile_ofs = get_arg_val<uint32_t>(2);
     const uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t num_batches = get_arg_val<uint32_t>(4);
-    const uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(5);
-    const uint32_t noc = get_arg_val<uint32_t>(6);
+    const uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(4);
+    const uint32_t noc = get_arg_val<uint32_t>(5);
 
     if (num_tiles == 0) {
         return;
@@ -62,15 +61,12 @@ void kernel_main() {
     uint32_t trid = 1u;  // MUST START WITH ONE
     uint32_t trid_to_wait = trid;
 
-    const uint32_t large_chunk = num_batches * num_tiles_per_batch;
     uint32_t remaining_tiles = num_tiles;
     bool first_iter = true;
     uint32_t prev_chunk = 0;
 
     auto get_num_tiles = [&](uint32_t remaining_tiles) {
-        if (remaining_tiles >= large_chunk) {
-            return large_chunk;
-        } else if (remaining_tiles >= num_tiles_per_batch) {
+        if (remaining_tiles >= num_tiles_per_batch) {
             return num_tiles_per_batch;
         }
         return remaining_tiles;

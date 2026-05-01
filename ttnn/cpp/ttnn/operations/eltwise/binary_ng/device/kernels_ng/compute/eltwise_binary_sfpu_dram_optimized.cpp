@@ -30,8 +30,7 @@
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t num_batches = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(2);
+    uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(1);
 
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
@@ -49,13 +48,10 @@ void kernel_main() {
     BINARY_SFPU_INIT
 #endif
 
-    const uint32_t large_chunk = num_batches * num_tiles_per_batch;
     uint32_t remaining = num_tiles;
     while (remaining > 0) {
         uint32_t n_tiles;
-        if (remaining >= large_chunk) {
-            n_tiles = large_chunk;
-        } else if (remaining >= num_tiles_per_batch) {
+        if (remaining >= num_tiles_per_batch) {
             n_tiles = num_tiles_per_batch;
         } else {
             n_tiles = remaining;

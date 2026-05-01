@@ -13,9 +13,8 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t tile_ofs = get_arg_val<uint32_t>(1);
     const uint32_t num_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t num_batches = get_arg_val<uint32_t>(3);
-    const uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(4);
-    const uint32_t noc = get_arg_val<uint32_t>(5);
+    const uint32_t num_tiles_per_batch = get_arg_val<uint32_t>(3);
+    const uint32_t noc = get_arg_val<uint32_t>(4);
 
     if (num_tiles == 0) {
         return;
@@ -27,14 +26,10 @@ void kernel_main() {
     uint64_t dst_noc_addr = dst_tensor.get_noc_addr(tile_ofs, /*offset=*/0, noc);
     uint32_t dst_noc_ofs = 0;
 
-    const uint32_t large_chunk = num_batches * num_tiles_per_batch;
     uint32_t remaining = num_tiles;
-
     while (remaining > 0) {
         uint32_t n_tiles_proc;
-        if (remaining >= large_chunk) {
-            n_tiles_proc = large_chunk;
-        } else if (remaining >= num_tiles_per_batch) {
+        if (remaining >= num_tiles_per_batch) {
             n_tiles_proc = num_tiles_per_batch;
         } else {
             n_tiles_proc = remaining;

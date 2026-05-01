@@ -207,11 +207,6 @@ uint32_t get_noc_max_burst_size(const ttnn::MeshDevice& mesh_device) {
     return noc_max_burst_size;
 }
 
-uint32_t compute_num_batches(const ttnn::operations::binary_ng::BinaryNgInputs& args) {
-    (void)args;
-    return 1;
-}
-
 uint32_t compute_num_tiles_per_batches(
     const ttnn::operations::binary_ng::BinaryNgParams& operation_attributes,
     const ttnn::operations::binary_ng::BinaryNgInputs& args,
@@ -250,7 +245,6 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const tt::tt_metal::KernelHandle compute_kernel_id,
     const CoreRangeSet& all_device_cores,
-    const uint32_t num_batches,
     const uint32_t num_tiles_per_batch,
     const std::map<CoreCoord, bool>& swap_noc_cores_map) {
     using namespace tt;
@@ -333,20 +327,17 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
             b_tensor.buffer()->address(),
             tile_ofs,
             num_tiles_per_core,
-            num_batches,
             num_tiles_per_batch,
             is_swap_noc_core ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0};
 
         std::vector<uint32_t> compute_args_vec = {
             num_tiles_per_core,
-            num_batches,
             num_tiles_per_batch,
         };
         std::vector<uint32_t> writer_args_vec = {
             output.buffer()->address(),
             tile_ofs,
             num_tiles_per_core,
-            num_batches,
             num_tiles_per_batch,
             is_swap_noc_core ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1};
 
@@ -611,18 +602,10 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     loop (line 48‑51), so it's fine.
     */
 
-    const uint32_t num_batches = CMAKE_UNIQUE_NAMESPACE::compute_num_batches(args);
-
     const uint32_t num_tiles_per_batch =
         CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, args, output);
 
-    const uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch * num_batches;
-    log_info(
-        tt::LogOp,
-        "num_tiles_per_cb: {}, num_tiles_per_batch: {}, num_batches: {}",
-        num_tiles_per_cb,
-        num_tiles_per_batch,
-        num_batches);
+    const uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch;  // double buffering
 
     auto [a_tensor_cb, a_tensor_cb_handle] =
         create_cb(tt::CBIndex::c_0, program, dram_optimal_cores, single_tile_size, num_tiles_per_cb, dtype);
@@ -635,8 +618,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
 
     /***************   READER KERNEL ***************/
 
-    // TODO: We can't use num_batches and num_tiles_per_batch as compile time aruments, the op expect one kernels for
-    // tensors with different shapes.
     std::vector<uint32_t> reader_compile_time_vec = {
         a_tensor_cb,
         b_tensor_cb,
@@ -826,7 +807,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         writer_kernel_id,
         compute_kernel_id,
         dram_optimal_cores,
-        num_batches,
         num_tiles_per_batch,
         swap_noc_cores_map);
     return {
@@ -861,7 +841,6 @@ void BinaryNgDramOptimizedProgram::override_runtime_arguments(
         sh_var.writer_kernel_id,
         sh_var.eltwise_kernel_id,
         sh_var.dram_device_cores,
-        CMAKE_UNIQUE_NAMESPACE::compute_num_batches(tensor_args),
         CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, tensor_args, tensor_return_value),
         swap_noc_cores_map);
 }
