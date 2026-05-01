@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from ttnn.device import is_blackhole as ttnn_is_blackhole
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
@@ -114,6 +116,13 @@ class BgeM3MLP(LightweightModule):
         runtime_batch = int(batch_size)
         runtime_seq = int(seq_len)
         core_grid = bge_m3_matmul_core_grid(self.config.mesh_device, runtime_seq, runtime_batch)
+        minimal_wi_config = _runtime_mlp_wi_minimal_matmul_config(
+            self.config.mesh_device,
+            runtime_seq,
+            runtime_batch,
+            hidden_size=self.config.hidden_size,
+            intermediate_size=self.config.intermediate_size,
+        )
         wi_prg_config = self.config.wi_prg_config or _runtime_mlp_wi_program_config(
             self.config.mesh_device,
             runtime_seq,
@@ -133,18 +142,31 @@ class BgeM3MLP(LightweightModule):
             max_seq_len=runtime_seq,
             max_batch_size=runtime_batch,
         )
-        # GELU stays fused into Wi, either through the default activation arg or an explicit S512 program config.
-        activated = ttnn.linear(
-            hidden_states,
-            self.wi_weight,
-            memory_config=self.config.wi_memcfg,
-            dtype=self.config.wi_dtype,
-            bias=self.wi_bias,
-            program_config=wi_prg_config,
-            compute_kernel_config=wi_compute_kernel_cfg,
-            activation=wi_activation,
-            core_grid=wi_core_grid,
-        )
+        # GELU stays fused into Wi. For B32/S512 on Blackhole, the experimental minimal matmul
+        # has a faster input-forwarding dataflow than the standard sequence-policy matmul.
+        if minimal_wi_config is not None and self.config.wi_prg_config is None:
+            activated = ttnn.experimental.minimal_matmul(
+                input_tensor=hidden_states,
+                weight_tensor=self.wi_weight,
+                bias_tensor=self.wi_bias,
+                fused_activation=(ttnn.UnaryOpType.GELU, True),
+                config=minimal_wi_config,
+                memory_config=self.config.wi_memcfg,
+                dtype=self.config.wi_dtype,
+                compute_kernel_config=wi_compute_kernel_cfg,
+            )
+        else:
+            activated = ttnn.linear(
+                hidden_states,
+                self.wi_weight,
+                memory_config=self.config.wi_memcfg,
+                dtype=self.config.wi_dtype,
+                bias=self.wi_bias,
+                program_config=wi_prg_config,
+                compute_kernel_config=wi_compute_kernel_cfg,
+                activation=wi_activation,
+                core_grid=wi_core_grid,
+            )
 
         output = ttnn.linear(
             activated,
@@ -331,6 +353,38 @@ def _b32s512_mlp_wi_program_config(
         out_subblock_h=1,
         out_subblock_w=3,
         fused_activation=(ttnn.UnaryOpType.GELU, True),
+    )
+
+
+def _runtime_mlp_wi_minimal_matmul_config(
+    mesh_device,
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+    *,
+    hidden_size: int,
+    intermediate_size: int,
+) -> object | None:
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len != 512 or max_batch != 32:
+        return None
+    if hidden_size != 1024 or intermediate_size != 4096:
+        return None
+    if mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
+
+    grid_x = 11
+    grid_y = 10
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    if device_grid.x < grid_x or device_grid.y < grid_y:
+        return None
+
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=4,
+        subblock_w=1,
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
     )
 
 
