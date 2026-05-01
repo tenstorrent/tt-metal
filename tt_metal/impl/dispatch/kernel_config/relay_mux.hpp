@@ -150,6 +150,17 @@ void assemble_2d_fabric_packet_header_args(
     const auto& src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(my_device_id);
     const auto& dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(destination_device_id);
     const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    // FIX TF: guard against nullopt — returned when inter-mesh relay is broken (degraded mode).
+    // Before this fix, calling .value() without has_value() threw std::bad_optional_access in SetUp(),
+    // which GTest caught as an opaque "bad optional access" with no context about which chip pair failed.
+    TT_FATAL(
+        forwarding_direction.has_value(),
+        "FIX TF: No forwarding direction from physical chip {} (fabric node {}) to physical chip {} (fabric node {}). "
+        "Inter-mesh relay path is broken or no route exists in the control plane routing table.",
+        my_device_id,
+        src_fabric_node_id,
+        destination_device_id,
+        dst_fabric_node_id);
     const auto& mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
