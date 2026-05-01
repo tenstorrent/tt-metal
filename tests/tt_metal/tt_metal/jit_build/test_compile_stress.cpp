@@ -35,13 +35,9 @@
 //                                             after warmup                (default unset)
 //
 // Example (direct invocation, single client, multiple remote servers):
-//   TT_METAL_JIT_SERVER_ENABLE=1 \
-//   TT_METAL_JIT_SERVER_ENDPOINTS=hostA:9876,hostB:9876 \
-//   TT_METAL_COMPILE_STRESS_NUM_KERNELS=20000 \
-//       ./build/test/tt_metal/unit_tests_jit_build \
-//       --gtest_also_run_disabled_tests \
-//       --gtest_filter='*TensixCompileStress*'
-//
+//   TT_METAL_JIT_SERVER_ENABLE=1 TT_METAL_JIT_SERVER_ENDPOINTS=hostA:9876,hostB:9876
+//   TT_METAL_COMPILE_STRESS_NUM_KERNELS=20000 ./build/test/tt_metal/unit_tests_jit_build
+//   --gtest_filter='*TensixCompileStress*'
 // For multi-client multi-server runs, use tests/scripts/run_compile_stress_harness.py.
 
 #include "common/mesh_dispatch_fixture.hpp"
