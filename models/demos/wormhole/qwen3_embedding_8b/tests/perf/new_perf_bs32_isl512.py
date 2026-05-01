@@ -8,7 +8,8 @@ Tracy-friendly Qwen3-Embedding-0.6B perf capture: bs=32 / ISL=512 / DP=1.
 ONE measured iteration with signpost markers around the trace-replay forward.
 bs=32 keeps activations DRAM-resident (L1 budget would be exceeded) and turns
 on `QWEN_MM_BIG_GRID_BH=1` to push MinimalMatmuls onto the (8,10)=80-core grid
-on Blackhole. Same config as `demo_bs32_isl512.py`.
+on Blackhole. Same config as `demo_bs32_isl512.py`, including the head-split
+NlpCreateHeads path.
 
 Usage:
     HF_MODEL=Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=P150 \\

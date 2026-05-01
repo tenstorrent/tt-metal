@@ -10,6 +10,11 @@ with `tracy.signpost("start"/"stop")` markers around the trace-replay forward.
 The signposted zone is what you filter on in Tracy/the CSV post-processor to
 get a clean device-time number — uncluttered by the compile pass.
 
+Uses the same all-optimizations-on environment as `demo_bs1_isl512.py`,
+including `QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1`, so Tracy should show
+`NlpCreateHeadsDeviceOperation` at ~128 cores rather than the generic 16-core
+sequence-only split.
+
 Usage (Tracy device profile):
     HF_MODEL=Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=P150 \\
       TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\

@@ -1670,12 +1670,6 @@ class ModelArgs:
         # Threshold >128 picks up bs32+ without regressing bs8.
         n_q_heads = getattr(self, "n_heads", 32)
         use_big_grid = is_blackhole() and (batch_size * n_q_heads) > 128
-        # Override: let the user force the larger grid for bs=1 short-seq, where
-        # each (batch_head, q_chunk) work unit is fairly small and the extra
-        # cores can sometimes pay off if combined with bigger q_chunk / k_chunk
-        # (more work per unit). Opt-in via QWEN_SDPA_BIG_GRID=1.
-        if is_blackhole() and os.getenv("QWEN_SDPA_BIG_GRID", "0") == "1":
-            use_big_grid = True
         sdpa_grid = (8, 10) if use_big_grid else (8, 8)
         # exp_approx_mode uses a fast piecewise-polynomial approximation of exp()
         # inside the online softmax; verified to have negligible impact on
