@@ -10,7 +10,7 @@ Weight sharding (T3K, 8 devices):
   MLP w2         : ShardTensorToMesh(dim=2) — row-parallel
   biases, norms  : replicated
 
-After each row-parallel projection, tt_all_reduce(cluster_axis=1) combines partial
+After each row-parallel projection, ttnn.all_reduce(cluster_axis=1) combines partial
 sums from 8 devices.
 
 Input/output format: [n_crops, 1, 729, hidden] — per-crop batch dimension keeps
@@ -169,7 +169,8 @@ class _ViTAttention(LightweightModule):
                 cache_file_name=cache_name("bo"),
             )
 
-        # SDPA program config: small q/k chunks to avoid L1 overflow
+        # SDPA program config: 128-token chunks — keeps L1 well within budget
+        # for the 2-local-head-per-device ViT SDPA ([n_crops, 2, 729, 96]).
         self._sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             q_chunk_size=128,
@@ -178,10 +179,12 @@ class _ViTAttention(LightweightModule):
         )
 
         # Program config for the column-parallel wqkv linear
+        # in0_block_w=4: load 4 tiles (128 elements) of hidden dim per step for better
+        # register reuse (was 1 tile = 32 elements, causing excessive DRAM re-reads).
         qkv_out_per_dev = 3 * self.n_local_heads * self.padded_head_dim  # 3*2*96=576
         self.xqkv_progcfg = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=1,
+            in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=1,
             per_core_M=max(1, math.ceil(seq_len / self.tile_size / 8)),
