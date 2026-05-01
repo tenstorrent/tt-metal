@@ -398,6 +398,8 @@ class Gemma4Model:
         pli_device_tensors=None,
         position_idx_cache=None,
         pli_combined=None,
+        page_tables_per_group=None,
+        layer_to_group=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -406,7 +408,8 @@ class Gemma4Model:
             hidden_states: [1, 1, seq_len, hidden_size] on device (post-embedding)
             rope_mats: (cos, sin) override, or dict {layer_type: (cos, sin)} for pre-sliced decode
             position_idx: decode position tensor ([1,32] uint32 for embedding RoPE, or [1] int32 legacy)
-            page_table: paged attention table
+            page_table: paged attention table — used for every layer when
+                page_tables_per_group is None (legacy single-group / non-vLLM path).
             kv_caches: list of [k, v] per layer, or None (uses self.tt_kv_cache)
             is_decode: True for decode, False for prefill
             token_index: int for decode RoPE slicing (None when using embedding-based RoPE)
@@ -415,7 +418,22 @@ class Gemma4Model:
             pli_device_tensors: optional list of pre-computed PLI device tensors (trace mode)
             position_idx_cache: optional [batch] int32 tensor for KV cache update (when position_idx is uint32)
             pli_combined: optional [1,1,n_layers,pli_size] device tensor of pre-computed PLI (decode)
+            page_tables_per_group: optional list of per-kv-cache-group page tables
+                (one per group, in upstream's group order) used when serving via
+                vLLM's hybrid kv cache manager. When provided, layer i uses
+                ``page_tables_per_group[layer_to_group[i]]`` instead of the
+                single ``page_table`` arg, so sliding-window layers can index
+                into a smaller paged pool than full-attention layers.
+            layer_to_group: list[int] of length ``num_layers`` mapping each
+                model layer index to its kv_cache_group index. Required when
+                ``page_tables_per_group`` is provided.
         """
+        if page_tables_per_group is not None and layer_to_group is None:
+            raise ValueError("page_tables_per_group requires layer_to_group to route per " "layer to the right group")
+        if layer_to_group is not None and len(layer_to_group) != len(self.layers):
+            raise ValueError(
+                f"layer_to_group has {len(layer_to_group)} entries but model " f"has {len(self.layers)} layers"
+            )
         seq_len = hidden_states.shape[2]
         caches = kv_caches or self.tt_kv_cache
 
@@ -483,11 +501,20 @@ class Gemma4Model:
             elif not is_decode and i in kv_source_indices:
                 keep_kv = True
 
+            # Per-group page table routing for hybrid kv cache groups (vLLM
+            # path). Sliding-window layers may index into a smaller paged
+            # pool than full-attention layers, so each layer picks up its
+            # group's block table instead of a shared one.
+            if page_tables_per_group is not None:
+                layer_page_table = page_tables_per_group[layer_to_group[i]]
+            else:
+                layer_page_table = page_table
+
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
                 position_idx=position_idx,
-                page_table=page_table,
+                page_table=layer_page_table,
                 kv_cache=kv_cache,
                 is_decode=is_decode,
                 token_index=token_index,
@@ -597,6 +624,8 @@ class Gemma4Model:
         batch_size=1,
         input_ids_torch=None,
         embeds_torch=None,
+        page_tables_per_group=None,
+        layer_to_group=None,
     ):
         """Prefill forward — matches tt_transformers Generator interface."""
         seq_len = x.shape[-2]
@@ -608,6 +637,8 @@ class Gemma4Model:
             is_decode=False,
             input_ids_torch=input_ids_torch,
             embeds_torch=embeds_torch,
+            page_tables_per_group=page_tables_per_group,
+            layer_to_group=layer_to_group,
         )
 
         # Extract last token tile for next-token prediction
@@ -695,6 +726,8 @@ class Gemma4Model:
         kv_cache=None,
         sampling_on_device=False,
         capture_sampling_trace=False,
+        page_tables_per_group=None,
+        layer_to_group=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
@@ -732,6 +765,8 @@ class Gemma4Model:
             token_index=token_index,
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(precomputed_pli, ttnn.TILE_LAYOUT) if precomputed_pli is not None else None,
+            page_tables_per_group=page_tables_per_group,
+            layer_to_group=layer_to_group,
         )
 
         # On-device sampling
