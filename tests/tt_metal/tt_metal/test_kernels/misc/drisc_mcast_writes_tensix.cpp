@@ -142,6 +142,7 @@ void kernel_main() {
 
     uint64_t end = get_timestamp();
     uint64_t total_time = end - start;
+    // Timing stored immediately after data buffer. Host reads at drisc_l1_addr + num_bytes
     experimental::CoreLocalMem<uint64_t> total_time_res(drisc_l1_addr);
     uint32_t offset = num_bytes / sizeof(uint64_t);
     total_time_res[offset] = total_time;

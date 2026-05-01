@@ -32,8 +32,8 @@ void kernel_main() {
         dst_gddr_addr += bytes_per_iter;
     }
     uint64_t total_time = get_timestamp() - start;
-    uint32_t offset = (bytes_per_iter) / sizeof(uint64_t);
-    // Write cycles consumed to L1 for host to read
+    // Timing stored immediately after data buffer. Host reads at l1_addr + bytes_per_iter
+    uint32_t offset = bytes_per_iter / sizeof(uint64_t);
     writes_cycles_consumed(l1_src_addr, offset, total_time);
 #else
     const uint32_t src_gddr_addr = get_arg_val<uint32_t>(0);
@@ -43,14 +43,14 @@ void kernel_main() {
 
     constexpr uint32_t tx_stream = 0;
     uint64_t start = get_timestamp();
-    // Multiple DRAM GDDR to L1 transfers
+    // Same src and dst each iteration - data is overwritten in DRISC L1 in place; pure BW measurement.
     for (uint32_t i = 0; i < iters; i++) {
         experimental::dma_async_read(tx_stream, src_gddr_addr, l1_dst_addr, bytes_per_iter);
         experimental::dma_async_read_barrier(tx_stream);
     }
     uint64_t total_time = get_timestamp() - start;
-    uint32_t offset = (bytes_per_iter) / sizeof(uint64_t);
-    // Write cycles consumed to L1 for host to read
+    // Timing stored immediately after data buffer. Host reads at l1_addr + bytes_per_iter
+    uint32_t offset = bytes_per_iter / sizeof(uint64_t);
     writes_cycles_consumed(l1_dst_addr, offset, total_time);
 #endif  // L1_TO_GDDR_WRITE_TEST
 

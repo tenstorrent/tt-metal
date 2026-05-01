@@ -272,6 +272,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
 
     run_workload(std::move(program));
 
+    // Kernel writes timing immediately after the data buffer in DRISC L1
     uint64_t timing_noc_addr = drisc_l1_noc_addr_ + static_cast<uint64_t>(bytes_per_iter);
     uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1e6;
     uint64_t max_cycles = 0;
@@ -280,7 +281,8 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
     // the aggregate write bandwidth from DRISC L1 to DRAM across all endpoints
     for (uint32_t row = 0; row < num_endpoints; row++) {
         for (uint32_t col = 0; col < num_banks; col++) {
-            uint32_t dram_channel = device_->dram_channel_from_logical_core(CoreCoord{col, 0});
+            uint32_t dram_channel =
+                device_->dram_channel_from_logical_core(CoreCoord{col, 0});  // channel maps by bank (col)
             std::vector<uint32_t> result(bytes_per_iter / sizeof(uint32_t));
             for (uint32_t i = 0; i < iters; i++) {
                 tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
@@ -355,7 +357,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
 
     run_workload(std::move(program));
 
-    // Calculate the aggregate read bandwidth from DRAM to DRISC L1 to across all endpoints
+    // Kernel writes timing immediately after the data buffer in DRISC L1.
     uint64_t timing_noc_addr = drisc_l1_noc_addr_ + static_cast<uint64_t>(bytes_per_iter);
     uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1e6;
     uint64_t max_cycles = 0;
@@ -581,7 +583,7 @@ TEST_P(DramKernelDRISCGDDRBWSweepFixture, DRISCDMAUcastToTensix) {
             sub_worker.x,
             sub_worker.y,
             bytes_per_iter,
-            0,
+            0,  // num_subordinates: unused in unicast path
             iters,
         });
     run_workload(std::move(program));
@@ -591,10 +593,12 @@ TEST_P(DramKernelDRISCGDDRBWSweepFixture, DRISCDMAUcastToTensix) {
     std::vector<uint32_t> result(elems_per_iter);
     MetalContext::instance().get_cluster().read_core(
         result.data(), bytes_per_iter, tt_cxy_pair(mesh_device_->build_id(), tensix_virtual), tensix_l1_base_);
+    // Kernel overwrites the same Tensix L1 address each iteration; verify the last chunk landed.
     std::vector<uint32_t> last_chunk(data.end() - elems_per_iter, data.end());
     EXPECT_EQ(result, last_chunk);
 
     CoreCoord dram_virtual = device_->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+    // Kernel writes timing immediately after the data buffer in DRISC L1.
     uint64_t timing_noc_addr = drisc_l1_noc_addr_ + static_cast<uint64_t>(bytes_per_iter);
     uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_->id()) * 1e6;
     uint64_t cycles = read_timing_cycles(dram_virtual, timing_noc_addr);
