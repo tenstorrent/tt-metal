@@ -36,7 +36,6 @@ def test_all_broadcast_2d_fabric(
     num_iters,
     function_level_defaults,
 ):
-    print(f"Bh 2d mesh shape: {bh_2d_mesh_device.shape[0]} x {bh_2d_mesh_device.shape[1]}")
     # On bh-llmbox (4,1 mesh), use 2 devices to avoid fabric routing issues
     # On other machines, use all devices in first dimension
     if bh_2d_mesh_device.shape == ttnn.MeshShape(4, 1):

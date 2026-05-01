@@ -201,7 +201,6 @@ def run_all_broadcast_impl(
     tt_out_tensor_list = []
     with cache_entries_counter.measure():
         if trace_mode:
-            logger.info("Running with trace")
             tt_out_tensor = run_with_trace(
                 mesh_device,
                 all_broadcast_topology,
@@ -214,7 +213,6 @@ def run_all_broadcast_impl(
             )
             tt_out_tensor_list.append(tt_out_tensor)
         else:
-            logger.info("Running all broadcast")
             for i in range(num_iters):
                 tt_out_tensors = ttnn.all_broadcast(
                     input_tensor_mesh_list[i],
@@ -229,8 +227,6 @@ def run_all_broadcast_impl(
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done op")
-
-    logger.info(f"Done op for real")
     passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_out_tensors = tt_out_tensor_list[tensor_index]
@@ -238,7 +234,6 @@ def run_all_broadcast_impl(
         for k in range(num_devices):
             output_tensor = output_tensors[k]
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensors[k])):
-                logger.info(f"calculating output tensor...")
                 tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
                 logger.info(f"Checking for device {t.device().id()}")
                 if input_dtype == ttnn.bfloat16:
