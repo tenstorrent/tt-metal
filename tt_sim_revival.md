@@ -111,6 +111,8 @@ This currently throws a runtime error during blitz pipeline creation due to H2D/
 
 
 ### Common Errors
+
+1.
 ```
 [840403] ERROR: UnimplementedFunctionality: e_tile_mmio_wr32: addr=0xfffffffc
 terminate called after throwing an instance of 'std::runtime_error'
@@ -119,10 +121,10 @@ info:
 Failed to read response message: Connection reset by peer
 ```
 
-`rm -rf tt_metal/pre-compiled` then try again
+`rm -rf tt_metal/pre-compiled` then try again. This happen each time `./build_metal.sh` is ran.
 
 
-
+2.
 ```
 [1,1]<stderr>: terminate called after throwing an instance of 'std::runtime_error'
 [1,1]<stderr>:   what():  TT_THROW @ /localdev/nzhao/tt-metal/tt_metal/third_party/umd/device/simulation/eth_connection.cpp:77: tt::exception
@@ -133,6 +135,23 @@ Failed to read response message: Connection reset by peer
 Zombie process from previous run needs to be killed: `pkill -9 -f "child_process_tt_sim_chip"`
 
 
+3.
 `No matching ASIC ID`
 
 Rank bindings file is incorrect. Tricky ->  using `generate_rank_bindings.py` and try to swap `TT_VISIBLE_DEVICES` of different ranks
+
+
+
+
+### Noteable Open Branches
+
+1. `nzhao/debug-ttsim-multihost`
+The current WIP debug branch. This branch points to a UMD submodule verison which refactors the underlying simulation chip to access the sim TLB. The refactor requires some amount of validation.
+
+
+
+2. `nzhao/strip-fabric-ccl-multidev-test`
+Minor adjustments off main to running following test:
+`TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_lb_2x4_cluster_desc_v2.yaml pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_multidevice`
+
+Removes inter-device communication to simplify test down to a single device. Ran with `ttsim-private` `main`. No sim issues here, only fails tensor assert (expectedly)
