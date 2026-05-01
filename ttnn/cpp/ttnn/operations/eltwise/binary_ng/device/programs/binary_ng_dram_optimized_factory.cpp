@@ -229,7 +229,7 @@ uint32_t compute_num_tiles_per_batches(
 
     const uint32_t max_tiles_per_dst = dtype == tt::DataFormat::Bfp4_b ? 8 : 16;
     return fp32_dest_acc_en or operation_attributes.is_sfpu
-               ? 1
+               ? 2  // Why 1 for fp32 ???? , shuold be 2 for f32 to max noc burst size
                : std::min(
                      max_tiles_per_dst,
                      CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / single_tile_size);
@@ -605,7 +605,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     const uint32_t num_tiles_per_batch =
         CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, args, output);
 
-    const uint32_t num_tiles_per_cb = 2 * num_tiles_per_batch;  // double buffering
+    const uint32_t num_tiles_per_cb = 3 * num_tiles_per_batch;  // triple buffering
 
     auto [a_tensor_cb, a_tensor_cb_handle] =
         create_cb(tt::CBIndex::c_0, program, dram_optimal_cores, single_tile_size, num_tiles_per_cb, dtype);
