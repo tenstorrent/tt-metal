@@ -61,7 +61,7 @@ models:
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_17b.yaml"
-      - "--max_steps 100"
+      - "--max_steps 500"
       - "--track_memory"
     skip-card:
       - "n150"
@@ -77,7 +77,7 @@ models:
     binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/nano_gpt/train_nanogpt.py"
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tiny_deepseek_char.yaml"
-      - "--max_steps 500"
+      - "--max_steps 1000"
       - "--track_memory"
     skip-card:
       - "n150"
