@@ -430,8 +430,6 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_core.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_schedulers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_schedulers.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
 )
