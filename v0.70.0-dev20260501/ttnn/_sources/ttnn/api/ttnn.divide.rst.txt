@@ -1,0 +1,8 @@
+﻿ttnn.divide
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.divide:
+
+.. autooperation:: ttnn.divide
