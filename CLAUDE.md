@@ -79,7 +79,35 @@ A model bring-up is **COMPLETE** when ALL of the following are satisfied:
 - Read BRINGUP_LOG.md at the start of every session.
 - Update BRINGUP_LOG.md before ending a session with: [Status, PCC, Block Hash].
 
-## Skills Available
+## Automated Bring-Up
+
+The `/bringup` skill runs the full relay race autonomously.
+
+```bash
+/bringup https://huggingface.co/org/ModelName   # new model
+/bringup ModelName                               # resume from Current Status
+```
+
+**What it does (unsupervised, escalates after 10 failed attempts per block):**
+1. Repo-wide CPU audit across all existing models
+2. Architecture: reads all HF configs + Python source, searches current `models/` by
+   recency + device + arch similarity, looks up unit tests for every planned op
+3. Reference: generates `reference/functional.py` with per-op capture, verifies PCC +
+   element-wise p99 vs HF, saves persistent golden tensors at every op boundary
+4. TTNN (serial, device occupied): adapts/generates blocks, per-block PCC test +
+   integration test. Debug loop: locate failing op → isolation unit test → fix → log
+5. End-to-end verification: runs ISL-matched prompt sets, compares TTNN vs reference
+6. Server: generates generator_vllm.py from template, registers, runs test suite
+
+**CPU rule**: `__init__` and preprocessing are fine; forward inference is never CPU.
+
+**Debug loop**: 10 attempts per block → escalation report → STOP → wait for hint → reset counter.
+
+**Log format**: `BRINGUP_LOG.md` is date-separated, append-only. `## Current Status` header
+at top lets agent resume instantly without scanning the full log.
+
+## Skills Available (individual phases)
+- `/bringup` — full automated end-to-end bring-up (orchestrates all phases)
 - `/architecture` — map HF model to TTNN blocks, parallelization plan
 - `/reference` — create golden PyTorch reference for PCC verification
 - `/ttnn` — implement TTNN blocks achieving PCC > 0.99
