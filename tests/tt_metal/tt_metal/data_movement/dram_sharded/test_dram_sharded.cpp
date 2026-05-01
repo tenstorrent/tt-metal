@@ -32,7 +32,7 @@ struct DramShardedConfig {
     CoreRangeSet cores;
     bool use_trid = false;
     uint32_t num_of_trids = 0;
-    bool use_2_0 = false;
+    bool use_2_0_api = false;  // Use Device 2.0 API
 };
 
 /// @brief Reads from Sharded DRAM to L1 using stateful API
@@ -96,7 +96,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
         kernel_path += "_trid";
         reader_compile_args.push_back((uint32_t)test_config.num_of_trids);
     }
-    if (test_config.use_2_0) {
+    if (test_config.use_2_0_api || MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         kernel_path += "_2_0";
         reader_compile_args.push_back((uint32_t)test_config.num_of_trids);
     }
@@ -312,7 +312,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers2_0
                 .page_size_bytes = page_size_bytes,
                 .l1_data_format = l1_data_format,
                 .cores = core_range_set,
-                .use_2_0 = true};
+                .use_2_0_api = true};
 
             // Run
             EXPECT_TRUE(run_dm(mesh_device, test_config));
@@ -343,7 +343,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedId
         .cores = core_range_set,
         .use_trid = true,
         .num_of_trids = 16,
-        .use_2_0 = true};
+        .use_2_0_api = true};
 
     // Run
     EXPECT_TRUE(run_dm(mesh_device, test_config));

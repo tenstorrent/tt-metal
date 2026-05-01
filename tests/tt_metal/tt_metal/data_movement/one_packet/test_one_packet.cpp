@@ -27,7 +27,7 @@ struct OnePacketConfig {
     uint32_t num_packets = 0;
     uint32_t packet_size_bytes = 0;
     bool read = true;
-    bool use_2_0 = false;
+    bool use_2_0_api = false;  // Use Device 2.0 API
 };
 
 /// @brief Does OneToOne or OneFromOne but with one_packet read/write
@@ -77,7 +77,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     } else {
         kernels_dir += write_kernel_filename;
     }
-    if (test_config.use_2_0) {
+    if (test_config.use_2_0_api || MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         kernels_dir += "_2_0";
     }
     kernels_dir += ".cpp";
@@ -362,7 +362,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
                 .num_packets = num_packets,
                 .packet_size_bytes = packet_size_bytes,
                 .read = true,
-                .use_2_0 = true,
+                .use_2_0_api = true,
             };
 
             // Run
@@ -398,7 +398,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
                 .num_packets = num_packets,
                 .packet_size_bytes = packet_size_bytes,
                 .read = false,
-                .use_2_0 = true,
+                .use_2_0_api = true,
             };
 
             // Run

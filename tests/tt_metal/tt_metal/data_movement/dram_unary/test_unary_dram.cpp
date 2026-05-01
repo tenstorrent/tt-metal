@@ -90,7 +90,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/";
     std::string reader_kernel_filename = "reader_unary";
     std::string writer_kernel_filename = "writer_unary";
-    if (test_config.use_2_0_api) {
+    if (test_config.use_2_0_api || MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         reader_kernel_filename += "_2_0";
         writer_kernel_filename += "_2_0";
     }

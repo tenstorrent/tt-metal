@@ -79,7 +79,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     // Kernels
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/";
     std::string requestor_kernel_filename = "requestor";
-    if (test_config.use_2_0_api) {
+    if (test_config.use_2_0_api || MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         requestor_kernel_filename += "_2_0";
     }
     std::string requestor_kernel_path = kernels_dir + requestor_kernel_filename + ".cpp";

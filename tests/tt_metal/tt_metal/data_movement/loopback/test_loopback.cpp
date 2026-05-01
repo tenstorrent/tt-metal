@@ -31,6 +31,7 @@ struct LoopbackConfig {
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     NOC noc_id = NOC::NOC_0;
+    bool use_2_0_api = false;  // Use Device 2.0 API
 
     // TODO: Add the following parameters
     //  1. Virtual Channel (only useful for unicast)
@@ -79,18 +80,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
         (uint32_t)test_config.test_id};
 
     // Kernels
+    std::string sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender";
+    if (test_config.use_2_0_api || MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        sender_kernel_path += "_2_0";
+    }
+    sender_kernel_path += ".cpp";
+
     KernelHandle sender_kernel;
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         sender_kernel = experimental::quasar::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
+            sender_kernel_path,
             master_core_set,
             experimental::quasar::QuasarDataMovementConfig{
                 .num_threads_per_cluster = 1, .compile_args = sender_compile_args});
     } else {
         sender_kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
+            sender_kernel_path,
             master_core_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,

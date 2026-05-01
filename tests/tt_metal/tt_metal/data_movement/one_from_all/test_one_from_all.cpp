@@ -33,6 +33,7 @@ struct OneFromAllConfig {
     DataFormat l1_data_format = DataFormat::Invalid;
     NOC noc_id = NOC::RISCV_1_default;
     uint32_t num_virtual_channels = 1;
+    bool use_2_0_api = false;  // Use Device 2.0 API
 
     // TODO: Add the following parameters
     //  1. Virtual Channel
@@ -97,18 +98,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     };
 
     // Kernels
+    std::string gatherer_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer";
+    if (test_config.use_2_0_api || MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        gatherer_kernel_path += "_2_0";
+    }
+    gatherer_kernel_path += ".cpp";
+
     KernelHandle gatherer_kernel;
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         gatherer_kernel = experimental::quasar::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer.cpp",
+            gatherer_kernel_path,
             master_core_set,
             experimental::quasar::QuasarDataMovementConfig{
                 .num_threads_per_cluster = 1, .compile_args = gatherer_compile_args});
     } else {
         gatherer_kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer.cpp",
+            gatherer_kernel_path,
             master_core_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
