@@ -193,3 +193,51 @@
 | Replicated bf8b | 91% | Phase 1 baseline |
 | TP AllGather | 87-84% | Ring-ordering mismatch |
 | **TP reduce_scatter+all_gather** | **98%** | Correct, trace-safe |
+
+## Session 7 — 2026-05-01
+
+**Status**: tt-inference-server integration complete — 95/100 accuracy via OpenAI API
+**PCC**: All 8 unit tests PASS (unchanged from session 6)
+**Block Hash**: COMPLETE
+
+### Work Done
+
+#### tt-inference-server vLLM Plugin Integration
+- `generator_vllm.py`: TTMolmo2ForConditionalGeneration vLLM plugin
+  - `initialize_vllm_model`: loads HF weights + creates TtMolmo2Model
+  - `prefill_forward` / `decode_forward`: server inference API
+  - `decode_forward` uses `forward_decode_step` (TTNN, no trace)
+  - `allocate_molmo2_kv_cache`: bfloat16 KV cache
+- `tt_vllm_plugin/__init__.py`: Registers TTMolmo2ForConditionalGeneration
+- `tt_platform.py`: Renamed from platform.py (stdlib conflict)
+- `tt_worker.py`, `tt_model_runner.py`, `ascend_scheduler.py`: vLLM V1 API compat
+- `workflows/model_spec.py`: Molmo2-8B DeviceModelSpec with Molmo2VideoBackend
+
+#### Key Fix: Frame Markers via video_input_ids
+**Root cause of 68% → 95% improvement**: vLLM's PromptReplacement by default inserts
+only N_pooled image_patch_id tokens (no frame markers `<im_start>`/`<im_end>`), giving
+S=2481 vs demo's S=2701. Frame markers provide temporal structure for the SDPA attention
+mask; without them, accuracy drops to 68%.
+
+**Fix**: In `molmo2.py` (_call_hf_processor), store the full HF video token sequence
+(including frame markers) as `video_input_ids` in the BatchFeature. The PromptReplacement
+uses this sequence as the replacement content, giving S=2701 matching the demo exactly.
+
+#### KV Cache Precision
+Changed attention.py KV cache dtype from bfloat8_b → bfloat16 for better SDPA precision.
+
+#### Decode Trace
+Disabled decode trace in server (trace captured at first request's S doesn't scale to
+other S values with different SDPA program config). Using `forward_decode_step` instead.
+
+### Final Results (105-video suite, T3K, via tt-inference-server)
+
+| Configuration | Accuracy | Notes |
+|--------------|----------|-------|
+| Patches-only (no frame markers) | 68% | Default PromptReplacement path |
+| **Full sequence (with frame markers)** | **95%** | video_input_ids fix |
+| Session 6 demo (direct) | 98% | HF processor + CPU float32 decode |
+
+**95/100 PASS** via tt-inference-server OpenAI API
+- Average latency: 6.4s per test (5.3s prefill + 1.1s decode @ 16 tokens)
+- 5 remaining failures at indices 22, 26, 55, 56, 76
