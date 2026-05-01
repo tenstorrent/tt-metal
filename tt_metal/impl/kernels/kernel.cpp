@@ -272,6 +272,20 @@ std::string_view DramKernel::get_compiler_opt_level() const { return enchantum::
 
 std::string_view DramKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
+void DataMovementKernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
+    Kernel::process_include_paths(callback);
+    for (const auto& path : this->config_.compiler_include_paths) {
+        callback(path.string());
+    }
+}
+
+void ComputeKernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
+    Kernel::process_include_paths(callback);
+    for (const auto& path : this->config_.compiler_include_paths) {
+        callback(path.string());
+    }
+}
+
 void Kernel::process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)> callback) const {
     callback(this->compile_time_args());
 }
@@ -505,6 +519,16 @@ uint64_t Kernel::compute_hash() const {
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
     hasher.update(this->config_hash());
+
+    // Include paths affect compilation: the gcc -I order is significant (left-to-right
+    // header resolution), so different lists or orderings must produce different binaries.
+    // Header contents are tracked separately via the per-object .dephash mechanism.
+    size_t num_include_paths = 0;
+    this->process_include_paths([&](const std::string& path) {
+        hasher.update(path);
+        ++num_include_paths;
+    });
+    hasher.update(static_cast<uint64_t>(num_include_paths));
     return hasher.digest();
 }
 
@@ -1088,6 +1112,14 @@ std::string_view QuasarDataMovementKernel::get_compiler_opt_level() const {
 
 std::string_view QuasarDataMovementKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
+void QuasarDataMovementKernel::process_include_paths(
+    const std::function<void(const std::string& path)>& callback) const {
+    Kernel::process_include_paths(callback);
+    for (const auto& path : this->config_.compiler_include_paths) {
+        callback(path.string());
+    }
+}
+
 std::string QuasarDataMovementKernel::config_hash() const {
     // DataMovementProcessor values must be sorted to ensure consistent ordering for hash generation
     TT_ASSERT(std::is_sorted(this->dm_processors_.begin(), this->dm_processors_.end()));
@@ -1173,6 +1205,13 @@ std::string_view QuasarComputeKernel::get_compiler_opt_level() const {
 }
 
 std::string_view QuasarComputeKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
+void QuasarComputeKernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
+    Kernel::process_include_paths(callback);
+    for (const auto& path : this->config_.compiler_include_paths) {
+        callback(path.string());
+    }
+}
 
 std::string QuasarComputeKernel::config_hash() const {
     // QuasarComputeProcessor values must be sorted to ensure consistent ordering for hash generation

@@ -330,6 +330,8 @@ public:
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
 
+    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
+
     std::string_view get_compiler_opt_level() const override;
 
     std::string_view get_linker_opt_level() const override;
@@ -465,6 +467,8 @@ public:
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
 
+    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
+
     std::string_view get_compiler_opt_level() const override;
 
     std::string_view get_linker_opt_level() const override;
@@ -554,6 +558,8 @@ public:
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
 
+    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
+
     std::string_view get_compiler_opt_level() const override;
 
     std::string_view get_linker_opt_level() const override;
@@ -623,6 +629,8 @@ public:
     Config config() const override { return this->config_; }
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     std::string_view get_compiler_opt_level() const override;
 
