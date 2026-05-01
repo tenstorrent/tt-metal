@@ -38,6 +38,8 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_moe_layer_weights,
 )
 
+ROUTED_EXPERT_LAYER_IDX = 49  # local override for this benchmark run; revert to imported value when done
+
 MTP_LAYER_IDX = 61
 
 
@@ -376,10 +378,6 @@ def test_decoder(
         pytest.skip("Real-weight decoder tests require unrigged_all_experts")
     if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
         pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real MTP layer tests")
-
-    # Disable standalone MLA/MoE reference runs (profiling-only mode).
-    validate_standalone_mla = False
-    validate_standalone_moe = False
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
@@ -841,13 +839,61 @@ def test_decoder(
     # weights and per-device expert indices, then sums — matching reduce-to-one exactly.
     passing, pcc = comp_pcc(moe_output.flatten(), decoder_moe_output_valid.flatten(), 0.97)
     logger.info(f"MoE PCC (decoder vs golden): {pcc}")
-    logger.info(f"Golden MoE output: {moe_output.flatten()[:8]}")
-    logger.info(f"DecoderBlock MoE output: {decoder_moe_output_valid.flatten()[:8]}")
+    _g = moe_output.flatten()
+    _d = decoder_moe_output_valid.flatten()
+    logger.info(f"Golden MoE output (len={_g.numel()})")
+    logger.info(f"  [0:8]:        {_g[:8]}")
+    logger.info(f"  [256:264]:    {_g[256:264]}")
+    logger.info(f"  [1024:1032]:  {_g[1024:1032]}")
+    logger.info(f"  [4096:4104]:  {_g[4096:4104]}")
+    logger.info(f"  [last 8]:     {_g[-8:]}")
+    logger.info(f"DecoderBlock MoE output (len={_d.numel()})")
+    logger.info(f"  [0:8]:        {_d[:8]}")
+    logger.info(f"  [256:264]:    {_d[256:264]}")
+    logger.info(f"  [1024:1032]:  {_d[1024:1032]}")
+    logger.info(f"  [4096:4104]:  {_d[4096:4104]}")
+    logger.info(f"  [last 8]:     {_d[-8:]}")
 
     if validate_standalone_moe:
         pure_moe_passing, pure_moe_pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.97)
         logger.info(f"Pure MoE PCC (standalone vs golden): {pure_moe_pcc}")
-        logger.info(f"Pure MoE output: {moe_device_output_valid.flatten()[:8]}")
+        _p = moe_device_output_valid.flatten()
+        logger.info(f"Pure MoE output (len={_p.numel()})")
+        logger.info(f"  [0:8]:        {_p[:8]}")
+        logger.info(f"  [256:264]:    {_p[256:264]}")
+        logger.info(f"  [1024:1032]:  {_p[1024:1032]}")
+        logger.info(f"  [4096:4104]:  {_p[4096:4104]}")
+        logger.info(f"  [last 8]:     {_p[-8:]}")
+
+        # Element-wise diff: decoder MoE vs pure (standalone) MoE.
+        diff = (_d.float() - _p.float()).abs()
+        eps = 1e-3
+        bad_mask = diff > eps
+        bad_count = int(bad_mask.sum().item())
+        total = _d.numel()
+        max_diff = float(diff.max().item())
+        max_idx = int(diff.argmax().item())
+        logger.info(
+            f"DecoderMoE vs PureMoE diff: bad={bad_count}/{total} (eps={eps}), "
+            f"max|diff|={max_diff:.4f} at idx {max_idx} "
+            f"(decoder={_d[max_idx].item():.4f}, pure={_p[max_idx].item():.4f})"
+        )
+        if bad_count > 0:
+            bad_idx = bad_mask.nonzero().flatten().tolist()
+            for i in bad_idx:
+                logger.info(
+                    f"  idx={i}: decoder={_d[i].item():.6g}, pure={_p[i].item():.6g}, " f"|diff|={diff[i].item():.6g}"
+                )
+            # Per-256-element block histogram of bad counts (7168 = 28 blocks).
+            block_size = 256
+            n_blocks = (total + block_size - 1) // block_size
+            pad = n_blocks * block_size - total
+            mask_padded = torch.cat([bad_mask, torch.zeros(pad, dtype=bad_mask.dtype)]) if pad else bad_mask
+            per_block = mask_padded.view(n_blocks, block_size).sum(dim=1)
+            block_str = " ".join(str(int(x)) for x in per_block.tolist())
+            logger.info(f"  bad/{block_size}-block: [{block_str}]")
+        else:
+            logger.info(f"DecoderMoE vs PureMoE: bit-identical across all {total} elements (eps={eps})")
 
         device_passing, device_pcc = comp_pcc(
             decoder_moe_output_valid.flatten(), moe_device_output_valid.flatten(), 0.996
