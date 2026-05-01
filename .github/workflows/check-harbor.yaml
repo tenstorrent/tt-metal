@@ -15,7 +15,7 @@ on:
 jobs:
   check:
     name: "Check Harbor"
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: tt-ubuntu-light
     outputs:
       harbor-prefix: ${{ steps.check.outputs.harbor-prefix }}
     steps:
