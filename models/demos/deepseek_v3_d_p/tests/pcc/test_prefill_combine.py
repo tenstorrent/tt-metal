@@ -40,10 +40,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
+# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
+# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
+# Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
-        pytest.param(128, 7 * 1024, 16, 4, 2, True, id="pcc"),
+        pytest.param(128, 7 * 1024, 16, 4, 4, True, id="pcc"),
         pytest.param(3200, 7168, 64, 2, 2, False, id="perf_no_pcc"),
     ],
 )
@@ -64,7 +67,7 @@ def test_ttnn_combine(
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     num_links,
     topology,
     use_predictable_data,
@@ -93,14 +96,26 @@ def test_ttnn_combine(
 
     signpost(
         f"Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} "
-        f"{num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"{num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {num_links=} {topology=}"
     )
 
     # Compute configuration
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
-    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(
+        f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
+    )
 
     # Step 1: Generate initial inputs using torch
     # For 2D mesh, generate different weights per EP rank
@@ -141,7 +156,7 @@ def test_ttnn_combine(
     )
 
     # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -159,6 +174,7 @@ def test_ttnn_combine(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         num_dispatch_groups=num_dispatch_groups,
@@ -194,6 +210,13 @@ def test_ttnn_combine(
         device=mesh_device,
         dtype=ttnn.int32,
     )
+    tt_expert_region_offsets = ttnn.from_torch(
+        expert_region_offsets,
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
+    )
 
     torch_combine = TorchCombineModule(
         dispatch_group_size=dispatch_group_size,
@@ -203,7 +226,7 @@ def test_ttnn_combine(
         num_dispatch_groups=num_dispatch_groups,
     )
 
-    torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts)
+    torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts, expert_region_offsets)
 
     # Run ttnn combine
     tt_combine = TtCombineModule(
@@ -223,6 +246,7 @@ def test_ttnn_combine(
         tt_dispatched_buffer,
         tt_dispatched_metadata,
         tt_expert_token_counts,
+        tt_expert_region_offsets,
     )
 
     if not run_pcc_check:

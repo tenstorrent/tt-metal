@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/types.hpp"
 #include "device/kernels/moe_ring_common.h"
+#include "device/hostdevcommon/config.hpp"
 
 namespace ttnn::experimental {
 
@@ -23,7 +24,6 @@ std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& matmul_w2_tensor,
     uint32_t layer_id,
     uint32_t output_height_shard_dim,
-    uint32_t output_width_shard_dim,
     bool has_bias,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
@@ -32,8 +32,11 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore,
-    const std::optional<::detail::MoEActivationFunction>& activation_type = std::nullopt);
+    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt);
 
-std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device);
+std::vector<ttnn::CoreCoord> get_moe_combine_cores(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores);
 
 }  // namespace ttnn::experimental

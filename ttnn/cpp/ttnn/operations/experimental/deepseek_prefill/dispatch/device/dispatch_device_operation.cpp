@@ -64,9 +64,8 @@ void DispatchDeviceOperation::validate_on_program_cache_hit(
 DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Extract necessary dimensions from operation attributes
-    uint32_t experts_per_chip = operation_attributes.experts_per_chip;
     uint32_t metadata_len = operation_attributes.metadata_len;
-    uint32_t max_dispatched_tokens_per_expert = operation_attributes.max_dispatched_tokens_per_expert;
+    uint32_t max_dispatch_buffer_token_size = operation_attributes.max_dispatch_buffer_token_size;
 
     // Get the input tensor's per-device shape (sharded dimension)
     auto input_shape = tensor_args.input_tensor.tensor_spec().logical_shape();
@@ -78,10 +77,11 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     // Layout for all output tensors
     auto layout = tt::tt_metal::Layout::ROW_MAJOR;
 
-    // Define output shapes - these are PER-DEVICE shapes (not global shapes)
-    auto dispatch_buffer_shape = ttnn::Shape({1, 1, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim});
-    auto dispatch_metadata_shape =
-        ttnn::Shape({1, 1, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len});
+    // Define output shapes - these are PER-DEVICE shapes (not global shapes). The
+    // dispatch buffer is a single flat region shared across all local experts; its
+    // total token capacity is max_dispatch_buffer_token_size.
+    auto dispatch_buffer_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, hidden_dim});
+    auto dispatch_metadata_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, metadata_len});
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(
@@ -134,7 +134,7 @@ prefill_dispatch(
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
-    uint32_t max_dispatched_tokens_per_expert,
+    uint32_t max_dispatch_buffer_token_size,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
@@ -149,7 +149,7 @@ prefill_dispatch(
             .num_routed_experts = num_routed_experts,
             .num_experts_per_tok = num_experts_per_tok,
             .metadata_len = metadata_len,
-            .max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert,
+            .max_dispatch_buffer_token_size = max_dispatch_buffer_token_size,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,

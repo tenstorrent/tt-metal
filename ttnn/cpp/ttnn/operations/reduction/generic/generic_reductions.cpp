@@ -20,6 +20,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <numeric>
 
@@ -138,12 +139,20 @@ static Tensor reduce_impl(
         auto reduce_nd_loop = [&](const bool use_reduce_type, float scalar) -> Tensor {
             Tensor output_tensor = input_tensor_arg;
             bool first = true;
+            const int min_reduce_axis = *std::min_element(dim.begin(), dim.end());
             for (int i_dim = rank - 1; i_dim >= 0; i_dim--) {
                 bool found = std::find(dim.begin(), dim.end(), i_dim) != dim.end();
                 if (found) {
                     // Only apply the scalar once when reducing dim-by-dim,
                     // otherwise the result will be scaled multiple times.
                     float effective_scalar = first ? scalar : 1.0;
+                    if constexpr (
+                        reduce_type == reduction_common::ReduceType::Max ||
+                        reduce_type == reduction_common::ReduceType::Min) {
+                        // Sum/Mean: scale once on the first partial reduction. Min/Max: only on the last
+                        // partial step (min_reduce_axis) so the result is scalar * global op(x).
+                        effective_scalar = (i_dim == min_reduce_axis) ? scalar : 1.0;
+                    }
                     first = false;
 
                     bool transpose = i_dim < rank - 2;
@@ -651,6 +660,19 @@ Tensor max(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    /* Scaling is applied after reduction, so flip the op for negative scalars:
+     * max(s * x) = s * min(x) when s < 0.*/
+    if (scalar < 0.0f) {
+        return operations::reduction::reduce<reduction_common::ReduceType::Min>(
+            input_tensor_arg,
+            dim_arg,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            correction,
+            sub_core_grids);
+    }
     return operations::reduction::reduce<reduction_common::ReduceType::Max>(
         input_tensor_arg,
         dim_arg,
@@ -671,6 +693,19 @@ Tensor min(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    /* Scaling is applied after reduction, so flip the op for negative scalars:
+     * min(s * x) = s * max(x) when s < 0.*/
+    if (scalar < 0.0f) {
+        return operations::reduction::reduce<reduction_common::ReduceType::Max>(
+            input_tensor_arg,
+            dim_arg,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            correction,
+            sub_core_grids);
+    }
     return operations::reduction::reduce<reduction_common::ReduceType::Min>(
         input_tensor_arg,
         dim_arg,

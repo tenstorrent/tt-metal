@@ -207,7 +207,7 @@ inline void calculate_tanh_derivative_sech2() {
 
         // Explicit RNE rounding for BF16 output — SFPSTORE truncates toward zero by default.
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+            result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = result;

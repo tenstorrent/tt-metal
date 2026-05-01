@@ -88,7 +88,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        r = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven));
+        r = sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven);
     }
 
     r = sfpi::setsgn(r, y);

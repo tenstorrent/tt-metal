@@ -13,7 +13,7 @@ using namespace ckernel;
 
 /**
  * @brief MOP configuration for matmul pack of contiguous tiles
- * @details Sets up MOP for packing out tile by tile via Packer 0. Packer 1 (SrcS) uses llk_srcs_tdma.h.
+ * @details Sets up MOP for packing out tile by tile via Packer 0. Packer 1 (SrcS) uses llk_srcs.h.
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 16-31
  * @param subblock_r_dim: number of tiles in the row dimension of a matrix block

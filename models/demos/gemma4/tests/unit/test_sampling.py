@@ -18,7 +18,7 @@ from ...tests.test_factory import parametrize_mesh_with_fabric
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 8)])
-def test_sampling_greedy(mesh_device):
+def test_sampling_greedy(mesh_device, reset_seeds):
     """Test that on-device greedy sampling matches CPU argmax.
 
     Creates logits with a known winner token per position, runs through

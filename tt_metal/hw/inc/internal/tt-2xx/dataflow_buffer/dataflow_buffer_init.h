@@ -331,8 +331,10 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
 #endif
                 }
-                // Single writer per per_risc entry; no atomic needed
+                // Only the RISC that actually performed the TC hardware init sets tc_init_done.
+#if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_PACK)
                 per_risc_ptr->num_tcs_and_init.tc_init_done = 1;
+#endif
             }
         }
 

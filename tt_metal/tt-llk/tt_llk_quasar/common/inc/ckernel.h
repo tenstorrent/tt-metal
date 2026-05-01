@@ -756,7 +756,7 @@ __attribute__((always_inline)) inline void rv_wrcfg(
     std::uint32_t const write_64b = 0,
     std::uint32_t const byte_mask = 0xFF)
 {
-    std::uint32_t const base_instrn = TRISC_OP_SWIZZLE(TT_OP_RV_WRCFG(byte_mask, write_64b, 0, 0, 0));
+    std::uint32_t const base_instrn = TT_OP_RV_WRCFG(byte_mask, write_64b, 0, 0, 0);
     asm volatile(
         ".equ reg_lut_zero, 0\n"
         ".equ reg_lut_ra, 1\n"
@@ -791,9 +791,9 @@ __attribute__((always_inline)) inline void rv_wrcfg(
         ".equ reg_lut_t4, 29\n"
         ".equ reg_lut_t5, 30\n"
         ".equ reg_lut_t6, 31\n"
-        ".word %[base_instrn] + (reg_lut_%[reg0] << 2) + (reg_lut_%[reg1] << 7) + (reg_lut_%[reg2] << 12)"
+        ".ttinsn %[base_instrn] + (reg_lut_%[reg0] << 0) + (reg_lut_%[reg1] << 5) + (reg_lut_%[reg2] << 10)"
         :
-        : [base_instrn] "i"(base_instrn), [reg2] "r"(wrdata_lo), [reg1] "r"(wrdata_hi), [reg0] "r"(cfg_addr)
+        : [base_instrn] "n"(base_instrn), [reg2] "r"(wrdata_lo), [reg1] "r"(wrdata_hi), [reg0] "r"(cfg_addr)
         :);
 }
 
