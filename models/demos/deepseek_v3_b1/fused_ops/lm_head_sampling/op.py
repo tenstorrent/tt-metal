@@ -31,7 +31,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_DIM
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MESH_LEAF, MESH_ROOT1, MESH_ROOT2, MESH_ROOT3
 from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
@@ -67,6 +66,7 @@ def _is_singleton_prefix_shape(shape, expected_last_dim: int) -> bool:
 # If we use input_shape[-1] for RMS tile picking, (K+32)//32 can make (num_cols % 32) != 0 and incorrectly
 # select the 16x32 RMS path while rms_num_tiles stays 7 (seven 32x32 tiles = K elements) — wrong norm.
 _SPEC_VERIFY_METADATA_BF16_COLS = 32
+ACTIVATION_DIM = 7168
 
 
 class LMHeadSampling:
@@ -1886,7 +1886,6 @@ class LMHeadSampling:
                         [ttnn.CoreRange(argmax_final_core, argmax_final_core)]
                     )
                     eh_gather_cb_descriptor.total_size = (eh_gather_dst_num_pages + 4) * eh_output_tile_size
-                    print("EH gather total size=", eh_gather_cb_descriptor.total_size, flush=True)
 
                     # CB 37: Sync CB for h_rmsnorm and lm head norm on TRISC
                     hnorm_ready_cb_format = ttnn.CBFormatDescriptor(
@@ -2015,21 +2014,6 @@ class LMHeadSampling:
                                 page_size=sampling_bf16_tile_size,
                             )
                         ]
-                        print("eh fused per device shape=", eh_mm_fused_per_device[device_idx].shape, flush=True)
-
-                        print(
-                            "Sampling scores total_size=",
-                            sampling_total_input_tiles * sampling_bf16_tile_size,
-                            flush=True,
-                        )
-                        print("Sampling scores page_size=", sampling_bf16_tile_size, flush=True)
-                        print(
-                            "Sampling indices total_size=",
-                            sampling_total_input_tiles * sampling_uint32_tile_size,
-                            flush=True,
-                        )
-                        print("Sampling indices page_size=", sampling_uint32_tile_size, flush=True)
-
                         sampling_topk_in_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                             sampling_topk_in_indices_cb,
                             eh_mm_fused_per_device[device_idx],
@@ -2709,7 +2693,6 @@ class LMHeadSampling:
                 io_tensors.append(indices_scratch_tensor)
         if base_token_buffer is not None:
             io_tensors.append(base_token_buffer)
-        print(f"[OP] calling generic_op with {len(io_tensors)} io_tensors", flush=True)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         logger.debug("[OP] generic_op returned")
         return result

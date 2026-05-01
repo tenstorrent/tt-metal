@@ -539,24 +539,6 @@ class SpecLMHeadStage(StageKind):
                 )
             }
         )
-
-        # fused_buf_grid = matmul_core_grid.merge(mcast_core_grid)
-        # num_fused_buf_cores = fused_buf_grid.num_cores()
-        # fused_buf_mem_config = ttnn.MemoryConfig(
-        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        #     ttnn.BufferType.L1,
-        #     ttnn.ShardSpec(fused_buf_grid, (SpecLMHeadStage.M, SpecLMHeadStage.K), ttnn.ShardOrientation.ROW_MAJOR),
-        # )
-        # input_core_fused_buffer = ttnn.from_torch(
-        #     torch.zeros((num_fused_buf_cores, SpecLMHeadStage.K), dtype=torch.bfloat16),
-        #     dtype=ttnn.bfloat16,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     device=mesh_device,
-        #     memory_config=fused_buf_mem_config,
-        #     tile=SpecLMHeadStage.A_TILE,
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        # )
-
         spec_gamma = self._spec_weights.shared_head_norm
         spec_b = self._spec_weights.lm_head
 
@@ -576,7 +558,6 @@ class SpecLMHeadStage(StageKind):
             "bcast_semaphores": bcast_inputs.semaphores,
             "global_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
             "global_stage2_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
-            # "input_core_fused_buffer": input_core_fused_buffer,
         }
         self._persistent_loop = PersistentLoop(mesh_device, worker_crs, self._persistent_mode)
         if self._persistent_mode:
@@ -617,7 +598,6 @@ class SpecLMHeadStage(StageKind):
             is_mtp_base_stage=False,
             is_mtp_verify_stage=True,
             metadata_tensor=d["metadata_tensor"],
-            # input_core_fused_buffer=d["input_core_fused_buffer"],
             k=1,
         )
 
@@ -860,24 +840,6 @@ class BaseLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        # Overlapped L1 buffer for mcast_src_cb, mcast_dst_cb, mcast_eh_src_cb, mcast_eh_dst_cb, embedding_cb
-        # fused_buf_grid = matmul_core_grid.merge(mcast_core_grid)
-        # num_fused_buf_cores = fused_buf_grid.num_cores()
-        # fused_buf_mem_config = ttnn.MemoryConfig(
-        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        #     ttnn.BufferType.L1,
-        #     ttnn.ShardSpec(fused_buf_grid, (BaseLMHeadStage.M, BaseLMHeadStage.K), ttnn.ShardOrientation.ROW_MAJOR),
-        # )
-        # input_core_fused_buffer = ttnn.from_torch(
-        #     torch.zeros((num_fused_buf_cores, BaseLMHeadStage.K), dtype=torch.bfloat16),
-        #     dtype=ttnn.bfloat16,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     device=mesh_device,
-        #     memory_config=fused_buf_mem_config,
-        #     tile=BaseLMHeadStage.A_TILE,
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        # )
-
         # MTP fused buffer: single allocation backing CB17 (matmul output), CB20 (reduce
         # intermediate), and CB19 (eh_gather / reduce output).  CB17+CB20 live on compute
         # cores at different offsets (both active during reduce); CB19 lives on the argmax
@@ -959,7 +921,6 @@ class BaseLMHeadStage(StageKind):
             "global_semaphore": global_semaphore,
             "global_stage2_semaphore": global_stage2_semaphore,
             "base_token_buffer": base_token_buffer,
-            # "input_core_fused_buffer": input_core_fused_buffer,
         }
         if self._enable_mtp:
             self._lmhead_state["eh_mm_fused_buffer"] = eh_mm_fused_buffer

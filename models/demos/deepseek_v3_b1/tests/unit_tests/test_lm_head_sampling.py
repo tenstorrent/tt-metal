@@ -23,7 +23,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
-from models.demos.deepseek_v3_b1.demo.pipeline import create_single_galaxy_combined_spec_decode_pipeline_configuration
+from models.demos.deepseek_v3_b1.demo.pipeline import create_single_galaxy_spec_decode_pipeline_configuration
 from models.demos.deepseek_v3_b1.demo.stage import TOKEN_META_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider, _build_synthetic_mtp_state_dict
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
@@ -1811,7 +1811,7 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
 
     num_procs = int(ttnn.distributed_context_get_size())
     if num_procs == 4:
-        config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
+        config = create_single_galaxy_spec_decode_pipeline_configuration(
             SyntheticWeightProvider(fold_rmsnorm_weights=True),
             fp32_dest_acc_en=use_fp32,
         )
