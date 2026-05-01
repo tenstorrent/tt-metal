@@ -34,14 +34,8 @@ inline void llk_math_eltwise_binary_init(bool acc_to_dest = false) {
         _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, binary_reuse_dest>(
             ckernel::DEFAULT_TENSOR_SHAPE, acc_to_dest);
     } else {
-        const TileShape default_tile_shape = {
-            .num_faces = TILE_NUM_FACES,
-            .face_r_dim = FACE_R_DIM,
-            .face_c_dim = FACE_C_DIM,
-            .narrow_tile = false,
-        };
         _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, math_fidelity>(
-            default_tile_shape);
+            ckernel::DEFAULT_TENSOR_SHAPE);
     }
 }
 
@@ -73,13 +67,8 @@ inline void llk_math_eltwise_binary_init_with_operands(
         _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, binary_reuse_dest>(
             tensor_shape_A, acc_to_dest);
     } else {
-        const TileShape tile_shape_A = {
-            .num_faces = get_operand_num_faces(operand_id),
-            .face_r_dim = get_operand_face_r_dim(operand_id),
-            .face_c_dim = FACE_C_DIM,
-            .narrow_tile = static_cast<bool>(get_operand_narrow_tile(operand_id)),
-        };
-        _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, math_fidelity>(tile_shape_A);
+        const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operand_id);
+        _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, math_fidelity>(tensor_shape_A);
     }
 }
 
