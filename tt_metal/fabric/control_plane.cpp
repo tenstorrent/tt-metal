@@ -116,9 +116,9 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     return fixed_asic_position_pinnings;
 }
 
-// Blitz decode pipeline: octet mesh (4x2 device topology, 8 chips) ASIC-position pinnings for chips 0, 3, and 7 on
-// Blackhole Galaxy (QSFP / tray layout vs logical mesh). Only used when cluster is Blackhole Galaxy and the mesh
-// shape matches decode MGDs (dims [4,2]).
+// Blitz decode pipeline: octet mesh (4x2 device topology, 8 chips) ASIC-position pinnings for chips 0, 1, 2, 5,
+// 6, and 7 on Blackhole Galaxy (QSFP / tray layout vs logical mesh). Only used when cluster is Blackhole Galaxy
+// and the mesh shape matches decode MGDs (dims [4,2]).
 std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>
 get_blitz_decode_pipeline_asic_position_pinnings_for_mesh(MeshId mesh_id, const MeshShape& mesh_shape) {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
