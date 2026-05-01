@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
@@ -1483,6 +1484,14 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
     }
 
     // Create Kernels (arch-specific)
+    // We also build a name -> handle map so we can wire each DFB to its producer/consumer
+    // kernel objects after creation. This binding is what populates the per-DFB
+    // `tensix_trisc_mask`, which the kernel-side `wait_front`/`pop_front`/`reserve_back`/
+    // `push_back` use on Quasar to decide whether to actually drive the LLK or no-op.
+    // Without this, all TRISC-side sync calls early-return and the pipeline runs as if
+    // the buffer is always ready (producing zeroed output and starving back-pressure).
+    std::unordered_map<std::string, KernelHandle> kernel_name_to_handle;
+    kernel_name_to_handle.reserve(spec.kernels.size());
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
@@ -1562,6 +1571,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
         program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
+        kernel_name_to_handle[kernel_spec.unique_id] = handle;
 
         // Register the RTA+CRTA schema (named lists + vararg counts) with the ProgramImpl.
         // Used by ValidateProgramRunParams and SetProgramRunParameters to validate and serialize
@@ -1615,7 +1625,34 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
     }
 
-    return Program(std::move(program_impl));
+    // Now that all DFBs and kernels exist, wire each DFB to its producer/consumer kernel.
+    // This is the only path that sets `tensix_trisc_mask` on Gen2 DFBs (and registers the
+    // producer/consumer DM-RISC bits on Gen1). Without it, on Quasar the unpacker / packer
+    // sync API short-circuits because the per-TRISC mask is 0 — producing the
+    // "wait_front returns immediately, pop_front no-ops" pathology that drove the
+    // 32x64 zero-output and 128x64 reader-hang failures during the reduce migration.
+    Program program(std::move(program_impl));
+    for (const auto& dfb_spec : spec.dataflow_buffers) {
+        const DFBSpecName& dfb_name = dfb_spec.unique_id;
+        const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
+        const uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        const KernelHandle producer_handle = kernel_name_to_handle.at(dfb_endpoint_info.producer->unique_id);
+        const KernelHandle consumer_handle = kernel_name_to_handle.at(dfb_endpoint_info.consumer->unique_id);
+        experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program, dfb_id, producer_handle, consumer_handle);
+
+        // #region agent log
+        {
+            std::ofstream log("/localdev/bbradel/tt-metal/.cursor/debug-43dce3.log", std::ios::app);
+            if (log.is_open()) {
+                log << R"({"sessionId":"43dce3","hypothesisId":"dfb-trisc-mask","location":"program_spec.cpp:MakeProgramFromSpec","message":"Bound DFB to producer/consumer","data":{"dfb":")"
+                    << dfb_name << R"(","producer":")" << dfb_endpoint_info.producer->unique_id << R"(","consumer":")"
+                    << dfb_endpoint_info.consumer->unique_id << R"("}})" << "\n";
+            }
+        }
+        // #endregion
+    }
+    return program;
 }
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
