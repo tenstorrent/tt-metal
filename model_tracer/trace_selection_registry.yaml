@@ -42,9 +42,6 @@
 targets:
   lead_models:
     - model:
-        - deepseek_v3
-      trace: [2]
-    - model:
         - gpt_oss
         - tt_dit
       trace: [9,15]
