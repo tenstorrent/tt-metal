@@ -383,6 +383,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         all_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi2,
+            .fp32_dest_acc_en = true,
             .math_approx_mode = true,
             .compile_args = compute_ct_args,
             .defines = {{"SDPA_TQ_DECODE", "1"}}});

@@ -238,7 +238,7 @@ inline void dequant_k_chunk(
             copy_tile(cb_dq_temp, t, 0);  // DST 0 = idx (preserved across cascade)
             fill_tile(1, centroids[0]);  // DST 1 = result, initialised to c[0]
             for (uint32_t lev = 1; lev < NumLevels; lev++) {
-                copy_dest_values<DataFormat::Float16_b>(0, 2);  // DST 2 = idx
+                copy_dest_values<DataFormat::Float32>(0, 2);    // DST 2 = idx (FP32 dst mode)
                 unary_ge_tile(2, level_bits[lev]);              // DST 2 = (idx >= lev)
                 mul_unary_tile(2, delta_bits[lev]);             // DST 2 *= (c[lev] - c[lev-1])
                 add_binary_tile(1, 2, 1);  // DST 1 += contribution
@@ -326,7 +326,7 @@ inline void dequant_v_chunk(
             copy_tile(cb_dq_temp, t, 0);  // DST 0 = idx (preserved across cascade)
             fill_tile(1, centroids[0]);  // DST 1 = result
             for (uint32_t lev = 1; lev < NumLevels; lev++) {
-                copy_dest_values<DataFormat::Float16_b>(0, 2);
+                copy_dest_values<DataFormat::Float32>(0, 2);  // FP32 dst mode
                 unary_ge_tile(2, level_bits[lev]);
                 mul_unary_tile(2, delta_bits[lev]);
                 add_binary_tile(1, 2, 1);
