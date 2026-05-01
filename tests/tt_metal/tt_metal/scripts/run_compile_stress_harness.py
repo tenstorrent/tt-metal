@@ -103,7 +103,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--test-binary",
         required=True,
         type=Path,
-        help="Path to unit_tests_legacy (the compiled gtest binary).",
+        help="Path to unit_tests_jit_build (the compiled gtest binary).",
     )
     p.add_argument("--num-clients", type=int, default=1, help="Number of stress-client processes to spawn.")
     p.add_argument(

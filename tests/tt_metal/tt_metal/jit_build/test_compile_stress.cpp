@@ -38,7 +38,7 @@
 //   TT_METAL_JIT_SERVER_ENABLE=1 \
 //   TT_METAL_JIT_SERVER_ENDPOINTS=hostA:9876,hostB:9876 \
 //   TT_METAL_COMPILE_STRESS_NUM_KERNELS=20000 \
-//       ./build/test/tt_metal/unit_tests_legacy \
+//       ./build/test/tt_metal/unit_tests_jit_build \
 //       --gtest_also_run_disabled_tests \
 //       --gtest_filter='*TensixCompileStress*'
 //
