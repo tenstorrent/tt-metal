@@ -22,11 +22,26 @@ namespace compute_kernel_lib {
 // HiFi4 fidelity for matmul-based reduce (higher precision than kernel default)
 constexpr ckernel::MathFidelity REDUCE_MATMUL_FIDELITY = ckernel::MathFidelity::HiFi4;
 
+// Matmul-based reduce path: only enabled on Gen1 (WH/BH). The relevant LLK API
+// (`llk_math_matmul_init` with MM_THROTTLE, `llk_math_matmul`,
+// `llk_unpack_AB_matmul_init`, `llk_unpack_AB_matmul`) is Gen1-shaped; Quasar
+// has a differently-shaped API and a different reduce-via-matmul semantics that
+// hasn't been bridged here. `reduce_uses_matmul()` returns false on Quasar so
+// these wrappers are never invoked there — but they're non-template namespace-
+// scope `ALWI` functions whose bodies are parsed unconditionally, so we still
+// have to gate the body to avoid eager name-lookup errors.
+
 // Matmul wrappers that use REDUCE_MATMUL_FIDELITY instead of MATH_FIDELITY
 ALWI void reduce_with_matmul_init(uint32_t in0_cb_id, uint32_t in1_cb_id) {
+#ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id);
     MATH((llk_math_matmul_init<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, 0)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, 0)));
+#else
+    (void)in0_cb_id;
+    (void)in1_cb_id;
+    ASSERT(false);  // matmul-based reduce path disabled on Gen2; reduce_uses_matmul() returns false
+#endif
 }
 
 // `_with_dt` variants reconfigure the unpacker / math SRCA data format when the
@@ -53,8 +68,17 @@ ALWI void reduce_with_matmul_init_with_dt(uint32_t in0_cb_id, uint32_t in1_cb_id
 
 ALWI void reduce_matmul_tiles(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
     MATH((llk_math_matmul<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(idst)));
+#else
+    (void)in0_cb_id;
+    (void)in1_cb_id;
+    (void)in0_tile_index;
+    (void)in1_tile_index;
+    (void)idst;
+    ASSERT(false);  // matmul-based reduce path disabled on Gen2; reduce_uses_matmul() returns false
+#endif
 }
 
 // =============================================================================

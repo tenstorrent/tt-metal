@@ -365,22 +365,47 @@ library (`ttnn/cpp/ttnn/kernel_lib/`):
    `Int16/4`, etc. Compilation of the helper for Quasar fails with eight
    `'X' is not a member of 'DataFormat'` errors.
 
-2. **`reduce_helpers_compute.inl`** defines `reduce_with_matmul_init_with_dt`
-   (non-template) and `reduce_init_short_with_dt` (template) whose bodies call
-   `llk_unpack_reconfig_data_format_srca` / `llk_math_reconfig_data_format_srca`.
-   These LLKs are absent from the Quasar LLK API. Even though both functions
-   are only reachable from `reload_accumulator_if_needed` (which is gated on
-   `is_accumulate_v` and never instantiated for our `NoAccumulation` callers),
-   GCC's `-Wtemplate-body` checks non-dependent names eagerly, so both bodies
-   are checked even when never instantiated. Compilation fails with
+2. **`reduce_helpers_compute.inl`** defines four matmul-related helpers
+   (`reduce_with_matmul_init`, `reduce_with_matmul_init_with_dt`,
+   `reduce_matmul_tiles`, `reduce_init_short_with_dt`) whose bodies call into a
+   Gen1-shaped LLK API:
+   - `llk_math_matmul_init<MathFidelity, MM_THROTTLE>(in0_cb, in1_cb, transpose)`
+     — Quasar's overload is `llk_math_matmul_init<MathFidelity>(ct_dim, rt_dim)`,
+     a different parameter shape with no MM_THROTTLE and no CB-id args.
+   - `llk_math_matmul<MathFidelity, MM_THROTTLE>(idst)` — does not exist on
+     Quasar (closest name is `llk_math_matmul_tile`).
+   - `llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(...)` and the math-
+     side counterpart used in the `_with_dt` accumulator-reload path — neither
+     exists on Quasar.
+   Even though `_with_dt` and the matmul wrappers are only reachable from the
+   accumulation-reload + REDUCE_ROW SUM/AVG paths (which our
+   `NoAccumulation` test never exercises), GCC's `-Wtemplate-body` checks
+   non-dependent names eagerly, and the non-template helpers are parsed
+   unconditionally. Compilation fails on Quasar with
+   `'llk_math_matmul_init' candidate expects 2 arguments, 3 provided`,
+   `'llk_math_matmul' was not declared in this scope`, and
    `'llk_unpack_reconfig_data_format_srca' was not declared in this scope`.
 
-Pragmatic fix applied here: `#ifndef ARCH_QUASAR` guards around the offending
-case labels and function bodies. The `_with_dt` helpers fall back to
-`ASSERT(false)` on Quasar so accidental accumulation use surfaces clearly
-rather than silently misbehaving. The Quasar tile-size formulas for
-`Tf32 / Fp8R/P / MxFp* / MxInt*` are not added — none of the W-reduction tests
-exercise them — but should be added under `#ifdef ARCH_QUASAR` when needed.
+Pragmatic fix applied here:
+- `#ifndef ARCH_QUASAR` guards around the offending DataFormat case labels and
+  the matmul-helper / `_with_dt`-helper bodies.
+- `reduce_uses_matmul<>()` (in `reduce_helpers_common.hpp`) returns `false` on
+  Quasar, so the matmul-based reduce specialization is disabled there and the
+  helpers' Quasar-stubbed bodies are never reached at runtime. Both reader
+  (scaler tile fill) and compute consult the same predicate, so they stay in
+  sync — the reader fills row-0 (reduce-LLK layout) on Quasar, matching the
+  compute path.
+- Quasar paths in the `_with_dt` and matmul wrappers fall back to
+  `ASSERT(false)` so accidental future use surfaces clearly rather than
+  silently misbehaving.
+- The Quasar tile-size formulas for `Tf32 / Fp8R/P / MxFp* / MxInt*` are not
+  added — none of the W-reduction tests exercise them — but should be added
+  under `#ifdef ARCH_QUASAR` when needed.
+
+Functional consequence on Quasar: SUM/AVG along W goes through the regular
+`reduce_tile` LLK rather than `matmul_tiles`. Correct, but loses the Gen1 perf
+optimization. Re-enabling matmul-based reduce on Quasar requires bridging the
+Quasar matmul LLK shape and is tracked separately.
 
 The user's stated preference was templating over `#ifdef`, but this case is
 fundamentally non-portable: the enumerators *literally do not exist* on the
