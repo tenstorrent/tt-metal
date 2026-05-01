@@ -25,6 +25,7 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
+#include "ops/moe_ffn_swiglu_op.hpp"
 #include "ops/moe_group_op.hpp"
 #include "ops/moe_ungroup_op.hpp"
 #include "ops/multi_head_utils.hpp"
@@ -287,6 +288,20 @@ void py_module(nb::module_& m) {
             "via metal::moe_group, multiplies by grouped_scores to produce\n"
             "d(expert_out), and reduces expert_out * grad_grouped along H to\n"
             "produce d(grouped_scores).");
+
+        py_moe.def(
+            "moe_ffn_swiglu_fw",
+            &ttml::ops::moe_ffn_swiglu_fw,
+            nb::arg("grouped"),
+            nb::arg("offsets"),
+            nb::arg("w_gate"),
+            nb::arg("w_up"),
+            nb::arg("w_down"),
+            "Per-expert SwiGLU FFN on grouped layout. For each local expert e:\n"
+            "  Y_e = (SiLU(X_e @ W_gate_e) * (X_e @ W_up_e)) @ W_down_e\n"
+            "where X_e = grouped[offsets[e] : offsets[e+1], :].\n"
+            "Returns Y [1, 1, T_cap, H] with autograd through grouped and the\n"
+            "per-expert weight lists.");
     }
 
     {
