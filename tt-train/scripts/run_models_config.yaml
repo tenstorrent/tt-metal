@@ -30,9 +30,6 @@ models:
     args:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nano_deepseek_char.yaml"
       - "--track_memory"
-    skip-card:
-      - "n150"
-      - "n300"
 
   - name: "TinyLlama Shakespeare"
     filename: "tinyllama_shakespeare"
