@@ -144,6 +144,17 @@ public:
             }
             if (cluster_ids.size() < ids.size()) {
                 cluster_degraded_skip_ = true;
+                // FIX TL (#42429): Do NOT proceed to create_unit_meshes with a partial chip set.
+                // A degraded cluster (topology downgraded to 1x1 etc.) may crash fabric initializers
+                // (e.g. UDM tensix builder) that require the full expected topology.
+                // SetUp() will GTEST_SKIP each test via cluster_degraded_skip_.
+                log_warning(
+                    tt::LogTest,
+                    "FIX TL (#42429): Fabric cluster has only {}/{} chips — skipping create_unit_meshes "
+                    "to avoid crashing fabric initializers on a degenerate topology.",
+                    cluster_ids.size(),
+                    ids.size());
+                return;
             }
             if (cluster_ids.empty()) {
                 log_warning(tt::LogTest, "FIX TK (#42429): No chips in fabric cluster — skipping SetUpTestSuite.");
