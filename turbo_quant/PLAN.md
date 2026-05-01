@@ -1,6 +1,6 @@
 # TurboQuant KV Cache Quantization
 
-## 🚦 Next Steps (2026-04-30 EOD)
+## 🚦 Next Steps (2026-05-01)
 
 **Where we are:**
 - Track A K=1 works on N150 (37 ms/tok, 88.9% top-1) and T3K (56.8 ms/tok,
@@ -12,31 +12,76 @@
 - Compressed KV cache (memory_efficient=True) verified end-to-end through
   prefill+decode on the needle test.
 - Long context up to 128K validated for both tracks (needle retrieval).
+- **K=1 fp32_dest_acc_en protection committed** (commit 8fe227b5ebd):
+  `fp32_dest_acc_en=true` + `copy_dest_values<Float32>` at lines 241/329.
+  No K>1 improvement (BF16 floor — see below) but stable and lets future
+  work safely use fp32_dest_acc_en if needed.
 
 **Open blockers / next priorities, ordered by impact:**
 
-### 🥇 1. Fix K-split kernel for FP32 dst mode
+### 🥇 1. Fix K-split kernel for FP32 dst mode — **BLOCKED on Issue #13364**
 The single biggest perf lever on T3K. Estimated **~28 ms/tok savings**
 (56.8 → 28.9 ms K=14, then K-split + hybrid simultaneous).
 
-- Tagged checkpoint: `pre-K-split-fix-checkpoint` at commit `c82766dabec`
-- Confirmed minimal isolated fix (verified, but reverted because the rest
-  of the work isn't done):
-  ```cpp
-  // sdpa_tq_program_factory.cpp ComputeConfig:
-  .fp32_dest_acc_en = true,
-  // sdpa_tq_decode.cpp lines 241, 329:
-  copy_dest_values<DataFormat::Float32>(0, 2);  // was Float16_b
-  ```
-  This protects K=1. K>1 drift unchanged at 5e-3 because cross-core
-  merge CBs are still BF16.
-- For K>1 to actually fix: coordinated upgrade of merge CBs (c_3, c_4,
-  c_18-23) and alias state CBs (c_25-30) to FP32, with every
-  pack_reconfig_data_format / reconfig_data_format / unpack_reconfig
-  call audited so all merge ops have consistent format on both inputs.
-  Tried partial upgrades — cross-core CBs only → cos 0.58 (mixed-format
-  inputs to max_block); global im_df=Float32 → inf/nan everywhere.
-- Estimated effort: multi-day focused PR with build-test cycles.
+**2026-05-01 finding: Issue #13364 blocks the obvious path.** Vanilla
+SDPA program factories all force `im_df = Float16_b` even when
+`fp32_dest_acc_en=true`, with the comment "need to disable fp32 cbs
+(Issue #13364)". Searched the tree:
+```
+ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp:555
+ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_program_factory.cpp:354
+ttnn/cpp/ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.cpp:388
+ttnn/cpp/ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.cpp:570
+```
+all carry the same comment. FP32 alias state CBs are a known LLK
+limitation — packing/unpacking does not produce correct values. So
+the PLAN's strategy of "promote c_25-c_30 to FP32" hits this floor.
+
+**Tested 2026-05-01:**
+- Alias state CBs FP32 (c_25-30) + cb_qk_im BF16 → K=1 broke (out_max
+  0.0337 vs 0.2373 expected). The chunk-loop softmax helper
+  `sub_exp_block_bcast_cols_inplace` packs to cb_qk_im AND
+  alias_cur_sum in one call with one packer config — they MUST be
+  same format.
+- Alias FP32 + cb_qk_im FP32 → K=1 still broke (0.1729). Format
+  consistency is now correct but the LLK still produces wrong values.
+  Confirms #13364 is the real blocker.
+- mm_init third-arg fix (`cb_out` → `cb_qk_im`) — no change to either
+  of the above. The mm_init hint isn't load-bearing here.
+
+**What works (committed at 8fe227b5ebd):**
+```cpp
+// sdpa_tq_program_factory.cpp ComputeConfig:
+.fp32_dest_acc_en = true,
+// sdpa_tq_decode.cpp lines 241, 329:
+copy_dest_values<DataFormat::Float32>(0, 2);  // was Float16_b
+```
+K=1 stays correct (out_max 0.2373). K>1 drift unchanged at 5e-3 —
+**this is a BF16 floor coming from the alias state CBs.**
+
+**Realistic paths forward:**
+- **(a) Wait for / push for Issue #13364 fix** (LLK team). Once FP32 CBs
+  work in SDPA, the existing K-split kernel can use them.
+- **(b) Separate compute kernel for the merge step** (multi-day).
+  Workers and reducer's chunk loops keep BF16 alias state. After the
+  reducer finishes its chunk loop, dispatch a separate compute kernel
+  whose entire job is the merge — with fp32_dest_acc_en and FP32
+  intermediates, working from BF16 input/output but doing the exp/mul
+  arithmetic in FP32 dst. Won't lift the BF16 input floor but reduces
+  per-merge rounding error.
+- **(c) Restructure merge to keep values in FP32 dst across more ops**
+  (kernel-level work). Use the fused `fused_max_sub_exp_add_tile` LLK
+  instead of the 11-op sequential merge. Reduces the number of pack
+  events that hit BF16, but limited because input/output are still
+  BF16 alias state.
+- **(d) Restructure model sharding** (host-level): 4 chips × NQH=8
+  instead of 8 × NQH=4 so K-split engages less aggressively. Halves
+  KV cache per chip; long context may not fit on N150 single-chip.
+- **(e) Accept current K=1 cost** and focus optimization on Hybrid
+  combine overhead and the dequant cascade.
+
+The K-split fix is no longer the top priority since the obvious lever
+is blocked. Pivot to options 2/3 below until #13364 lands.
 
 ### 🥈 2. Single fused Hybrid SDPA kernel
 Track B currently runs two SDPA calls + LSE combine per layer per step.
