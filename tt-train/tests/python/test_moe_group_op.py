@@ -83,9 +83,24 @@ def _device_grid_size() -> int:
 
 
 def _device_num_total_cores(e_local: int, k: int, d: int, b: int, s: int) -> int:
+    # Mirror the kernel's split_work_to_cores(grid, total_tiles) split:
+    # num_workers = min(grid_size, total_tiles). t_cap is sized with the
+    # full grid, so total_tiles = t_cap_full_grid // 32.
     grid_size = _device_grid_size()
     t_cap = moe_group_t_cap(e_local, k, d, b, s, num_total_cores=grid_size)
-    return min(grid_size, max(1, t_cap // 32))
+    return min(grid_size, t_cap // 32)
+
+
+# (D, B, S, H, E, K, E_local). "small" is the original tiny shape;
+# the others are pulled from the moe_group / moe_ungroup perf tables
+# (see pr_description.md / pr_description_ungroup.md). Tests assume
+# E_local == E (single-device sparse MoE) so the d(scores) reference
+# is exact.
+SHAPES = [
+    pytest.param((1, 1, 32, 64, 4, 2, 4), id="small"),
+    pytest.param((2, 1, 128, 512, 2, 2, 2), id="perf-d2-s128-h512"),
+    pytest.param((4, 1, 256, 2048, 4, 4, 4), id="perf-d4-s256-h2048"),
+]
 
 
 @pytest.mark.skipif(not _TTML_AVAILABLE, reason="ttml / ttnn not importable")
@@ -109,6 +124,9 @@ class TestMoeGroupOpDevice:
         out = ttml.ops.moe.moe_group_op(x, md, sc, le, int(E_local), int(K))
         ttnn.synchronize_device(_device())
 
+        # T_cap uses full grid count (kernel allocates pessimistically); the
+        # actual `offsets[-1]` (T_used) is computed by split_work_to_cores
+        # at runtime and is typically smaller — but the tensor IS T_cap rows.
         T_cap = moe_group_t_cap(E_local, K, D, B, S, num_total_cores=_device_grid_size())
         assert list(out.grouped.shape()) == [1, 1, T_cap, H]
         assert list(out.grouped_scores.shape()) == [1, 1, 1, T_cap]
@@ -161,14 +179,15 @@ class TestMoeGroupOpDevice:
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
-    def test_backward_d_dispatched_active_tokens(self):
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_backward_d_dispatched_active_tokens(self, shape):
         """Backward through `grouped` only: d(dispatched)[t] should equal
         the count of times token t appears in active grouped rows (because
         we set d(grouped) = ones and ones_gs = 1 in the bw scatter).
         """
-        D, B, S, H = 1, 1, 32, 16
-        E, K = 4, 2
-        E_local = 4  # all global experts are local
+        D, B, S, H, E, K, E_local = shape
+        # Force E_local == E so every token's K experts are all local.
+        assert E_local == E, "this test assumes E_local == E"
         dispatched, metadata, scores_full, leids = _make_inputs(D, B, S, H, K, E, E_local, seed=2)
 
         x = _to_autograd_tensor(dispatched)
@@ -189,6 +208,9 @@ class TestMoeGroupOpDevice:
         # Reference: when E_local == E, every token's K experts are all local
         # ⇒ each token contributes exactly K rows to grouped. With a `mean`
         # loss the per-element grad is 1/(T_cap*H), so d(x)[t,h] = K/(T_cap*H).
+        # T_cap uses full grid count (kernel allocates pessimistically); the
+        # actual `offsets[-1]` (T_used) is computed by split_work_to_cores
+        # at runtime and is typically smaller — but the tensor IS T_cap rows.
         T_cap = moe_group_t_cap(E_local, K, D, B, S, num_total_cores=_device_grid_size())
         d_x = ttnn.to_torch(x.get_grad()).float()
         expected = torch.full((D, B, S, H), K / (T_cap * H), dtype=torch.float32)
@@ -196,7 +218,8 @@ class TestMoeGroupOpDevice:
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
-    def test_backward_d_scores_K_wide_scatter(self):
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_backward_d_scores_K_wide_scatter(self, shape):
         """Backward through `grouped_scores`: d(scores) is built from the
         K-wide one-hot * dot scatter via metal::moe_ungroup with H = K.
 
@@ -206,9 +229,8 @@ class TestMoeGroupOpDevice:
         precisely 0..K-1, so d(scores)[t, ks] = 1/T_cap for ALL (t, ks)
         positions in the dense [D,B,S,K] tensor.
         """
-        D, B, S, H = 1, 1, 32, 16
-        E, K = 4, 2
-        E_local = 4  # all global experts are local — every (t, ks) gets a hit
+        D, B, S, H, E, K, E_local = shape
+        assert E_local == E, "this test assumes E_local == E"
         dispatched, metadata, scores_full, leids = _make_inputs(D, B, S, H, K, E, E_local, seed=3)
 
         x = _to_autograd_tensor(dispatched)
@@ -223,6 +245,9 @@ class TestMoeGroupOpDevice:
 
         # grouped_scores is ROW_MAJOR bf16 — mean() requires TILE, so set
         # the grad directly: d(grouped_scores) = 1 across all entries.
+        # T_cap uses full grid count (kernel allocates pessimistically); the
+        # actual `offsets[-1]` (T_used) is computed by split_work_to_cores
+        # at runtime and is typically smaller — but the tensor IS T_cap rows.
         T_cap = moe_group_t_cap(E_local, K, D, B, S, num_total_cores=_device_grid_size())
         gs_grad_torch = torch.ones(1, 1, 1, T_cap, dtype=torch.float32)
         gs_grad = ttnn.from_torch(

@@ -26,6 +26,7 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/moe_group_op.hpp"
+#include "ops/moe_ungroup_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
@@ -265,6 +266,27 @@ void py_module(nb::module_& m) {
             "Backward uses metal::moe_ungroup to scatter d(grouped) back to\n"
             "d(dispatched) (H = hidden_dim) and d(grouped_scores) back to\n"
             "d(scores) (H = K, via K-wide one-hot expansion of k_slot).");
+
+        py_moe.def(
+            "moe_ungroup_op",
+            &ttml::ops::moe_ungroup_op,
+            nb::arg("expert_out"),
+            nb::arg("grouped_scores"),
+            nb::arg("metadata"),
+            nb::arg("local_expert_ids"),
+            nb::arg("plan"),
+            nb::arg("offsets"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            nb::arg("d"),
+            nb::arg("b"),
+            nb::arg("s"),
+            "Autograd wrapper around metal::moe_ungroup. Forward scatters expert\n"
+            "outputs back to dense [D,B,S,H], fused with the per-token weight\n"
+            "scaling baked into grouped_scores. Backward gathers d(ungrouped)\n"
+            "via metal::moe_group, multiplies by grouped_scores to produce\n"
+            "d(expert_out), and reduces expert_out * grad_grouped along H to\n"
+            "produce d(grouped_scores).");
     }
 
     {

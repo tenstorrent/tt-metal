@@ -60,6 +60,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_group_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_group_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ungroup_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ungroup_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/polynorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
