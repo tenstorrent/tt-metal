@@ -8,6 +8,7 @@
 #include <optional>
 #include <variant>
 
+#include "hostdevcommon/config.hpp"
 #include "moe_compute_device_operation_types.hpp"
 #include "moe_compute_program_factory.hpp"
 
@@ -45,7 +46,6 @@ std::vector<Tensor> moe_compute(
     const ttnn::Tensor& matmul_w2_tensor,
     uint32_t layer_id,
     uint32_t output_height_shard_dim,
-    uint32_t output_width_shard_dim,
     bool has_bias,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
@@ -54,7 +54,7 @@ std::vector<Tensor> moe_compute(
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
-    const std::optional<::detail::MoEActivationFunction>& activation_type = std::nullopt);
+    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
 

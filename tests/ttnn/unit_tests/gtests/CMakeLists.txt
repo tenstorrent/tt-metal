@@ -39,7 +39,12 @@ add_library(unit_tests_ttnn_smoke OBJECT)
 add_library(TTNN::Test::Smoke ALIAS unit_tests_ttnn_smoke)
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(unit_tests_ttnn_smoke PRIVATE ${UNIT_TESTS_TTNN_SMOKE_SOURCES})
-target_include_directories(unit_tests_ttnn_smoke PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_include_directories(
+    unit_tests_ttnn_smoke
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
 target_link_libraries(
     unit_tests_ttnn_smoke
     PRIVATE
