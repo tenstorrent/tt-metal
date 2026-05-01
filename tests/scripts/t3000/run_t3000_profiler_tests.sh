@@ -172,12 +172,14 @@ run_multi_host_tracy_smoke() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
+    set +e
     tt-run --bare \
         --mpi-args "--allow-run-as-root" \
         --rank-binding tests/ttnn/distributed/config/t3k_tracy_smoke_rank_bindings.yaml \
         --tracy "-r" \
         pytest tests/ttnn/distributed/test_tracy_multi_host_smoke.py | tee $PROFILER_ARTIFACTS_DIR/test_out.log
     tt_run_status=${PIPESTATUS[0]}
+    set -e
 
     if grep -q "SKIPPED" $PROFILER_ARTIFACTS_DIR/test_out.log; then
         echo "No verification as test was skipped (not a T3K)"
