@@ -127,6 +127,32 @@ void RelayMux::GenerateStaticConfigs() {
     const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
     const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
 
+    // FIX TH (#42429): Guard against all ETH channels between src and dst being dead (e.g. when
+    // pre_dead_channels covers every channel on this device in the routing direction to dst).
+    // On a progressively-degraded T3K cluster (GAP test teardown leaves channels corrupt), the
+    // MMIO-to-MMIO dispatch relay path can lose all channels.  The existing FIX NY/NY+ guards only
+    // check whether chips are *excluded from the fabric cluster* — they do not catch the case where
+    // the chip is still in the cluster but every ETH link between src and dst is dead.
+    // Calling get_dispatch_link_index() here would TT_FATAL.  Instead: detect empty links first,
+    // mark this device as channels-not-ready (same flag FIX QU sets), and return early so that
+    // FIX SA in CustomMeshGraphFabric2DFixture::SetUp() can skip the test gracefully.
+    {
+        const auto& available_links =
+            tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+        if (available_links.empty()) {
+            log_warning(
+                tt::LogMetal,
+                "FIX TH (#42429): RelayMux::GenerateStaticConfigs — no available dispatch links from "
+                "FabricNodeId ({}) to ({}) (all ETH channels between devices are dead/excluded). "
+                "Marking device {} fabric_channels_not_ready_for_traffic so FIX SA skips the test.",
+                src_fabric_node_id,
+                dst_fabric_node_id,
+                device_id_);
+            device_->set_fabric_channels_not_ready_for_traffic();
+            return;
+        }
+    }
+
     auto link_index = get_dispatch_link_index(
         get_control_plane_ref(),
         descriptor_.cluster().is_galaxy_cluster(),
