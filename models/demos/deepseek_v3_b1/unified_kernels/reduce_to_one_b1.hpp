@@ -221,9 +221,6 @@ struct ReduceToOneB1 {
                     cb_reserve_back(CTArgs::local_cb, CTArgs::num_tiles);
                     cb_push_back(CTArgs::local_cb, CTArgs::num_tiles);
                 }
-
-                cb_wait_front(CTArgs::local_cb, CTArgs::num_tiles);
-
                 // Round 1: Wait for shard from LEAF (page 0 of received_cb)
                 cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem1_ptr =
@@ -384,9 +381,6 @@ struct ReduceToOneB1 {
                         uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
                         // Socket barrier means receiver has received and acknowledged the write, so we can use posted
                         // writes here
-                        for (uint32_t i = 0; i < 5; i++) {
-                            DPRINT << "R21 Scratch CB [" << i << "]: " << BF16(reinterpret_cast<uint16_t*>(src_addr)[i]) << ENDL();
-                        }
                         noc_async_write<useful_per_shard, true, /*posted=*/true>(src_addr, fifo_dst, useful_per_shard);
 
                         if constexpr (is_last_worker_metadata_forwarder) {

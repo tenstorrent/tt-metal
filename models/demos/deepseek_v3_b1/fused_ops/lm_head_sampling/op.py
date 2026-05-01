@@ -31,6 +31,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_DIM
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MESH_LEAF, MESH_ROOT1, MESH_ROOT2, MESH_ROOT3
 from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
@@ -310,7 +311,6 @@ class LMHeadSampling:
         reduce_semaphores=None,
         mtp_bcast_semaphores=None,
         base_token_buffer=None,
-        # input_core_fused_buffer=None,
         k=32,
     ):
         logger.debug(f"broadcast sender_coord={sender_coord}")
@@ -356,11 +356,7 @@ class LMHeadSampling:
             f"[OP] entered mtp_base={is_mtp_base_stage} mtp_verify={is_mtp_verify_stage} persistent={persistent_mode}",
         )
         # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
-
         enable_argmax = True
-        # When fold_rmsnorm is enabled, gamma weights are pre-multiplied into the
-        # matmul weight matrices so the kernel skips the gamma multiply step.
-        # All gammas (base, h, e) are folded together.
         fold_rmsnorm = gamma_tensor is None
         is_mtp_base_stage = (
             is_mtp_base_stage
@@ -457,9 +453,6 @@ class LMHeadSampling:
             if (is_mtp_base_stage and base_token_buffer is not None)
             else None
         )
-        # fused_buffer_tensors_per_device = (
-        #     ttnn.get_device_tensors(input_core_fused_buffer) if input_core_fused_buffer is not None else None
-        # )
         # [Sampling] Per-device scratch tensors for mesh stage-1/stage-2 gather.
         # scores_scratch_tensor: bf16-logical scratch (height-sharded on argmax_final_core_grid)
         # indices_scratch_tensor: uint32 scratch (height-sharded on argmax_final_core_grid)
@@ -582,7 +575,7 @@ class LMHeadSampling:
             eh_dtype = eh_projection_tensor_sample.dtype
             eh_proj_tile = eh_projection_tensor_sample.get_tile()
             eh_proj_tile_size = eh_proj_tile.get_tile_size(eh_dtype)
-            eh_subblock_k = 28
+            eh_subblock_k = (ACTIVATION_DIM // 8) // eh_proj_tile.tile_shape[1]
             eh_num_subblocks_k = 2
             eh_out_num_tiles = eh_out_w_per_core
 
@@ -1095,13 +1088,6 @@ class LMHeadSampling:
                             return 0 if ring_distance <= first_half_threshold else 1
 
                         argmax_mesh_mode = 1
-                        # sampling.hpp declares stage{1,2}_slot_base_offset but
-                        # never references them; the kernel uses
-                        # scores_scratch_stage2_offset / indices_scratch_stage2_offset
-                        # for the stage-2 base instead. Pass 0 to match
-                        # micro_ops/sampling/op.py:874,878 (the legacy non-zero
-                        # value here was an argmax.hpp leftover, since argmax
-                        # actually consumed these as raw byte offsets).
                         argmax_stage1_slot_base_offset = 0
                         argmax_stage1_num_slots = mesh_rows
                         argmax_stage2_slot_base_offset = 0
@@ -1112,19 +1098,9 @@ class LMHeadSampling:
                         argmax_stage1_receiver = 1 if row == target_row else 0
                         argmax_stage2_sender = 1 if (row == target_row and col != target_col) else 0
                         argmax_stage2_receiver = 1 if (row == target_row and col == target_col) else 0
-                        # sampling.hpp expects these as SLOT INDICES (not byte
-                        # offsets) — see unified_kernels/sampling.hpp:732,736 where
-                        # the kernel multiplies by topk_{scores,indices}_slot_bytes
-                        # itself. argmax.hpp used these as raw byte offsets, which
-                        # is where the legacy `_offset` naming and the byte-offset
-                        # computation came from. Mirrors micro_ops/sampling/op.py:877,881.
                         argmax_stage1_local_slot_offset = row
                         argmax_stage2_local_slot_offset = col
                         is_argmax_mesh_sender_core = bool(argmax_stage1_sender or argmax_stage2_sender)
-                        # Unused by sampling.hpp on the sender side (the sender
-                        # reads from the winner CB, not from a scratch slot).
-                        # argmax.hpp used this to address `scratch_addr + offset`.
-                        # Matches micro_ops/sampling/op.py:882.
                         argmax_mesh_local_send_slot_offset = 0
 
                         if is_argmax_mesh_sender_core:
@@ -1196,11 +1172,6 @@ class LMHeadSampling:
                 )
                 persistent_target_node = mesh_device.get_fabric_node_id(persistent_target_mesh_coord)
                 persistent_enable = int(persistent_mode and emit_socket_on_this_device)
-                logger.info(f"Persistent enable: {persistent_enable} on row, col: {row}, {col}")
-                logger.info(f"Emit socket on this device: {emit_socket_on_this_device}")
-                logger.info(f"Persistent mode: {persistent_mode}")
-                # address of persistent_next_iter_global_sem_addr
-                logger.info(f"Persistent next iter global sem address: {persistent_next_iter_global_sem_addr}")
 
                 # broadcast_rms-style BRISC source selection:
                 # - CCL path: packet CB
@@ -1226,14 +1197,11 @@ class LMHeadSampling:
                 # [MTP] EH output parameters (used by socket send for gather_dst_cb sizing)
                 eh_output_tile_size = out_tile.get_tile_size(data_format) if enable_mtp_on_device else 1
                 eh_gather_dst_num_pages = eh_matmul_num_cores * eh_out_w_per_core if enable_mtp_on_device else 0
-                logger.info(f"EH gather dst num pages: {eh_gather_dst_num_pages}")
-                logger.info(f"EH output tile size: {eh_output_tile_size}")
                 eh_gather_send_total_bytes = (
                     (eh_gather_dst_num_pages + socket_page_size_bytes // (eh_output_tile_size)) * eh_output_tile_size
                     if enable_mtp_on_device
                     else 0
                 )
-                logger.info(f"EH gather send total bytes: {eh_gather_send_total_bytes}")
                 # MTP metadata landing buffer on argmax final core (NCRISC unicast from exit input core).
                 metadata_output_l1_addr = 0
                 if metadata_tensor is not None:
@@ -1739,11 +1707,6 @@ class LMHeadSampling:
                     + [
                         int(final_core_phys.x),
                         int(final_core_phys.y),
-                        # [Sampling] BRISC doesn't need a global scratch addr —
-                        # per-core mesh sender RT args supply dst_{scores,indices}_addr
-                        # directly. The corresponding kernel-side
-                        # `.scratch_addr = get_common_arg_val(...)` slot must be
-                        # removed when the kernel is swapped to sampling.hpp.
                         int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
                         persistent_enable,
                         int(persistent_target_input_core_phys.x),
@@ -1787,9 +1750,6 @@ class LMHeadSampling:
                     page_size=rms_tile_size,
                     tile=rms_out_tile_descriptor,
                 )
-                # fused_buffer_device = (
-                #     fused_buffer_tensors_per_device[device_idx] if fused_buffer_tensors_per_device else None
-                # )
                 rmsnorm_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     mcast_src_cb,
                     rmsnorm_input_backing_tensor,
@@ -1818,12 +1778,6 @@ class LMHeadSampling:
 
                 # CB 2: Matmul weights — vocab_tensor, tensor-backed on matmul cores
                 matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_in1_cb, vocab_tensor_device)
-
-                # NOTE: The sampling kernel (unlike argmax) reads the per-core
-                # indices shard via noc_async_read from its buffer_address
-                # (passed as a runtime arg), not via a tensor-backed CB. So
-                # there is no CB binding for indices_tensor_device here —
-                # sampling_topk_in_indices_cb is a plain L1 CB allocated below.
 
                 # CB 16: Matmul output — tensor-backed on matmul cores
                 matmul_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_out_cb, output_tensor_device)
@@ -1948,9 +1902,7 @@ class LMHeadSampling:
 
                     # CB 38: NCRISC -> BRISC sync on input_core. Pushed by NCRISC
                     # right after `token_bcast_receiver` returns; consumed by
-                    # BRISC immediately before issuing `mcast_eh`. See comment
-                    # at the CB-id definition above for the race it closes.
-                    # Sender-only (1 core/device), sized to the L1 minimum.
+                    # BRISC immediately before issuing `mcast_eh`.
                     mcast_eh_ready_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=mcast_eh_ready_cb,
                         data_format=ttnn.uint32,
@@ -2757,8 +2709,6 @@ class LMHeadSampling:
                 io_tensors.append(indices_scratch_tensor)
         if base_token_buffer is not None:
             io_tensors.append(base_token_buffer)
-        # if input_core_fused_buffer is not None:
-        #     io_tensors.append(input_core_fused_buffer)
         print(f"[OP] calling generic_op with {len(io_tensors)} io_tensors", flush=True)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         logger.debug("[OP] generic_op returned")

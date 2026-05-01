@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Literal
 
 from loguru import logger
-from transformers import AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
@@ -49,6 +48,9 @@ class ModelPipeline:
         num_slots: int = 64,
         relaxed_acceptance_delta: float = 0.6,
         fold_rmsnorm_weights: bool = False,
+        top_k: int = 1,
+        top_p: float = 1.0,
+        temperature: float = 0.6,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -62,6 +64,9 @@ class ModelPipeline:
             )
         self.mesh_device = mesh_device
         self.relaxed_acceptance_delta = relaxed_acceptance_delta
+        self.top_k = top_k
+        self.top_p = top_p
+        self.temperature = temperature
         num_procs = int(ttnn.distributed_context_get_size())
         if num_procs not in (4, 16, 64):
             raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
@@ -145,23 +150,13 @@ class ModelPipeline:
                 position_id=i,
                 page_size_datums=self._page_size_datums,
                 token_type=TokenType.BASE,
-                temperature=0.6,
-                top_k=32,
-                probability_mass_threshold=0.95,
+                temperature=self.temperature,
+                top_k=self.top_k,
+                probability_mass_threshold=self.top_p,
             )
             for i in range(len(tokens))
         ]
         results = self.model.prefill(prompt_token_tensors)
-        logger.info(f"Prefill complete ({len(tokens)} tokens). Got {len(results)} result(s):")
-        for i, r in enumerate(results):
-            logger.info(
-                f"  prefill_result[{i}]: tok0={r.token_0} (type={r.token_0_type}, pos={r.token_0_pos}), "
-                f"tok1={r.token_1} (type={r.token_1_type}, pos={r.token_1_pos}), slot={r.slot_id}"
-            )
-            logger.info(
-                f"    p_indices[:8]={r.p_indices[:8] if r.p_indices else None}, "
-                f"p_scores[:8]={[round(s, 4) for s in r.p_scores[:8]] if r.p_scores else None}"
-            )
         return results
 
     def check_acceptance(self, prev_spec_token_id: int, result: DecodeResult) -> bool:
@@ -242,7 +237,6 @@ class ModelPipeline:
         generated_tokens: list[int] = []
         verified_spec_tokens: list[int] = []
         unverified_spec_tokens: list[int] = []
-        tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
         if think_token_ids is not None:
             think_open_id, think_close_id = think_token_ids
         else:
@@ -333,9 +327,9 @@ class ModelPipeline:
                 result.token_0_pos,
                 result.token_1,
                 result.token_1_pos,
-                temperature=0.6,
-                top_k=32 if self._in_thinking_phase else 1,
-                probability_mass_threshold=0.95,
+                temperature=self.temperature,
+                top_k=self.top_k if self._in_thinking_phase else 1,
+                probability_mass_threshold=self.top_p,
             )
             num_writes += 2
 

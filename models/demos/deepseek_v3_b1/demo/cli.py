@@ -53,7 +53,7 @@ def _needs_extended_worker_l1(num_procs: int) -> bool:
 def open_mesh_device():
     """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     num_procs = int(ttnn.distributed_context_get_size())
-    worker_l1_size = 1457500 if _needs_extended_worker_l1(num_procs) else 1431568
+    worker_l1_size = 1453716 if _needs_extended_worker_l1(num_procs) else 1431568
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
     device_params = {
@@ -156,6 +156,24 @@ def create_parser() -> argparse.ArgumentParser:
         help="Fold RMSNorm weights into the LM head weights (only for real weights)",
     )
     parser.add_argument(
+        "--top-k",
+        type=int,
+        default=1,
+        help="Top-k sampling for the LM head weights (only for real weights)",
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=1.0,
+        help="Top-p sampling for the LM head weights (only for real weights)",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.6,
+        help="Temperature for softmax in probablistic sampling",
+    )
+    parser.add_argument(
         "--io-socket-descriptor-prefix",
         type=str,
         default=None,
@@ -189,6 +207,9 @@ def run_demo(
     num_slots: int = 64,
     relaxed_acceptance_delta: float = 0.6,
     fold_rmsnorm_weights: bool = True,
+    top_k: int = 1,
+    top_p: float = 1.0,
+    temperature: float = 0.6,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -209,6 +230,9 @@ def run_demo(
             num_slots=num_slots,
             relaxed_acceptance_delta=relaxed_acceptance_delta,
             fold_rmsnorm_weights=fold_rmsnorm_weights,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -296,6 +320,9 @@ def main(argv: list[str] | None = None) -> int:
         num_slots=args.num_slots,
         relaxed_acceptance_delta=args.relaxed_acceptance_delta,
         fold_rmsnorm_weights=args.fold_rmsnorm_weights,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        temperature=args.temperature,
     )
     print(file=sys.stdout, flush=True)
     return 0

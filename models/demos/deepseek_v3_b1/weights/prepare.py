@@ -1751,9 +1751,7 @@ def prepare_spec_weights(
             _LM_HEAD_K,
         ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
         if fold_rmsnorm_weights:
-            print("LM_w shape=", lm_w.shape, flush=True)
             norm_spec = t[_norm_key].unsqueeze(0)
-            print("Norm_key shape=", norm_spec.shape, flush=True)
             lm_w = lm_w * norm_spec
         return {lm_target.name: lm_w.T.contiguous()}
 

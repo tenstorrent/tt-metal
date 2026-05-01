@@ -1617,6 +1617,10 @@ struct TopKSampling {
             }
 #elif defined(COMPILE_FOR_TRISC)
 
+            // Matmul leaves the PACK MOP in block-contiguous mode; re-init to standard tile-by-tile
+            // so that subsequent pack_tile() calls in run_top32_llk produce correct results.
+            PACK((llk_pack_init<false, false, false>(CTArgs::topk_out_scores_cb)));
+
             // Phase 1: LLK top-32 sort (all active cores, k==32 only)
             if constexpr (IsActiveCore && CTArgs::topk_k <= 32) {
                 run_top32_llk<

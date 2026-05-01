@@ -916,54 +916,10 @@ void kernel_main() {
         }
 #endif
 
-// #if defined(COMPILE_FOR_NCRISC)
-//         if constexpr (Core::is_matmul_core) {
-//             constexpr uint32_t mcast_dst = get_named_compile_time_arg_val("mcast_dst_cb");
-//             constexpr uint32_t mcast_dst_pages = get_named_compile_time_arg_val("mcast_dst_num_pages");
-//             cb_wait_front(mcast_dst, mcast_dst_pages);
-//             invalidate_l1_cache();
-//             auto* base = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(mcast_dst));
-//             constexpr uint32_t FACE = 256;
-//             DPRINT << "MCAST_DST iter=" << iteration_count
-//                    << " pages=" << mcast_dst_pages
-//                    << " face0[0:4]=["
-//                    << BF16(base[0]) << "," << BF16(base[1]) << ","
-//                    << BF16(base[2]) << "," << BF16(base[3])
-//                    << "] face1[0:4]=["
-//                    << BF16(base[FACE]) << "," << BF16(base[FACE+1]) << ","
-//                    << BF16(base[FACE+2]) << "," << BF16(base[FACE+3])
-//                    << "]" << ENDL();
-//         }
-// #endif
-
         {
             DeviceZoneScopedN("MATMUL");
             matmul(matmul_args);
         }
-
-        // #if defined(COMPILE_FOR_NCRISC)
-        //         if constexpr (Core::is_matmul_core) {
-        //             constexpr uint32_t matmul_out_cb = get_named_compile_time_arg_val("matmul_out");
-        //             constexpr uint32_t matmul_out_tiles = get_named_compile_time_arg_val("matmul_out_w");
-        //             cb_wait_front(matmul_out_cb, matmul_out_tiles);
-        //             invalidate_l1_cache();
-        //             // Tile shape is (1, 32): each tile is 32 contiguous bf16 values
-        //             // followed by padding to tile_size. For (1,32) bf16 the data lives
-        //             // in the first 16 uint16 of face 0 and the next 16 in face 1.
-        //             // Face layout: face0 = 256 uint16 (16 data + 240 pad), face1 = 256 uint16 (16 data + 240 pad).
-        //             auto* base = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(matmul_out_cb));
-        //             constexpr uint32_t FACE_ELEMS = 256;
-        //             DPRINT << "MATMUL_OUT iter=" << iteration_count
-        //                    << " tiles=" << matmul_out_tiles
-        //                    << " tile0_face0[0:4]=["
-        //                    << BF16(base[0]) << "," << BF16(base[1]) << ","
-        //                    << BF16(base[2]) << "," << BF16(base[3])
-        //                    << "] tile0_face1[0:4]=["
-        //                    << BF16(base[FACE_ELEMS]) << "," << BF16(base[FACE_ELEMS+1]) << ","
-        //                    << BF16(base[FACE_ELEMS+2]) << "," << BF16(base[FACE_ELEMS+3])
-        //                    << "]" << ENDL();
-        //         }
-        // #endif
 
 #if defined(COMPILE_FOR_BRISC)
         // Device-local fabric gate (pre-sampling acquire on argmax final core).
@@ -989,62 +945,6 @@ void kernel_main() {
             noc_semaphore_wait(metadata_ready_sem, 1);
             noc_semaphore_set(metadata_ready_sem, 0);
         }
-#endif
-
-#if defined(COMPILE_FOR_TRISC)
-        // Restore the standard tile-by-tile PACK MOP after matmul.
-        //
-        // Root cause: `Matmul::Op::impl` calls `pack_block_contiguous_init(args.out)`
-        // (matmul.hpp:131), which under the hood
-        // (pack_block.h:35 -> llk_pack_block_api.h:31) executes
-        // `_llk_pack_block_contiguous_mop_config_`. That LLK rewrites the
-        // PACK REPLAY+MOP buffer to a block-contiguous program. Its
-        // counterpart `custom_mm_block_uninit` (custom_mm.h:251) only
-        // restores the W-stride config register; it does NOT restore the
-        // MOP. So after every matmul the PACK MOP is stuck in
-        // block-contiguous mode.
-        //
-        // `run_top32_llk` later issues `pack_tile()` for DEST tile 0
-        // (scores) and tile 2 (indices). `pack_tile` fires whatever MOP is
-        // currently programmed, so it triggers the block-contig sequence
-        // with a single tile request, producing the "first ~4 entries
-        // valid, remaining 28 zeros" pattern observed in the Phase-1
-        // NCRISC dumps.
-        //
-        // `llk_pack_init<false,false,false>` resolves to
-        // `_llk_pack_init_<untilize=false, zero_output=false, tilize=false>`,
-        // which calls `_llk_pack_mop_config_` and reprograms the standard
-        // tile-by-tile pack MOP -- exactly the state matmul tore down.
-        //
-        // Why nothing else from `deepseek_compute_kernel_hw_startup`:
-        //   - UNPACK / MATH data formats are already restored inside
-        //     `run_top32_llk` (`reconfig_data_format_srca` +
-        //     `llk_unpack_A_top32_rm_init` + `llk_math_top32_rm_init` at
-        //     sampling.hpp:460-470).
-        //   - Pack output formats are restored by
-        //     `pack_reconfig_data_format(out_scores_cb)` /
-        //     `pack_reconfig_data_format(out_indices_cb)` inside the LLK
-        //     (sampling.hpp:514,516).
-        //   - `llk_pack_dest_init` is unsafe mid-kernel (it does
-        //     `tensix_sync()` and resets `pack_sync_tile_dst_ptr`, only
-        //     valid at boot before any tile_regs_* handshakes are in
-        //     flight). DEST geometry / sync mode were already set at
-        //     boot by `deepseek_compute_kernel_hw_startup<true>` (line ~720)
-        //     and matmul does not change `num_faces` or `DST_SYNC_MODE`.
-        //   - `llk_math_pack_sync_init` is also unsafe mid-kernel; it
-        //     resets the math<->pack handshake counters used by
-        //     acquire_dst / pack-DEST commits. Triggering it mid-flight
-        //     desyncs matmul's in-flight commit count with pack and hangs
-        //     every non-final sender inside the LLK.
-        //
-        // Gating: `argmax_core_grid == matmul_core_grid` (op.py:861), so
-        // `sampling_is_active_core` is exactly the set of cores whose MOP
-        // matmul corrupted AND that will run the sampling LLK. Cores
-        // outside this set never call `pack_tile` after matmul, so their
-        // residual block-contig MOP is harmless.
-        // if constexpr (Core::sampling_is_active_core) {
-        PACK((llk_pack_init<false, false, false>(SamplingCTArgs::topk_out_scores_cb)));
-        // }
 #endif
 
         {

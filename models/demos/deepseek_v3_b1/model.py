@@ -215,11 +215,8 @@ class DeepSeekV3:
         self.batch_size = batch_size
         self._pipeline_depth = pipeline_depth
         payload_bytes: int = batch_size * TOKEN_ID_BYTES
-        logger.debug(f"Payload bytes: {payload_bytes} bytes")
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
-        logger.debug(f"Tensor size bytes: {self._tensor_size_bytes} bytes")
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
-        print(f"page_size_datums: {self._page_size_datums}")
         self._position: int = 0
         self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
