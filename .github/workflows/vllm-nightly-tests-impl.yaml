@@ -348,10 +348,12 @@ jobs:
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         FILE_SERVER_PID: "./server.pid"
+        FILE_INSTALL_LOG: "./output/vllm_install.log"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
         FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
         FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
+        FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -389,13 +391,14 @@ jobs:
           ref: ${{ inputs.vllm-commit }}
           fetch-depth: 0
 
-      - name: 📀 Install vLLM
-        run: |
-          uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
-
       - name: 📂 Create output directory
         run: |
           mkdir -p output
+
+      - name: 📀 Install vLLM
+        run: |
+          uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 2>&1 | tee "${FILE_INSTALL_LOG}"
+          exit "${PIPESTATUS[0]}"
 
       - name: 🚀 Run server
         timeout-minutes: 1
@@ -584,12 +587,15 @@ jobs:
         if: ${{ matrix.test-group.sampling-tests }}
         timeout-minutes: 10
         run: |
-          FILTER="${{ matrix.test-group.sampling-test-filter }}"
-          if [ -n "$FILTER" ]; then
-            pytest vllm/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
-          else
-            pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
-          fi
+          {
+            FILTER="${{ matrix.test-group.sampling-test-filter }}"
+            if [ -n "$FILTER" ]; then
+              pytest vllm/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+            else
+              pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+            fi
+          } 2>&1 | tee "${FILE_SAMPLING_TESTS_LOG}"
+          exit "${PIPESTATUS[0]}"
 
       - name: 🧹 Cleanup server process
         if: always()
