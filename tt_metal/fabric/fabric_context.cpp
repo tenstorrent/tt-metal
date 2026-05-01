@@ -234,10 +234,10 @@ FabricContext::FabricContext(
     const ControlPlane& control_plane,
     const tt_metal::Hal& hal,
     tt::ARCH arch,
-    bool is_ubb_galaxy,
+    tt::tt_metal::ClusterType cluster_type,
     tt::tt_fabric::FabricConfig fabric_config,
     const FabricRouterConfig& router_config) :
-    router_config_(router_config), is_ubb_galaxy_(is_ubb_galaxy) {
+    router_config_(router_config), cluster_type_(cluster_type) {
     // === Initialization order critical - dependencies flow downward ===
     // fabric_config_ → topology_ → routing flags → packet specs
 
@@ -346,7 +346,7 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
         return true;
     }
     if (topology_ == Topology::Torus) {
-        const auto fabric_type = get_fabric_type(fabric_config_, is_ubb_galaxy_);
+        const auto fabric_type = get_fabric_type(fabric_config_, cluster_type_);
         // if we are not torused along a dimension, we dont need deadlock avoidance for that direction
         const bool is_north_south =
             (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);

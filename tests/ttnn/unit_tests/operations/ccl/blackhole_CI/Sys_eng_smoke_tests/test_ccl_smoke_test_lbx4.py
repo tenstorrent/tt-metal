@@ -16,7 +16,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology, cluster_axis",
     [
-        (8, [1, 1, 12000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear, 1),
+        (8, [1, 1, 12000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 1),
     ],
     ids=[
         "cross host test",
