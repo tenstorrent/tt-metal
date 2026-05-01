@@ -138,6 +138,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         config = {
             "expert_mapping_tensor": expert_mapping_tensor,
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+            "moe_gate": MoEGate.create_shared_state(hf_config, mesh_device),
         }
 
         # TODO: #42722 - preallocated tensors for all_to_all_dispatch_metadata
@@ -194,7 +195,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         fabric_config: ttnn.FabricConfig,
         mode: str,
         batch_size_per_row: int,
-        topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Build operator configuration for decode or prefill."""
 
@@ -219,7 +219,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             "hidden_size": hf_config.hidden_size,
             "num_experts_per_tok": hf_config.num_experts_per_tok,
             "num_dispatch_devices": mesh_device.shape[0],
-            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -317,7 +317,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
         batch_size_per_row: int,
-        topk_fallback: bool = False,
     ) -> ModelDecodeConfig:
         return cls.model_config(
             hf_config,
@@ -325,7 +324,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             fabric_config,
             "decode",
             batch_size_per_row=batch_size_per_row,
-            topk_fallback=topk_fallback,
         )
 
     @classmethod
@@ -334,7 +332,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
-        topk_fallback: bool = False,
     ) -> ModelPrefillConfig:
         return cls.model_config(
             hf_config,
@@ -342,7 +339,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             fabric_config,
             "prefill",
             batch_size_per_row=USERS_PER_ROW,
-            topk_fallback=topk_fallback,
         )
 
     @classmethod
@@ -460,9 +456,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-        ttnn.deallocate(topk_experts_indices)
-        ttnn.deallocate(topk_experts_weights)
-
         topk_experts_indices_rm = ttnn.permute(
             topk_experts_indices_rm, (2, 0, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG
         )
@@ -509,7 +502,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         )
 
         ttnn.deallocate(topk_experts_indices)
-        ttnn.deallocate(topk_experts_weights)
 
         # NOTE: store in DRAM while chunking, as moe_compute requires just about all of L1
         topk_experts_indices_rm = ttnn.permute(
