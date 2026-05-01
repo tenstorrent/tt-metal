@@ -48,6 +48,7 @@ LOG_FILE="/tmp/single_pod_$(date +%Y%m%d_%H%M%S)_${TEST}.log"
 echo "[run] PIPELINE_DIR=$PIPELINE_DIR"
 echo "[run] TEST=$TEST_FILE::$TEST"
 echo "[run] LOG_FILE=$LOG_FILE"
+echo "[run] running... (per-rank output multiplexed into $LOG_FILE; this block holds for ~30-60s)"
 
 export PATH=/opt/openmpi-v5.0.7-ulfm/bin:$PATH
 ulimit -n 65536
@@ -64,6 +65,60 @@ tt-run --skip-executable-check \
 RC=$?
 
 echo "[run] exit=$RC"
-echo "[run] tail:"
-sed 's/\x1b\[[0-9;]*m//g' "$LOG_FILE" | tail -40
+
+# Per-rank summary: count PASSED / FAILED / SKIPPED / ERROR across all 16 ranks,
+# and print per-rank wall-clock from each rank's pytest "1 X in …s" line.
+NUM_RANKS=$(echo "$SINGLE_POD_HOSTS" | wc -w)
+NUM_RANKS=$((NUM_RANKS * 4))   # 4 procs/host
+STRIPPED=$(sed 's/\x1b\[[0-9;]*m//g' "$LOG_FILE")
+extract_ranks() {  # arg1 = grep pattern; emit unique rank ids
+  echo "$STRIPPED" | grep -aE "$1" | sed -E 's/^\[1,([0-9]+)\].*/\1/' | sort -un
+}
+PASSED_RANKS=$(extract_ranks '^\[1,[0-9]+\]<stdout>: PASSED ' || true)
+FAILED_RANKS=$(extract_ranks '^\[1,[0-9]+\]<stdout>: FAILED ' || true)
+SKIPPED_RANKS=$(extract_ranks '^\[1,[0-9]+\]<stdout>: SKIPPED ' || true)
+ERROR_RANKS=$(extract_ranks '^\[1,[0-9]+\]<stdout>: ERROR ' || true)
+# Use `wc -w` (returns 0 on empty input) instead of `grep -c` (returns
+# exit 1 on zero matches, which trips `set -e` and aborts the summary).
+N_PASSED=$(echo $PASSED_RANKS | wc -w)
+N_FAILED=$(echo $FAILED_RANKS | wc -w)
+N_SKIPPED=$(echo $SKIPPED_RANKS | wc -w)
+N_ERROR=$(echo $ERROR_RANKS | wc -w)
+
+echo "[run] per-rank wall-clock (from pytest '1 X in …s' lines):"
+{
+  echo "$STRIPPED" \
+    | grep -aE '^\[1,[0-9]+\]<stdout>: =+ 1 (passed|failed|skipped|error) in [0-9.]+s' \
+    | sed -E 's/^\[1,([0-9]+)\]<stdout>: =+ 1 (passed|failed|skipped|error) in ([0-9.]+s).*/  rank \1: \2 (\3)/' \
+    | sort -t: -k1.8n
+} || true
+
+# On non-zero exit, dump the last 40 lines so you can see the actual error.
+if [ $RC -ne 0 ]; then
+  echo "[run] (non-zero exit — tail of log:)"
+  echo "$STRIPPED" | tail -40
+fi
+
+# Final summary banner (last thing on screen so you don't have to scroll).
+# Choose a one-word verdict + colored banner if running in a TTY.
+if [ $N_FAILED -gt 0 ] || [ $N_ERROR -gt 0 ] || [ $RC -ne 0 ]; then
+  VERDICT="FAILED"; COLOR='\033[1;31m'  # bold red
+elif [ $N_PASSED -eq $NUM_RANKS ] && [ $N_SKIPPED -eq 0 ]; then
+  VERDICT="PASSED"; COLOR='\033[1;32m'  # bold green
+elif [ $((N_PASSED + N_SKIPPED)) -eq $NUM_RANKS ]; then
+  VERDICT="PASSED (some skipped)"; COLOR='\033[1;33m'  # bold yellow
+else
+  VERDICT="INCOMPLETE"; COLOR='\033[1;33m'  # bold yellow
+fi
+RESET='\033[0m'
+[ -t 1 ] || { COLOR=''; RESET=''; }   # no color when not on a TTY
+
+echo
+printf "${COLOR}═══════════════════════════════════════════════════════════════${RESET}\n"
+printf "${COLOR}[run] %s — PASSED=%d/%d  FAILED=%d  SKIPPED=%d  ERROR=%d${RESET}\n" \
+       "$VERDICT" "$N_PASSED" "$NUM_RANKS" "$N_FAILED" "$N_SKIPPED" "$N_ERROR"
+[ -n "$FAILED_RANKS" ]  && echo "[run]   failed ranks:  $(echo $FAILED_RANKS  | tr '\n' ' ')"
+[ -n "$SKIPPED_RANKS" ] && echo "[run]   skipped ranks: $(echo $SKIPPED_RANKS | tr '\n' ' ')"
+[ -n "$ERROR_RANKS" ]   && echo "[run]   error ranks:   $(echo $ERROR_RANKS   | tr '\n' ' ')"
+printf "${COLOR}═══════════════════════════════════════════════════════════════${RESET}\n"
 exit $RC

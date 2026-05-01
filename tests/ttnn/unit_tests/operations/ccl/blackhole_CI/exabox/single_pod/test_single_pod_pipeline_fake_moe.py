@@ -39,29 +39,27 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.pipeline import (
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.single_pod._fake_moe_helpers import (
+    make_fake_lm_head_stage_factory,
+    make_fake_moe_decoder_stage_factory,
+    make_synthetic_embedding_weights,
+)
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.single_pod._vendored.pipeline import (
     PipelineConfiguration,
     create_fabric_router_config,
 )
-from models.demos.deepseek_v3_b1.demo.stage import (
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.single_pod._vendored.stage import (
     EmbeddingStage,
     PassthroughPayload,
     PassthroughStage,
     StageKind,
-)
-from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.single_pod._fake_moe_helpers import (
-    make_fake_lm_head_stage_factory,
-    make_fake_moe_decoder_stage_factory,
 )
 
 VOCAB_SIZE = 129280
 SINGLE_POD_NUM_PROCS = 16
 
 
-def _build_fake_moe_single_pod_config(
-    weight_provider: SyntheticWeightProvider,
-) -> PipelineConfiguration:
+def _build_fake_moe_single_pod_config() -> PipelineConfiguration:
     """16-stage single-pod with stages 4–13 replaced by FakeMoeDecoderStage.
 
     Stages 1–3 (Dense decoder) are also swapped to PassthroughStage(ACTIVATION)
@@ -77,7 +75,7 @@ def _build_fake_moe_single_pod_config(
     )
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
-        0: lambda d: EmbeddingStage(weight_provider.load_embedding(d)),
+        0: lambda d: EmbeddingStage(make_synthetic_embedding_weights(d)),
         1: activation_passthrough,
         2: activation_passthrough,
         3: activation_passthrough,
@@ -145,8 +143,7 @@ def test_single_pod_pipeline_fake_moe(
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
-    provider = SyntheticWeightProvider()
-    config = _build_fake_moe_single_pod_config(provider)
+    config = _build_fake_moe_single_pod_config()
     assert (
         config.num_stages == SINGLE_POD_NUM_PROCS
     ), f"Expected {SINGLE_POD_NUM_PROCS} pipeline stages, got {config.num_stages}"
