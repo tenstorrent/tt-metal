@@ -23,6 +23,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "nb_models.hpp"
 #include "nb_ops.hpp"
 #include "nb_optimizers.hpp"
+
 namespace ttml::nanobind {
 using namespace ::nanobind;
 
