@@ -48,26 +48,9 @@ targets:
 
   model_traced:
     - model:
-        - deepseek-llm-7b-chat
-        - deepseek-r1-distill-qwen-32b
         - efficientnetb0
-        - falcon7b
-        - llama-3.2-11b-vision-instruct
-        - llama-3.2-1b-instruct
-        - llama-krikri-8b-instruct
-        - mistral-7b-instruct-v0.3
-        - phi-3-mini-128k-instruct
-        - qwen2.5-coder-32b
-        - qwen2.5-coder-7b-instruct
-        - qwen3-32b
-        - qwen3-32b_2
-        - segmentation
-        - sentence_bert
-        - stable_diffusion_xl_base
-        - vit
-        - vit_2
-        - whisper
-      trace: [3,4,5,7]
+        - llama-3.2-1b
+      trace: [7, 8]
 
 registry:
   - trace_id: 1
@@ -200,3 +183,13 @@ registry:
     config_count: 130
     loaded_at: '2026-04-28'
     notes: ''
+
+  - trace_id: 16
+    status: draft
+    models: [tt_dit_2]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 445bfb0d-eb24-454d-9d74-46a257703f13
+    tt_metal_sha: 41ae9e67ce3c9ce811ce1e0889baf51c36f58ab4
+    config_count: 209
+    loaded_at: '2026-05-01'
+    notes: 'flux 1 dev via pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py   -k "4x8sp0tp1 and encoder_device and 28 and yes_use_cache and not not_traced"'
