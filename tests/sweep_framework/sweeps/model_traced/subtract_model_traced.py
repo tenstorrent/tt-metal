@@ -137,6 +137,10 @@ def run(
         )
         e2e_perf = stop_measuring_time(start_time)
 
+        if is_mesh_device:
+            torch_output_tensor = reconcile_golden_to_actual(
+                torch_output_tensor, output_tensor, input_a_tensor_placement
+            )
         return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
 
     # Tensor-tensor operation

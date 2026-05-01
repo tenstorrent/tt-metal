@@ -525,30 +525,15 @@ def run(
             global_shape = list(input_shape)
             torch_global = torch.rand(global_shape).bfloat16()
 
-            # Per-device size on each sharded axis (used for golden slicing).
-            per_dev_sizes = {}
-            for axis_idx, sd in enumerate(shard_dims):
-                if sd is not None:
-                    esd = sd if sd >= 0 else len(input_shape) + sd
-                    per_dev_sizes[esd] = global_shape[esd] // mesh_shape[axis_idx]
-
-            # Golden reference for device 0 after all_gather:
-            # Concatenates the cluster's per-device chunks along `dim`.
+            # The traced model path below uses replicate_with_topology: every
+            # chip receives the full logical tensor while preserving the
+            # model's sharded topology metadata for trace matching. Mirror the
+            # resulting all_gather semantics in the golden by repeating the
+            # logical tensor across the gathered cluster axis.
             cluster_size = mesh_shape[cluster_axis]
-            chunks = []
-            for i in range(cluster_size):
-                slices = [slice(None)] * len(global_shape)
-                for axis_idx, sd in enumerate(shard_dims):
-                    if sd is not None:
-                        esd = sd if sd >= 0 else len(input_shape) + sd
-                        size = per_dev_sizes[esd]
-                        if axis_idx == cluster_axis:
-                            slices[esd] = slice(i * size, (i + 1) * size)
-                        else:
-                            slices[esd] = slice(0, size)
-                chunks.append(torch_global[tuple(slices)])
-
-            torch_reference = torch.cat(chunks, dim=effective_dim)
+            repeats = [1] * len(global_shape)
+            repeats[effective_dim] = cluster_size
+            torch_reference = torch_global.repeat(*repeats)
             torch_input = torch_global
         else:
             # 1D mesh or unparseable placement: shard only along gather dim.

@@ -949,7 +949,12 @@ def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[
         if kind != "S" or dim is None or n <= 1:
             continue
         d = dim if dim >= 0 else dim + ndim
-        if not (0 <= d < ndim):
+        if d >= ndim:
+            # Some traced transformer helper ops collapse a sharded input dim
+            # into the last output dim (for example QKV/head reshape paths).
+            # Preserve the shard factor by applying it to the innermost dim.
+            d = ndim - 1
+        if d < 0:
             continue
         repeats = [1] * out.ndim
         repeats[d] = n

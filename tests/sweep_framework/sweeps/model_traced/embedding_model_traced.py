@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -155,7 +156,7 @@ def run(
     # Golden function (torch.nn.functional.embedding) requires 2D weights,
     # but the model uses 4D weights. Reshape for golden comparison only.
     golden_weight = torch_weight_tensor.reshape(-1, torch_weight_tensor.shape[-1])
-    torch_output_tensor = golden_function(torch_input_tensor, golden_weight).squeeze()
+    torch_output_tensor = golden_function(torch_input_tensor, golden_weight)
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -228,6 +229,16 @@ def run(
     output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None).squeeze()
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, weight_tensor_placement
+        )
+    if torch_output_tensor.shape != output_tensor.shape:
+        squeezed_expected = torch_output_tensor.squeeze()
+        squeezed_actual = output_tensor.squeeze()
+        if squeezed_expected.shape == squeezed_actual.shape:
+            torch_output_tensor = squeezed_expected
+            output_tensor = squeezed_actual
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
