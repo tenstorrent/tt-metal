@@ -32,6 +32,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "experimental/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
@@ -69,8 +70,21 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_tiles; ++i) {
         input_buf.reserve_back(onetile);
-        noc_async_read_tile(i, s, input_buf.get_write_ptr());
+        const uint32_t wptr = input_buf.get_write_ptr();
+        // #region agent log
+        DPRINT << "R:wp i=" << i << " wp=0x" << HEX() << wptr << ENDL();
+        // #endregion
+        noc_async_read_tile(i, s, wptr);
         noc_async_read_barrier();
+        // #region agent log
+        // After read: dump first 4 u32s the reader just deposited (sanity check that
+        // bf16 ones land at this address in DM L1 view).
+        {
+            volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wptr);
+            DPRINT << "R:after_rd i=" << i << " @0x" << HEX() << wptr << " : 0x" << HEX() << p[0] << " 0x" << HEX()
+                   << p[1] << " 0x" << HEX() << p[2] << " 0x" << HEX() << p[3] << ENDL();
+        }
+        // #endregion
         input_buf.push_back(onetile);
     }
 }

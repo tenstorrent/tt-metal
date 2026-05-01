@@ -34,14 +34,20 @@
 #define KL_TRISC_TAG "?"
 #endif
 
-// Print first 4 uint32_ts at an L1 byte address as hex. For bf16 each u32 = two
-// packed bf16 values: ones=0x3F803F80. For fp32 each u32 = one fp32 value:
-// ones=0x3F800000. Quasar's `print_tile_rows`/`print_full_tile` link against
-// `cb_interface` which only exists on Gen1, so we read L1 directly instead.
+// Dump first 4 uint32_ts at an L1 address. We try the address as-is AND shifted
+// by 4 (× 16). On Quasar the TRISC-side DFB get_read_ptr/get_write_ptr returns
+// `base_addr + offset` where the offset can be in 16B units (LLK pack/unpack
+// engines address L1 in 16B granularity). The DM-side wr_ptr/rd_ptr are byte
+// addresses. If only one of the two interpretations sees real data, that's our
+// L1 access mode mismatch. For bf16 ones each u32 = 0x3F803F80.
 ALWI void kl_dump_l1_u32(const char* tag, uint32_t l1_addr) {
-    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
-    DPRINT << KL_TRISC_TAG << ":" << tag << " @0x" << HEX() << l1_addr << " : 0x" << HEX() << p[0]
-           << " 0x" << HEX() << p[1] << " 0x" << HEX() << p[2] << " 0x" << HEX() << p[3] << ENDL();
+    volatile tt_l1_ptr uint32_t* p_raw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
+    volatile tt_l1_ptr uint32_t* p_shifted = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr << 4);
+    DPRINT << KL_TRISC_TAG << ":" << tag << " raw@0x" << HEX() << l1_addr << " : 0x" << HEX() << p_raw[0]
+           << " 0x" << HEX() << p_raw[1] << " 0x" << HEX() << p_raw[2] << " 0x" << HEX() << p_raw[3] << ENDL();
+    DPRINT << KL_TRISC_TAG << ":" << tag << " sh@0x" << HEX() << (l1_addr << 4) << " : 0x" << HEX()
+           << p_shifted[0] << " 0x" << HEX() << p_shifted[1] << " 0x" << HEX() << p_shifted[2] << " 0x"
+           << HEX() << p_shifted[3] << ENDL();
 }
 // #endregion
 
