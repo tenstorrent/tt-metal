@@ -43,10 +43,8 @@ sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val)
     // apply mask
     TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
 
-    // Make sure compiler avoids these two regs here, ugh. And make
-    // sure the DCE pass considers this live without warning.
-    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vFloat(sfpi::l_reg[sfpi::LRegs::LReg2]);
-    sfpi::l_reg[sfpi::LRegs::LReg3] = sfpi::vFloat(sfpi::l_reg[sfpi::LRegs::LReg3]);
+    sfpi::l_reg[sfpi::LRegs::LReg2].in_use();
+    sfpi::l_reg[sfpi::LRegs::LReg3].in_use();
 
     return sfpi::l_reg[sfpi::LRegs::LReg1];
 }

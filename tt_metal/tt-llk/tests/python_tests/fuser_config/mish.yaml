@@ -38,6 +38,7 @@ operations:
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCB"
+        # acc_to_dest: true # only for DEST_TO_SRCA
         math_fidelity: "LoFi"
     packer: "Packer"
     output: "mish"

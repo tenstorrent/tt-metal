@@ -27,11 +27,17 @@ from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
     DEFAULT_MAX_SEQ_LEN,
+    DEFAULT_PREFILL_WARMUP_MODE_DEMO,
+    DEFAULT_PREFILL_WARMUP_MODE_VLLM,
     DEFAULT_SAMPLING_TEMPERATURE,
     DEFAULT_SAMPLING_TOP_K,
     DEFAULT_SAMPLING_TOP_P,
+    PREFILL_WARMUP_MODE_LINEAR_ADDITIVE,
+    PREFILL_WARMUP_MODE_LINEAR_MULTIPLES,
     USERS_PER_ROW,
+    align_up,
     even_int_div,
+    get_min_alignment_value_for_prefill,
     make_deepseek_sampling_args,
 )
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
@@ -171,7 +177,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         sample_on_device: bool = False,
         enable_mtp: bool = False,
         sampling_params: SamplingParams | None = None,
+        vllm_context: bool = False,
     ) -> None:
+        self.vllm_context = vllm_context  # track if Generator is initialized in vLLM context
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
@@ -199,6 +207,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 model_max_seq_len,
             )
         self.hf_config.max_seq_len = requested_max_seq_len
+
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -290,6 +299,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.prefill_max_tokens = prefill_max_tokens
         self.force_recalculate = force_recalculate
         self.profile_decode = profile_decode  # Profile decode: skip prefill, run only 1st dense + 1st MoE layer
+        self._warmup_completed_configs: set[tuple[bool, bool, int, int, int]] = set()
         logger.info(f"Enable trace: {self.enable_trace}")
         if self.profile_decode:
             logger.info("profile_decode=True: Prefill skipped, decode runs only 1st dense layer + 1st MoE layer")
@@ -301,6 +311,113 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         self._prepare_weight_configs(cache_dir)
         self._assert_mtp_available()
+
+    def warmup_model(self, min_token_len: int, max_token_len: int):
+        if not self.vllm_context:
+            # Phase 1: Warmup (i) prefill and (ii) decode without trace
+            logger.debug(f"Phase 1: (i) Warmup prefill without trace for demo")
+            self.warmup_model_prefill(
+                kv_cache=None,
+                enable_trace=False,
+                can_sample_on_device=False,
+                non_greedy_decoding_on_device=False,
+                min_token_len=min_token_len,
+                max_token_len=max_token_len,
+                sample_on_device=self.sample_on_device,
+            )
+            logger.debug(f"Phase 1: (ii) Warmup decode without trace for demo")
+            self._warmup_model_decode_demo(enable_trace=False, sample_on_device=self.sample_on_device)
+
+            if self.enable_trace:
+                # Phase 2: Warmup decode with trace (deepseek does not support prefill with trace)
+                logger.debug(f"Phase 2: Warmup decode with trace for demo")
+                self._warmup_model_decode_demo(enable_trace=True, sample_on_device=self.sample_on_device)
+            else:
+                logger.debug("Demo was initiated without trace, skipping Phase 2: Warmup decode with trace")
+            logger.info("Warmup completed for demo mode")
+
+        else:
+            logger.info("vLLM runs its own warmup, no need to warmup explicitly for vLLM context")
+
+    def _warmup_model_decode_demo(self, enable_trace: bool, sample_on_device: bool):
+        warmup_tokens = torch.zeros(self.batch_size, dtype=torch.int32)
+        warmup_start_pos = torch.zeros(self.batch_size, dtype=torch.int32)
+        decode_logits = self.decode_forward(
+            tokens=warmup_tokens,
+            start_pos=warmup_start_pos,
+            enable_trace=enable_trace,
+            page_table=None,
+            sample_on_device=sample_on_device,
+        )
+
+        if sample_on_device:
+            self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
+        else:
+            self._sample_on_host(decode_logits)
+
+    def _get_default_prefill_warmup_mode(self) -> str:
+        return DEFAULT_PREFILL_WARMUP_MODE_VLLM if self.vllm_context else DEFAULT_PREFILL_WARMUP_MODE_DEMO
+
+    def _get_prefill_warmup_token_lens(self, min_prompt_len: int = 0, max_prompt_len: int = 0) -> list[int]:
+        """Build and cache supported prefill warmup lengths.
+
+        Args:
+            min_prompt_len: Minimum prompt length to consider (inclusive). Rounded
+                up to the prefill alignment value for warmup generation.
+            max_prompt_len: Maximum prompt length to consider. If ``<= 0``, uses
+                ``self.hf_config.max_seq_len`` and rounds up to the same alignment.
+
+        Supported modes:
+            - ``LINEAR_ADDITIVE``: ``tile, 2*tile, 3*tile, ...``
+              Dense warmup coverage with more warmup compile/runtime cost.
+            - ``LINEAR_MULTIPLES``: ``tile, 2*tile, 4*tile, 8*tile, ...``
+              Geometric warmup coverage with fewer warmup points and more runtime padding.
+
+        Returns:
+            A unique, ascending list of prompt lengths aligned to the prefill
+            boundary. The list always includes the effective upper bound.
+        """
+        mode = self._get_default_prefill_warmup_mode()
+        alignment_value = get_min_alignment_value_for_prefill(self.mesh_device.shape[0])
+        upper_bound = max_prompt_len if max_prompt_len > 0 else self.hf_config.max_seq_len
+
+        upper_bound = align_up(upper_bound, alignment_value)
+        lower_bound = align_up(min_prompt_len, alignment_value)
+
+        if upper_bound > self.hf_config.max_seq_len:
+            raise ValueError(f"Upper bound {upper_bound} can not exceed model max seq len {self.hf_config.max_seq_len}")
+        if lower_bound > self.hf_config.max_seq_len:
+            raise ValueError(f"Lower bound {lower_bound} can not exceed model max seq len {self.hf_config.max_seq_len}")
+
+        cache_key = (lower_bound, upper_bound, mode)
+        cache = getattr(self, "_prefill_warmup_prompt_lens_cache", {})
+        if cache_key in cache:
+            return cache[cache_key]
+
+        prompt_lens_set: set[int] = set()
+        if mode == PREFILL_WARMUP_MODE_LINEAR_ADDITIVE:
+            prompt_len = lower_bound
+            while prompt_len <= upper_bound:
+                prompt_lens_set.add(prompt_len)
+                prompt_len += alignment_value
+        elif mode == PREFILL_WARMUP_MODE_LINEAR_MULTIPLES:
+            multiple = 1
+            while alignment_value * multiple < lower_bound:
+                multiple *= 2
+            while alignment_value * multiple <= upper_bound:
+                prompt_lens_set.add(alignment_value * multiple)
+                multiple *= 2
+        else:
+            raise ValueError(
+                f"Unsupported warmup prompt_len mode '{mode}'. "
+                "Expected one of ['LINEAR_ADDITIVE', 'LINEAR_MULTIPLES']."
+            )
+
+        prompt_lens_set.add(upper_bound)
+        prompt_lens = sorted(prompt_lens_set)
+        cache[cache_key] = prompt_lens
+        self._prefill_warmup_prompt_lens_cache = cache
+        return prompt_lens
 
     def _validate_and_initialize_sampling(
         self,
@@ -1765,6 +1882,40 @@ class DeepseekGenerator(WarmupForwardMixin):
         profiler.end("tokenizing")
 
         logger.info(f"Lengths of {lengths.shape} (encoded) prompts: {lengths}")
+        padded_seq_len = int(tokens_batched.shape[-1])
+        # For demo the entire batch of prompts are padded to the same max length,
+        # so we warmup the model with only one prefill length i.e. min and max are the same.
+        # Once https://github.com/tenstorrent/tt-metal/issues/43099 is fixed, we can use the actual min lengths of the prompts
+        min_token_len = padded_seq_len
+        max_token_len = padded_seq_len
+        if max_token_len > self.hf_config.max_seq_len:
+            raise ValueError(
+                f"Max prompt length {max_token_len} exceeds model max seq len {self.hf_config.max_seq_len}"
+            )
+        # Warmup is expensive and only depends on runtime mode + prefill length bounds.
+        # Cache completed warmups per configuration so repeated generate() calls can skip it.
+        warmup_cache_key = (
+            bool(self.enable_trace),
+            bool(self.sample_on_device),
+            int(self.hf_config.max_seq_len),
+            int(min_token_len),
+            int(max_token_len),
+        )
+
+        if warmup_cache_key not in self._warmup_completed_configs:
+            if self.signpost:
+                signpost(header="warmup_model")
+            profiler.start("warmup_model")
+            self.warmup_model(min_token_len, max_token_len)
+            profiler.end("warmup_model")
+            if self.signpost:
+                signpost(header="warmup_model")
+
+            self._warmup_completed_configs.add(warmup_cache_key)
+        else:
+            # Keep profiler timing for "warmup_model" even when warmup is skipped.
+            logger.info(f"Skipping warmup_model; warmup already completed for cache key={warmup_cache_key}.")
+
         decode_steps_for_stats = 0
         decode_forward_passes = 0
         decode_step_active_masks_for_stats: List[List[bool]] = []
@@ -2219,6 +2370,20 @@ class DeepseekGenerator(WarmupForwardMixin):
             out.append(1)
         return out
 
+    def _pad_seq_len_to_warmup_prompt_lens(self, seq_len: int) -> int:
+        """Return the smallest supported prefill length >= seq_len.
+
+        Raises:
+            ValueError: If seq_len exceeds every value returned by
+                _get_prefill_warmup_token_lens().
+        """
+        warmup_token_lens = self._get_prefill_warmup_token_lens()
+        for supported_len in warmup_token_lens:
+            if seq_len <= supported_len:
+                return supported_len
+
+        raise ValueError(f"seq_len {seq_len} is greater than all supported prefill lengths {warmup_token_lens}")
+
     def _prefill(
         self,
         tokens: torch.Tensor,
@@ -2242,6 +2407,28 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         tokens = tokens.view(1, 1, -1)
         seq_len = tokens.shape[-1]
+        if self.vllm_context:
+            # In vLLM context, we perform warmup for prefill and decode.
+            # prefill warmup is performed for all supported prompt lengths in the list returned by _get_prefill_warmup_token_lens()
+            # We need to pad the seq_len to the closest supported warmup prompt length, otherwise memory corruption can happen.
+            # The memory corruption happens when any new device memory is allocated when trace is active.
+            max_supported_seq_len = max(self._get_prefill_warmup_token_lens())
+            if seq_len > max_supported_seq_len:
+                raise ValueError(
+                    f"seq_len {seq_len} is greater than {max_supported_seq_len}. "
+                    "Crash here early rather than wait for memory corruption to happen and crash later."
+                )
+            padded_seq_len = self._pad_seq_len_to_warmup_prompt_lens(seq_len)
+            if padded_seq_len > seq_len:
+                pad_token_id = self._get_pad_id()
+                pad_tokens = torch.full(
+                    (tokens.shape[0], tokens.shape[1], padded_seq_len - seq_len),
+                    pad_token_id,
+                    dtype=tokens.dtype,
+                    device=tokens.device,
+                )
+                tokens = torch.cat((tokens, pad_tokens), dim=-1)
+                seq_len = padded_seq_len
 
         # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
         tt_tokens = ttnn.from_torch(
@@ -2679,16 +2866,11 @@ class DeepseekGenerator(WarmupForwardMixin):
         """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
         assert self._trace_id is None, "Trace already captured"
 
-        # 1) Warm-up compile run (no trace) to keep compilation out of capture
-        logger.info("Running warm-up decode step (no trace)...")
-        if self.signpost:
-            signpost(header="decode_warmup")
-        _ = self._decode_step(init_tokens, positions, page_tables=page_tables, sample_on_device=False)
-        ttnn.synchronize_device(self.mesh_device)
-        if self.signpost:
-            signpost(header="decode_warmup")
+        # vLLM handles warmup calls internally, so we don't need to do anything here.
+        # For demo mode, we need to do warmup explicitly.
+        # So, overall it's expected that the warmup is done before capturing the trace.
 
-        # 2) Allocate persistent device inputs
+        # 1) Allocate persistent device inputs
         self._trace_tokens = self._tt_from_tokens_step(init_tokens)
         self._trace_positions = ttnn.from_torch(
             positions,
@@ -2707,7 +2889,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             self._trace_page_tables_to_use = self._get_page_tables()
         ttnn.synchronize_device(self.mesh_device)
 
-        # 3) Capture decode graph
+        # 2) Capture decode graph
         self.ccl.reset_sem_counters()
         logger.info("Begin capturing decode trace...")
         if self.signpost:
@@ -2743,7 +2925,8 @@ class DeepseekGenerator(WarmupForwardMixin):
     ) -> ttnn.Tensor | torch.Tensor:
         # vLLM does not pass enable_trace param while initializing the model.
         # vLLM sets it in decode/prefill calls only, so we need to set it here too.
-        self.enable_trace = enable_trace
+        if self.vllm_context:
+            self.enable_trace = enable_trace
 
         if not enable_trace:
             return self._decode_step(tokens, start_pos, page_table, sample_on_device)
@@ -2844,9 +3027,87 @@ class DeepseekGenerator(WarmupForwardMixin):
                 ttnn.ReadDeviceProfiler(self.mesh_device)
             return logits.squeeze(0).squeeze(0)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
-        logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
-        logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator")
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device,
+        non_greedy_decoding_on_device,
+        min_token_len: int = 0,
+        max_token_len: int = 0,
+        sample_on_device: bool | None = None,
+    ) -> None:
+        if enable_trace:
+            logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator; skipping warmup.")
+            return
+
+        user_id = 0
+        original_sample_on_device = getattr(self, "sample_on_device", False)
+        if sample_on_device is None or self.vllm_context:
+            sample_on_device_list = [False, True] if can_sample_on_device else [False]
+        else:
+            sample_on_device_list = [sample_on_device]
+
+        for sample_on_device in sample_on_device_list:
+            for token_len in self._get_prefill_warmup_token_lens(min_token_len, max_token_len):
+                vocab = int(getattr(self.hf_config, "vocab_size", 129280))
+                warmup_token_ids = [torch.randint(vocab, (token_len,), dtype=torch.int32).tolist()]
+                tokens, _ = self._pad_batch(warmup_token_ids, 1)
+                # TODO: MTP path warmup needed?
+                prefill_logits = self._prefill(
+                    tokens=tokens,
+                    user_id=user_id,
+                    sample_on_device=sample_on_device,
+                    return_last_hidden=False,
+                )
+                if sample_on_device:
+                    self._validate_and_initialize_sampling(
+                        None,
+                        sample_on_device,
+                        enable_trace=enable_trace,
+                    )
+                    sliced_prefill_logits = self._slice_last_token_logits(
+                        prefill_logits, token_len, expand_to_batch=True
+                    )
+                    sampled_tokens = self._sample_tokens_device(sliced_prefill_logits, user_slots=[user_id])
+                    try:
+                        if sampled_tokens is not None:
+                            ttnn.deallocate(sampled_tokens)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate sampled tokens: {e}")
+                    try:
+                        if sliced_prefill_logits is not None:
+                            ttnn.deallocate(sliced_prefill_logits)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate sliced prefill logits: {e}")
+                    try:
+                        if prefill_logits is not None:
+                            ttnn.deallocate(prefill_logits)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate prefill logits: {e}")
+
+        if getattr(self, "sample_on_device", False) != original_sample_on_device:
+            # Warmup may initialize sampling internals; restore the caller's expected mode.
+            self._validate_and_initialize_sampling(
+                None,
+                original_sample_on_device,
+                enable_trace=enable_trace,
+            )
+
+        # Warmup creates temporary page tables; clean them up to free memory.
+        try:
+            if self.page_tables_tt is not None:
+                for i, page_table in enumerate(self.page_tables_tt):
+                    try:
+                        ttnn.deallocate(page_table)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate warmup page table {i}: {e}")
+                self.page_tables_tt = None
+            self.base_page_table_host = None
+        except Exception as e:
+            logger.warning(f"Failed to cleanup warmup page tables: {e}")
+
+        logger.info("Prefill warmup completed.")
 
     def get_kv_cache(self):
         assert self.model_state is not None, "Model state is not initialized"
