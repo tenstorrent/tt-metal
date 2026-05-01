@@ -1204,11 +1204,23 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     auto host_rank_for_chip =
                         this->topology_mapper_->get_host_rank_for_chip(mesh_id, logical_connected_chip_id);
 
-                    TT_ASSERT(
-                        host_rank_for_chip.has_value(),
-                        "Mesh {} Chip {} does not have a host rank associated with it",
-                        *mesh_id,
-                        logical_connected_chip_id);
+                    // FIX TG (#42429): TT_ASSERT is a no-op in Release builds — calling .value()
+                    // without a preceding has_value() check throws std::bad_optional_access when the
+                    // connected chip has been excluded from the topology mapper by FIX TB (degraded
+                    // cluster, corrupt ERISC L1).  Skip the connection gracefully, matching the
+                    // pattern used by FIX TE for missing ASIC IDs on the source chip.
+                    if (!host_rank_for_chip.has_value()) {
+                        log_warning(
+                            tt::LogFabric,
+                            "FIX TG (#42429): Mesh {} Chip {} has no host rank in topology mapper "
+                            "(chip excluded by degraded-topology guard). "
+                            "Skipping cross-host routing table entry from FabricNodeId (M{}, D{}).",
+                            *mesh_id,
+                            logical_connected_chip_id,
+                            *mesh_id,
+                            fabric_chip_id);
+                        continue;
+                    }
                     auto connected_host_rank_id = host_rank_for_chip.value();
 
                     // Iterate over all neighboring hosts

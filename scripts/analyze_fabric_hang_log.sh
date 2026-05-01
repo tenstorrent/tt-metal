@@ -20,10 +20,12 @@ elif [[ ! -f "$LOGFILE" ]]; then
     exit 1
 fi
 
-# Strip ANSI escape codes for clean processing
+# Strip ANSI/VT100 escape codes and GitHub Actions group markers for clean processing.
+# Handles: color codes (\x1b[...m), cursor movement, character set switches (\x1b(B),
+# carriage returns, and ##[group]/##[endgroup] GitHub Actions annotations.
 CLEAN=$(mktemp /tmp/fabric_clean_XXXXXX)
 trap "rm -f $CLEAN ${TMPF:-}" EXIT
-sed 's/\x1b\[[0-9;]*m//g; s/\[0m//g; s/\[90m//g; s/\[35m//g; s/\[37m//g; s/\[36;1m//g' "$LOGFILE" > "$CLEAN"
+sed $'s/\x1b\\[[0-9;]*[A-Za-z]//g; s/\x1b(B//g; s/\r//g; s/##\\[.*\\]//g' "$LOGFILE" > "$CLEAN"
 
 echo "========================================================================"
 echo "  FABRIC HANG LOG ANALYSIS"
@@ -41,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX TE|FIX TF|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX TE|FIX TF|FIX TG|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -110,7 +112,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX TE|FIX TF|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX TE|FIX TF|FIX TG|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re, signal
@@ -193,7 +195,7 @@ for line in sys.stdin:
         seen.add(key)
         print('  ' + msg[:140])
 " || true
-MUX_RESETS=$(grep -c 'assert_risc_reset_at_core\|force.reset.*ETH\|ETH.*force.reset' "$CLEAN" 2>/dev/null || echo 0)
+MUX_RESETS=$(grep -c 'assert_risc_reset_at_core\|force.reset.*ETH\|ETH.*force.reset' "$CLEAN" 2>/dev/null; :)
 echo "  (total matching lines: ${MUX_RESETS:-0})"
 echo ""
 
@@ -215,7 +217,7 @@ for line in sys.stdin:
         seen.add(key)
         print('  ' + msg[:140])
 " || true
-DEAD_CH=$(grep -cE 'newly.dead|newly_dead|configure_fabric_cores.*newly.dead' "$CLEAN" 2>/dev/null || echo 0)
+DEAD_CH=$(grep -cE 'newly.dead|newly_dead|configure_fabric_cores.*newly.dead' "$CLEAN" 2>/dev/null; :)
 [[ "${DEAD_CH:-0}" -eq 0 ]] && echo "  (none detected)"
 echo ""
 
@@ -235,12 +237,12 @@ for line in sys.stdin:
         seen.add(key)
         print('  ' + msg[:140])
 " || true
-SENTINEL=$(grep -c '0x49706550' "$CLEAN" 2>/dev/null || echo 0)
+SENTINEL=$(grep -c '0x49706550' "$CLEAN" 2>/dev/null; :)
 echo "  (0x49706550 sentinel occurrences: ${SENTINEL:-0})"
-GLOBAL_DL=$(grep -cE 'Global deadline expired|global.*deadline.*channel' "$CLEAN" 2>/dev/null || echo 0)
+GLOBAL_DL=$(grep -cE 'Global deadline expired|global.*deadline.*channel' "$CLEAN" 2>/dev/null; :)
 echo "  (Global deadline teardown events: ${GLOBAL_DL:-0})"
 # Canary detections
-CANARY_COUNT=$(grep -c '0xA0A0A0A0\|A0A0A0A0' "$CLEAN" 2>/dev/null || echo 0)
+CANARY_COUNT=$(grep -c '0xA0A0A0A0\|A0A0A0A0' "$CLEAN" 2>/dev/null; :)
 if [ "$CANARY_COUNT" -gt 0 ]; then
     echo "  => CANARY 0xA0A0A0A0 detected $CANARY_COUNT times (fabric firmware crashed before INITIALIZATION_STARTED)"
     grep '0xA0A0A0A0\|A0A0A0A0' "$CLEAN" | head -5 | while IFS= read -r line; do
@@ -796,70 +798,70 @@ if [[ "$CANCEL_TS" != "unknown" && "$LAST_METAL_TS" != "unknown" ]]; then
 fi
 
 # Detect which failure patterns are present, then emit a targeted diagnosis.
-HAS_DISPATCH_CASCADE=$(grep -c 'Timeout (500 ms) waiting for physical cores' "$CLEAN" 2>/dev/null || echo 0)
-HAS_RELAY_BROKEN=$(grep -c 'relay.*path.*broken\|fabric_relay_path_broken_' "$CLEAN" 2>/dev/null || echo 0)
-HAS_P4_TIMEOUT=$(grep -cE 'Phase 4.*TIMEOUT|Phase 4.*timeout|MUX.*timeout|Timeout.*MUX|Timeout.*MUX READY_FOR_TRAFFIC|MUX READY_FOR_TRAFFIC.*[Tt]imeout|Timeout waiting for fabric MUX' "$CLEAN" 2>/dev/null || echo 0)
-HAS_EXCEPTION=$(grep -cE 'TT_THROW|TT_FATAL|Fatal|Abort' "$CLEAN" 2>/dev/null || echo 0)
-HAS_FORCE_RESET=$(grep -c 'assert_risc_reset_at_core\|force.reset' "$CLEAN" 2>/dev/null || echo 0)
-FIX_Z=$(grep -c 'is_fabric_relay_path_broken\|relay.*broken.*completion_queue\|CQ.*relay.*broken' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AB=$(grep -cE 'hard-reset.*MMIO|RiscFirmwareInitializer.*teardown|MMIO ETH.*reset|fabric_teardown_timed_out_.*set.*device|FIX AB extension' "$CLEAN" 2>/dev/null || echo 0)
+HAS_DISPATCH_CASCADE=$(grep -c 'Timeout (500 ms) waiting for physical cores' "$CLEAN" 2>/dev/null; :)
+HAS_RELAY_BROKEN=$(grep -c 'relay.*path.*broken\|fabric_relay_path_broken_' "$CLEAN" 2>/dev/null; :)
+HAS_P4_TIMEOUT=$(grep -cE 'Phase 4.*TIMEOUT|Phase 4.*timeout|MUX.*timeout|Timeout.*MUX|Timeout.*MUX READY_FOR_TRAFFIC|MUX READY_FOR_TRAFFIC.*[Tt]imeout|Timeout waiting for fabric MUX' "$CLEAN" 2>/dev/null; :)
+HAS_EXCEPTION=$(grep -cE 'TT_THROW|TT_FATAL|Fatal|Abort' "$CLEAN" 2>/dev/null; :)
+HAS_FORCE_RESET=$(grep -c 'assert_risc_reset_at_core\|force.reset' "$CLEAN" 2>/dev/null; :)
+FIX_Z=$(grep -c 'is_fabric_relay_path_broken\|relay.*broken.*completion_queue\|CQ.*relay.*broken' "$CLEAN" 2>/dev/null; :)
+FIX_AB=$(grep -cE 'hard-reset.*MMIO|RiscFirmwareInitializer.*teardown|MMIO ETH.*reset|fabric_teardown_timed_out_.*set.*device|FIX AB extension' "$CLEAN" 2>/dev/null; :)
 # FIX AB extension: post_teardown flag that quiesce timed out; triggers Step 5 FIX AC reset
-FIX_AB_EXT=$(grep -cE 'FIX AB extension|post_teardown.*FIX AB|fabric_teardown_timed_out.*set.*hard-reset|teardown: FIX AC \(timeout-only\)' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AD=$(grep -cE 'rescue_stuck_dispatch_cores.*hard.*reset|hard BRISC reset|performing hard BRISC reset' "$CLEAN" 2>/dev/null || echo 0)
-FIX_W=$(grep -cE 'FIX W|Phase 5b.*all.*truly.*unhealthy.*stuck at 0x0|all.*dead.*clean return' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AA=$(grep -ciE 'FIX AA|relay path broken.*skipping AllGather|skipping AllGather' "$CLEAN" 2>/dev/null || echo 0)
-FIX_V=$(grep -cE 'FIX V|Setting fabric_relay_path_broken_=true to skip relay ops in subsequent quiesce|Phase 5.*timeout.*0x0.*non-MMIO|status still 0x0 on non-MMIO device' "$CLEAN" 2>/dev/null || echo 0)
-RELAY_RESTORED=$(grep -c 'relay-broken flag reset by configure_fabric' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AB_EXT=$(grep -cE 'FIX AB extension|post_teardown.*FIX AB|fabric_teardown_timed_out.*set.*hard-reset|teardown: FIX AC \(timeout-only\)' "$CLEAN" 2>/dev/null; :)
+FIX_AD=$(grep -cE 'rescue_stuck_dispatch_cores.*hard.*reset|hard BRISC reset|performing hard BRISC reset' "$CLEAN" 2>/dev/null; :)
+FIX_W=$(grep -cE 'FIX W|Phase 5b.*all.*truly.*unhealthy.*stuck at 0x0|all.*dead.*clean return' "$CLEAN" 2>/dev/null; :)
+FIX_AA=$(grep -ciE 'FIX AA|relay path broken.*skipping AllGather|skipping AllGather' "$CLEAN" 2>/dev/null; :)
+FIX_V=$(grep -cE 'FIX V|Setting fabric_relay_path_broken_=true to skip relay ops in subsequent quiesce|Phase 5.*timeout.*0x0.*non-MMIO|status still 0x0 on non-MMIO device' "$CLEAN" 2>/dev/null; :)
+RELAY_RESTORED=$(grep -c 'relay-broken flag reset by configure_fabric' "$CLEAN" 2>/dev/null; :)
 # FIX-1: MMIO device Phase 5 timeout now also sets fabric_relay_path_broken_ (removed !is_mmio_capable() guard)
-FIX_1_MMIO=$(grep -cE 'Setting fabric_relay_path_broken_=true|Phase 5.*timeout.*0x0.*MMIO|fabric_relay_path_broken_.*MMIO' "$CLEAN" 2>/dev/null || echo 0)
+FIX_1_MMIO=$(grep -cE 'Setting fabric_relay_path_broken_=true|Phase 5.*timeout.*0x0.*MMIO|fabric_relay_path_broken_.*MMIO' "$CLEAN" 2>/dev/null; :)
 # FIX AS: Pass-0 canary poll events (per-channel polling before write_launch_msg)
-FIX_AS_PASS0=$(grep -cE 'Pass-0 \(FIX AS\)|Pass-0 \(FIX AR\+AS\) complete' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AS_PASS0=$(grep -cE 'Pass-0 \(FIX AS\)|Pass-0 \(FIX AR\+AS\) complete' "$CLEAN" 2>/dev/null; :)
 # FIX_AS_TIMEOUT: actual log messages are "NOT ready after ... marking dead" and
 # "did NOT reach UMD ready after ... marking dead, skipping launch"
-FIX_AS_TIMEOUT=$(grep -cE 'Pass-0.*NOT ready after|Pass-0.*did NOT reach.*UMD ready|Pass-0.*marking dead|canary not seen' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AS_TIMEOUT=$(grep -cE 'Pass-0.*NOT ready after|Pass-0.*did NOT reach.*UMD ready|Pass-0.*marking dead|canary not seen' "$CLEAN" 2>/dev/null; :)
 # FIX AC: teardown MMIO ETH reset events
-FIX_AC_FIRES=$(grep -cE 'FIX AC' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AC_FIRES=$(grep -cE 'FIX AC' "$CLEAN" 2>/dev/null; :)
 # FIX AU: relay-broken non-MMIO channels bypassed poll loop (FIX AU #42429)
-FIX_AU_FIRES=$(grep -cE 'FIX AU|bypassed the poll loop.*relay-broken' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AU_FIRES=$(grep -cE 'FIX AU|bypassed the poll loop.*relay-broken' "$CLEAN" 2>/dev/null; :)
 # FIX AX: relay-confirmed-dead non-MMIO channels skipped assert_risc_reset
-FIX_AX_FIRES=$(grep -cE 'FIX AX|relay confirmed dead.*skipping assert_risc_reset' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AX_FIRES=$(grep -cE 'FIX AX|relay confirmed dead.*skipping assert_risc_reset' "$CLEAN" 2>/dev/null; :)
 # FIX AJ: relay path confirmed dead during assert_risc_reset (marks relay_dead_devices)
-FIX_AJ_FIRES=$(grep -cE 'FIX AJ|relay path confirmed dead during force-reset' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AJ_FIRES=$(grep -cE 'FIX AJ|relay path confirmed dead during force-reset' "$CLEAN" 2>/dev/null; :)
 # FIX AK (FabricFirmware): transitive relay guard — skipping l1_barrier for ALL non-MMIO
-FIX_AK_FIRES=$(grep -cE 'relay-dead device.*confirmed.*skipping l1_barrier.*FIX AK|FIX AK.*skipping l1_barrier' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AK_FIRES=$(grep -cE 'relay-dead device.*confirmed.*skipping l1_barrier.*FIX AK|FIX AK.*skipping l1_barrier' "$CLEAN" 2>/dev/null; :)
 # FIX AQ: secondary edm_status_address sentinel poll after FIX AR heartbeat poll
-FIX_AQ_FIRES=$(grep -cE 'FIX AQ' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AQ_TIMEOUT=$(grep -cE 'FIX AQ.*ROM postcode.*after.*ms' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AQ_FIRES=$(grep -cE 'FIX AQ' "$CLEAN" 2>/dev/null; :)
+FIX_AQ_TIMEOUT=$(grep -cE 'FIX AQ.*ROM postcode.*after.*ms' "$CLEAN" 2>/dev/null; :)
 # FIX AT: Phase 5 handshake poll skipped when MMIO master chan was FIX AS Pass-0 timeout'd
-FIX_AT_FIRES=$(grep -cE 'FIX AT|Pass-0 timeout.*skipping.*handshake|master chan.*FIX AS.*Pass-0 timeout' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AT_FIRES=$(grep -cE 'FIX AT|Pass-0 timeout.*skipping.*handshake|master chan.*FIX AS.*Pass-0 timeout' "$CLEAN" 2>/dev/null; :)
 # FIX AY: deferred non-MMIO ETH ERISC reset via restored MMIO relay
 # FIX AV: skip remaining ETH cores on same device when first assert_risc_reset times out
-FIX_AY_FIRES=$(grep -cE 'FIX AY' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AY_SUCCEEDED=$(grep -cE 'FIX AY.*all.*reset to base firmware|FIX AY.*succeeded' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AY_FAILED=$(grep -cE 'FIX AY.*failed|FIX AY.*non-std exception|FIX AY/AV.*failed' "$CLEAN" 2>/dev/null || echo 0)
-FIX_AV_FIRES=$(grep -cE 'FIX AV #42429|FIX AY/AV.*Skipping all remaining' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AY_FIRES=$(grep -cE 'FIX AY' "$CLEAN" 2>/dev/null; :)
+FIX_AY_SUCCEEDED=$(grep -cE 'FIX AY.*all.*reset to base firmware|FIX AY.*succeeded' "$CLEAN" 2>/dev/null; :)
+FIX_AY_FAILED=$(grep -cE 'FIX AY.*failed|FIX AY.*non-std exception|FIX AY/AV.*failed' "$CLEAN" 2>/dev/null; :)
+FIX_AV_FIRES=$(grep -cE 'FIX AV #42429|FIX AY/AV.*Skipping all remaining' "$CLEAN" 2>/dev/null; :)
 # FIX AL: STARTED early-exit — Phase 5 master chan stuck at EDMStatus::STARTED after kStartedTimeoutMs
-FIX_AL_FIRES=$(grep -cE 'FIX AL|STARTED early-exit after.*ms.*master chan' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AL_FIRES=$(grep -cE 'FIX AL|STARTED early-exit after.*ms.*master chan' "$CLEAN" 2>/dev/null; :)
 # FIX AM: Phase 5b skip when master chan still at STARTED after FIX AL break
-FIX_AM_FIRES=$(grep -cE 'FIX AM|skipping Phase 5b.*FIX AM|channels_not_ready_for_traffic.*FIX AM|still at STARTED.*skipping Phase 5b' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AM_FIRES=$(grep -cE 'FIX AM|skipping Phase 5b.*FIX AM|channels_not_ready_for_traffic.*FIX AM|still at STARTED.*skipping Phase 5b' "$CLEAN" 2>/dev/null; :)
 # FIX AW: ~Cluster destructor runs driver_->close_device() in detached thread to avoid wait_for_non_mmio_flush hang
-FIX_AW_FIRES=$(grep -cE 'FIX AW|relay-broken non-MMIO.*running driver.*close_device.*background thread|close_device.*did not complete.*5s.*FIX AW' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AW_FIRES=$(grep -cE 'FIX AW|relay-broken non-MMIO.*running driver.*close_device.*background thread|close_device.*did not complete.*5s.*FIX AW' "$CLEAN" 2>/dev/null; :)
 # FIX BA: STARTED-state non-MMIO devices added to relay_broken_non_mmio (FIX AM fired, relay_broken=false)
-FIX_BA_FIRES=$(grep -cE 'FIX BA|channels_not_ready_for_traffic.*relay not marked broken.*Adding to relay_broken_non_mmio|teardown: FIX BA' "$CLEAN" 2>/dev/null || echo 0)
+FIX_BA_FIRES=$(grep -cE 'FIX BA|channels_not_ready_for_traffic.*relay not marked broken.*Adding to relay_broken_non_mmio|teardown: FIX BA' "$CLEAN" 2>/dev/null; :)
 # FIX AE: catch wait_for_non_mmio_flush() timeout in write_core/write_reg/noc_multicast_write + mark_relay_broken() for ~Cluster()
 # Pattern: "FIX AE: wait_for_non_mmio_flush(chip N) threw: ... Marking relay broken."
-FIX_AE_FLUSH_TIMEOUT=$(grep -cE 'FIX AE.*wait_for_non_mmio_flush.*threw|FIX AE.*Marking relay broken' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AE_FLUSH_TIMEOUT=$(grep -cE 'FIX AE.*wait_for_non_mmio_flush.*threw|FIX AE.*Marking relay broken' "$CLEAN" 2>/dev/null; :)
 # FIX AE also marks all remote chips relay-broken in ~Cluster() before close_device() — no specific log (silent path).
 # FIX NS: eliminate redundant topology discovery in initialize_base_objects (no runtime log — structural fix)
 # Regression evidence: 14+ min SIGALRM before any test, "unit_tests_ttnn" hangs without FIX AQ warning
 # FIX NT: preserve EthCoord for FIX-AQ-skipped remote chips in chip_locations
 # Log: "FIX AQ: Failed to init remote device ... Skipping" (FIX AQ fires; NT adds EthCoord silently)
 # Regression evidence: TT_FATAL "Physical chip id not found for eth coord" @ tt_cluster.cpp:575
-FIX_NT_CRASH=$(grep -cE 'Physical chip id not found for eth coord|TT_FATAL.*chip id not found.*eth' "$CLEAN" 2>/dev/null || echo 0)
+FIX_NT_CRASH=$(grep -cE 'Physical chip id not found for eth coord|TT_FATAL.*chip id not found.*eth' "$CLEAN" 2>/dev/null; :)
 # FIX NU: capture MMIO EthCoord (via PCIe NODE_INFO) before FIX W heartbeat guard
 # Log: "FIX NU: Captured EthCoord for MMIO device ASIC ID" (debug-level only, may not appear in CI)
 # Regression evidence: same TT_FATAL as FIX NT but MMIO chip missing; FIX W skipped ALL ETH channels
-FIX_NU_COORD=$(grep -cE 'FIX NU: Captured EthCoord|Captured EthCoord.*MMIO.*before relay' "$CLEAN" 2>/dev/null || echo 0)
+FIX_NU_COORD=$(grep -cE 'FIX NU: Captured EthCoord|Captured EthCoord.*MMIO.*before relay' "$CLEAN" 2>/dev/null; :)
 # FIX NX+NY: write_core() relay guard for non-MMIO chips — FIX NX catches first timeout exception,
 # FIX NY caches the failure in relay_broken_chips_ so subsequent calls for same chip skip UMD.
 # FIX NX log: "FIX NX: write_core(chip N) threw: ... Marking relay broken (FIX NX+NY)."
@@ -867,28 +869,35 @@ FIX_NU_COORD=$(grep -cE 'FIX NU: Captured EthCoord|Captured EthCoord.*MMIO.*befo
 # Regression evidence (FIX NX missing): write_core exception propagates to MetalContext::initialize.
 # Regression evidence (FIX NY missing): N_channels × 5s serial stall per dead chip — GHA timeout.
 #   CI ref: run 25086219070 (job 73503180670): 6 channels × 5s = 30s → GHA 5-min action timeout.
-FIX_NX_THROWS=$(grep -cE 'FIX NX: write_core.*threw|Marking relay broken \(FIX NX\+NY\)' "$CLEAN" 2>/dev/null || echo 0)
-FIX_NY_SKIPS=$(grep -cE 'FIX NY: write_core.*skipped.*relay already known broken' "$CLEAN" 2>/dev/null || echo 0)
+FIX_NX_THROWS=$(grep -cE 'FIX NX: write_core.*threw|Marking relay broken \(FIX NX\+NY\)' "$CLEAN" 2>/dev/null; :)
+FIX_NY_SKIPS=$(grep -cE 'FIX NY: write_core.*skipped.*relay already known broken' "$CLEAN" 2>/dev/null; :)
 # FIX TE (#42429): control_plane.cpp callers of try_get_asic_id_from_fabric_node_id skip chips
 # excluded by FIX TB (no entry in topology mapper — degraded topology from corrupt ERISC L1).
 # Log: "FIX TE (#42429): Skipping order_ethernet_channels for FabricNodeId {}"
 #      "FIX TE (#42429): FabricNodeId (M{}, D{}) not found in topology mapper"
 # Regression evidence: without FIX TE, TT_FATAL in configure_routing_tables or order_ethernet_channels
 #   for FIX TB-excluded chips → SIGABRT; with FIX TE, warning logged and chip skipped.
-FIX_TE_SKIPS=$(grep -cE 'FIX TE.*Skipping order_ethernet_channels|FIX TE.*not found in topology mapper' "$CLEAN" 2>/dev/null || echo 0)
+FIX_TE_SKIPS=$(grep -cE 'FIX TE.*Skipping order_ethernet_channels|FIX TE.*not found in topology mapper' "$CLEAN" 2>/dev/null; :)
 # FIX TF (#42429): assemble_2d_fabric_packet_header_args TT_FATAL guard — replaces opaque
 # bad_optional_access thrown when inter-mesh relay is broken (get_forwarding_direction returns nullopt).
 # Log (TT_FATAL, appears before SIGABRT): "FIX TF: No forwarding direction from physical chip N"
 # Regression evidence: without FIX TF, GTest sees "bad optional access" with no chip context;
 #   with FIX TF, TT_FATAL names src/dst chip IDs and fabric node IDs.
-FIX_TF_FIRES=$(grep -cE 'FIX TF: No forwarding direction' "$CLEAN" 2>/dev/null || echo 0)
+FIX_TF_FIRES=$(grep -cE 'FIX TF: No forwarding direction' "$CLEAN" 2>/dev/null; :)
+# FIX TG (#42429): control_plane.cpp configure_routing_tables_for_fabric_ethernet_channels —
+# TT_ASSERT (no-op in Release) guarded host_rank_for_chip.value() for connected chips excluded
+# by FIX TB.  Fixed by guarding with has_value() check and continuing (skip), matching FIX TE.
+# Log: "FIX TG (#42429): Mesh {} Chip {} has no host rank in topology mapper"
+# Regression evidence: without FIX TG, std::bad_optional_access thrown in ControlPlane ctor
+#   during T3K SetUp() on degraded cluster → GTest catches it as opaque "bad optional access".
+FIX_TG_FIRES=$(grep -cE 'FIX TG.*has no host rank in topology mapper' "$CLEAN" 2>/dev/null; :)
 # FIX M2 (#42429): Secondary check in compile_and_configure_fabric() — channel showed 0x49706550 (base-UMD relay)
 # but peer non-MMIO device is confirmed dead-relay → remove from base_umd_channels so configure_fabric_cores()
 # performs a hard soft-reset (no relay reads in flight, safe to reset).
-FIX_M2_FIRES=$(grep -cE 'FIX M2.*dead-relay|compile_and_configure_fabric: FIX M2' "$CLEAN" 2>/dev/null || echo 0)
+FIX_M2_FIRES=$(grep -cE 'FIX M2.*dead-relay|compile_and_configure_fabric: FIX M2' "$CLEAN" 2>/dev/null; :)
 # FIX PL (#42429): opt-in timeout guards on l1_barrier / dram_barrier / read_core for non-MMIO chips.
 # Fires when the ERISC relay path is dead and the barrier/read would otherwise hang indefinitely.
-FIX_PL_FIRES=$(grep -cE 'clear_l1_state: l1_barrier timed out.*dead ERISC relay|clear_dram_state: dram_barrier timed out|terminate_active_ethernet_cores_on_all_chips: l1_barrier timed out|WriteInitMagic: read_core timed out' "$CLEAN" 2>/dev/null || echo 0)
+FIX_PL_FIRES=$(grep -cE 'clear_l1_state: l1_barrier timed out.*dead ERISC relay|clear_dram_state: dram_barrier timed out|terminate_active_ethernet_cores_on_all_chips: l1_barrier timed out|WriteInitMagic: read_core timed out' "$CLEAN" 2>/dev/null; :)
 
 if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
     DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
@@ -1001,7 +1010,7 @@ if [ "${FIX_AY_FIRES:-0}" -gt 0 ]; then
     fi
 fi
 # FIX AV: sysmem_manager_->reset() skipped for relay-broken non-MMIO devices
-FIX_AV_SKIP=$(grep -cE 'running in degraded mode|configure_fabric.*degraded' "$CLEAN" 2>/dev/null || echo 0)
+FIX_AV_SKIP=$(grep -cE 'running in degraded mode|configure_fabric.*degraded' "$CLEAN" 2>/dev/null; :)
 if [ "${FIX_AV_SKIP:-0}" -gt 0 ]; then
     echo "  => [FIX AV / DEGRADED] configure_fabric degraded mode fired (${FIX_AV_SKIP} event(s)) — pre-dead channels skipped; relay-broken sysmem reset guard may have applied"
 fi
@@ -1082,6 +1091,16 @@ elif grep -qE 'bad optional access' "$CLEAN" 2>/dev/null; then
     echo "     get_forwarding_direction() result without has_value() check."
     echo "     When inter-mesh relay is broken, this throws bad_optional_access caught by GTest in SetUp()."
     echo "     Fix: add TT_FATAL(forwarding_direction.has_value(), \"FIX TF: ...\") before .value() call."
+fi
+if [ "${FIX_TG_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TG] configure_routing_tables: connected chip excluded by FIX TB has no host rank (${FIX_TG_FIRES} skip(s))."
+    echo "     get_host_rank_for_chip() returned nullopt for a chip that FIX TB excluded (degraded cluster)."
+    echo "     Before FIX TG: TT_ASSERT (no-op in Release) failed to guard .value() → bad_optional_access in ControlPlane ctor."
+    echo "     FIX TG: has_value() guard + warning log + continue, matching FIX TE pattern."
+elif grep -qE 'bad optional access' "$CLEAN" 2>/dev/null && [ "${FIX_TE_SKIPS:-0}" -gt 0 ]; then
+    echo "  => [FIX TG MISSING?] bad optional access + FIX TE skips present, but no FIX TG warning."
+    echo "     Possible regression: control_plane.cpp:1212 TT_ASSERT→has_value() guard missing or reverted."
+    echo "     Commit to check: FIX TG in configure_routing_tables_for_fabric_ethernet_channels."
 fi
 echo ""
 echo "========================================================================"
