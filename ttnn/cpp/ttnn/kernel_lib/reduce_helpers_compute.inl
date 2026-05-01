@@ -9,12 +9,30 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "experimental/circular_buffer.h"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/buffer_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+
+// #region agent log
+// Compile-time tag for the active TRISC variant; identifies which RISC stream a
+// DPRINT line came from when TT_METAL_DPRINT_ONE_FILE_PER_RISC is on. Each TRISC
+// only has its own UCK_CHLKC_* define, so this expands to a single character.
+#if defined(UCK_CHLKC_UNPACK)
+#define KL_TRISC_TAG "U"
+#elif defined(UCK_CHLKC_MATH)
+#define KL_TRISC_TAG "M"
+#elif defined(UCK_CHLKC_PACK)
+#define KL_TRISC_TAG "P"
+#elif defined(UCK_CHLKC_ISOLATE_SFPU)
+#define KL_TRISC_TAG "S"
+#else
+#define KL_TRISC_TAG "?"
+#endif
+// #endregion
 
 
 namespace compute_kernel_lib {
@@ -422,6 +440,11 @@ ALWI void reduce(
         UNPACK((assert_input_cb_size<input_policy>(input_cb_id, Wt, total_input_tiles)));
         PACK((assert_output_cb_size<input_policy>(output_cb_id, total_output_tiles)));
 
+        // #region agent log
+        DPRINT << KL_TRISC_TAG << ":REDW enter in=" << input_cb_id << " sc=" << scaler_cb_id
+               << " out=" << output_cb_id << " Ht=" << Ht << " Wt=" << Wt << " NC=" << num_batches << ENDL();
+        // #endregion
+
         // No-pop modes: bulk reserve output upfront
         if constexpr (!should_pop(input_policy)) {
             output_buf.reserve_back(total_output_tiles);
@@ -450,13 +473,29 @@ ALWI void reduce(
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
                     if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
+                        // #region agent log
+                        DPRINT << KL_TRISC_TAG << ":W bw nc=" << nc << " ht=" << ht << " wt=" << wt
+                               << ENDL();
+                        // #endregion
                         input_buf.wait_front(onetile);
+                        // #region agent log
+                        DPRINT << KL_TRISC_TAG << ":W aw nc=" << nc << " ht=" << ht << " wt=" << wt
+                               << ENDL();
+                        // #endregion
                         if constexpr (use_matmul) {
                             reduce_matmul_tiles(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
                         } else {
                             reduce_tile<reduce_type, reduce_dim>(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
                         }
+                        // #region agent log
+                        DPRINT << KL_TRISC_TAG << ":W bp nc=" << nc << " ht=" << ht << " wt=" << wt
+                               << ENDL();
+                        // #endregion
                         input_buf.pop_front(onetile);
+                        // #region agent log
+                        DPRINT << KL_TRISC_TAG << ":W ap nc=" << nc << " ht=" << ht << " wt=" << wt
+                               << ENDL();
+                        // #endregion
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
                         if constexpr (use_matmul) {
@@ -481,14 +520,26 @@ ALWI void reduce(
 
                 // Pop modes: reserve per-row to avoid deadlock
                 if constexpr (should_pop(input_policy)) {
+                    // #region agent log
+                    DPRINT << KL_TRISC_TAG << ":W brsv nc=" << nc << " ht=" << ht << ENDL();
+                    // #endregion
                     output_buf.reserve_back(onetile);
+                    // #region agent log
+                    DPRINT << KL_TRISC_TAG << ":W arsv nc=" << nc << " ht=" << ht << ENDL();
+                    // #endregion
                 }
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst_idx, output_cb_id);
                 tile_regs_release();
                 if constexpr (should_pop(input_policy)) {
+                    // #region agent log
+                    DPRINT << KL_TRISC_TAG << ":W bpush nc=" << nc << " ht=" << ht << ENDL();
+                    // #endregion
                     output_buf.push_back(onetile);
+                    // #region agent log
+                    DPRINT << KL_TRISC_TAG << ":W apush nc=" << nc << " ht=" << ht << ENDL();
+                    // #endregion
                 }
 
                 // BulkWaitBulkPop: pop all tiles after processing
