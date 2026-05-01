@@ -352,9 +352,7 @@ void run_single_core_broadcast(
         TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
     }
 
-    KernelHandle reader_kernel;
-    KernelHandle writer_kernel;
-    KernelHandle compute_kernel;
+    KernelHandle reader_kernel, writer_kernel, binary_kernel;
 
     std::vector<uint32_t> reader_cta;
     std::vector<uint32_t> writer_cta;
@@ -378,7 +376,7 @@ void run_single_core_broadcast(
                 .num_threads_per_cluster = 1, .compile_args = writer_cta});
 
         compute_cta = {inp0_dfb, inp1_dfb, out_dfb};
-        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+        binary_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
             core,
@@ -389,11 +387,11 @@ void run_single_core_broadcast(
                 .defines = defines});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, inp0_dfb, reader_kernel, compute_kernel);
+            program_, inp0_dfb, reader_kernel, binary_kernel);
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, inp1_dfb, reader_kernel, compute_kernel);
+            program_, inp1_dfb, reader_kernel, binary_kernel);
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, out_dfb, compute_kernel, writer_kernel);
+            program_, out_dfb, binary_kernel, writer_kernel);
     } else {
         reader_kernel = tt_metal::CreateKernel(
             program_,
@@ -411,7 +409,7 @@ void run_single_core_broadcast(
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = writer_compile_args});
 
-        compute_kernel = tt_metal::CreateKernel(
+        binary_kernel = tt_metal::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
             core,
@@ -590,8 +588,8 @@ INSTANTIATE_TEST_SUITE_P(
                           20}));  // Row 20
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb) {
-    constexpr EltwiseOp k_op = EltwiseOp::ADD;
-    constexpr BroadcastDim k_dim = BroadcastDim::ROW;
+    constexpr EltwiseOp k_op = EltwiseOp::SUB;
+    constexpr BroadcastDim k_dim = BroadcastDim::COL;
     unit_tests::compute::broadcast::BroadcastConfig cfg = {
         .api_convention = ApiConvention::DEFAULT,
         .eltwise_op = k_op,
