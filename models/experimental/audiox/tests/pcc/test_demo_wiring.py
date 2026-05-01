@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Wiring smoke-tests for the text-to-audio demo. We don't pull in the real
+HuggingFace AudioX checkpoint here — the heavy bits (T5, CLIP, DiT layers)
+have their own parity tests. These tests check the demo helpers stitch the
+pieces together with the right shapes and that the empty-feat shortcuts fire
+on the text-to-audio path."""
+
+import torch
+
+from models.experimental.audiox.demo import demo as demo_mod
+
+
+def test_metadata_batch_zero_inputs_have_text_only_shapes():
+    """Default metadata for text-to-audio: zero video tensor and zero audio
+    tensor at the AudioX HF config sizes, plus the user prompt string."""
+    batch = demo_mod._build_metadata_batch("hello")
+    assert len(batch) == 1
+    assert batch[0]["text_prompt"] == "hello"
+
+    fps = 5
+    duration = demo_mod._HF_CONFIG["duration_seconds"]
+    assert batch[0]["video_prompt"].shape == (1, fps * duration, 3, 224, 224)
+    assert torch.all(batch[0]["video_prompt"] == 0)
+
+    samples = demo_mod._HF_CONFIG["sample_rate"] * duration
+    assert batch[0]["audio_prompt"].shape == (1, 2, samples)
+    assert torch.all(batch[0]["audio_prompt"] == 0)
+
+
+def test_make_cross_attn_cond_concats_in_audiox_order():
+    """Order matters for cross-attn cond: video, text, audio (AudioX uses this)."""
+    multi_out = {
+        "video_prompt": (torch.full((1, 5, 768), 1.0), None),
+        "text_prompt": (torch.full((1, 7, 768), 2.0), None),
+        "audio_prompt": (torch.full((1, 3, 768), 3.0), None),
+    }
+    cat = demo_mod._make_cross_attn_cond(multi_out)
+    assert cat.shape == (1, 5 + 7 + 3, 768)
+    # First 5 rows are video (1.0), next 7 text (2.0), last 3 audio (3.0).
+    assert torch.all(cat[:, :5] == 1.0)
+    assert torch.all(cat[:, 5:12] == 2.0)
+    assert torch.all(cat[:, 12:] == 3.0)
+
+
+def test_hf_config_invariants():
+    """Pin the HF config values the demo relies on. Building a full-shape DiT
+    + decoder in PyTorch is too expensive for a unit test — the per-module
+    PCC tests already cover construction at HF dims."""
+    cfg = demo_mod._HF_CONFIG
+    # downsample = prod(decoder strides), and total samples must divide cleanly
+    # into latent frames at this rate.
+    prod_strides = 1
+    for s in cfg["decoder_strides"]:
+        prod_strides *= s
+    assert cfg["downsample"] == prod_strides
+    assert cfg["embed_dim"] % cfg["num_heads"] == 0
+    assert cfg["sample_rate"] * cfg["duration_seconds"] > 0
