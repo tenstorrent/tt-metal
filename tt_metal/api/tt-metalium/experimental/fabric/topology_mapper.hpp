@@ -177,6 +177,18 @@ public:
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
     /**
+     * @brief Try to get ASIC ID from fabric node ID — returns std::nullopt if not in mapping.
+     *
+     * Use this instead of get_asic_id_from_fabric_node_id() when the caller must tolerate chips
+     * excluded by FIX TB (degraded-topology guard in build_topology_mapping).
+     *
+     * @param fabric_node_id
+     * @return std::optional<tt::tt_metal::AsicID>
+     */
+    std::optional<tt::tt_metal::AsicID> try_get_asic_id_from_fabric_node_id(
+        const FabricNodeId& fabric_node_id) const;
+
+    /**
      * @brief Get physical chip ID from ASIC ID mapped by the topology mapper
      *
      * @param asic_id

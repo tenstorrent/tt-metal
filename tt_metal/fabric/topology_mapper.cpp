@@ -199,6 +199,15 @@ tt::tt_metal::AsicID TopologyMapper::get_asic_id_from_fabric_node_id(const Fabri
     return it->second->asic_id;
 }
 
+std::optional<tt::tt_metal::AsicID> TopologyMapper::try_get_asic_id_from_fabric_node_id(
+    const FabricNodeId& fabric_node_id) const {
+    auto it = fabric_node_id_to_mapping_.find(fabric_node_id);
+    if (it == fabric_node_id_to_mapping_.end()) {
+        return std::nullopt;
+    }
+    return it->second->asic_id;
+}
+
 TopologyMapper::TopologyMapper(
     const tt::Cluster& cluster,
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,

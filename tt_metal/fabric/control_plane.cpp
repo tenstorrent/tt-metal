@@ -984,6 +984,16 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 // order ethernet channels using translated coordinates
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
+        // FIX TE (#42429): Skip chips excluded by FIX TB (degraded topology — not in topology mapper).
+        // Their ASIC IDs are not in the PSD so get_asic_neighbors() would crash.
+        if (!this->topology_mapper_->try_get_asic_id_from_fabric_node_id(fabric_node_id).has_value()) {
+            log_warning(
+                tt::LogFabric,
+                "FIX TE (#42429): Skipping order_ethernet_channels for FabricNodeId {} — chip excluded by "
+                "degraded-topology guard.",
+                fabric_node_id);
+            continue;
+        }
         auto phys_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
         const auto src_asic_id = tt::tt_metal::AsicID{this->cluster_.get().get_unique_chip_ids().at(phys_chip_id)};
         const auto& asic_neighbors = physical_system_descriptor_->get_asic_neighbors(src_asic_id);
@@ -1129,8 +1139,20 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
 
         for (const auto& [_, fabric_chip_id] : local_mesh_chip_id_container) {
             const auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
+            // FIX TE (#42429): FIX TB may have excluded this chip from the topology mapper
+            // (degraded topology — corrupt ERISC L1).  Skip it rather than TT_FATALing.
+            auto maybe_asic_id = this->topology_mapper_->try_get_asic_id_from_fabric_node_id(fabric_node_id);
+            if (!maybe_asic_id.has_value()) {
+                log_warning(
+                    tt::LogFabric,
+                    "FIX TE (#42429): FabricNodeId (M{}, D{}) not found in topology mapper — chip excluded by "
+                    "degraded-topology guard.  Skipping intra-mesh routing table entry.",
+                    *mesh_id,
+                    fabric_chip_id);
+                continue;
+            }
             auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-            auto asic_id = this->topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
+            auto asic_id = *maybe_asic_id;
 
             for (const auto& [logical_connected_chip_id, edge] : intra_mesh_connectivity[*mesh_id][fabric_chip_id]) {
                 auto connected_mesh_coord = this->mesh_graph_->chip_to_coordinate(mesh_id, logical_connected_chip_id);
