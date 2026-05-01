@@ -142,6 +142,35 @@ def test_spec_unknown_layer_type_raises():
         HybridAttentionForCausalLM.get_kv_cache_spec(cfg)
 
 
+def test_hybrid_generator_routing_state_lifecycle():
+    """``HybridGenerator`` holds per-call routing state (page tables per
+    group + layer→group mapping) on the instance for the duration of a
+    forward call. Verifies set/clear/predicate work."""
+    from models.tt_transformers.tt.generator_vllm import HybridGenerator
+
+    instance = HybridGenerator.__new__(HybridGenerator)
+    instance._hybrid_page_tables_per_group = None
+    instance._hybrid_layer_to_group = None
+
+    assert instance.hybrid_routing_active is False
+
+    instance.set_hybrid_routing(["t0", "t1"], [0, 1])
+    assert instance.hybrid_routing_active is True
+    assert instance._hybrid_page_tables_per_group == ["t0", "t1"]
+    assert instance._hybrid_layer_to_group == [0, 1]
+
+    instance.clear_hybrid_routing()
+    assert instance.hybrid_routing_active is False
+
+
+def test_hybrid_attention_for_causal_lm_inherits_from_hybrid_generator():
+    """The vLLM wrapper base inherits from HybridGenerator so it picks up
+    the per-call routing state machinery alongside the spec hook."""
+    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, HybridGenerator
+
+    assert issubclass(HybridAttentionForCausalLM, HybridGenerator)
+
+
 def test_subclass_must_override_prefill_and_decode():
     """The base class's prefill_forward / decode_forward are explicit
     NotImplementedError stubs — subclasses must provide model-specific

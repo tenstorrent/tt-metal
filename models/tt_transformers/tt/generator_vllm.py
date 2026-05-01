@@ -127,7 +127,58 @@ def _check_per_group_kwargs(kwargs, model_name):
         )
 
 
-class HybridAttentionForCausalLM(Generator):
+class HybridGenerator(Generator):
+    """:class:`Generator` subclass for hybrid attention models.
+
+    Holds per-call routing state (``page_tables_per_group`` and
+    ``layer_to_group``) on the instance for the duration of a forward
+    call so the deeply-nested prefill / decode chain doesn't have to
+    thread the new args through every method signature. The state is
+    set by :meth:`set_hybrid_routing` before invoking the parent's
+    ``prefill_forward_text`` / ``decode_forward_text``, and cleared
+    afterwards.
+
+    Subclasses (currently :class:`HybridAttentionForCausalLM` and its
+    wrapper subclasses) drive the lifecycle via the ``hybrid_routing``
+    context manager. The actual integration with ``Generator``'s call
+    chain — converting host per-group page tables to device tensors and
+    teaching ``prefill_forward_single_user_text`` / decode equivalents
+    to use the routing — lands per-path in follow-ups so each path can
+    be HW-validated independently. Until then the methods raise a
+    clear NotImplementedError pointing at the missing integration.
+
+    Non-hybrid models (every existing wrapper that inherits directly
+    from :class:`Generator`) are entirely unaffected.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Per-call routing state. ``None`` when not in a hybrid forward.
+        self._hybrid_page_tables_per_group: list | None = None
+        self._hybrid_layer_to_group: list[int] | None = None
+
+    def set_hybrid_routing(
+        self,
+        page_tables_per_group: list | None,
+        layer_to_group: list[int] | None,
+    ) -> None:
+        """Stash per-call routing state for use by overridden inner
+        methods. Cleared via :meth:`clear_hybrid_routing` (typically in a
+        ``try / finally`` around the parent's text forward call).
+        """
+        self._hybrid_page_tables_per_group = page_tables_per_group
+        self._hybrid_layer_to_group = layer_to_group
+
+    def clear_hybrid_routing(self) -> None:
+        self._hybrid_page_tables_per_group = None
+        self._hybrid_layer_to_group = None
+
+    @property
+    def hybrid_routing_active(self) -> bool:
+        return self._hybrid_page_tables_per_group is not None
+
+
+class HybridAttentionForCausalLM(HybridGenerator):
     """vLLM wrapper base for hybrid attention models.
 
     Models with mixed sliding-window + full-attention layers (Gemma3,
