@@ -5,6 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "device.hpp"
 #include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal_types.hpp"
@@ -84,10 +85,10 @@ void write_go_signal(
         expected_num_workers_completed,
         go_msg_u32_val,
         MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
-        (send_mcast && mesh_device->has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
-                                                                      : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-        send_unicasts ? mesh_device->num_virtual_eth_cores(sub_device_id) : 0,
-        mesh_device->noc_data_start_index(sub_device_id, send_unicasts), /* noc_data_start_idx */
+        (send_mcast && mesh_device->impl().has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
+                                                                              : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+        send_unicasts ? mesh_device->impl().num_virtual_eth_cores(sub_device_id) : 0,
+        mesh_device->impl().noc_data_start_index(sub_device_id, send_unicasts), /* noc_data_start_idx */
         dispatcher_for_go_signal);
 
     TT_ASSERT(go_signal_cmd_sequence.size_bytes() == go_signal_cmd_sequence.write_offset_bytes());

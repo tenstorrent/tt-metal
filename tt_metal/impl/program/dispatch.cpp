@@ -47,6 +47,7 @@
 #include "hal_types.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
 #include "runtime_args_data.hpp"
@@ -1941,9 +1942,10 @@ public:
         const ProgramTransferInfo& program_transfer_info,
         bool has_multicast_launch_cmds,
         bool has_unicast_launch_cmds) {
-        const auto& noc_data_start_idx = mesh_device->noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
+        const auto& noc_data_start_idx =
+            mesh_device->impl().noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
         const auto& num_noc_unicast_txns =
-            has_unicast_launch_cmds ? mesh_device->num_noc_unicast_txns(sub_device_id) : 0;
+            has_unicast_launch_cmds ? mesh_device->impl().num_noc_unicast_txns(sub_device_id) : 0;
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         auto sub_device_index = *sub_device_id;
         if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -2950,9 +2952,9 @@ void reset_worker_dispatch_state_on_device(
                     dispatch_core.y,
                     MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i)),
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
-                mesh_device->has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-                mesh_device->num_noc_unicast_txns(sub_device_id),
-                mesh_device->noc_data_start_index(sub_device_id),
+                mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+                mesh_device->impl().num_noc_unicast_txns(sub_device_id),
+                mesh_device->impl().noc_data_start_index(sub_device_id),
                 dispatcher_for_go_signal);
         }
     }

@@ -334,7 +334,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // through the num_virtual_eth_cores() function.
         // The physical device itself may have less ethernet cores than what is queried here and will dispatch
         // accordingly.
-        num_virtual_eth_cores = mesh_device_->num_virtual_eth_cores(sub_device_id);
+        num_virtual_eth_cores = mesh_device_->impl().num_virtual_eth_cores(sub_device_id);
         num_workers += num_virtual_eth_cores;
     }
 
@@ -1364,7 +1364,7 @@ void FDMeshCommandQueue::record_end() {
                 }
                 if (unicast) {
                     trace_worker_descriptor.num_completion_worker_cores +=
-                        mesh_device_->num_virtual_eth_cores(sub_device);
+                        mesh_device_->impl().num_virtual_eth_cores(sub_device);
                     worker_launch_msg_state.inc_unicast_wptr(1);
                     trace_worker_descriptor.num_traced_programs_needing_go_signal_unicast++;
                 }
@@ -1391,7 +1391,7 @@ void FDMeshCommandQueue::record_end() {
             uint32_t num_virtual_eth_cores = 0;
 
             if (mesh_node.unicast_go_signals) {
-                num_virtual_eth_cores = mesh_device_->num_virtual_eth_cores(sub_device_id);
+                num_virtual_eth_cores = mesh_device_->impl().num_virtual_eth_cores(sub_device_id);
             }
 
             // Access the program dispatch-command cache
