@@ -94,6 +94,7 @@ class TestCosineAnnealingMatchesPyTorch:
 
         for step in range(1, N_STEPS + 1):
             _step(opt, sched)
+            torch_opt.step()
             torch_sched.step()
             assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-5), f"step {step}"
 
@@ -180,6 +181,7 @@ class TestStepSchedulerMatchesPyTorch:
 
         for step in range(1, N_STEPS + 1):
             _step(opt, sched)
+            torch_opt.step()
             torch_sched.step()
             assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-6), f"step {step}"
 
@@ -262,6 +264,7 @@ class TestLinearSchedulerMatchesPyTorch:
 
         for step in range(1, N_STEPS + 1):
             _step(opt, sched)
+            torch_opt.step()
             torch_sched.step()
             assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-5), f"step {step}"
 
@@ -342,6 +345,7 @@ class TestLambdaSchedulerMatchesPyTorch:
 
         for step in range(1, N_STEPS + 1):
             _step(opt, sched)
+            torch_opt.step()
             torch_sched.step()
             assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-6), f"step {step}"
 
