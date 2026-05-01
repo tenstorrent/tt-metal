@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "experimental/core_local_mem.h"
+#include "experimental/kernel_args.h"
 #include "api/debug/dprint.h"
 
 /**
@@ -13,13 +14,13 @@
  */
 
 void kernel_main() {
-    tt_l1_ptr std::uint32_t* arg_a = (tt_l1_ptr uint32_t*)get_arg_addr(0);
-    tt_l1_ptr std::uint32_t* arg_b = (tt_l1_ptr uint32_t*)get_arg_addr(1);
-    constexpr uint32_t l1_address = get_compile_time_arg_val(0);
+    uint32_t val_a = get_vararg(0);
+    uint32_t val_b = get_vararg(1);
+    constexpr uint32_t l1_address = get_arg(args::l1_address);
 
     experimental::CoreLocalMem<std::uint32_t> result(l1_address);
 
-    result[0] = arg_a[0] + arg_b[0];
-    DPRINT << "Adding two ints: " << arg_a[0] << " + " << arg_b[0] << " = " << result[0] << ENDL();
-    DEVICE_PRINT("Adding two ints: {} + {} = {}\n", arg_a[0], arg_b[0], result[0]);
+    result[0] = val_a + val_b;
+    DPRINT << "Adding two ints: " << val_a << " + " << val_b << " = " << result[0] << ENDL();
+    DEVICE_PRINT("Adding two ints: {} + {} = {}\n", val_a, val_b, result[0]);
 }
