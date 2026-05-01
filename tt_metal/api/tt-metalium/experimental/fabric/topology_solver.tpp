@@ -25,6 +25,9 @@
 #include <cstddef>   // For SIZE_MAX
 #include <unordered_set>
 #include <map>
+#include <cctype>
+#include <cstdlib>
+#include <string>
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -1194,6 +1197,45 @@ void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result) {
 // ============================================================================
 
 namespace tt::tt_fabric::detail {
+
+inline bool topology_mapping_env_selects_sat(const char* v) {
+    if (v == nullptr || v[0] == '\0') {
+        return false;
+    }
+    std::string s(v);
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s == "sat" || s == "1" || s == "true" || s == "yes";
+}
+
+inline bool topology_mapping_use_sat_engine() {
+    return topology_mapping_env_selects_sat(std::getenv("TT_TOPOLOGY_SOLVER_ENGINE"));
+}
+
+inline bool topology_mapping_should_use_sat_engine(
+    TopologyMappingSolverEngine engine, size_t n_target, size_t n_global) {
+    switch (engine) {
+        case TopologyMappingSolverEngine::Sat:
+            return true;
+        case TopologyMappingSolverEngine::Dfs:
+            return false;
+        case TopologyMappingSolverEngine::Auto: {
+            const char* env = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
+            if (env != nullptr && env[0] != '\0') {
+                std::string s(env);
+                std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (s == "sat" || s == "1" || s == "true" || s == "yes") {
+                    return true;
+                }
+                if (s == "dfs" || s == "0" || s == "false" || s == "no") {
+                    return false;
+                }
+            }
+            static constexpr size_t kAutoSatMinAssignmentVars = 512;
+            return (n_target * n_global) >= kAutoSatMinAssignmentVars;
+        }
+    }
+    return false;
+}
 
 // Progress logging interval mask: log every 2^18 (262144) DFS calls
 // Using bit mask (2^18 - 1) to efficiently check if dfs_calls is divisible by 2^18
@@ -3137,10 +3179,5 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
 }
 
 }  // namespace tt::tt_fabric::detail
-
-// SAT / MaxSAT backend (CaDiCaL): included at global scope so third-party headers (cadical.hpp)
-// are not nested under tt::tt_fabric::detail (would break CaDiCaL::Solver linkage).
-// NOLINTNEXTLINE(misc-header-include-cycle)
-#include <tt-metalium/experimental/fabric/topology_solver_sat.tpp>
 
 #endif  // TOPOLOGY_SOLVER_TPP

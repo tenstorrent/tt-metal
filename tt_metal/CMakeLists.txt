@@ -99,7 +99,6 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         TT::STL
         tt-logger::tt-logger
-        TT::ThirdParty::cadical
         ${EXECINFO_LIB}
     PRIVATE
         Metalium::Metal::Impl

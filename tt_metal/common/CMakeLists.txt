@@ -20,9 +20,6 @@ target_include_directories(
 target_link_libraries(
     common
     PUBLIC
-        # Public fabric API headers transitively include topology_solver (CaDiCaL); OBJECT libs that link common must
-        # see cadical.hpp and link libcadical in the final shared library.
-        TT::ThirdParty::cadical
         nlohmann_json::nlohmann_json
         enchantum::enchantum
         fmt::fmt-header-only

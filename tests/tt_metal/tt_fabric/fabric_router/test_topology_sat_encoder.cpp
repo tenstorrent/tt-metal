@@ -4,11 +4,11 @@
 
 #include <gtest/gtest.h>
 
-#include <cadical.hpp>
 #include <map>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <fabric/topology_solver_sat_detail.hpp>
 
 namespace tt::tt_fabric {
 

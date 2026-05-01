@@ -2,11 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Included from topology_solver.tpp after the closing brace of namespace tt::tt_fabric::detail.
-// This file opens that namespace below so CaDiCaL and other includes are not nested under detail.
+// SAT / CaDiCaL implementation: not part of the public header graph. Include only from TUs that run the SAT
+// topology backend (fabric mapper / grouping sources and fabric unit tests). `topology_solver.hpp` / `.tpp` stay
+// Cadical-free; `control_plane.hpp` forward-declares TopologyMapper so llrt does not compile this file.
 
-#ifndef TT_METALIUM_TOPOLOGY_SOLVER_SAT_TPP
-#define TT_METALIUM_TOPOLOGY_SOLVER_SAT_TPP
+#pragma once
+
+#ifndef TT_METALIUM_TOPOLOGY_SOLVER_SAT_DETAIL_HPP
+#define TT_METALIUM_TOPOLOGY_SOLVER_SAT_DETAIL_HPP
 
 #include <algorithm>
 #include <cctype>
@@ -21,15 +24,21 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
+
 namespace tt::tt_fabric::detail {
+
+struct TopologySatHardEncoding {
+    bool trivial_unsat = false;
+    std::string trivial_reason;
+    std::vector<std::vector<size_t>> allowed_global_idx;
+    std::vector<std::vector<int>> assign_lit;
+};
 
 namespace {
 
 template <typename TargetNode, typename GlobalNode>
-bool global_adjacent_idx(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    size_t global_i,
-    size_t global_j) {
+bool global_adjacent_idx(const GraphIndexData<TargetNode, GlobalNode>& graph_data, size_t global_i, size_t global_j) {
     if (global_i >= graph_data.n_global || global_j >= graph_data.n_global) {
         return false;
     }
@@ -161,9 +170,7 @@ inline bool topology_sat_add_at_least_k_literals(
     if (k > m) {
         if (trivial_reason != nullptr) {
             *trivial_reason = fmt::format(
-                "topology_sat: cardinality needs at least {} satisfied literals but only {} are listed",
-                k,
-                m);
+                "topology_sat: cardinality needs at least {} satisfied literals but only {} are listed", k, m);
         }
         return false;
     }
@@ -190,9 +197,7 @@ inline bool topology_sat_add_at_least_k_literals(
 
 // Sequential (Sinz 2005) at-most-one encoding: O(n) clauses + O(n) auxiliary register variables instead of the
 // O(n²) pairwise binary clauses.  Gives CaDiCaL much tighter unit-propagation on large domains.
-inline void topology_sat_add_at_most_one_sequential(
-    CaDiCaL::Solver& solver,
-    const std::vector<int>& lits) {
+inline void topology_sat_add_at_most_one_sequential(CaDiCaL::Solver& solver, const std::vector<int>& lits) {
     const size_t n = lits.size();
     if (n <= 1) {
         return;
@@ -432,8 +437,7 @@ bool topology_sat_append_relaxed_channel_threshold_literals(
                 if (channel_threshold_literals_out.size() > kMaxTotalIndicators) {
                     if (fail_reason != nullptr) {
                         *fail_reason = fmt::format(
-                            "topology_sat: relaxed channel threshold literals exceeded {}",
-                            kMaxTotalIndicators);
+                            "topology_sat: relaxed channel threshold literals exceeded {}", kMaxTotalIndicators);
                     }
                     return false;
                 }
@@ -449,7 +453,7 @@ bool topology_sat_encode_hard_constraints(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode) {
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED) {
     enc = TopologySatHardEncoding{};
     const size_t nt = graph_data.n_target;
     const size_t ng = graph_data.n_global;
@@ -538,18 +542,14 @@ bool topology_sat_encode_hard_constraints(
             auto& dom = domain[t];
             size_t before = dom.size();
             dom.erase(
-                std::remove_if(
-                    dom.begin(),
-                    dom.end(),
-                    [&](size_t g) { return !has_support(t, g, tn); }),
-                dom.end());
+                std::remove_if(dom.begin(), dom.end(), [&](size_t g) { return !has_support(t, g, tn); }), dom.end());
             if (dom.size() < before) {
                 domain_set[t].clear();
                 domain_set[t].insert(dom.begin(), dom.end());
                 if (dom.empty()) {
                     enc.trivial_unsat = true;
-                    enc.trivial_reason = fmt::format(
-                        "topology_sat: arc consistency emptied domain for target_idx {}", t);
+                    enc.trivial_reason =
+                        fmt::format("topology_sat: arc consistency emptied domain for target_idx {}", t);
                     return false;
                 }
                 for (size_t t2 : graph_data.target_adj_idx[t]) {
@@ -748,8 +748,8 @@ bool topology_sat_encode_hard_constraints(
         std::string card_reason;
         if (!topology_sat_add_at_least_k_literals(solver, lits, min_count, kMaxCardinalityCombClauses, &card_reason)) {
             enc.trivial_unsat = true;
-            enc.trivial_reason = card_reason.empty() ? std::string("topology_sat: cardinality encoding failed")
-                                                     : std::move(card_reason);
+            enc.trivial_reason =
+                card_reason.empty() ? std::string("topology_sat: cardinality encoding failed") : std::move(card_reason);
             return false;
         }
     }
@@ -759,9 +759,7 @@ bool topology_sat_encode_hard_constraints(
 
 template <typename TargetNode, typename GlobalNode>
 bool topology_sat_decode_hard_solution(
-    CaDiCaL::Solver& solver,
-    const TopologySatHardEncoding& enc,
-    std::vector<int>& mapping_out) {
+    CaDiCaL::Solver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out) {
     if (enc.trivial_unsat) {
         return false;
     }
@@ -789,43 +787,6 @@ bool topology_sat_decode_hard_solution(
     }
     return true;
 }
-
-inline bool topology_mapping_env_selects_sat(const char* v) {
-    if (v == nullptr || v[0] == '\0') {
-        return false;
-    }
-    std::string s(v);
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return s == "sat" || s == "1" || s == "true" || s == "yes";
-}
-
-inline bool topology_mapping_use_sat_engine() { return topology_mapping_env_selects_sat(std::getenv("TT_TOPOLOGY_SOLVER_ENGINE")); }
-
-inline bool topology_mapping_should_use_sat_engine(TopologyMappingSolverEngine engine, size_t n_target, size_t n_global) {
-    switch (engine) {
-        case TopologyMappingSolverEngine::Sat: return true;
-        case TopologyMappingSolverEngine::Dfs: return false;
-        case TopologyMappingSolverEngine::Auto: {
-            const char* env = std::getenv("TT_TOPOLOGY_SOLVER_ENGINE");
-            if (env != nullptr && env[0] != '\0') {
-                std::string s(env);
-                std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (s == "sat" || s == "1" || s == "true" || s == "yes") {
-                    return true;
-                }
-                if (s == "dfs" || s == "0" || s == "false" || s == "no") {
-                    return false;
-                }
-            }
-            // Size-based heuristic: SAT encoding has fixed overhead per call that dominates on small
-            // problems; DFS is faster there. For large problems SAT's clause propagation wins.
-            static constexpr size_t kAutoSatMinAssignmentVars = 512;
-            return (n_target * n_global) >= kAutoSatMinAssignmentVars;
-        }
-    }
-    return false;
-}
-
 template <typename TargetNode, typename GlobalNode>
 bool SatSearchEngine<TargetNode, GlobalNode>::search(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
@@ -839,7 +800,8 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
 
     if (graph_data.n_global < graph_data.n_target) {
         state_.error_message = fmt::format(
-            "Cannot map target graph to global graph: target graph is larger with {} nodes, but global graph only has {} nodes",
+            "Cannot map target graph to global graph: target graph is larger with {} nodes, but global graph only has "
+            "{} nodes",
             graph_data.n_target,
             graph_data.n_global);
         if (quiet_mode) {
@@ -879,8 +841,9 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
 
     auto solve_hard_only = [&](CaDiCaL::Solver& solver, TopologySatHardEncoding& enc) -> bool {
         if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
-            state_.error_message =
-                enc.trivial_reason.empty() ? std::string("Topology SAT: encoding failed (trivial UNSAT)") : enc.trivial_reason;
+            state_.error_message = enc.trivial_reason.empty()
+                                       ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
+                                       : enc.trivial_reason;
             if (quiet_mode) {
                 log_debug(tt::LogFabric, "{}", state_.error_message);
             } else {
@@ -891,7 +854,8 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
         const int status = solver.solve();
         if (status != CaDiCaL::SATISFIABLE) {
             state_.error_message = fmt::format(
-                "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} nodes under hard constraints",
+                "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} "
+                "nodes under hard constraints",
                 graph_data.n_target,
                 graph_data.n_global);
             if (quiet_mode) {
@@ -924,8 +888,9 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
     CaDiCaL::Solver probe_solver;
     TopologySatHardEncoding probe_enc;
     if (!topology_sat_encode_hard_constraints(probe_solver, graph_data, constraint_data, probe_enc, validation_mode)) {
-        state_.error_message = probe_enc.trivial_reason.empty() ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
-                                                                : probe_enc.trivial_reason;
+        state_.error_message = probe_enc.trivial_reason.empty()
+                                   ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
+                                   : probe_enc.trivial_reason;
         if (quiet_mode) {
             log_debug(tt::LogFabric, "{}", state_.error_message);
         } else {
@@ -935,8 +900,7 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
     }
 
     std::vector<int> pref_hit_literals_probe;
-    topology_sat_append_preferred_hit_indicators(
-        probe_solver, probe_enc, constraint_data, pref_hit_literals_probe);
+    topology_sat_append_preferred_hit_indicators(probe_solver, probe_enc, constraint_data, pref_hit_literals_probe);
     const size_t mp = pref_hit_literals_probe.size();
 
     size_t locked_pref_hits = 0;
@@ -976,7 +940,8 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
             const int pst = probe_solver.solve();
             if (pst != CaDiCaL::SATISFIABLE) {
                 state_.error_message = fmt::format(
-                    "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} nodes under hard constraints",
+                    "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with "
+                    "{} nodes under hard constraints",
                     graph_data.n_target,
                     graph_data.n_global);
                 if (quiet_mode) {
@@ -1009,7 +974,8 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
             const int pst = probe_solver.solve();
             if (pst != CaDiCaL::SATISFIABLE) {
                 state_.error_message = fmt::format(
-                    "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} nodes under hard constraints",
+                    "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with "
+                    "{} nodes under hard constraints",
                     graph_data.n_target,
                     graph_data.n_global);
                 if (quiet_mode) {
@@ -1048,103 +1014,111 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
                     kMaxRelaxedChannelLiteralsForKDescent);
             }
         } else {
-        std::vector<int> ch_size_lits;
-        std::string ch_size_reason;
-        CaDiCaL::Solver ch_probe;
-        TopologySatHardEncoding ch_probe_enc;
-        const bool ch_probe_ok = topology_sat_encode_hard_constraints(
-                                   ch_probe, graph_data, constraint_data, ch_probe_enc, validation_mode) &&
-                               topology_sat_append_relaxed_channel_threshold_literals(
-                                   ch_probe, ch_probe_enc, graph_data, ch_size_lits, &ch_size_reason);
-        if (ch_probe_ok) {
-            const size_t mc = ch_size_lits.size();
-            if (mc > 0 && mc <= kMaxRelaxedChannelIndicatorsForMaxOpt) {
-                auto try_channel_k = [&](size_t kc) -> int {
-                    CaDiCaL::Solver solver;
-                    TopologySatHardEncoding enc;
-                    if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
-                        return -1;
-                    }
-                    std::vector<int> pref_lits;
-                    topology_sat_append_preferred_hit_indicators(solver, enc, constraint_data, pref_lits);
-                    if (!pref_lits.empty() && locked_pref_hits > 0) {
-                        std::string pref_lock_reason;
-                        if (!topology_sat_add_at_least_k_literals(
-                                solver, pref_lits, locked_pref_hits, kPrefMaxCardinalityCombClauses, &pref_lock_reason)) {
+            std::vector<int> ch_size_lits;
+            std::string ch_size_reason;
+            CaDiCaL::Solver ch_probe;
+            TopologySatHardEncoding ch_probe_enc;
+            const bool ch_probe_ok = topology_sat_encode_hard_constraints(
+                                         ch_probe, graph_data, constraint_data, ch_probe_enc, validation_mode) &&
+                                     topology_sat_append_relaxed_channel_threshold_literals(
+                                         ch_probe, ch_probe_enc, graph_data, ch_size_lits, &ch_size_reason);
+            if (ch_probe_ok) {
+                const size_t mc = ch_size_lits.size();
+                if (mc > 0 && mc <= kMaxRelaxedChannelIndicatorsForMaxOpt) {
+                    auto try_channel_k = [&](size_t kc) -> int {
+                        CaDiCaL::Solver solver;
+                        TopologySatHardEncoding enc;
+                        if (!topology_sat_encode_hard_constraints(
+                                solver, graph_data, constraint_data, enc, validation_mode)) {
                             return -1;
                         }
-                    }
-                    std::vector<int> ch_lits;
-                    std::string ch_reason;
-                    if (!topology_sat_append_relaxed_channel_threshold_literals(
-                            solver, enc, graph_data, ch_lits, &ch_reason)) {
-                        return -1;
-                    }
-                    if (ch_lits.size() != mc) {
-                        return -1;
-                    }
-                    std::string ch_card_reason;
-                    if (!topology_sat_add_at_least_k_literals(
-                            solver, ch_lits, kc, kChMaxCardinalityCombClauses, &ch_card_reason)) {
-                        return -1;
-                    }
-                    if (solver.solve() == CaDiCaL::SATISFIABLE) {
-                        return 1;
-                    }
-                    return 0;
-                };
-                size_t best_kc = 0;
-                size_t ch_lo = 1, ch_hi = mc;
-                while (ch_lo <= ch_hi) {
-                    const size_t mid = ch_lo + (ch_hi - ch_lo) / 2;
-                    const int res = try_channel_k(mid);
-                    if (res < 0) {
-                        break;
-                    }
-                    if (res == 1) {
-                        best_kc = mid;
-                        ch_lo = mid + 1;
-                    } else {
-                        if (mid == 0) {
-                            break;
-                        }
-                        ch_hi = mid - 1;
-                    }
-                }
-                if (best_kc > 0) {
-                    CaDiCaL::Solver solver;
-                    TopologySatHardEncoding enc;
-                    if (topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
                         std::vector<int> pref_lits;
                         topology_sat_append_preferred_hit_indicators(solver, enc, constraint_data, pref_lits);
                         if (!pref_lits.empty() && locked_pref_hits > 0) {
-                            topology_sat_add_at_least_k_literals(
-                                solver, pref_lits, locked_pref_hits, kPrefMaxCardinalityCombClauses, nullptr);
+                            std::string pref_lock_reason;
+                            if (!topology_sat_add_at_least_k_literals(
+                                    solver,
+                                    pref_lits,
+                                    locked_pref_hits,
+                                    kPrefMaxCardinalityCombClauses,
+                                    &pref_lock_reason)) {
+                                return -1;
+                            }
                         }
                         std::vector<int> ch_lits;
-                        if (topology_sat_append_relaxed_channel_threshold_literals(
-                                solver, enc, graph_data, ch_lits, nullptr) &&
-                            ch_lits.size() == mc) {
-                            topology_sat_add_at_least_k_literals(
-                                solver, ch_lits, best_kc, kChMaxCardinalityCombClauses, nullptr);
-                            if (solver.solve() == CaDiCaL::SATISFIABLE) {
-                                return finalize_success(solver, enc);
+                        std::string ch_reason;
+                        if (!topology_sat_append_relaxed_channel_threshold_literals(
+                                solver, enc, graph_data, ch_lits, &ch_reason)) {
+                            return -1;
+                        }
+                        if (ch_lits.size() != mc) {
+                            return -1;
+                        }
+                        std::string ch_card_reason;
+                        if (!topology_sat_add_at_least_k_literals(
+                                solver, ch_lits, kc, kChMaxCardinalityCombClauses, &ch_card_reason)) {
+                            return -1;
+                        }
+                        if (solver.solve() == CaDiCaL::SATISFIABLE) {
+                            return 1;
+                        }
+                        return 0;
+                    };
+                    size_t best_kc = 0;
+                    size_t ch_lo = 1, ch_hi = mc;
+                    while (ch_lo <= ch_hi) {
+                        const size_t mid = ch_lo + (ch_hi - ch_lo) / 2;
+                        const int res = try_channel_k(mid);
+                        if (res < 0) {
+                            break;
+                        }
+                        if (res == 1) {
+                            best_kc = mid;
+                            ch_lo = mid + 1;
+                        } else {
+                            if (mid == 0) {
+                                break;
+                            }
+                            ch_hi = mid - 1;
+                        }
+                    }
+                    if (best_kc > 0) {
+                        CaDiCaL::Solver solver;
+                        TopologySatHardEncoding enc;
+                        if (topology_sat_encode_hard_constraints(
+                                solver, graph_data, constraint_data, enc, validation_mode)) {
+                            std::vector<int> pref_lits;
+                            topology_sat_append_preferred_hit_indicators(solver, enc, constraint_data, pref_lits);
+                            if (!pref_lits.empty() && locked_pref_hits > 0) {
+                                topology_sat_add_at_least_k_literals(
+                                    solver, pref_lits, locked_pref_hits, kPrefMaxCardinalityCombClauses, nullptr);
+                            }
+                            std::vector<int> ch_lits;
+                            if (topology_sat_append_relaxed_channel_threshold_literals(
+                                    solver, enc, graph_data, ch_lits, nullptr) &&
+                                ch_lits.size() == mc) {
+                                topology_sat_add_at_least_k_literals(
+                                    solver, ch_lits, best_kc, kChMaxCardinalityCombClauses, nullptr);
+                                if (solver.solve() == CaDiCaL::SATISFIABLE) {
+                                    return finalize_success(solver, enc);
+                                }
                             }
                         }
                     }
                 }
+            } else if (!ch_size_reason.empty() && !quiet_mode) {
+                log_debug(
+                    tt::LogFabric, "Topology SAT: relaxed channel threshold encoding skipped: {}", ch_size_reason);
             }
-        } else if (!ch_size_reason.empty() && !quiet_mode) {
-            log_debug(tt::LogFabric, "Topology SAT: relaxed channel threshold encoding skipped: {}", ch_size_reason);
-        }
         }
     }
 
     CaDiCaL::Solver final_solver;
     TopologySatHardEncoding final_enc;
     if (!topology_sat_encode_hard_constraints(final_solver, graph_data, constraint_data, final_enc, validation_mode)) {
-        state_.error_message =
-            final_enc.trivial_reason.empty() ? std::string("Topology SAT: encoding failed (trivial UNSAT)") : final_enc.trivial_reason;
+        state_.error_message = final_enc.trivial_reason.empty()
+                                   ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
+                                   : final_enc.trivial_reason;
         if (quiet_mode) {
             log_debug(tt::LogFabric, "{}", state_.error_message);
         } else {
@@ -1173,5 +1147,4 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
 }
 
 }  // namespace tt::tt_fabric::detail
-
-#endif  // TT_METALIUM_TOPOLOGY_SOLVER_SAT_TPP
+#endif  // TT_METALIUM_TOPOLOGY_SOLVER_SAT_DETAIL_HPP
