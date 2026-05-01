@@ -296,18 +296,27 @@ def test_demo_teacher_forcing_accuracy(
             ref_gen_ids[:max_new_tokens].tolist(),
             skip_special_tokens=False,
         )
-        output_records: list[dict[str, str | int]] = []
+        output_records: list[dict[str, object]] = []
         for idx, gen in enumerate(results["generations"]):
-            pred_ids = gen.get("predicted_tokens", [])
-            tt_text = tokenizer.decode([int(x) for x in pred_ids], skip_special_tokens=False) if pred_ids else ""
-            output_records.append(
-                {
-                    "index": idx,
-                    "prompt": prompt_text_for_users,
-                    "tt_output": tt_text,
-                    "gt_output": gt_decode,
-                }
-            )
+            tt_text = gen.get("text")
+            if not tt_text:
+                gen_ids = gen.get("tokens", [])
+                tt_text = tokenizer.decode([int(x) for x in gen_ids], skip_special_tokens=False) if gen_ids else ""
+
+            record: dict[str, object] = {
+                "index": idx + 1,
+                "prompt": prompt_text_for_users,
+                "tt_output": tt_text,
+                "gt_output": gt_decode,
+            }
+
+            pred_ids = gen.get("predicted_tokens")
+            if pred_ids:
+                record["tt_predicted_output"] = tokenizer.decode(
+                    [int(x) for x in pred_ids], skip_special_tokens=False
+                )
+
+            output_records.append(record)
         artifact_dir = ARTIFACT_DIR
         artifact_dir.mkdir(parents=True, exist_ok=True)
         output_file = artifact_dir / f"{_timestamped_artifact_stem(f'teacher_forced_generated_outputs_{upr_suffix}')}.json"
