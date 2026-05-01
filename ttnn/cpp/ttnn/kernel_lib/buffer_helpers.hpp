@@ -111,6 +111,9 @@ public:
     ALWI void pop_front(uint32_t num_pages) { cb_.pop_front(num_pages); }
     ALWI void reserve_back(uint32_t num_pages) { cb_.reserve_back(num_pages); }
     ALWI void push_back(uint32_t num_pages) { cb_.push_back(num_pages); }
+    // L1 byte-address accessors (UNPACK uses read; PACK uses write).
+    ALWI uint32_t get_read_ptr() const { return cb_.get_read_ptr(); }
+    ALWI uint32_t get_write_ptr() const { return cb_.get_write_ptr(); }
 
 private:
     ::experimental::CircularBuffer cb_;
@@ -127,6 +130,8 @@ public:
     ALWI void pop_front(uint32_t num_pages) { cb_.pop_front(num_pages); }
     ALWI void reserve_back(uint32_t num_pages) { cb_.reserve_back(num_pages); }
     ALWI void push_back(uint32_t num_pages) { cb_.push_back(num_pages); }
+    ALWI uint32_t get_read_ptr() const { return cb_.get_read_ptr(); }
+    ALWI uint32_t get_write_ptr() const { return cb_.get_write_ptr(); }
 
 private:
     ::experimental::CircularBuffer& cb_;
@@ -143,6 +148,8 @@ public:
     ALWI void pop_front(uint32_t num_pages) { dfb_.pop_front(num_pages); }
     ALWI void reserve_back(uint32_t num_pages) { dfb_.reserve_back(num_pages); }
     ALWI void push_back(uint32_t num_pages) { dfb_.push_back(num_pages); }
+    ALWI uint32_t get_read_ptr() const { return dfb_.get_read_ptr(); }
+    ALWI uint32_t get_write_ptr() const { return dfb_.get_write_ptr(); }
 
 private:
     ::experimental::DataflowBuffer& dfb_;

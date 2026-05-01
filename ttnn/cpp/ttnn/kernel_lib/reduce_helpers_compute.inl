@@ -10,8 +10,8 @@
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
-#include "api/debug/dprint_pages.h"
 #include "experimental/circular_buffer.h"
+#include "experimental/dataflow_buffer.h"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/buffer_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
@@ -33,6 +33,16 @@
 #else
 #define KL_TRISC_TAG "?"
 #endif
+
+// Print first 4 uint32_ts at an L1 byte address as hex. For bf16 each u32 = two
+// packed bf16 values: ones=0x3F803F80. For fp32 each u32 = one fp32 value:
+// ones=0x3F800000. Quasar's `print_tile_rows`/`print_full_tile` link against
+// `cb_interface` which only exists on Gen1, so we read L1 directly instead.
+ALWI void kl_dump_l1_u32(const char* tag, uint32_t l1_addr) {
+    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
+    DPRINT << KL_TRISC_TAG << ":" << tag << " @0x" << HEX() << l1_addr << " : 0x" << HEX() << p[0]
+           << " 0x" << HEX() << p[1] << " 0x" << HEX() << p[2] << " 0x" << HEX() << p[3] << ENDL();
+}
 // #endregion
 
 
@@ -444,8 +454,9 @@ ALWI void reduce(
         // #region agent log
         DPRINT << KL_TRISC_TAG << ":REDW enter in=" << input_cb_id << " sc=" << scaler_cb_id
                << " out=" << output_cb_id << " Ht=" << Ht << " Wt=" << Wt << " NC=" << num_batches << ENDL();
-        // Dump scaler tile row 0 once on UNPACK to verify prepare_reduce_scaler ran.
-        UNPACK((tt::compute::common::print_tile_rows(scaler_cb_id, 0, true, 0, 1, 0, 32)));
+        // Dump first 4 u32s of the scaler tile on UNPACK to verify prepare_reduce_scaler
+        // populated the buffer (bf16 ones expected: 0x3F803F80 0x3F803F80 ...).
+        UNPACK((kl_dump_l1_u32("scaler", scaler_buf.get_read_ptr())));
         // #endregion
 
         // No-pop modes: bulk reserve output upfront
@@ -484,8 +495,9 @@ ALWI void reduce(
                         // #region agent log
                         DPRINT << KL_TRISC_TAG << ":W aw nc=" << nc << " ht=" << ht << " wt=" << wt
                                << ENDL();
-                        // Dump input tile row 0 on UNPACK to verify reader populated L1.
-                        UNPACK((tt::compute::common::print_tile_rows(input_cb_id, 0, true, 0, 1, 0, 32)));
+                        // Dump first 4 u32s of the front input tile on UNPACK to verify the
+                        // reader populated the slot UNPACK is reading from (bf16 ones expected).
+                        UNPACK((kl_dump_l1_u32("input", input_buf.get_read_ptr())));
                         // #endregion
                         if constexpr (use_matmul) {
                             reduce_matmul_tiles(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
@@ -537,9 +549,10 @@ ALWI void reduce(
                 tile_regs_wait();
                 pack_tile(dst_idx, output_cb_id);
                 // #region agent log
-                // Dump output tile row 0 right after pack_tile to confirm the SUM landed in L1.
-                // print_tile_rows on PACK uses CB_WR_PTR (write pointer of the slot we just packed).
-                PACK((tt::compute::common::print_tile_rows(output_cb_id, 0, true, 0, 1, 0, 32)));
+                // Dump first 4 u32s of the freshly packed output tile on PACK. For REDUCE_ROW
+                // SUM with all-ones input the first u32 should encode the row sum (e.g. 64 in
+                // bf16: 0x42800000 high half -> 0x4280XXXX after pack; XXXX = next col's sum).
+                PACK((kl_dump_l1_u32("output", output_buf.get_write_ptr())));
                 // #endregion
                 tile_regs_release();
                 if constexpr (should_pop(input_policy)) {
