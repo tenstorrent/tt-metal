@@ -47,7 +47,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from aiohttp import web
-from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
+from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEMO_DIR = Path(__file__).resolve().parent / "demo"
@@ -310,8 +310,11 @@ async def dets_forward_loop(hub: IngressHub, mode_state: dict, stop: asyncio.Eve
         # dets to its <video> element's currentTime. src_frame_id is the
         # video frame index (mod src_n_frames) the worker processed; if
         # the worker didn't emit it, browser falls back to "latest wins".
+        # compute_ms is the worker's periodic Option-4 device-only timing,
+        # used by the browser to compute Aggr FPS = Σ (1000/compute_ms_i)
+        # — free of host wait/scheduling jitter that taints `fps` above.
         out = {"fps": d.get("fps", 0), "dets": d.get("dets", [])}
-        for k in ("src_frame_id", "src_n_frames", "src_fps"):
+        for k in ("src_frame_id", "src_n_frames", "src_fps", "compute_ms"):
             if k in d:
                 out[k] = d[k]
         return out
@@ -402,8 +405,22 @@ class ModeController:
         v8s_input = CAM_V8S_640_FILE if self.video_mode else CAM_640_FILE
         v11s_input = CAM_V11S_640_FILE if self.video_mode else CAM_640_FILE
 
-        def _worker_argv(model: str, frame_input: str, dets_out: str) -> list[str]:
+        # CPU pinning so each worker owns a distinct pair of physical cores
+        # (this box is 8C/16T). Without pinning, host CPU jitter / OS migration
+        # was costing several ms per iteration when 4 workers run concurrently
+        # — measured ~10 FPS gap on v11l between perf-test alone (53) and
+        # the demo (41-43). Pinning eliminates the cross-worker scheduling
+        # contention. Pairs are listed below; supervisor itself stays float.
+        cpu_pin_v8s = "0-3"
+        cpu_pin_v11s = "4-7"
+        cpu_pin_v8l_640 = "8-11"
+        cpu_pin_v11l = "12-15"
+
+        def _worker_argv(model: str, frame_input: str, dets_out: str, cpus: str) -> list[str]:
             return [
+                "taskset",
+                "-c",
+                cpus,
                 self._python(),
                 "-u",
                 str(UNIFIED_DEMO_SCRIPT),
@@ -424,20 +441,26 @@ class ModeController:
                 str(self.iou),
             ]
 
-        v8s_cmd = _worker_argv("yolov8s", v8s_input, DETS_V8S_FILE)
-        v11s_cmd = _worker_argv("yolov11s", v11s_input, DETS_V11S_FILE)
-        print(f"[qb2] spawn yolov8s (TT_VISIBLE_DEVICES=0): {' '.join(v8s_cmd)}", flush=True)
+        v8s_cmd = _worker_argv("yolov8s", v8s_input, DETS_V8S_FILE, cpu_pin_v8s)
+        v11s_cmd = _worker_argv("yolov11s", v11s_input, DETS_V11S_FILE, cpu_pin_v11s)
+        print(f"[qb2] spawn yolov8s (TT_VISIBLE_DEVICES=0, CPUs {cpu_pin_v8s}): {' '.join(v8s_cmd)}", flush=True)
         p_v8s = subprocess.Popen(v8s_cmd, env=self._env("0"), start_new_session=True)
-        print(f"[qb2] spawn yolov11s (TT_VISIBLE_DEVICES=1): {' '.join(v11s_cmd)}", flush=True)
+        print(f"[qb2] spawn yolov11s (TT_VISIBLE_DEVICES=1, CPUs {cpu_pin_v11s}): {' '.join(v11s_cmd)}", flush=True)
         p_v11s = subprocess.Popen(v11s_cmd, env=self._env("1"), start_new_session=True)
         workers = [p_v8s, p_v11s]
 
         if self.video_mode:
-            v8l_640_cmd = _worker_argv("yolov8l_640", CAM_V8L_640_FILE, DETS_V8L_640_FILE)
-            v11l_640_cmd = _worker_argv("yolov11l", CAM_V11L_640_FILE, DETS_V11L_640_FILE)
-            print(f"[qb2] spawn yolov8l_640 (TT_VISIBLE_DEVICES=2): {' '.join(v8l_640_cmd)}", flush=True)
+            v8l_640_cmd = _worker_argv("yolov8l_640", CAM_V8L_640_FILE, DETS_V8L_640_FILE, cpu_pin_v8l_640)
+            v11l_640_cmd = _worker_argv("yolov11l", CAM_V11L_640_FILE, DETS_V11L_640_FILE, cpu_pin_v11l)
+            print(
+                f"[qb2] spawn yolov8l_640 (TT_VISIBLE_DEVICES=2, CPUs {cpu_pin_v8l_640}): {' '.join(v8l_640_cmd)}",
+                flush=True,
+            )
             p_v8l_640 = subprocess.Popen(v8l_640_cmd, env=self._env("2"), start_new_session=True)
-            print(f"[qb2] spawn yolov11l (TT_VISIBLE_DEVICES=3): {' '.join(v11l_640_cmd)}", flush=True)
+            print(
+                f"[qb2] spawn yolov11l (TT_VISIBLE_DEVICES=3, CPUs {cpu_pin_v11l}): {' '.join(v11l_640_cmd)}",
+                flush=True,
+            )
             p_v11l_640 = subprocess.Popen(v11l_640_cmd, env=self._env("3"), start_new_session=True)
             workers += [p_v8l_640, p_v11l_640]
 
@@ -616,9 +639,13 @@ async def api_config_handler(req: web.Request) -> web.Response:
 async def offer_handler(req: web.Request) -> web.Response:
     body = await req.json()
     offer = RTCSessionDescription(sdp=body["sdp"], type=body["type"])
-    pc = RTCPeerConnection(
-        configuration=RTCConfiguration(iceServers=[RTCIceServer(urls="stun:stun.l.google.com:19302")])
-    )
+    # No STUN server — the browser and supervisor reach each other via the
+    # host candidate (direct LAN/loopback). Including a public STUN URL
+    # makes aioice schedule retries that produce noisy
+    # `Exception in callback Transaction.__retry() … InvalidStateError`
+    # tracebacks when the host can't reach Google's STUN endpoint
+    # (firewalled UDP, offline LAN, etc.). Empty iceServers is fine.
+    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
     hub: IngressHub = req.app["hub"]
     hub.pcs.add(pc)
 

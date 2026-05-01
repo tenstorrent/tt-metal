@@ -58,7 +58,7 @@ class YOLOv11PerformanceRunnerInfra:
         )
         self.parameters = create_yolov11_model_parameters(self.torch_model, self.torch_input_params, device=self.device)
 
-        self.ttnn_yolov11_model = ttnn_yolov11.TtnnYoloV11(self.device, self.parameters)
+        self.ttnn_yolov11_model = ttnn_yolov11.TtnnYoloV11(self.device, self.parameters, resolution=self.resolution)
 
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
@@ -66,6 +66,11 @@ class YOLOv11PerformanceRunnerInfra:
         # Pick the largest rectangular grid whose core count divides the
         # input shard_height cleanly.  WH 8x8=64; BH 8x10=80 — divides
         # both 1×16×640=10240 and 1×16×1280=20480 evenly.
+        # NOTE: tried v8l's c=3 + 12×10=120 grid here for parity but
+        # v11l's downstream reshard ops fail with "120 shards > 110 L1
+        # banks" on harvested BH chips, and 8×12=96 places kernels on
+        # dispatch cores. Stays at 80 until v11l's shard-bank check is
+        # made harvesting-aware.
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:  # BH

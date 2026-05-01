@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import ttnn
 from models.demos.yolov8s.runner.performant_runner_infra import YOLOv8sPerformanceRunnerInfra
 
@@ -23,6 +25,12 @@ class YOLOv8sPerformantRunner:
         weights_mesh_mapper=None,
         model_location_generator=None,
     ):
+        # Periodic device-compute measurement (Option 4). Same convention as
+        # the v8l runner — see _execute_yolov8s_trace_2cqs_inference for the
+        # measurement block.
+        self._compute_measure_every = 100
+        self._pipeline_frame = 0
+        self._last_compute_ms: float | None = None
         self.device = device
         self.mesh_mapper = mesh_mapper
         self.mesh_composer = mesh_composer
@@ -94,7 +102,20 @@ class YOLOv8sPerformantRunner:
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
 
+        # Option-4 device-compute measurement (mirrors yolov8l/runner/
+        # performant_runner.py:392-402). Start event recorded literally
+        # right before execute_trace, end event right after — no host
+        # work between them — so the diff is pure on-chip trace runtime.
+        measure_compute = self._pipeline_frame % self._compute_measure_every == 0
+        compute_start_evt = ttnn.record_event(self.device, 0) if measure_compute else None
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+        if measure_compute:
+            compute_end_evt = ttnn.record_event(self.device, 0)
+            ttnn.event_synchronize(compute_start_evt)
+            t_compute_start = time.perf_counter()
+            ttnn.event_synchronize(compute_end_evt)
+            self._last_compute_ms = (time.perf_counter() - t_compute_start) * 1000
+        self._pipeline_frame += 1
 
         return self.runner_infra.output_tensor
 

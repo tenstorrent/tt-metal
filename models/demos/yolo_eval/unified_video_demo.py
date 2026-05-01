@@ -421,6 +421,11 @@ def _build_model(model: str, device):
     elif model == "yolov11l":
         from models.demos.yolov11l.runner.performant_runner import YOLOv11PerformantRunner
 
+        # Note: the runner accepts act_dtype/weight_dtype kwargs but the
+        # downstream `create_yolov11_model_parameters` ignores them and
+        # hard-codes its own dtypes (bfloat8_b activations, float32
+        # weights, bfloat16 intermediates), so passing bf8 here does
+        # nothing — the model already runs in its tuned dtypes.
         print("[init] Building YOLOv11PerformantRunner (640x640)...", flush=True)
         runner = YOLOv11PerformantRunner(device, device_batch_size=1, resolution=(640, 640))
         return "YOLOv11L", runner
@@ -451,17 +456,16 @@ def _device_params(model: str) -> dict:
 
         return dict(l1_small_size=YOLOV11S_L1_SMALL_SIZE, trace_region_size=6434816, num_command_queues=2)
     elif model == "yolov11l":
-        from models.demos.yolov11l.common import yolov11_l1_small_size_for_res
+        from models.demos.yolov11l.common import yolov11_l1_small_size_for_res, yolov11_trace_region_size_e2e_for_res
 
-        # The shared yolov11_trace_region_size_e2e_for_res formula is tuned
-        # for yolov11s (6.4MB at 640×640) — yolov11l's bigger op graph trips
-        # "Creating trace buffers of size 7233536B but only 6434816B is
-        # allocated". 12MB gives plenty of headroom; tests in
-        # yolov11l/demo/demo.py use 23.8MB at 1280×1280, so 12MB at 640×640
-        # is conservative.
+        # Match the device_params block in
+        # models/demos/yolov11l/tests/perf/test_e2e_performant.py — those
+        # values are tuned for the 1280×1280 trace, but using them at 640
+        # is fine (just allocates more L1/trace headroom) and ensures we
+        # don't fall short like the original 6.4 MB default did.
         return dict(
-            l1_small_size=yolov11_l1_small_size_for_res(640, 640),
-            trace_region_size=12000000,
+            l1_small_size=yolov11_l1_small_size_for_res(1280, 1280),
+            trace_region_size=yolov11_trace_region_size_e2e_for_res(1280, 1280),
             num_command_queues=2,
         )
     elif model == "yolov8l":
@@ -475,11 +479,14 @@ def _device_params(model: str) -> dict:
     elif model == "yolov8l_640":
         from models.demos.yolov8l.common import yolov8l_l1_small_size_for_res
 
-        # 640x640 is 1/4 the activation footprint of 1280x1280, so the trace
-        # region scales down accordingly. 8.75M is 35M/4 rounded conservatively.
+        # Match the device_params from
+        # models/demos/yolov8l/tests/perf/test_e2e_performant.py — that
+        # test runs the same runner at 640 with the 1280-tuned L1 budget
+        # and a 35 MB trace region; downsizing them is unnecessary and
+        # the perf test's numbers are the published baseline.
         return dict(
-            l1_small_size=yolov8l_l1_small_size_for_res(640, 640),
-            trace_region_size=8750000,
+            l1_small_size=yolov8l_l1_small_size_for_res(1280, 1280),
+            trace_region_size=35000000,
             num_command_queues=2,
         )
     else:
@@ -701,6 +708,12 @@ def _run_single(args):
             if args.model in ("yolov11s", "yolov11l", "yolov8l", "yolov8l_640"):
                 ttnn.synchronize_device(device)
             dt_dev = time.perf_counter() - t_dev
+            # Read the runner's own Option-4 device-compute measurement.
+            # Each runner records events directly adjacent to execute_trace
+            # in `_execute_..._trace_2cqs_inference`, so no host work runs
+            # between them and the diff is pure on-chip trace runtime —
+            # see e.g. yolov8l/runner/performant_runner.py:392-402.
+            last_compute_ms = getattr(runner, "_last_compute_ms", None)
 
             if isinstance(preds, (list, tuple)):
                 preds = preds[0]
@@ -715,22 +728,27 @@ def _run_single(args):
                     input_res=input_res[0],
                     content_bounds=content_bounds,
                 )
-                _write_dets(
-                    args.dets_out_file,
-                    {
-                        "t": time.time(),
-                        "frame_id": frame_id,
-                        "model": model_name,
-                        "input_res": input_res[0],
-                        "fps": round(ema_dev_fps, 1),
-                        "dets": dets.tolist() if dets.numel() else [],
-                        # Pass through the supervisor's source-video frame
-                        # id (when present) so the browser can align dets
-                        # to its <video> playhead instead of overlaying
-                        # whatever just finished inferring.
-                        **frame_meta,
-                    },
-                )
+                dets_payload = {
+                    "t": time.time(),
+                    "frame_id": frame_id,
+                    "model": model_name,
+                    "input_res": input_res[0],
+                    "fps": round(ema_dev_fps, 1),
+                    "dets": dets.tolist() if dets.numel() else [],
+                    # Pass through the supervisor's source-video frame
+                    # id (when present) so the browser can align dets
+                    # to its <video> playhead instead of overlaying
+                    # whatever just finished inferring.
+                    **frame_meta,
+                }
+                # Pure device-compute time (Option 4): the supervisor
+                # forwards this and the browser uses it for an
+                # Aggr FPS = Σ (1000/compute_ms_i) that's free of host
+                # wait/scheduling jitter (unlike `fps` above which is
+                # 1/dt_dev).
+                if last_compute_ms is not None:
+                    dets_payload["compute_ms"] = round(last_compute_ms, 3)
+                _write_dets(args.dets_out_file, dets_payload)
             else:
                 annotated = nms_and_draw(
                     preds_torch,

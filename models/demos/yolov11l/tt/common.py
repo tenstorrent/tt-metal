@@ -107,11 +107,15 @@ class Yolov11Conv2D:
             activation_param = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
         # Add more activation types as needed
 
+        # enable_act_double_buffer=True overlaps the activation L1 read with
+        # compute via two CB buffers, hiding the read latency behind the next
+        # tile's compute. On v8l this is the default; v11l shipped with it
+        # disabled — flipping it on is the cheapest perf win on BH.
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
+            enable_act_double_buffer=True,
             reshard_if_not_optimal=True if self.reshard else False,
             activation=activation_param,
         )

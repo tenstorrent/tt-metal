@@ -20,17 +20,26 @@ from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_
 
 
 class TtnnYoloV11:
-    def __init__(self, device, parameters):
+    def __init__(self, device, parameters, resolution=None):
         self.device = device
+        # Stem conv slice strategy: at 1280×1280 the activation tile overflows
+        # the L1 CB budget, so we DRAM-slice with num_slices=2. At 640×640 the
+        # tile fits in L1 cleanly — staying L1-resident eliminates a serial
+        # L1↔DRAM round-trip on the stem (matches v8l's pattern). `resolution`
+        # is (h, w); default None preserves the legacy 1280-safe DRAM slice
+        # for callers that don't pass it.
+        h_res = resolution[0] if (resolution is not None and len(resolution) >= 1) else None
+        if h_res is not None and h_res <= 640:
+            stem_slice = ttnn.Conv2dL1FullSliceConfig
+        else:
+            stem_slice = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2)
         self.conv1 = TtnnConv(
             device,
             parameters.conv_args[0],
             parameters.model[0],
             deallocate_activation=True,
             shard_layout=None,
-            # Keep at least 2 slices for stem conv; num_slices=1 overflows L1 CB allocation at 1280.
-            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=2),
-            # slice_config=ttnn.Conv2dL1FullSliceConfig(),
+            slice_config=stem_slice,
         )
         self.conv2 = TtnnConv(
             device,

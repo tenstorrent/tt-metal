@@ -18,7 +18,7 @@
     --good: #5af2a3;
     --warn: #ffb05a;
     --bad: #ff6b6b;
-    --v8s-rgb: 90, 242, 163;
+    --v8s-rgb: 255, 230, 90;
     --v11s-rgb: 92, 184, 255;
     --v8l-rgb: 124, 92, 255;
     --v8l640-rgb: 255, 176, 90;
@@ -306,17 +306,35 @@
     display: grid; grid-template-columns: 1fr 1fr;
     column-gap: 8px; align-items: baseline;
   }
-  .fps-row .fps-lbl { text-align: right; color: var(--text-dim); font-weight: 600; }
+  .fps-row .fps-lbl {
+    text-align: right; color: var(--text-dim); font-weight: 600;
+    white-space: nowrap;  /* keep "YOLOvNNL E2E fps:" on a single line */
+  }
   .fps-row .fps-val { text-align: left; }
-  #fpsCap, #aggFpsCap, #fpsCap_v8s, #fpsCap_v11s, #fpsCap_v8l_640, #fpsCap_v11l_640 {
+  #fpsCap, #aggFpsCap {
     margin-top: 6px;
     font: 600 20px ui-monospace, SFMono-Regular, Menlo, monospace;
     letter-spacing: 0.3px;
     color: var(--good);
   }
+  /* Per-model E2E rows — four in Multi mode. Fixed label column width
+     (instead of the .fps-row default 1fr 1fr) so the "fps:" of every row
+     ends at the exact same pixel. 18 px / 215 px column so the numbers
+     read across the room. `margin-left: -16px` nudges the whole row
+     leftward inside the galaxy-card padding so the longer labels don't
+     hug the right edge of the sidebar. */
+  #fpsCap_v8s, #fpsCap_v11s, #fpsCap_v8l_640, #fpsCap_v11l_640 {
+    margin-top: 6px;
+    margin-left: -16px;
+    font: 600 18px ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.2px;
+    color: var(--good);
+    grid-template-columns: 215px 1fr;
+  }
   /* Mode-driven visibility for the FPS rows.
-     side-by-side → per-model E2E rows only (aggregate is meaningless when
-                    the two chips run independent streams of the same frame).
+     side-by-side → per-model E2E rows only (Aggr removed; the per-model
+                    rates are individually meaningful and adding them isn't
+                    a useful summary in this demo).
      large-model  → generic E2E + Aggr rows. */
   body.mode-side-by-side #fpsCap,
   body.mode-side-by-side #aggFpsCap { display: none; }
@@ -331,8 +349,6 @@
   #fpsCap_v11s .fps-val { color: rgb(var(--v11s-rgb)); }
   #fpsCap_v8l_640  .fps-val { color: rgb(var(--v8l640-rgb)); }
   #fpsCap_v11l_640 .fps-val { color: rgb(var(--v11l640-rgb)); }
-  #fpsCap_v8s  .fps-lbl, #fpsCap_v11s .fps-lbl,
-  #fpsCap_v8l_640 .fps-lbl, #fpsCap_v11l_640 .fps-lbl { font-size: 16px; }
   .switch-overlay {
     position: fixed; inset: 0;
     background: rgba(10, 6, 18, 0.78);
@@ -491,16 +507,16 @@
         </div>
         <div class="galaxy-tiles" id="galaxyTiles">2 of 4 chips active</div>
         <div class="fps-row" id="fpsCap_v8s">
-          <span class="fps-lbl">YOLOv8s E2E:</span><span class="fps-val">—.—</span>
+          <span class="fps-lbl">YOLOv8s E2E fps:</span><span class="fps-val">—.—</span>
         </div>
         <div class="fps-row" id="fpsCap_v11s">
-          <span class="fps-lbl">YOLOv11s E2E:</span><span class="fps-val">—.—</span>
+          <span class="fps-lbl">YOLOv11s E2E fps:</span><span class="fps-val">—.—</span>
         </div>
         <div class="fps-row" id="fpsCap_v8l_640">
-          <span class="fps-lbl">YOLOv8L E2E:</span><span class="fps-val">—.—</span>
+          <span class="fps-lbl">YOLOv8L E2E fps:</span><span class="fps-val">—.—</span>
         </div>
         <div class="fps-row" id="fpsCap_v11l_640">
-          <span class="fps-lbl">YOLOv11L E2E:</span><span class="fps-val">—.—</span>
+          <span class="fps-lbl">YOLOv11L E2E fps:</span><span class="fps-val">—.—</span>
         </div>
         <div class="fps-row" id="fpsCap">
           <span class="fps-lbl">E2E FPS:</span><span class="fps-val">—.—</span>
@@ -576,7 +592,7 @@ let currentMode = "side-by-side";
 let inputResByMode = { "side-by-side": 640, "large-model": 1216 };
 let appConfig = { video_mode: false, video_urls: {} };
 const COLOR = {
-  v8s: "90,242,163",
+  v8s: "255,230,90",
   v11s: "92,184,255",
   v8l: "124,92,255",
   v8l_640: "255,176,90",
@@ -831,15 +847,41 @@ function drawLoop() {
 
    E2E   = the rate at which the user sees fresh detections on the SLOWEST
            visible panel. In side-by-side that's max(v8s, v11s) — both
-           panels animate at their own model's rate; the "end-to-end" feel
-           is governed by the higher of the two (the lower-fps panel feels
-           choppy in comparison, but the system as a whole is delivering at
-           the higher rate).
-   Aggr  = total inferences/sec across the active chips. Side-by-side =
-           v8s + v11s (one chip each, parallel streams of the same frame).
-           Large-model = v8l × 4 (the v8l fps is the rate of complete
-           frames, each frame runs 4 tile inferences in parallel across
-           4 chips, so the aggregate tile throughput is 4× that). */
+           panels animate at their own model's rate.
+   Aggr  = pure device-compute throughput aggregated across active chips,
+           computed as Σ (1000 / compute_ms_i) — same convention as
+           demo/launch.html. compute_ms is the worker's Option-4 event-
+           based timing (record_event before/after trace + event_synchronize),
+           which excludes host h2d / scheduling jitter. Falls back to
+           summing the per-model `fps` field if compute_ms hasn't landed
+           yet (it's published every 100 frames). */
+// Aggregate device-compute throughput. compute_ms is measured by each
+// runner's Option-4 event-based timing (see yolov8l/runner/performant_runner.py
+// :392-402 for the canonical pattern) — events recorded directly adjacent
+// to execute_trace, so the value is a clean on-chip trace duration with
+// no host overhead. Sum 1000/compute_ms across active chips.
+function _aggrFromCompute(models) {
+  let aggr = 0;
+  let any = false;
+  for (const k of models) {
+    const m = latest[k];
+    if (!m) continue;
+    const cms = +(m.compute_ms || 0);
+    const fps = +(m.fps || 0);
+    if (cms > 0) {
+      aggr += 1000 / cms;
+      any = true;
+    } else if (fps > 0.5) {
+      // compute_ms not yet emitted for this model (publishes every 100
+      // frames). Fall back to the worker's EMA fps until the first one
+      // lands so the row doesn't blink.
+      aggr += fps;
+      any = true;
+    }
+  }
+  return any ? aggr : 0;
+}
+
 function updateFpsCaps() {
   const now = performance.now();
   const stalled = _detsLastT === 0 || (now - _detsLastT) > 2000;
@@ -858,11 +900,24 @@ function updateFpsCaps() {
       if (_e2eV8l640El)  _e2eV8l640El.textContent  = live8l_640  ? f8l_640.toFixed(1)  : "—.—";
       if (_e2eV11l640El) _e2eV11l640El.textContent = live11l_640 ? f11l_640.toFixed(1) : "—.—";
     }
+    const aggrModels = appConfig.video_mode
+      ? ["v8s", "v11s", "v8l_640", "v11l_640"]
+      : ["v8s", "v11s"];
+    const aggr = stalled ? 0 : _aggrFromCompute(aggrModels);
+    if (_aggFpsEl) _aggFpsEl.textContent = aggr > 0.5 ? aggr.toFixed(1) : "—.—";
   } else if (currentMode === "large-model") {
     const f = latest.v8l ? +(latest.v8l.fps || 0) : 0;
     const live = !stalled && f > 0.5;
-    if (_e2eFpsEl) _e2eFpsEl.textContent = live ? f.toFixed(1)         : "—.—";
-    if (_aggFpsEl) _aggFpsEl.textContent = live ? (f * 4).toFixed(1)   : "—.—";
+    if (_e2eFpsEl) _e2eFpsEl.textContent = live ? f.toFixed(1) : "—.—";
+    // Single mode: 1 frame = 4 tile inferences in parallel across the 2×2
+    // mesh. Aggregate tile rate = 4 × (1000 / compute_ms). Falls back to
+    // 4 × fps until the first compute_ms measurement publishes.
+    const v8l = latest.v8l;
+    const cms = v8l ? +(v8l.compute_ms || 0) : 0;
+    let aggr = 0;
+    if (cms > 0)    aggr = 4 * (1000 / cms);
+    else if (live)  aggr = 4 * f;
+    if (_aggFpsEl) _aggFpsEl.textContent = aggr > 0.5 ? aggr.toFixed(1) : "—.—";
   }
 }
 

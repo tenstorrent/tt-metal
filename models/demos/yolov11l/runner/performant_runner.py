@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import ttnn
 from models.demos.yolov11l.runner.performant_runner_infra import YOLOv11PerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -21,6 +23,18 @@ class YOLOv11PerformantRunner:
         weights_mesh_mapper=None,
         outputs_mesh_composer=None,
     ):
+        # Periodic device-compute timing (Option 4 — same pattern as
+        # yolov8l/runner/performant_runner.py:392-402). Wraps execute_trace
+        # with two record_event calls and a paired event_synchronize so
+        # the diff measures pure on-chip trace runtime, free of host
+        # h2d/sync overhead. Critical: events MUST be recorded directly
+        # adjacent to execute_trace (no host code between them) — if any
+        # host work runs between the events, the device may finish the
+        # trace before we sync, and the diff measures Python overhead
+        # (yielding bogus near-zero compute_ms).
+        self._compute_measure_every = 100
+        self._pipeline_frame = 0
+        self._last_compute_ms: float | None = None
         self.device = device
         self.resolution = resolution
         self.torch_input_tensor = torch_input_tensor
@@ -94,7 +108,22 @@ class YOLOv11PerformantRunner:
         ttnn.wait_for_event(0, self.write_event)
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
+        # Option-4 device-compute measurement, mirroring
+        # yolov8l/runner/performant_runner.py:392-402 verbatim. The start
+        # event is recorded LITERALLY right before execute_trace and the
+        # end event LITERALLY right after — zero host work between them
+        # — so the device queue is guaranteed to still be processing the
+        # trace when we event_synchronize. Diff = pure on-chip trace time.
+        measure_compute = self._pipeline_frame % self._compute_measure_every == 0
+        compute_start_evt = ttnn.record_event(self.device, 0) if measure_compute else None
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+        if measure_compute:
+            compute_end_evt = ttnn.record_event(self.device, 0)
+            ttnn.event_synchronize(compute_start_evt)
+            t_compute_start = time.perf_counter()
+            ttnn.event_synchronize(compute_end_evt)
+            self._last_compute_ms = (time.perf_counter() - t_compute_start) * 1000
+        self._pipeline_frame += 1
         return self.runner_infra.output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
