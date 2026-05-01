@@ -823,12 +823,8 @@ void ProgramImpl::finalize_single_dfb_config(
     //  - consumer compute -> set trisc0 (bit 0)
     // TODO: if/when consumer-compute can target trisc3 instead of trisc0, that
     // selection would need a dedicated DataflowBufferConfig field.
-    if (has_tensix_risc(config.producer_risc_mask)) {
-        dfb->tensix_trisc_mask |= (1u << 2);
-    }
-    if (has_tensix_risc(config.consumer_risc_mask)) {
-        dfb->tensix_trisc_mask |= (1u << 0);
-    }
+    dfb->tensix_trisc_mask = (has_tensix_risc(config.producer_risc_mask) ? (1u << 2) : 0u) |
+                             (has_tensix_risc(config.consumer_risc_mask) ? (1u << 0) : 0u);
 
     const bool is_intra_tensix =
         config.tensix_scope.has_value() && *config.tensix_scope == TensixScope::INTRA;
