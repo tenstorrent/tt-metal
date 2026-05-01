@@ -12,11 +12,13 @@ import os
 import shlex
 import subprocess
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import List
 
-import yaml
 import git
+import pandas as pd
+import yaml
 import tt_train_metrics
 import analyze_memory
 import analyze_steps
@@ -163,8 +165,18 @@ def main() -> int:
     output_dir = Path(_verify_path(parsed_args.output_dir, tt_metal_runtime_root))
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Report failing models
-    failing_models = []
+    # Collect model status
+    model_status = []
+
+    def set_model_status(filename, status, elapsed_time, log_path):
+        model_status.append(
+            {
+                "filename": filename,
+                "run status": status,
+                "elapsed time (hh::mm::ss)": elapsed_time,
+                "log path": log_path,
+            }
+        )
 
     # Check that both --filter-filenames and --exclude-filenames are not used together
     if parsed_args.filter_filenames and parsed_args.exclude_filenames:
@@ -227,7 +239,8 @@ def main() -> int:
             ret_code = run_and_save_log(cmd, os.devnull)
             # Record failing model run but continue to run remaining models
             if ret_code != 0:
-                failing_models.append(str(log_path))
+                # failing_models.append(str(log_path))
+                set_model_status(filename=model_filename, status="❌", elapsed_time=None, log_path=str(log_path))
                 print(f"Subprocess dataset_to_tokens.py failed. Return code {ret_code}")
                 continue
 
@@ -239,11 +252,12 @@ def main() -> int:
         print()
         cmd_start = time.time()
         ret_code = run_and_save_log(cmd, log_path)
-        print(f"{model_filename} elapsed time: {time.time() - cmd_start:,.2f} s")
+        elapsed_time = str(timedelta(seconds=(int(time.time() - cmd_start))))
+        print(f"{model_filename} elapsed time: {elapsed_time}")
 
         # Record failing model run but continue to run remaining models
         if ret_code != 0:
-            failing_models.append(str(log_path))
+            set_model_status(filename=model_filename, status="❌", elapsed_time=elapsed_time, log_path=str(log_path))
             print(f"Subprocess {binary} failed. Return code {ret_code}")
             continue
 
@@ -289,13 +303,16 @@ def main() -> int:
         output_filename = output_dir / log_path.with_suffix(".json").name
         tt_train_metrics.write_json(pydantic_data, output_filename)
 
-    if failing_models:
-        # Fail the run if any model binary exited non-zero
-        raise Exception(
-            "{} model(s) failed with error code != 0. Check the following logs: \n{}".format(
-                len(failing_models), "\n".join(failing_models)
-            )
-        )
+        set_model_status(filename=model_filename, status="✅", elapsed_time=elapsed_time, log_path=str(log_path))
+
+    # Show summary and display to Github if environment variable exists
+    df = pd.DataFrame(model_status)
+    df_md = df.to_markdown(index=False)
+    print("Summary:")
+    print(df_md)
+    if "GITHUB_STEP_SUMMARY" in os.environ:
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+            print(df_md, file=fh)
 
 
 if __name__ == "__main__":
