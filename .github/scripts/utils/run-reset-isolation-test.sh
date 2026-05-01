@@ -100,7 +100,10 @@ sleep 5
 wait "$container0_initial_pid" || true
 
 echo ">>> Resetting device(s): ${RESET_DEVICE_IDS} via tt-smi -r ..."
-docker exec "${container0}" tt-smi -r "$RESET_DEVICE_IDS"
+if ! timeout 120 docker exec "${container0}" tt-smi -r "$RESET_DEVICE_IDS"; then
+    echo ">>> tt-smi -r timed out or failed, falling back to tt-smi -glx_reset ..."
+    docker exec "${container0}" tt-smi -glx_reset "$RESET_DEVICE_IDS"
+fi
 echo ">>> Reset complete."
 
 # Unblock the survivor loops so they perform their final confirming run.
