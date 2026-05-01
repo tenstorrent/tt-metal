@@ -113,10 +113,6 @@ bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     return inactive_ethernet_cores.contains(logical_core);
 }
 
-uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
-    return this->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
-}
-
 std::tuple<ChipId, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const {
     return MetalEnvAccessor(*env_).impl().get_cluster().get_connected_ethernet_core(
         std::make_tuple(this->id_, eth_core));
@@ -797,23 +793,6 @@ void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocation
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
-
-bool Device::has_noc_mcast_txns(SubDeviceId /*sub_device_id*/) const {
-    TT_FATAL(false, "has_noc_mcast_txns is deprecated for device");
-    return false;
-}
-
-uint8_t Device::num_noc_unicast_txns(SubDeviceId /*sub_device_id*/) const {
-    TT_FATAL(false, "num_noc_unicast_txns is deprecated for device");
-    return 0U;
-}
-
-uint8_t Device::noc_data_start_index(SubDeviceId /*sub_device_id*/, bool unicast_data) const {
-    if (unicast_data) {
-        TT_FATAL(false, "noc_data_start_index is deprecated for unicast mode for device");
-    }
-    return 0U;
-}
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {

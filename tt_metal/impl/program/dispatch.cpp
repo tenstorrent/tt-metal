@@ -1914,7 +1914,6 @@ public:
     // Determine the size of the go signal commands.
     void size_commands(
         DeviceCommandCalculator& calculator,
-        IDevice* /*device*/,
         SubDeviceId /*sub_device_id*/,
         const ProgramTransferInfo& program_transfer_info) {
         // if dispatch_s is enabled have dispatch_d send a semaphore update to dispatch_s (this will include a write
@@ -1937,13 +1936,14 @@ public:
         ProgramCommandSequence& program_command_sequence,
         HostMemDeviceCommand& device_command_sequence,
         const CommandConstants& constants,
-        IDevice* device,
+        distributed::MeshDevice* mesh_device,
         SubDeviceId sub_device_id,
         const ProgramTransferInfo& program_transfer_info,
         bool has_multicast_launch_cmds,
         bool has_unicast_launch_cmds) {
-        const auto& noc_data_start_idx = device->noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
-        const auto& num_noc_unicast_txns = has_unicast_launch_cmds ? device->num_noc_unicast_txns(sub_device_id) : 0;
+        const auto& noc_data_start_idx = mesh_device->noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
+        const auto& num_noc_unicast_txns =
+            has_unicast_launch_cmds ? mesh_device->num_noc_unicast_txns(sub_device_id) : 0;
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         auto sub_device_index = *sub_device_id;
         if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -2002,7 +2002,7 @@ public:
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     ProgramImpl& program,
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache) {
     LOG_TRACE_LAZY(tt::LogDispatch, "");
@@ -2011,7 +2011,7 @@ void assemble_device_commands(
     LOG_TRACE_LAZY(
         tt::LogDispatch,
         "Device: {}, SubDevice: {}, Prefetcher Cache: {}",
-        device->id(),
+        mesh_device->id(),
         *sub_device_id,
         use_prefetcher_cache ? "enabled" : "disabled");
 
@@ -2021,26 +2021,26 @@ void assemble_device_commands(
     constants.noc_index = k_dispatch_downstream_noc;
     constants.max_prefetch_command_size =
         MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
-    constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
+    constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(mesh_device);
     BatchedTransfers batched_transfers =
-        assemble_runtime_args_commands(program_command_sequence, program, device, constants);
+        assemble_runtime_args_commands(program_command_sequence, program, mesh_device, constants);
 
     // Assemble config buffer
     DeviceCommandCalculator program_config_buffer_calculator;
 
     SemphoreCommandGenerator semaphore_command_generator;
     semaphore_command_generator.size_commands(
-        program, device, program_config_buffer_calculator, constants, batched_transfers);
+        program, mesh_device, program_config_buffer_calculator, constants, batched_transfers);
 
     CircularBufferCommandGenerator circular_buffer_command_generator;
-    circular_buffer_command_generator.construct_commands(device, constants, program, batched_transfers);
+    circular_buffer_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
 
     TT_ASSERT(
         program.dataflow_buffers().empty() || !MetalContext::instance().hal().has_tile_counter_registers(),
         "Dataflow buffers on Quasar are not supported through Fast Dispatch yet. Use Slow Dispatch instead.");
 
     DataflowBufferCommandGenerator dfb_command_generator;
-    dfb_command_generator.construct_commands(device, constants, program, batched_transfers);
+    dfb_command_generator.construct_commands(mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(batched_transfers, program_config_buffer_calculator);
@@ -2060,15 +2060,16 @@ void assemble_device_commands(
     const auto& program_transfer_info = program.get_program_transfer_info();
     if (!program_transfer_info.kernel_bins.empty()) {
         TT_FATAL(
-            program.get_kernels_buffer(device).get(), "Expected Kernel Binary Buffer to be allocated for program.");
+            program.get_kernels_buffer(mesh_device).get(),
+            "Expected Kernel Binary Buffer to be allocated for program.");
     }
     ProgramBinaryCommandGenerator program_binary_command_generator;
     DeviceCommandCalculator program_binary_calculator;
     program_binary_command_generator.size_commands(
-        device,
+        mesh_device,
         program,
         program_transfer_info,
-        program.get_kernels_buffer(device),
+        program.get_kernels_buffer(mesh_device),
         constants,
         program_binary_calculator,
         use_prefetcher_cache);
@@ -2080,7 +2081,7 @@ void assemble_device_commands(
         program_command_sequence.program_binary_command_sequence.size_bytes() ==
         program_command_sequence.program_binary_command_sequence.write_offset_bytes());
     if (use_prefetcher_cache) {
-        program_command_sequence.kernel_bins_base_addr = program.get_kernels_buffer(device)->address();
+        program_command_sequence.kernel_bins_base_addr = program.get_kernels_buffer(mesh_device)->address();
     }
 
     // Assemble wait barrier command sequence
@@ -2098,7 +2099,7 @@ void assemble_device_commands(
     // Assemble launch message
     LaunchMessageGenerator launch_message_generator;
     DeviceCommandCalculator launch_message_calculator;
-    launch_message_generator.construct_commands(device, program, launch_message_calculator, constants, sub_device_id);
+    launch_message_generator.construct_commands(mesh_device, program, launch_message_calculator, constants, sub_device_id);
     program_command_sequence.launch_msg_command_sequence =
         HostMemDeviceCommand(launch_message_calculator.write_offset_bytes());
     launch_message_generator.assemble_commands(
@@ -2110,13 +2111,13 @@ void assemble_device_commands(
     // Assemble go signal
     GoSignalGenerator go_signal_generator;
     DeviceCommandCalculator go_signal_calculator;
-    go_signal_generator.size_commands(go_signal_calculator, device, sub_device_id, program_transfer_info);
+    go_signal_generator.size_commands(go_signal_calculator, sub_device_id, program_transfer_info);
     program_command_sequence.go_msg_command_sequence = HostMemDeviceCommand(go_signal_calculator.write_offset_bytes());
     go_signal_generator.assemble_commands(
         program_command_sequence,
         program_command_sequence.go_msg_command_sequence,
         constants,
-        device,
+        mesh_device,
         sub_device_id,
         program_transfer_info,
         launch_message_generator.has_multicast_launch_cmds(),

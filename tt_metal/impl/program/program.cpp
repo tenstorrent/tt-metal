@@ -2013,15 +2013,15 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     }
 }
 
-void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
     uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key();
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        ttsl::hash::hash_combine(device_hash, device->id());
+        ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2034,37 +2034,36 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
 
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
 
-        // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
-        // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
     } else {
         TT_ASSERT(
             cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
-void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_trace_dispatch_commands(
+    distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
     uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key();
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        device_hash = (device_hash << 32) | (device->id());
+        device_hash = (device_hash << 32) | (mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2077,12 +2076,12 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     auto& trace_cached_program_command_sequences = get_trace_cached_program_command_sequences();
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
@@ -2093,7 +2092,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
             trace_cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
