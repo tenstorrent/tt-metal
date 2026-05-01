@@ -1,5 +1,90 @@
 # TurboQuant KV Cache Quantization
 
+## ▶️ TOMORROW (resume here, 2026-05-02)
+
+**Pick up the K-split FP32 work where I stopped at end-of-day 2026-05-01.**
+HEAD is `4d1aaf9e455` — `git log --oneline -8` shows the trail. Baseline
+test (`turbo_quant/test_K_split_low_nqh.py`) still works: K=1=0.2373,
+K>1 cos=0.9998 with max-diff 5e-3. K=1 protection (`8fe227b5ebd`) and
+LLK improvements (`60daae3811f`) are committed and shipping.
+
+### What's diagnosed (this session, 2026-05-01)
+
+| Configuration | K=1 cos vs torch | K>1 |
+|---|---:|---|
+| BF16 baseline (committed) | 0.997 | cos 0.9998, max-diff 5e-3 |
+| All-FP32 (alias + qk_im + merge) | 0.863 | wrong |
+| BF16 alias + FP32 merge cluster + LLK fixes | 0.997 | cos 0.769 (regression) |
+| **BF16 cb_qk_im + FP32 alias + FP32 merge + LLK fixes** | **0.992** | **inf/nan** |
+
+The last row is the key finding. Two distinct bugs:
+- **K=1 break with all-FP32**: caused specifically by `cb_qk_im → FP32`.
+  Matmul output to FP32 CB does something wrong; not yet diagnosed.
+  Keeping `cb_qk_im` at BF16 (vanilla pattern) fixes K=1.
+- **K>1 inf/nan with FP32 alias state**: chunk loop works (K=1 OK at
+  0.992), so the bug is in the cross-core merge path — worker
+  pack-and-skip emit, writer NoC transfer, or reducer merge code.
+  Bisecting CB formats hit a wall without device visibility.
+
+### Concrete next steps (Day 2)
+
+**1. DPRINT-driven diagnosis at the merge boundary** (highest-leverage).
+Re-apply the BF16-cb_qk_im + FP32-alias + FP32-merge config that gives
+K=1=0.992 / K>1=inf-nan. Then add `DPRINT` (per
+`turbo_quant/test_dprint.py` for the existing pattern) at:
+
+   - Worker side, after `pack_tile(0, cb_partial_max)` in the
+     pack-and-skip path: dump first few values of `cb_partial_max`
+     to verify FP32 bytes are valid.
+   - Reducer side, after `cb_wait_front(cb_remote_max, ...)`: dump
+     `cb_remote_max` slot 0 and slot 1 contents to verify NoC transfer
+     preserved the FP32 bytes.
+   - Reducer side, after `max_block(...)`: dump `cb_merge_new_max` to
+     find the first op whose output goes non-finite.
+
+   File to modify: `ttnn/cpp/ttnn/operations/experimental/turbo_quant/sdpa/kernels/compute/sdpa_tq_decode.cpp`.
+   Repro: `python turbo_quant/test_K_split_low_nqh.py`.
+
+**2. Mixed-format binary ops audit.** Before merge ops with
+mixed-format inputs (`add_block_inplace(BF16, FP32)` etc.), insert
+explicit `reconfig_data_format(srcA_cb, srcB_cb)` to make sure both
+unpack contexts are configured. The helpers' `*_init_short` may only
+reconfig srcA reliably.
+
+**3. Independent investigation: matmul output to FP32 CB.** Find an
+existing ttnn op that uses fp32_dest_acc_en + FP32 output CB (not
+BF16). If one exists, port the reconfig pattern. If not, that's
+constraining cb_qk_im to BF16 forever and we should not pursue
+all-FP32.
+
+**4. T3K K=14 latency benchmark.** Run only after FP32 alias state
+K>1 produces correct (cos > 0.9999) results. Confirms the projected
+~28 ms/tok savings.
+
+### Parallel track (no kernel debugging needed)
+
+**Hybrid fused SDPA kernel** (~10–15 ms/tok savings, fully independent
+of K-split status) is the highest-confidence next win. Spec:
+
+- Single SDPA kernel handles both K/V data sources in one chunk loop
+  (TQ-quantized for `[0, cur_pos-W]`, BFP8 ring for `[cur_pos-W, cur_pos]`).
+- Replaces the current dual-SDPA + host-side `_combine_lse` flow at
+  `ttnn_integration.py`.
+- Cleanest version: one kernel with two K/V address streams and a
+  per-chunk-index branch in the reader. Compute kernel barely changes
+  (Flash Attention online softmax is already there).
+- Also unblocks the `K=1` hard-code at `ttnn_integration.py:1065`.
+
+### Useful artifacts in repo
+
+- `turbo_quant/test_K_split_low_nqh.py` — main K-split repro.
+- `turbo_quant/test_K1_vs_torch.py` — K=1 vs torch reference (cos metric).
+- `turbo_quant/test_K1_one_chunk.py` — single-chunk minimal repro.
+- `turbo_quant/test_dprint.py` — pattern for DPRINT-enabled debugging.
+- LLK helpers in `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp` — fixes from this session land here.
+
+---
+
 ## 🚦 Next Steps (2026-05-01)
 
 **Where we are:**
