@@ -41,13 +41,20 @@ namespace compute_kernel_lib {
  *
  * @return true if FP32 accumulation is enabled via any source
  *
- * For compute kernels (TRISC0/1/2): Uses DST_ACCUM_MODE constexpr bool from JIT-generated
- * chlkc_dst_accum_mode.h (included via chlkc_list.h before user kernel).
+ * For compute kernels (TRISC0/1/2 on Gen1; plus the Quasar SFPU TRISC variant
+ * UCK_CHLKC_ISOLATE_SFPU): Uses DST_ACCUM_MODE constexpr bool from JIT-generated
+ * chlkc_descriptors.h (included via chlkc_list.h before the user kernel).
  *
  * For data movement kernels: Uses ENABLE_FP32_DEST_ACC macro define.
+ *
+ * NOTE: Quasar introduces a 4th TRISC variant for the SFPU/vector engine that
+ * compiles user compute code under UCK_CHLKC_ISOLATE_SFPU. chlkc_list.h still
+ * includes chlkc_descriptors.h for that variant, so DST_ACCUM_MODE is defined,
+ * but the previous condition (only MATH/PACK/UNPACK) caused this header to fall
+ * through to the data-movement branch and trip the static_assert.
  */
 constexpr bool get_fp32_dest_acc_enabled() {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK)
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
     // Compute kernel (TRISC) - DST_ACCUM_MODE is a constexpr bool from JIT header
     return DST_ACCUM_MODE;
 #elif defined(ENABLE_FP32_DEST_ACC)
@@ -55,6 +62,7 @@ constexpr bool get_fp32_dest_acc_enabled() {
     return (ENABLE_FP32_DEST_ACC == 1);
 #else
     static_assert(false, "ENABLE_FP32_DEST_ACC must be defined for data movement kernels");
+    return false;  // Unreachable; suppresses 'no return statement' diagnostic on some toolchains.
 #endif
 }
 
