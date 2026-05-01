@@ -56,8 +56,9 @@ run_survivor_loop() {
             fi
         done
         # Final run after reset to confirm ETH survived.
-        docker exec "$container" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}"
-        echo $? > "${RESULTS_DIR}/${container}.status"
+        rc=0
+        docker exec "$container" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}" || rc=$?
+        echo "$rc" > "${RESULTS_DIR}/${container}.status"
     ) &
 }
 
@@ -102,7 +103,7 @@ wait "$container0_initial_pid" || true
 echo ">>> Resetting device(s): ${RESET_DEVICE_IDS} via tt-smi -r ..."
 if ! timeout 120 docker exec "${container0}" tt-smi -r "$RESET_DEVICE_IDS"; then
     echo ">>> tt-smi -r timed out or failed, falling back to tt-smi -glx_reset ..."
-    docker exec "${container0}" tt-smi -glx_reset "$RESET_DEVICE_IDS"
+    timeout 120 docker exec "${container0}" tt-smi -glx_reset "$RESET_DEVICE_IDS"
 fi
 echo ">>> Reset complete."
 
@@ -112,8 +113,9 @@ touch "$RESET_DONE_FLAG"
 # --- Step 4: Restart workload in container-0 ---
 echo ">>> Restarting workload in ${container0}..."
 (
-    docker exec "$container0" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}"
-    echo $? > "${RESULTS_DIR}/${container0}.status"
+    rc=0
+    docker exec "$container0" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}" || rc=$?
+    echo "$rc" > "${RESULTS_DIR}/${container0}.status"
 ) &
 bg_pids+=($!)
 
