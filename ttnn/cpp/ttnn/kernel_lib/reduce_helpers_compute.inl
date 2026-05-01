@@ -10,6 +10,7 @@
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
+#include "api/debug/dprint_pages.h"
 #include "experimental/circular_buffer.h"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/buffer_helpers.hpp"
@@ -443,6 +444,8 @@ ALWI void reduce(
         // #region agent log
         DPRINT << KL_TRISC_TAG << ":REDW enter in=" << input_cb_id << " sc=" << scaler_cb_id
                << " out=" << output_cb_id << " Ht=" << Ht << " Wt=" << Wt << " NC=" << num_batches << ENDL();
+        // Dump scaler tile row 0 once on UNPACK to verify prepare_reduce_scaler ran.
+        UNPACK((tt::compute::common::print_tile_rows(scaler_cb_id, 0, true, 0, 1, 0, 32)));
         // #endregion
 
         // No-pop modes: bulk reserve output upfront
@@ -481,6 +484,8 @@ ALWI void reduce(
                         // #region agent log
                         DPRINT << KL_TRISC_TAG << ":W aw nc=" << nc << " ht=" << ht << " wt=" << wt
                                << ENDL();
+                        // Dump input tile row 0 on UNPACK to verify reader populated L1.
+                        UNPACK((tt::compute::common::print_tile_rows(input_cb_id, 0, true, 0, 1, 0, 32)));
                         // #endregion
                         if constexpr (use_matmul) {
                             reduce_matmul_tiles(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
@@ -531,6 +536,11 @@ ALWI void reduce(
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst_idx, output_cb_id);
+                // #region agent log
+                // Dump output tile row 0 right after pack_tile to confirm the SUM landed in L1.
+                // print_tile_rows on PACK uses CB_WR_PTR (write pointer of the slot we just packed).
+                PACK((tt::compute::common::print_tile_rows(output_cb_id, 0, true, 0, 1, 0, 32)));
+                // #endregion
                 tile_regs_release();
                 if constexpr (should_pop(input_policy)) {
                     // #region agent log
