@@ -4,8 +4,8 @@
 
 """Unit tests for ttml LR schedulers.
 
-Covered: CosineAnnealingScheduler, StepScheduler, LinearScheduler, LambdaScheduler.
-SequentialScheduler is not exposed to Python (unique_ptr ownership transfer).
+All schedulers are tested via the pure-Python implementations in
+ttml.common.schedulers.
 
 Each scheduler has two test classes:
   - TestXMatchesPyTorch  — trajectory compared step-by-step against the
@@ -16,6 +16,7 @@ Each scheduler has two test classes:
 import pytest
 import torch
 import ttml
+from ttml.common.schedulers import CosineAnnealingScheduler, LambdaScheduler, LinearScheduler, StepScheduler
 
 
 BASE_LR = 0.1
@@ -30,6 +31,11 @@ N_STEPS = 60
 def _make_opt(lr=BASE_LR):
     params = ttml.NamedParameters()
     return ttml.optimizers.create_optimizer({"type": "AdamW", "lr": lr}, params)
+
+
+def _step(opt, sched):
+    sched.step()
+    assert opt.get_lr() == pytest.approx(sched.get_last_lr(), abs=1e-8)
 
 
 def _make_torch_opt(lr=BASE_LR):
@@ -48,19 +54,19 @@ def _roundtrip(make_sched_fn, n_steps=N_STEPS):
     ref_opt, ref_sched = make_sched_fn()  # noqa: F841
     ref_lrs = []
     for _ in range(n_steps):
-        ref_sched.step()
+        _step(ref_opt, ref_sched)
         ref_lrs.append(ref_sched.get_current_lr())
 
     opt1, sched1 = make_sched_fn()  # noqa: F841
     for _ in range(half):
-        sched1.step()
+        _step(opt1, sched1)
     state = sched1.get_state_dict()
 
     opt2, sched2 = make_sched_fn()  # noqa: F841
     sched2.set_state_dict(state)
     resumed_lrs = []
     for _ in range(n_steps - half):
-        sched2.step()
+        _step(opt2, sched2)
         resumed_lrs.append(sched2.get_current_lr())
 
     return resumed_lrs, ref_lrs[half:]
@@ -76,7 +82,7 @@ ETA_MIN = 1e-4
 
 def _make_cosine(base_lr=BASE_LR, T_max=T_MAX, eta_min=ETA_MIN):
     opt = _make_opt(base_lr)
-    return opt, ttml.schedulers.CosineAnnealingScheduler(opt, T_max, eta_min)
+    return opt, CosineAnnealingScheduler(opt, T_max, eta_min)
 
 
 class TestCosineAnnealingMatchesPyTorch:
@@ -87,7 +93,7 @@ class TestCosineAnnealingMatchesPyTorch:
         torch_sched = torch.optim.lr_scheduler.CosineAnnealingLR(torch_opt, T_max=T_MAX, eta_min=ETA_MIN)
 
         for step in range(1, N_STEPS + 1):
-            sched.step()
+            _step(opt, sched)
             torch_sched.step()
             assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-5), f"step {step}"
 
@@ -95,27 +101,27 @@ class TestCosineAnnealingMatchesPyTorch:
         """At step T_max the LR must equal eta_min."""
         opt, sched = _make_cosine()  # noqa: F841
         for _ in range(T_MAX):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_current_lr() == pytest.approx(ETA_MIN, abs=1e-6)
 
     def test_lr_at_2T_max_is_base_lr(self):
         """At step 2*T_max the LR must return to base_lr."""
         opt, sched = _make_cosine()  # noqa: F841
         for _ in range(2 * T_MAX):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_current_lr() == pytest.approx(BASE_LR, abs=1e-5)
 
     def test_get_last_lr_matches_current(self):
         opt, sched = _make_cosine()  # noqa: F841
         for _ in range(7):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_last_lr() == pytest.approx(sched.get_current_lr(), abs=1e-8)
 
     def test_eta_min_zero_default(self):
-        opt = _make_opt()
-        sched = ttml.schedulers.CosineAnnealingScheduler(opt, T_MAX)
+        opt = _make_opt()  # noqa: F841
+        sched = CosineAnnealingScheduler(opt, T_MAX)
         for _ in range(T_MAX):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_current_lr() == pytest.approx(0.0, abs=1e-6)
 
 
@@ -127,7 +133,7 @@ class TestCosineAnnealingStateDict:
     def test_state_dict_contains_expected_keys(self):
         opt, sched = _make_cosine()  # noqa: F841
         for _ in range(5):
-            sched.step()
+            _step(opt, sched)
         state = sched.get_state_dict()
         assert "m_last_step" in state
         assert "m_last_lr" in state
@@ -136,7 +142,7 @@ class TestCosineAnnealingStateDict:
         opt, sched = _make_cosine()  # noqa: F841
         n = 13
         for _ in range(n):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_state_dict()["m_last_step"] == n
 
     def test_restore_before_first_step_is_noop(self):
@@ -145,8 +151,8 @@ class TestCosineAnnealingStateDict:
         sched_b.set_state_dict(sched_a.get_state_dict())
         lrs_a, lrs_b = [], []
         for _ in range(10):
-            sched_a.step()
-            sched_b.step()
+            _step(opt_a, sched_a)
+            _step(opt_b, sched_b)
             lrs_a.append(sched_a.get_current_lr())
             lrs_b.append(sched_b.get_current_lr())
         assert lrs_a == pytest.approx(lrs_b, abs=1e-8)
@@ -162,7 +168,7 @@ GAMMA = 0.5
 
 def _make_step(base_lr=BASE_LR, step_size=STEP_SIZE, gamma=GAMMA):
     opt = _make_opt(base_lr)
-    return opt, ttml.schedulers.StepScheduler(opt, step_size, gamma)
+    return opt, StepScheduler(opt, step_size, gamma)
 
 
 class TestStepSchedulerMatchesPyTorch:
@@ -173,7 +179,7 @@ class TestStepSchedulerMatchesPyTorch:
         torch_sched = torch.optim.lr_scheduler.StepLR(torch_opt, step_size=STEP_SIZE, gamma=GAMMA)
 
         for step in range(1, N_STEPS + 1):
-            sched.step()
+            _step(opt, sched)
             torch_sched.step()
             assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-6), f"step {step}"
 
@@ -181,20 +187,20 @@ class TestStepSchedulerMatchesPyTorch:
         """LR must not decay until step_size steps have been taken."""
         opt, sched = _make_step()  # noqa: F841
         for _ in range(STEP_SIZE - 1):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_current_lr() == pytest.approx(BASE_LR, abs=1e-7)
 
     def test_lr_decays_at_boundary(self):
         """LR must be base_lr * gamma exactly at step_size."""
         opt, sched = _make_step()  # noqa: F841
         for _ in range(STEP_SIZE):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_current_lr() == pytest.approx(BASE_LR * GAMMA, abs=1e-7)
 
     def test_get_last_lr_matches_current(self):
         opt, sched = _make_step()  # noqa: F841
         for _ in range(7):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_last_lr() == pytest.approx(sched.get_current_lr(), abs=1e-8)
 
 
@@ -206,7 +212,7 @@ class TestStepSchedulerStateDict:
     def test_state_dict_contains_expected_keys(self):
         opt, sched = _make_step()  # noqa: F841
         for _ in range(5):
-            sched.step()
+            _step(opt, sched)
         state = sched.get_state_dict()
         assert "m_last_step" in state
         assert "m_last_lr" in state
@@ -215,7 +221,7 @@ class TestStepSchedulerStateDict:
         opt, sched = _make_step()  # noqa: F841
         n = 17
         for _ in range(n):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_state_dict()["m_last_step"] == n
 
     def test_restore_before_first_step_is_noop(self):
@@ -224,8 +230,8 @@ class TestStepSchedulerStateDict:
         sched_b.set_state_dict(sched_a.get_state_dict())
         lrs_a, lrs_b = [], []
         for _ in range(10):
-            sched_a.step()
-            sched_b.step()
+            _step(opt_a, sched_a)
+            _step(opt_b, sched_b)
             lrs_a.append(sched_a.get_current_lr())
             lrs_b.append(sched_b.get_current_lr())
         assert lrs_a == pytest.approx(lrs_b, abs=1e-8)
@@ -242,7 +248,7 @@ TOTAL_STEPS = 30
 
 def _make_linear(base_lr=BASE_LR, start_factor=START_FACTOR, end_factor=END_FACTOR, total_steps=TOTAL_STEPS):
     opt = _make_opt(base_lr)
-    return opt, ttml.schedulers.LinearScheduler(opt, start_factor, end_factor, total_steps)
+    return opt, LinearScheduler(opt, start_factor, end_factor, total_steps)
 
 
 class TestLinearSchedulerMatchesPyTorch:
@@ -255,7 +261,7 @@ class TestLinearSchedulerMatchesPyTorch:
         )
 
         for step in range(1, N_STEPS + 1):
-            sched.step()
+            _step(opt, sched)
             torch_sched.step()
             assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-5), f"step {step}"
 
@@ -263,20 +269,20 @@ class TestLinearSchedulerMatchesPyTorch:
         """At total_steps the LR must equal base_lr * end_factor."""
         opt, sched = _make_linear()  # noqa: F841
         for _ in range(TOTAL_STEPS):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_current_lr() == pytest.approx(BASE_LR * END_FACTOR, abs=1e-6)
 
     def test_lr_clamps_after_total_steps(self):
         """Beyond total_steps the LR must stay at base_lr * end_factor."""
         opt, sched = _make_linear()  # noqa: F841
         for _ in range(TOTAL_STEPS + 20):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_current_lr() == pytest.approx(BASE_LR * END_FACTOR, abs=1e-6)
 
     def test_get_last_lr_matches_current(self):
         opt, sched = _make_linear()  # noqa: F841
         for _ in range(7):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_last_lr() == pytest.approx(sched.get_current_lr(), abs=1e-8)
 
 
@@ -288,7 +294,7 @@ class TestLinearSchedulerStateDict:
     def test_state_dict_contains_expected_keys(self):
         opt, sched = _make_linear()  # noqa: F841
         for _ in range(5):
-            sched.step()
+            _step(opt, sched)
         state = sched.get_state_dict()
         assert "m_last_step" in state
         assert "m_last_lr" in state
@@ -297,7 +303,7 @@ class TestLinearSchedulerStateDict:
         opt, sched = _make_linear()  # noqa: F841
         n = 11
         for _ in range(n):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_state_dict()["m_last_step"] == n
 
     def test_restore_before_first_step_is_noop(self):
@@ -306,8 +312,8 @@ class TestLinearSchedulerStateDict:
         sched_b.set_state_dict(sched_a.get_state_dict())
         lrs_a, lrs_b = [], []
         for _ in range(10):
-            sched_a.step()
-            sched_b.step()
+            _step(opt_a, sched_a)
+            _step(opt_b, sched_b)
             lrs_a.append(sched_a.get_current_lr())
             lrs_b.append(sched_b.get_current_lr())
         assert lrs_a == pytest.approx(lrs_b, abs=1e-8)
@@ -324,7 +330,7 @@ _LAMBDA = lambda step: _DECAY**step  # noqa: E731
 
 def _make_lambda(base_lr=BASE_LR):
     opt = _make_opt(base_lr)
-    return opt, ttml.schedulers.LambdaScheduler(opt, _LAMBDA)
+    return opt, LambdaScheduler(opt, _LAMBDA)
 
 
 class TestLambdaSchedulerMatchesPyTorch:
@@ -335,7 +341,7 @@ class TestLambdaSchedulerMatchesPyTorch:
         torch_sched = torch.optim.lr_scheduler.LambdaLR(torch_opt, lr_lambda=_LAMBDA)
 
         for step in range(1, N_STEPS + 1):
-            sched.step()
+            _step(opt, sched)
             torch_sched.step()
             assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-6), f"step {step}"
 
@@ -343,22 +349,22 @@ class TestLambdaSchedulerMatchesPyTorch:
         """LR after N steps must equal base_lr * lambda(N) exactly."""
         opt, sched = _make_lambda()  # noqa: F841
         for n in range(1, 21):
-            sched.step()
+            _step(opt, sched)
             expected = BASE_LR * (_DECAY**n)
             assert sched.get_current_lr() == pytest.approx(expected, abs=1e-6), f"step {n}"
 
     def test_constant_lambda_keeps_lr(self):
         """A lambda that always returns 1.0 must leave the LR unchanged."""
-        opt = _make_opt()
-        sched = ttml.schedulers.LambdaScheduler(opt, lambda _: 1.0)
+        opt = _make_opt()  # noqa: F841
+        sched = LambdaScheduler(opt, lambda _: 1.0)
         for _ in range(10):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_current_lr() == pytest.approx(BASE_LR, abs=1e-7)
 
     def test_get_last_lr_matches_current(self):
         opt, sched = _make_lambda()  # noqa: F841
         for _ in range(7):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_last_lr() == pytest.approx(sched.get_current_lr(), abs=1e-8)
 
 
@@ -370,7 +376,7 @@ class TestLambdaSchedulerStateDict:
     def test_state_dict_contains_expected_keys(self):
         opt, sched = _make_lambda()  # noqa: F841
         for _ in range(5):
-            sched.step()
+            _step(opt, sched)
         state = sched.get_state_dict()
         assert "m_last_step" in state
         assert "m_last_lr" in state
@@ -379,7 +385,7 @@ class TestLambdaSchedulerStateDict:
         opt, sched = _make_lambda()  # noqa: F841
         n = 9
         for _ in range(n):
-            sched.step()
+            _step(opt, sched)
         assert sched.get_state_dict()["m_last_step"] == n
 
     def test_restore_before_first_step_is_noop(self):
@@ -388,8 +394,8 @@ class TestLambdaSchedulerStateDict:
         sched_b.set_state_dict(sched_a.get_state_dict())
         lrs_a, lrs_b = [], []
         for _ in range(10):
-            sched_a.step()
-            sched_b.step()
+            _step(opt_a, sched_a)
+            _step(opt_b, sched_b)
             lrs_a.append(sched_a.get_current_lr())
             lrs_b.append(sched_b.get_current_lr())
         assert lrs_a == pytest.approx(lrs_b, abs=1e-8)
