@@ -67,6 +67,8 @@ target_sources(
         test_gap67_fixtf_2d_fabric_header_args_guard.cpp
         test_gap68_fixtg_control_plane_host_rank_guard.cpp
         test_gap69_fixth_relay_mux_no_links_guard.cpp
+        test_gap70_fixtk_degraded_cluster_chip_filter.cpp
+        test_gap71_fixtl_degraded_cluster_bail_before_create_meshes.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
