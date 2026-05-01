@@ -3,13 +3,11 @@
 
 """Molmo2-8B vLLM generator for tt-inference-server.
 
-Integrates TtMolmo2Model with the vLLM plugin system following the Qwen3-VL pattern.
-The server is started via tt-inference-server/run.py and the vLLM plugin
-(TTMolmo2ForConditionalGeneration) is loaded by TTModelLoader.
+Works with both the new vllm fork (has molmo2.py with Molmo2MultiModalProcessor)
+and the reference vllm fork (molmo.py only, sends raw frames to prefill_forward).
 
-Video processing: vLLM's Molmo2MultiModalProcessor calls the HF Molmo2VideoProcessor
-internally, so pixel_values_videos arriving at prefill_forward are already-processed
-Molmo2 patches — identical to demo.py inputs.
+Raw frame handling: if pixel_values_videos arrives as [n, 3, H, W] (reference vllm),
+we unfold to patch format [n, 729, 588] before passing to TtMolmo2Model.
 """
 
 from pathlib import Path
@@ -23,22 +21,48 @@ from models.common.warmup import WarmupForwardMixin
 from models.demos.molmo2.tt.model_config import Molmo2Config
 from models.tt_transformers.tt.ccl import TT_CCL
 from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.molmo2 import Molmo2DummyInputsBuilder, Molmo2MultiModalProcessor, Molmo2ProcessingInfo
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
+# New vllm fork has molmo2.py; reference fork does not.
+try:
+    from vllm.model_executor.models.molmo2 import (
+        Molmo2DummyInputsBuilder,
+        Molmo2MultiModalProcessor,
+        Molmo2ProcessingInfo,
+    )
+
+    class _TT_Molmo2ProcessingInfo(Molmo2ProcessingInfo):
+        def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+            # Video only — image modality reuses the video path; exposing "image"
+            # causes vllm to generate image dummy inputs that our _get_mm_fields_config
+            # does not handle, leading to IndexError in _merge_mm_kwargs.
+            return {"video": 1}
+
+    _registry_decorator = MULTIMODAL_REGISTRY.register_processor(
+        Molmo2MultiModalProcessor,
+        info=_TT_Molmo2ProcessingInfo,
+        dummy_inputs=Molmo2DummyInputsBuilder,
+    )
+except ImportError:
+    _registry_decorator = lambda cls: cls  # no-op for reference vllm
+
 WEIGHT_CACHE_PATH = Path("/tmp/molmo2_weight_cache")
+_PATCH_SIZE = 14
+_PATCH_FEATURES = _PATCH_SIZE * _PATCH_SIZE * 3  # 588
+
+
+def _raw_frames_to_patches(frames: torch.Tensor) -> torch.Tensor:
+    """Convert raw normalized frames [n, 3, H, W] → patch format [n, n_patches, 588].
+
+    Used when the reference vllm sends raw frames instead of pre-processed patches.
+    """
+    x = frames.unfold(2, _PATCH_SIZE, _PATCH_SIZE).unfold(3, _PATCH_SIZE, _PATCH_SIZE)
+    # x: [n, c, h/p, w/p, p, p] → [n, n_patches, 588]
+    return x.permute(0, 2, 3, 4, 5, 1).reshape(frames.shape[0], -1, _PATCH_FEATURES)
 
 
 def allocate_molmo2_kv_cache(kv_cache_shape, dtype, num_layers, model, cfg):
-    """Replace each layer's KV cache with new TTNN tensors.
-
-    vLLM requests a paged KV shape but our model uses sequential KV cache.
-    We allocate using our model's native shape and return them for vLLM to
-    pass back in prefill/decode calls.
-    """
-    import torch
-
-    # Use our model's native KV shape: [max_batch, n_local_kv_heads, max_seq_len, head_dim]
+    """Replace each layer's KV cache with new TTNN tensors."""
     cache_shape = (cfg.max_batch_size, cfg.n_local_kv_heads, cfg.max_seq_len, cfg.head_dim)
     for layer_idx in range(num_layers):
         cache_kv = torch.zeros(cache_shape, dtype=torch.bfloat16)
@@ -46,7 +70,7 @@ def allocate_molmo2_kv_cache(kv_cache_shape, dtype, num_layers, model, cfg):
             ttnn.as_tensor(
                 cache_kv,
                 device=model.mesh_device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
@@ -57,22 +81,9 @@ def allocate_molmo2_kv_cache(kv_cache_shape, dtype, num_layers, model, cfg):
     return [layer.attention.layer_past for layer in model.layers]
 
 
-class TT_Molmo2ProcessingInfo(Molmo2ProcessingInfo):
-    """Enable both image and video modality for TT Molmo2."""
-
-    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
-        return {"image": 1, "video": 1}
-
-
-@MULTIMODAL_REGISTRY.register_processor(
-    Molmo2MultiModalProcessor, info=TT_Molmo2ProcessingInfo, dummy_inputs=Molmo2DummyInputsBuilder
-)
+@_registry_decorator
 class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
-    """TT Molmo2 vLLM generator.
-
-    Wraps TtMolmo2Model to expose the vLLM generator interface expected by
-    TTModelLoader and WarmupForwardMixin.
-    """
+    """TT Molmo2 vLLM generator wrapping TtMolmo2Model."""
 
     model_capabilities = {
         "supports_prefix_caching": False,
@@ -80,8 +91,8 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
     }
 
     def __init__(self, model, cfg, mesh_device, processor):
-        self.model = model  # TtMolmo2Model
-        self.cfg = cfg  # Molmo2Config
+        self.model = model
+        self.cfg = cfg
         self.mesh_device = mesh_device
         self.processor = processor
         self._decode_trace_captured = False
@@ -140,65 +151,68 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_molmo2_kv_cache(*args, **kwargs, model=self.model, cfg=self.cfg)
 
-    def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, enable_trace, **kwargs):
+    def _unwrap(self, val):
+        """Unwrap up to two layers of list nesting."""
+        if isinstance(val, list):
+            val = val[0] if val else None
+        if isinstance(val, list):
+            val = val[0] if val else None
+        return val
+
+    def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, enable_trace=False, **kwargs):
         """Run prefill for a single user (batch_size=1).
 
         tokens: [batch, padded_seq_len] int32
         prompt_lens: [batch] int — actual length before padding
-        kwargs: multimodal inputs from Molmo2MultiModalProcessor
-          - pixel_values_videos: [n_frames, 729, 588] float — already-processed Molmo2 patches
-          - video_token_pooling: [N_pooled, pool_window] int
-          - pixel_values: [n_crops, 729, 588] float — for image inputs
-          - image_token_pooling: [N_pooled, pool_window] int
-          - token_type_ids: [1, S] int
+        pixel_values_videos may be:
+          [n, 729, 588] pre-processed patches (new vllm / our processor)
+          [n, 3, H, W]  raw normalized frames  (reference vllm)
         """
-        # Extract multimodal inputs
         pv = None
         pool_idx = None
-        token_type_ids = None
+        token_type_ids = self._unwrap(kwargs.get("token_type_ids"))
 
-        if "token_type_ids" in kwargs and kwargs["token_type_ids"] is not None:
-            token_type_ids = kwargs["token_type_ids"]
-
-        # Prefer video over image
-        pixel_values_videos = kwargs.get("pixel_values_videos", None)
-        video_token_pooling = kwargs.get("video_token_pooling", None)
-        pixel_values = kwargs.get("pixel_values", None)
-        image_token_pooling = kwargs.get("image_token_pooling", None)
+        pixel_values_videos = self._unwrap(kwargs.get("pixel_values_videos"))
+        video_token_pooling = self._unwrap(kwargs.get("video_token_pooling"))
+        pixel_values = self._unwrap(kwargs.get("pixel_values"))
+        image_token_pooling = self._unwrap(kwargs.get("image_token_pooling"))
 
         if pixel_values_videos is not None:
-            # Video input: [n_frames, 729, 588] → [1, n_frames, 729, 588]
-            if isinstance(pixel_values_videos, list):
-                pixel_values_videos = pixel_values_videos[0] if len(pixel_values_videos) > 0 else None
-            if pixel_values_videos is not None:
-                pv = pixel_values_videos.float().unsqueeze(0)
+            t = pixel_values_videos.float()
+            # Reference vllm sends raw frames [n, 3, H, W]; convert to patches
+            if t.dim() == 4 and t.shape[1] == 3:
+                logger.info(f"Converting raw frames {t.shape} → patches")
+                t = _raw_frames_to_patches(t)
+            pv = t.unsqueeze(0)  # [1, n_frames, 729, 588]
             if video_token_pooling is not None:
-                if isinstance(video_token_pooling, list):
-                    video_token_pooling = video_token_pooling[0]
                 pool_idx = video_token_pooling.unsqueeze(0)
         elif pixel_values is not None:
-            # Image input: [n_crops, 729, 588] → [1, n_crops, 729, 588]
-            if isinstance(pixel_values, list):
-                pixel_values = pixel_values[0] if len(pixel_values) > 0 else None
-            if pixel_values is not None:
-                pv = pixel_values.float().unsqueeze(0)
+            t = pixel_values.float()
+            if t.dim() == 4 and t.shape[1] == 3:
+                t = _raw_frames_to_patches(t)
+            pv = t.unsqueeze(0)
             if image_token_pooling is not None:
-                if isinstance(image_token_pooling, list):
-                    image_token_pooling = image_token_pooling[0]
                 pool_idx = image_token_pooling.unsqueeze(0)
 
-        # Trim tokens to actual prompt length (remove padding)
         seq_len = int(prompt_lens[0].item()) if hasattr(prompt_lens[0], "item") else int(prompt_lens[0])
         input_ids = tokens[:1, :seq_len]
 
-        # Reset KV cache for this request
-        self.model.reset_kv_cache(user_id=0)
+        # Reconstruct token_type_ids from input_ids: marks image_patch_id (151938) positions
+        # as type=1 for the image-bidirectional SDPA attention mask in forward_prefill.
+        # With mm_processor_cache_gb=0 (combined path), input_ids contains all Molmo2
+        # special tokens (frame markers, row/col separators). While the HF processor's
+        # token_type_ids marks those extra tokens too, marking only 151938 positions is
+        # still more correct than causal-only (no token_type_ids).
+        if token_type_ids is None and pv is not None:
+            _IMAGE_PATCH_ID = 151938
+            token_type_ids = (input_ids == _IMAGE_PATCH_ID).long()
 
+        self.model.reset_kv_cache(user_id=0)
         logger.info(
-            f"Prefill: S={seq_len}, vision={'video' if pixel_values_videos is not None else 'image' if pixel_values is not None else 'none'}"
+            f"Prefill: S={seq_len}, "
+            f"vision={'video' if pixel_values_videos is not None else 'image' if pixel_values is not None else 'none'}"
         )
 
-        # Run TT prefill
         logits = self.model.forward_prefill(
             input_ids=input_ids,
             pixel_values=pv,
@@ -207,21 +221,13 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
             user_id=0,
         )
 
-        # Always capture decode trace after the FIRST real prefill, regardless of enable_trace.
-        # Root cause: WarmupForwardMixin calls decode_forward(pos=0, enable_trace=True) with an
-        # empty KV cache. Capturing the trace at pos=0 (1 KV entry) may use a different
-        # SDPA code path than pos=S (thousands of KV entries), causing wrong decode outputs.
-        # Solution: capture here, at a real pos=S with a properly-filled KV cache — exactly
-        # matching the demo (model.generate()) behavior.
         if not self._decode_trace_captured:
-            logger.info(f"Capturing decode trace at pos={seq_len} (first real prefill)...")
+            logger.info(f"Capturing decode trace at pos={seq_len}...")
             self._capture_decode_trace(seq_len)
 
-        # Return [1, 1, vocab_size] — vLLM expects logits for last token
         return logits, None  # (logits, rope_deltas=None)
 
     def _capture_decode_trace(self, prefill_seq_len: int):
-        """Capture decode trace via TtMolmo2Model infrastructure."""
         self.model._decode_trace_tensors = self.model._allocate_decode_trace_tensors()
         self.model._decode_trace_id, self.model._decode_trace_output = self.model._capture_decode_trace(
             self.model._decode_trace_tensors, prefill_seq_len
@@ -240,21 +246,14 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         sampling_params=None,
         **kwargs,
     ):
-        """Run single-token decode.
-
-        tokens: [batch, 1] int32 — current token
-        start_pos: [batch] int32 — position in sequence
-        enable_trace: if True and trace not captured, captures the trace first
-        """
+        """Run single-token decode."""
         token_id = int(tokens[0, 0].item())
         position = int(start_pos[0].item()) if hasattr(start_pos[0], "item") else int(start_pos[0])
 
-        # Trace is always captured in prefill_forward after the first real prefill.
-        # During WarmupForwardMixin warmup calls (enable_trace=True, pos=0), the trace
-        # is not yet captured — use non-traced decode. This matches demo behavior.
-        if self._decode_trace_captured:
-            logits = self.model._execute_decode_trace(token_id, position)
-        else:
-            logits = self.model.forward_decode_step(token_id, position)
+        # Always use forward_decode_step (no trace) — the trace is captured at the
+        # first request's S, but SDPA's auto-selected program config is baked in at
+        # capture time and doesn't scale to larger S values from subsequent requests.
+        # forward_decode_step returns [1, vocab_size]; squeeze to [vocab_size].
+        logits = self.model.forward_decode_step(token_id, position).squeeze(0)
 
         return logits.unsqueeze(0)  # [1, vocab_size]

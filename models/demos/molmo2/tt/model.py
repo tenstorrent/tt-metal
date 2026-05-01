@@ -376,8 +376,8 @@ class TtMolmo2Model(LightweightModule):
         cfg = self.configuration
         zeros_k = torch.zeros(1, cfg.n_local_kv_heads, cfg.max_seq_len, cfg.head_dim, dtype=torch.bfloat16)
         zeros_k_tt = ttnn.from_torch(
-            zeros_k.to(float),
-            dtype=ttnn.bfloat8_b,
+            zeros_k,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

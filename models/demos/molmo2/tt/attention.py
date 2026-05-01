@@ -152,13 +152,14 @@ class TtMolmo2TextAttention(LightweightModule):
         self.k_norm = _rmsnorm("k_norm")
 
         # ------------------------------------------------------------------ #
-        # KV cache — bfloat8_b matches the reference implementation.
+        # KV cache — bfloat16 for precision: bfloat8_b causes logit flips for
+        # long video sequences (S>2500) due to accumulated SDPA precision loss.
         # ------------------------------------------------------------------ #
         cache_k = torch.zeros(self.max_batch_size, self.n_local_kv_heads, self.max_seq_len, self.head_dim)
         self.layer_past = [
             ttnn.as_tensor(
                 kv,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -377,15 +378,11 @@ class TtMolmo2TextAttention(LightweightModule):
         q = q_rotated[:, :, :seq_len, :]
         k = k_rotated[:, :, :seq_len, :]
 
-        # KV cache fill: cast to bfloat8_b to match cache dtype
+        # KV cache fill: use bfloat16 directly (cache is bfloat16)
         keys = kv_cache[0] if kv_cache else self.layer_past[0]
         values = kv_cache[1] if kv_cache else self.layer_past[1]
-        k_8b = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
-        v_8b = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
-        ttnn.fill_cache(keys, k_8b, user_id % self.max_batch_size)
-        ttnn.fill_cache(values, v_8b, user_id % self.max_batch_size)
-        ttnn.deallocate(k_8b)
-        ttnn.deallocate(v_8b)
+        ttnn.fill_cache(keys, k, user_id % self.max_batch_size)
+        ttnn.fill_cache(values, v, user_id % self.max_batch_size)
 
         # SDPA: is_causal and attn_mask are mutually exclusive in TTNN SDPA.
         # When a custom mask is provided (image-bidir override), it already encodes
