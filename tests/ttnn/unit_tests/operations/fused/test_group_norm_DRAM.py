@@ -270,7 +270,6 @@ def run_group_norm_DRAM(
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SHAPES)
 @pytest.mark.parametrize("welford_mode", WELFORD_MODES)
-@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_DRAM(
     device,
     N,

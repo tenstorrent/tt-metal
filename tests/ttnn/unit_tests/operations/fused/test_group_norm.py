@@ -657,7 +657,6 @@ def run_sdxl_base_group_norm_test(
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-@pytest.mark.parametrize("specify_grid", [True])
 # Paramemeters need to stay consistent with usage in
 # models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl_performance
 def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid=True, perf_test_mode=False):
@@ -764,7 +763,6 @@ def generate_sdxl_test_inputs_neg_mask():
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs_neg_mask())
-@pytest.mark.parametrize("specify_grid", [True])
 def test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid=True, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
