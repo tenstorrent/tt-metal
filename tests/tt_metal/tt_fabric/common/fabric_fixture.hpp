@@ -61,6 +61,10 @@ public:
     inline static std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
     inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
+    // FIX TK (#42429): Set to true when the fabric cluster has too few chips to run tests.
+    // Happens when the topology mapper downgrades to 1x1 on a severely degraded T3K cluster
+    // (all ETH links dead after progressive SIGKILL teardowns).  SetUp() skips when this is true.
+    inline static bool cluster_degraded_skip_ = false;
 
     const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) const {
@@ -68,6 +72,13 @@ public:
     }
 
     void SetUp() override {
+        // FIX TK (#42429): Skip per-test if the fabric cluster was downgraded (e.g. 1x1 on T3K
+        // with all ETH links dead).  This check runs before the device-count guard so we don't
+        // crash trying to use devices that aren't in the cluster.
+        if (cluster_degraded_skip_) {
+            GTEST_SKIP() << "FIX TK (#42429): fabric cluster has fewer chips than expected "
+                            "(topology downgraded on severely degraded hardware — skipping)";
+        }
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (num_devices < 2) {
             log_info(tt::LogTest, "Skipping fabric tests as there are less than 2 devices available");
@@ -109,6 +120,38 @@ public:
         }
         tt::tt_fabric::SetFabricConfig(
             fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
+
+        // FIX TK (#42429): After topology discovery, some chips may not be in the fabric cluster
+        // (e.g. when all ETH links are dead and the mapper degrades to 1x1).  Filter ids to only
+        // chips the control plane knows about; if fewer chips remain than requested, mark the
+        // suite as degraded so per-test SetUp() can skip gracefully.
+        cluster_degraded_skip_ = false;
+        {
+            const auto& control_plane =
+                tt::tt_metal::MetalContext::instance().get_control_plane();
+            std::vector<ChipId> cluster_ids;
+            cluster_ids.reserve(ids.size());
+            for (ChipId id : ids) {
+                if (control_plane.is_physical_chip_in_fabric_cluster(id)) {
+                    cluster_ids.push_back(id);
+                } else {
+                    log_warning(
+                        tt::LogTest,
+                        "FIX TK (#42429): Physical chip {} not in fabric cluster "
+                        "(topology downgraded on degraded hardware). Excluding from unit meshes.",
+                        id);
+                }
+            }
+            if (cluster_ids.size() < ids.size()) {
+                cluster_degraded_skip_ = true;
+            }
+            if (cluster_ids.empty()) {
+                log_warning(tt::LogTest, "FIX TK (#42429): No chips in fabric cluster — skipping SetUpTestSuite.");
+                return;
+            }
+            ids = std::move(cluster_ids);
+        }
+
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
@@ -125,6 +168,7 @@ public:
         devices_map_.clear();
         devices_.clear();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        cluster_degraded_skip_ = false;  // FIX TK (#42429): reset for next suite
     }
 
     static void SetUpTestSuite() { TT_THROW("SetUpTestSuite not implemented in BaseFabricFixture"); }
