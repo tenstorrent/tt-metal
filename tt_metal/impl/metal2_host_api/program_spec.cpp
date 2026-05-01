@@ -658,6 +658,16 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // Compute kernels cannot have any semaphore bindings.
+    // (This may later change for Quasar.)
+    for (const auto& kernel : spec.kernels) {
+        TT_FATAL(
+            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty(),
+            "KernelSpec '{}' has semaphore bindings. "
+            "Semaphore bindings are not currently supported for compute kernels.",
+            kernel.unique_id);
+    }
+
     //////////////////////////////////
     // Validate DataflowBufferSpecs
     //////////////////////////////////
@@ -793,19 +803,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "SemaphoreSpec '{}' has initial_value={} but only zero is supported on Quasar",
                 sem.unique_id,
                 sem.initial_value);
-        }
-    }
-
-    // On Gen1 (WH/BH), semaphores can only be bound to DM kernels, not compute kernels.
-    // Compute-kernel semaphore access is a Quasar-only feature.
-    if (is_gen1_arch()) {
-        for (const auto& kernel : spec.kernels) {
-            if (kernel.is_compute_kernel() && !kernel.semaphore_bindings.empty()) {
-                TT_THROW(
-                    "KernelSpec '{}' has semaphore bindings, but it is a compute kernel. "
-                    "On WH/BH, semaphores can only be bound to data movement kernels.",
-                    kernel.unique_id);
-            }
         }
     }
 
