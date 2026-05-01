@@ -76,6 +76,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
