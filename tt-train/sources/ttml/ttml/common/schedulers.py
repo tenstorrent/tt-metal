@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Learning rate and optimizer parameter schedulers."""
-from ttml.common.config import SchedulerConfig
+import math
 from typing import Optional
+
+from ttml.common.config import SchedulerConfig
 
 
 class SpeedrunScheduler:
@@ -55,8 +57,6 @@ class OptimParamSetter:
 # Stateful LR schedulers
 # ---------------------------------------------------------------------------
 
-import math  # noqa: E402
-
 
 class _SchedulerBase:
     def __init__(self, optimizer):
@@ -84,6 +84,8 @@ class _SchedulerBase:
 
 class CosineAnnealingScheduler(_SchedulerBase):
     def __init__(self, optimizer, T_max: int, eta_min: float = 0.0):
+        if T_max <= 0:
+            raise ValueError(f"T_max = {T_max} must be greater than zero.")
         super().__init__(optimizer)
         self._T_max = T_max
         self._eta_min = eta_min
@@ -99,6 +101,8 @@ class CosineAnnealingScheduler(_SchedulerBase):
 
 class StepScheduler(_SchedulerBase):
     def __init__(self, optimizer, step_size: int, gamma: float = 0.1):
+        if step_size <= 0:
+            raise ValueError(f"step_size = {step_size} must be greater than zero.")
         if gamma <= 0.0:
             raise ValueError(f"gamma = {gamma} must be greater than zero.")
         super().__init__(optimizer)
@@ -115,6 +119,8 @@ class StepScheduler(_SchedulerBase):
 
 class LinearScheduler(_SchedulerBase):
     def __init__(self, optimizer, start_factor: float, end_factor: float, total_steps: int):
+        if total_steps <= 0:
+            raise ValueError(f"total_steps = {total_steps} must be greater than zero.")
         super().__init__(optimizer)
         self._start_factor = start_factor
         self._end_factor = end_factor

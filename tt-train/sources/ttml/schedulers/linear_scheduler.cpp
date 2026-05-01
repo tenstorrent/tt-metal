@@ -4,6 +4,8 @@
 
 #include "linear_scheduler.hpp"
 
+#include <tt_stl/assert.hpp>
+
 #include "optimizers/optimizer_base.hpp"
 
 namespace ttml::schedulers {
@@ -17,6 +19,7 @@ LinearScheduler::LinearScheduler(
     m_total_steps(total_steps),
     m_last_step(0),
     m_last_lr(m_base_lr) {
+    TT_FATAL(total_steps > 0, "total_steps = {} must be greater than zero.", total_steps);
 }
 
 void LinearScheduler::step() {

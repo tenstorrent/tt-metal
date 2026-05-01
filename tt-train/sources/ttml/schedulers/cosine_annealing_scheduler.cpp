@@ -4,6 +4,8 @@
 
 #include "cosine_annealing_scheduler.hpp"
 
+#include <tt_stl/assert.hpp>
+
 #include "optimizers/optimizer_base.hpp"
 
 namespace ttml::schedulers {
@@ -15,6 +17,7 @@ CosineAnnealingScheduler::CosineAnnealingScheduler(optimizers::OptimizerBase* op
     m_base_lr(optimizer->get_lr()),
     m_last_step(0),
     m_last_lr(optimizer->get_lr()) {
+    TT_FATAL(T_max > 0, "T_max = {} must be greater than zero.", T_max);
 }
 
 void CosineAnnealingScheduler::step() {
