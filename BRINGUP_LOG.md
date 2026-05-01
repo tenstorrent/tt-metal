@@ -256,3 +256,36 @@ other S values with different SDPA program config). Using `forward_decode_step` 
 **98/100 PASS** via tt-inference-server OpenAI API
 - Average latency: 6.4s per test (5.3s prefill + 1.1s decode @ 16 tokens)
 - 5 remaining failures at indices 22, 26, 55, 56, 76
+
+## Session 8 — 2026-05-01
+
+**Status**: Optimization — 99/100 accuracy, 11% latency improvement
+**PCC**: All 8 unit tests PASS (vit_encoder 0.999167)
+**Block Hash**: COMPLETE
+
+### Optimization Attempted
+
+**ViT QKV matmul: in0_block_w 1→4**
+Load 4 input tiles (128 elements) per step instead of 1 (32 elements) for
+better DRAM register reuse in the column-parallel QKV projection.
+- ViT matmul time: 5806→5097µs (-12%)
+- Total latency: 6.4s → 5.67s per test (-11%)
+- Accuracy: 98/100 → **99/100** (+1 test)
+
+**Reverted (documented):**
+- SDPA q_chunk_size 128→384: L1 overflow for n_local_heads=2, SDPA time doubled
+- all_reduce num_links 1→2: T3K device deadlock, not supported for this pattern
+
+**Replicated-weights optimization (not attempted):**
+Would eliminate 50 all_reduce calls (56ms) but OOMs for 384-frame input
+([384, 16, 729, 96] activations per device exceed L1+DRAM budget).
+TP layout is required for large video inputs.
+
+### Final Results (105-video suite, T3K, via tt-inference-server)
+
+| | Accuracy | Latency |
+|---|---|---|
+| Before optimization | 98/100 | 6.4s/test |
+| **After optimization** | **99/100** | **5.67s/test** |
+
+Remaining failure: idx=22 (C vs B, logit margin=0.17 — borderline)
