@@ -48,34 +48,44 @@ What was tried:
 - **Hybrid path** (cb_partial_max reuse on reducer for FP32
   alias_prev_max only, alias_prev_sum/out stay BF16): same K>1 drift
   as baseline (~5e-3). Other merge ops still see mixed inputs.
+- **BF16 cb_qk_im + FP32 alias + FP32 merge cluster + LLK fixes**:
+  K=1 cos = 0.992 (close to baseline 0.997) — the FP32 alias state
+  itself is fine for K=1 once cb_qk_im stays BF16. **K>1 produces
+  inf/nan**. This isolates the all-FP32 K=1 break to cb_qk_im FP32
+  specifically (matmul output format). And it confirms the K>1
+  failure mode is in the cross-core merge path (worker
+  pack-and-skip → writer NoC → reducer merge) when alias state is
+  FP32, not in the chunk loop itself.
 
 What's clear:
 - The LLK fixes (max_block, sub_exp_block_bcast_cols_inplace) are
   correct generic improvements; verified no regression on uniform
   callers.
-- The current FP32 alias path produces the wrong values for an
-  unidentified reason. The error is systematic (deterministic 0.1729
-  output vs expected 0.2397).
-- Mixed BF16/FP32 inputs to binary helpers (add_tiles, mul_tiles,
-  sub_tiles) probably DO have an issue — `add_tiles_init` reconfigs
-  both srcA/srcB but the actual op may still misread one of them. Not
-  yet verified.
+- BF16 `cb_qk_im` + FP32 alias state works for K=1 (cos 0.992).
+  Promoting `cb_qk_im` to FP32 alongside breaks the matmul math —
+  unclear whether matmul output to FP32 CB is supported in this LLK
+  config or whether some reconfig is missing.
+- K>1 with FP32 alias state produces inf/nan. The chunk loop itself
+  works (K=1 OK), so the bug is in the cross-core merge path —
+  either the worker pack-and-skip emit, the writer NoC transfer, or
+  the reducer's merge code.
 
 Next steps (in order):
-1. **DPRINT inside the chunk loop** to capture cb_qk_im after the QK
-   matmul, alias_cur_max after reduce_c, alias_cur_sum after
-   sub_exp_block_bcast_cols_inplace, etc. Compare against torch values
-   to find the first divergence step. This is the path I should have
-   taken first instead of bisecting CB formats.
-2. **Try `reconfig_data_format_srca` and `reconfig_data_format_srcb`
-   explicitly** before mixed-format binary ops. The pattern would be:
-   ```cpp
-   reconfig_data_format(in0_cb, in1_cb);  // both srcs explicitly
-   add_tiles(in0_cb, in1_cb, ...);
-   ```
-3. Once K=1 in the FP32 path is correct, K>1 should follow because all
-   merge inputs share format (no mixed-format issue).
-4. Run T3K K=14 latency benchmark to confirm projected ~28 ms/tok.
+1. **DPRINT around the merge boundary**: capture cb_partial_*
+   contents on a worker after pack-and-skip, then capture
+   cb_remote_* contents on the reducer after the writer's NoC
+   transfer. Verify the bytes flow correctly with FP32 CBs.
+   Then capture intermediate merge values (cb_merge_new_max after
+   max_block, cb_exp_max_diff after sub_exp_block) to find the
+   first non-finite value.
+2. **Try `reconfig_data_format(srcA, srcB)` explicitly** before each
+   merge op even when inputs share format — vanilla helpers may
+   not always reconfig srcB.
+3. **Independently fix cb_qk_im FP32**: try matmul_blocks with
+   FP32 output. If standard ttnn matmul ops support FP32 output CB,
+   patterns from those should port over. If not, that path is
+   constrained to BF16 cb_qk_im.
+4. Run T3K K=14 latency benchmark once FP32 alias state K>1 works.
 
 ### 🥇 (original 2026-04-30) Fix K-split kernel for FP32 dst mode
 The single biggest perf lever on T3K. Estimated **~28 ms/tok savings**
