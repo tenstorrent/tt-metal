@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <fabric/topology_solver_sat_detail.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>

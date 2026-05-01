@@ -3209,9 +3209,4 @@ bool topology_sat_encode_hard_constraints(
 
 }  // namespace tt::tt_fabric::detail
 
-// SAT / MaxSAT backend (CaDiCaL): included at global scope so third-party headers (cadical.hpp)
-// are not nested under tt::tt_fabric::detail (would break CaDiCaL::Solver linkage).
-// NOLINTNEXTLINE(misc-header-include-cycle)
-#include <tt-metalium/experimental/fabric/topology_solver_sat.tpp>
-
 #endif  // TOPOLOGY_SOLVER_TPP
