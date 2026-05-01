@@ -24,10 +24,7 @@ using namespace tt::tt_metal;
 constexpr uint32_t NUM_DM_CORES = 8;
 constexpr uint32_t TOTAL_RESULT_BYTES = NUM_DM_CORES * TLS_CHECK_RESULT_SLOT_BYTES;
 
-class LegacyVsNonLegacyTest
-    : public MeshDeviceSingleCardFixture,
-      public testing::WithParamInterface<bool> {
-};
+class LegacyVsNonLegacyTest : public QuasarMeshDeviceSingleCardFixture, public testing::WithParamInterface<bool> {};
 
 // This test requires simulator environment
 TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
@@ -42,9 +39,6 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "This test is for Quasar compute kernels only.";
     }
 
     constexpr CoreCoord core = {0, 0};
@@ -285,16 +279,13 @@ static constexpr uint32_t NUM_COMPUTE_SLOTS =
     QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
 static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8-23
 
-TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     auto mesh_device = devices_[0];
     IDevice* device = mesh_device->get_devices()[0];
 
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "This test is for Quasar compute kernels only.";
     }
 
     constexpr CoreCoord core = {0, 0};

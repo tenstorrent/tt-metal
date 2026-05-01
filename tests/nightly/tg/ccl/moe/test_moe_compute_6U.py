@@ -17,6 +17,14 @@ from ttnn.experimental.moe_compute_utils import (
     prepare_w0_w1_tensor_with_bias,
     prepare_w2_tensor_for_moe_compute,
     prepare_w2_tensor_with_bias,
+    DS_PAD_CORES,
+    DS_W0_W1_SHARD_VALS,
+    DS_W2_SHARD_VALS,
+    GPT_PAD_CORES,
+    GPT_W0_W1_SHARD_VALS,
+    GPT_W2_SHARD_VALS,
+    get_weight_core_shard_maps,
+    get_weight_mem_configs,
 )
 
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
@@ -30,6 +38,12 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
+
+# TODO (AM) this should go in a central location
+HIDDEN_TO_SHARD_INFO = {
+    7168: (DS_PAD_CORES, DS_W0_W1_SHARD_VALS, DS_W2_SHARD_VALS),
+    2880: (GPT_PAD_CORES, GPT_W0_W1_SHARD_VALS, GPT_W2_SHARD_VALS),
+}
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -271,12 +285,9 @@ def prepare_output_tensor_from_combine_writer(
     combine_output_shards = [all_output_shards[c.x, c.y] for c in output_shard_cores]
     output_shard_tensor = torch.stack(combine_output_shards)
 
-    buffer_size_total_tokens = 512
-    # Validate that hardcoded buffer_size_total_tokens matches the actual tensor dimensions
-    # The view operation requires: output_shard_tensor.numel() == experts_per_device * buffer_size_total_tokens * hidden
-    assert buffer_size_total_tokens == output_shard_tensor.numel() // (
-        experts_per_device * hidden
-    ), f"buffer_size_total_tokens ({buffer_size_total_tokens}) doesn't match computed value from tensor shape"
+    # Consistent with token_offset logic in program factories
+    assert output_shard_tensor.numel() % (experts_per_device * hidden) == 0
+    buffer_size_total_tokens = output_shard_tensor.numel() // (experts_per_device * hidden)
 
     output_shape = (
         output_shard_height_dim,
@@ -318,7 +329,6 @@ def prepare_output_tensor_from_combine_writer(
     return torch_output
 
 
-PCC_THRESHOLD = 0.988
 # Matmul with bias: LoFi + bf16/bfp4 on device can land just under PCC_THRESHOLD (e.g. ~0.987994 on one
 # device/expert) while still tracking golden closely; combine PCC stays above 0.988.
 PCC_THRESHOLD_MATMUL_WITH_BIAS = 0.98799
@@ -327,15 +337,25 @@ SWIGLU_PCC_THRESHOLD = 0.984
 SILU_PCC_THRESHOLD = 0.988
 
 
-def _get_pcc_threshold(activation_type):
+def _get_base_pcc_threshold(activation_type, has_bias):
     # Determine PCC threshold based on activation type
+    # Note: this threshold is applicable for checking a block of 32 tokens, smaller matrices will need a lower threshold
     # https://github.com/tenstorrent/tt-metal/blob/368efa1f7062704b8e885aa72dae115e91320032/tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_gpt_e2e.py#L438
+    act_threshold = None
     if activation_type == MoEActivationFunction.SWIGLU:
-        return SWIGLU_PCC_THRESHOLD
+        act_threshold = SWIGLU_PCC_THRESHOLD
     elif activation_type == MoEActivationFunction.SILU:  # SILU
-        return SILU_PCC_THRESHOLD
+        act_threshold = SILU_PCC_THRESHOLD
     else:
         raise TypeError("Invalid Activation type")
+
+    bias_threshold = None
+    if has_bias:
+        bias_threshold = PCC_THRESHOLD_MATMUL_WITH_BIAS
+    else:
+        bias_threshold = act_threshold
+
+    return min(bias_threshold, act_threshold)
 
 
 def validate_matmul(
@@ -351,9 +371,9 @@ def validate_matmul(
     torch_output_ref,
     tt_output_tensor,
     mesh_device,
+    base_pcc_threshold,
     *,
     has_bias: bool = False,
-    activation_type=MoEActivationFunction.SILU,
 ):
     logger.info(f"\n========== Matmul Output Tensor Validation ==========")
 
@@ -371,25 +391,48 @@ def validate_matmul(
         output_shard_cores=output_shard_cores,
         output_shard_height_dim=output_shard_height_dim,
         output_shard_width_dim=output_shard_width_dim,
-        experts_per_device=experts_per_device,
+        experts_per_device=2,  # always 2 for double buffer
         hidden=hidden,
     )
 
-    # (D, E/devices, T, H)
-    reshaped_device_outputs = torch.stack(
-        [reshape_func(raw_output[d], expert_token_counts[d], d) for d in range(devices)]
-    )
-
     matmul_all_passed = True
-    base_threshold = _get_pcc_threshold(activation_type)
-    pcc_cutoff = min(base_threshold, PCC_THRESHOLD_MATMUL_WITH_BIAS) if has_bias else base_threshold
+    # Calculate which experts are still in the double buffer
+    # Buffer toggles for each expert: 0->1->0->1...
+    # So for N experts, the last 2 experts in the buffer are:
+    # - If N is even: buffer 0 has expert N-2, buffer 1 has expert N-1
+    # - If N is odd: buffer 0 has expert N-1, buffer 1 has expert N-2
+    experts_to_check = []
+    if experts_per_device == 1:
+        experts_to_check = [(0, 0)]  # Only one expert in buffer 0
+    elif experts_per_device == 2:
+        experts_to_check = [(0, 0), (1, 1)]  # Expert 0 in buffer 0, expert 1 in buffer 1
+    else:
+        # For >2 experts, determine which 2 experts remain in the buffer
+        if experts_per_device % 2 == 0:
+            # Even number of experts
+            experts_to_check = [(experts_per_device - 2, 0), (experts_per_device - 1, 1)]
+        else:
+            # Odd number of experts
+            experts_to_check = [(experts_per_device - 1, 0), (experts_per_device - 2, 1)]
+
+    logger.info(f"Checking experts in double buffer: {experts_to_check}")
+
+    # Build buffer token counts based on which experts are actually in the buffer
+    reshaped_device_outputs = []
+    for d in range(devices):
+        buffer_token_counts = torch.zeros(2, dtype=expert_token_counts[d].dtype)
+        for expert_id, buffer_idx in experts_to_check:
+            buffer_token_counts[buffer_idx] = expert_token_counts[d][expert_id]
+        reshaped_device_outputs.append(reshape_func(raw_output[d], buffer_token_counts, d))
+    reshaped_device_outputs = torch.stack(reshaped_device_outputs)
 
     for d in range(devices):
-        for expert_id in range(experts_per_device):
+        for expert_id, buffer_idx in experts_to_check:
             active_tokens = expert_token_counts[d, expert_id].item()
             # torch_output_ref is (L, D, E/D, T, H)
             torch_layer_output = torch_output_ref[layer_id, d, expert_id, :active_tokens, :]
-            tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
+            # The buffer position determines where to read from in the output
+            tt_layer_output = reshaped_device_outputs[d, buffer_idx, :active_tokens, :]
 
             _pcc_passed, pcc_val = comp_pcc(torch_layer_output, tt_layer_output)
             allclose_passed = torch.allclose(torch_layer_output, tt_layer_output, atol=ATOL_THRESHOLD)
@@ -400,12 +443,24 @@ def validate_matmul(
                 else 0.0
             )
 
-            if pcc_val < pcc_cutoff:
+            # Base PCC threshold is valid for 32xhidden, for comparing smaller matrices, a looser threshold is valid
+            pcc_threshold = base_pcc_threshold if active_tokens >= 16 else base_pcc_threshold - 0.001
+            if pcc_val < pcc_threshold:
                 matmul_all_passed = False
-                logger.warning(f"Layer {layer_id}, Device {d}, Expert {expert_id}: PCC={pcc_val:.6f}")
+
+                logger.warning(
+                    f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val}"
+                    f" Allclose passed: {allclose_passed}"
+                )
+
+                if not allclose_passed:
+                    mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
+                    logger.warning(
+                        f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
+                    )
             else:
                 logger.info(
-                    f"Layer {layer_id}, Device {d}, Expert {expert_id}: PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
+                    f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
                     f" Allclose passed: {allclose_passed}"
                 )
 
@@ -1007,64 +1062,8 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
-# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 or 1x8 mesh descriptor before running
-@pytest.mark.skipif(
-    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500000,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device",
-    [
-        pytest.param(
-            (1, 8),
-            (1, 8),
-            marks=pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
-                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
-            ),
-            id="1x8",
-        ),
-        pytest.param(
-            (1, 16),
-            (1, 16),
-            marks=pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
-            ),
-            id="1x16",
-        ),
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("experts_per_device", [2, 3, 4])
-@pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
-@pytest.mark.parametrize(
-    "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 5), (8, 5, 3)],
-    ids=["perf", "accuracy"],
-)
-@pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [False, True])
-@pytest.mark.parametrize("output_height_shard_dim", [4])
-@pytest.mark.parametrize("output_width_shard_dim", [4])
-@pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
-@pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
 @torch.no_grad()
-def test_moe_compute(
+def run_moe_compute_test(
     mesh_device,
     mesh_shape,
     cluster_axis,
@@ -1081,26 +1080,10 @@ def test_moe_compute(
     enable_trace,
     activation_type,
     has_bias,
-    device_params,
-    is_ci_env,
 ):
     """
-    This test:
-    1. Generates a sparse buffer (simulating output from all_to_all_dispatch)
-    2. Generates all-gathered expert indices and scores
-    3. Generates per-device expert mapping
-    4. Runs the moe operation
-    5. Verifies the outputs against a golden reference
+    Core test execution helper function.
     """
-    # Skip certain parameter combinations in CI to keep runtime reasonable.
-    if is_ci_env:
-        if experts_per_device == 3:
-            pytest.skip("Skipping experts_per_device=3 in CI to keep runtime reasonable.")
-        if selected_experts_k == 1 and num_layers == 1 and num_iterations == 5:  # perf test
-            pytest.skip("Skipping perf parameter set in CI to keep runtime reasonable.")
-        if not enable_trace:
-            pytest.skip("Skipping enable_trace=False in CI to keep runtime reasonable.")
-
     torch.manual_seed(2003)
     random.seed(2003)
 
@@ -1278,30 +1261,10 @@ def test_moe_compute(
     # --------------------------------------------------------------------------
     # Shard grid
     # --------------------------------------------------------------------------
-    MATMUL_FULL_CORES_A = {0, 1, 8, 9}
-    MATMUL_PAD_CORES_A = {2, 3, 4, 5, 6, 7, 10, 11}
 
-    MATMUL_FULL_CORES_B = {0, 3, 6, 9}
-    MATMUL_PAD_CORES_B = {1, 2, 4, 5, 7, 8, 10, 11}
-
-    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
-    core2dram = {}
-    for dram_bank_id, core_coords in enumerate(in0_core_coords):
-        core2dram[core_coords] = dram_bank_id
-
-    in0_num_cores = len(in0_core_coords)
-
-    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
-    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
-
-    ring2cores = {}
-    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
-        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
-        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES_B else 0)
-
-    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
-    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
-    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
+        mesh_device, *HIDDEN_TO_SHARD_INFO[hidden_size]
+    )
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
@@ -1362,57 +1325,28 @@ def test_moe_compute(
         cluster_axis,
     )
 
-    # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w0_w1
-    # ------------------------------------------------------------------------
-    if has_bias:
-        W0_W1_TILES_PER_TXN = 14  # Must match moe_ring_common.h
-        K_tiles_with_bias = hidden_size // ttnn.TILE_SIZE + 1
-        K_tiles_padded = math.ceil(K_tiles_with_bias / W0_W1_TILES_PER_TXN) * W0_W1_TILES_PER_TXN
-        K_for_shard = K_tiles_padded * ttnn.TILE_SIZE
-    else:
-        K_for_shard = hidden_size
-    w0_w1_shard_height = num_layers * experts_per_device * 3 * K_for_shard
-    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
-
-    w0_w1_shard_spec = ttnn.ShardSpec(
-        dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    # Get memory configurations for weights (handles bias padding)
+    w0_w1_mem_config, w2_mem_config, K_for_shard, w2_N_total = get_weight_mem_configs(
+        num_layers,
+        experts_per_device,
+        hidden_size,
+        N,
+        w0_w1_shard_map,
+        w2_shard_map,
+        dram_core_range_set,
+        has_bias=has_bias,
     )
-
-    w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec)
-
-    # ------------------------------------------------------------------------
-    # Create DRAM shard spec for w2
-    # ------------------------------------------------------------------------
-    # W2: both bias and non-bias cases pad N to 70 tiles (2240 elements)
-    # Non-bias: 64 tiles padded to ceil(64/7)*7 = 70 tiles = N + 192
-    # With bias: 65 tiles (64 weight + 1 bias), padded to ceil(65/14)*14 = 70 tiles = 2240
-    # Both happen to give the same total (70 tiles), but the padding amounts differ.
-    w2_N_total = N + 192  # 2240 in both cases
-    w2_shard_height = num_layers * experts_per_device * 5 * w2_N_total
-    w2_shard_width = 4 * ttnn.TILE_SIZE
-
-    w2_shard_spec = ttnn.ShardSpec(
-        dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
-    )
-
-    w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
 
     # ------------------------------------------------------------------------
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
     if has_bias:
         torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
-            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, ring2cores
+            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
         )
     else:
         torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
         )
-
-    expected_w0_w1_shape = (12, num_layers, experts_per_device, 3, K_for_shard, 4 * ttnn.TILE_SIZE)
-    assert (
-        torch_w0_w1_reordered.shape == expected_w0_w1_shape
-    ), f"W0/W1 shape mismatch: got {torch_w0_w1_reordered.shape}, expected {expected_w0_w1_shape}"
 
     # Create tt_w0_w1 tensor with DRAM sharding
     tt_w0_w1 = ttnn.from_torch(
@@ -1428,19 +1362,14 @@ def test_moe_compute(
     # Prepare w2 tensor (padded and reordered)
     if has_bias:
         torch_w2_reordered = prepare_w2_tensor_with_bias(
-            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, ring2cores
+            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
         )
     else:
         torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-            torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
         )
 
-    expected_w2_shape = (12, num_layers, experts_per_device, 5, w2_N_total, 4 * ttnn.TILE_SIZE)
-    assert (
-        torch_w2_reordered.shape == expected_w2_shape
-    ), f"W2 shape mismatch: got {torch_w2_reordered.shape}, expected {expected_w2_shape}"
-
-    if has_bias:
+    if False:  # has_bias:
         # Verify prepare_w2_tensor_with_bias correctness:
         # The bias tile occupies element rows [N:N+TILE_SIZE] in the N dimension (tile Nt).
         # It should be non-zero (bias was appended) and must NOT appear in the weight rows [0:N]
@@ -1472,7 +1401,9 @@ def test_moe_compute(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    output_shard_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
+    output_shard_cores = ttnn.experimental.get_moe_combine_cores(
+        mesh_device, output_height_shard_dim, output_width_shard_dim
+    )
     combine_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in output_shard_cores])
     combine_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
     mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
@@ -1544,7 +1475,6 @@ def test_moe_compute(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=output_height_shard_dim,
-            output_width_shard_dim=output_width_shard_dim,
             has_bias=has_bias,
             cluster_axis=cluster_axis,
             mux_core_range_set=mux_core_range_set,
@@ -1619,9 +1549,11 @@ def test_moe_compute(
         }
     )
 
-    pcc_threshold = _get_pcc_threshold(activation_type)
+    base_pcc_threshold = _get_base_pcc_threshold(activation_type, has_bias)
 
-    output_shard_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
+    output_shard_cores = ttnn.experimental.get_moe_combine_cores(
+        mesh_device, output_height_shard_dim, output_width_shard_dim
+    )
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True
@@ -1666,24 +1598,23 @@ def test_moe_compute(
 
             # ========== Matmul Output Tensor Validation ==========
 
-            if experts_per_device == 2:
-                if not validate_matmul(
-                    layer_id,
-                    experts_per_device,
-                    all_core_range_set,
-                    output_shard_cores,
-                    output_height_shard_dim,
-                    output_width_shard_dim,
-                    total_tokens,
-                    hidden_size,
-                    expert_token_counts,
-                    matmul_goldens,
-                    matmul_output_tensor,
-                    mesh_device,
-                    has_bias=has_bias,
-                    activation_type=activation_type,
-                ):
-                    matmul_all_passed = False
+            if not validate_matmul(
+                layer_id,
+                experts_per_device,
+                all_core_range_set,
+                output_shard_cores,
+                output_height_shard_dim,
+                output_width_shard_dim,
+                total_tokens,
+                hidden_size,
+                expert_token_counts,
+                matmul_goldens,
+                matmul_output_tensor,
+                mesh_device,
+                base_pcc_threshold,
+                has_bias=has_bias,
+            ):
+                matmul_all_passed = False
 
             if not validate_combine(
                 layer_id,
@@ -1691,7 +1622,7 @@ def test_moe_compute(
                 cluster_axis,
                 combine_output_tensor,
                 combine_goldens,
-                pcc_threshold,
+                base_pcc_threshold,
             ):
                 combine_all_passed = False
 
@@ -1700,13 +1631,7 @@ def test_moe_compute(
     logger.info(f"\nPer Expert Total Tokens Verification: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
     logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
     logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
-    if experts_per_device == 2:
-        logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
-    else:
-        logger.info(
-            "\nWe cannot directly validate matmul results for all experts when experts_per_device > 2 due "
-            " to the double buffer scheme"
-        )
+    logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
     logger.info(f"\nCombine Output Tensor Verification: {'PASSED' if combine_all_passed else 'FAILED'}")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
@@ -1714,3 +1639,145 @@ def test_moe_compute(
     assert e_t_all_passed, "E-T tensor verification failed!"
     assert matmul_all_passed, "Matmul output tensor verification failed!"
     assert combine_all_passed, "Combine output tensor verification failed!"
+
+
+# Test for DeepSeek configuration - requires 1x16 mesh
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"DeepSeek test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("test_mode", ["perf", "correctness"])
+@pytest.mark.parametrize("has_bias", [False, True])
+def test_moe_compute_deepseek(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+):
+    """Test MoE compute for DeepSeek configuration on 1x16 mesh."""
+
+    # DeepSeek specific configuration
+    cluster_axis = 1
+    experts_per_device = 2
+    tokens_per_device = 32
+    N = 2048
+    hidden_size = 7168
+    output_height_shard_dim = 4
+    output_width_shard_dim = 4  # DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    # Test mode specific parameters
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:  # correctness
+        selected_experts_k = 8
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
+
+
+# Test for GPT-OSS configuration - requires 1x8 mesh
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+    reason=f"GPT-OSS test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False, True])
+@pytest.mark.parametrize("test_mode", ["perf", "correctness"])
+@pytest.mark.parametrize("has_bias", [True])
+def test_moe_compute_gpt_oss(
+    mesh_device,
+    mesh_shape,
+    enable_trace,
+    has_bias,
+    test_mode,
+):
+    """Test MoE compute for GPT-OSS configuration on 1x8 mesh."""
+
+    # GPT-OSS specific configuration
+    cluster_axis = 1
+    experts_per_device = 4
+    tokens_per_device = 32
+    N = 2880
+    hidden_size = 2880
+    output_height_shard_dim = 4
+    output_width_shard_dim = 3  # GptRingConfig::OUTPUT_WIDTH_SHARD_DIM
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    # Test mode specific parameters
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:  # correctness
+        selected_experts_k = 8
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )

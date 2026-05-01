@@ -25,32 +25,7 @@ import ttml
 from ttml.common.profiler_utils import profiler_marker
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
-
-
-class TrainerCallback:
-    """Base class for SFTTrainer callbacks.
-
-    Override any subset of hooks to customise training behaviour.
-    All methods are no-ops by default.
-    """
-
-    def on_train_begin(self, trainer: "SFTTrainer") -> None:
-        pass
-
-    def on_step_end(self, trainer: "SFTTrainer", step: int, loss: float, lr: float) -> None:
-        pass
-
-    def on_eval_end(self, trainer: "SFTTrainer", step: int, eval_loss: float) -> None:
-        pass
-
-    def on_before_optimizer_step(self, trainer: "SFTTrainer") -> None:
-        pass
-
-    def on_save(self, trainer: "SFTTrainer", step: int, path: str) -> None:
-        pass
-
-    def on_train_end(self, trainer: "SFTTrainer") -> None:
-        pass
+from ttml.trainers.callback import TrainerCallback
 
 
 @dataclass
