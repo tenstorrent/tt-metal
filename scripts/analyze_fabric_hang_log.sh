@@ -41,7 +41,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX TE|FIX TF|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -110,7 +110,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX TE|FIX TF|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re, signal
@@ -869,6 +869,19 @@ FIX_NU_COORD=$(grep -cE 'FIX NU: Captured EthCoord|Captured EthCoord.*MMIO.*befo
 #   CI ref: run 25086219070 (job 73503180670): 6 channels × 5s = 30s → GHA 5-min action timeout.
 FIX_NX_THROWS=$(grep -cE 'FIX NX: write_core.*threw|Marking relay broken \(FIX NX\+NY\)' "$CLEAN" 2>/dev/null || echo 0)
 FIX_NY_SKIPS=$(grep -cE 'FIX NY: write_core.*skipped.*relay already known broken' "$CLEAN" 2>/dev/null || echo 0)
+# FIX TE (#42429): control_plane.cpp callers of try_get_asic_id_from_fabric_node_id skip chips
+# excluded by FIX TB (no entry in topology mapper — degraded topology from corrupt ERISC L1).
+# Log: "FIX TE (#42429): Skipping order_ethernet_channels for FabricNodeId {}"
+#      "FIX TE (#42429): FabricNodeId (M{}, D{}) not found in topology mapper"
+# Regression evidence: without FIX TE, TT_FATAL in configure_routing_tables or order_ethernet_channels
+#   for FIX TB-excluded chips → SIGABRT; with FIX TE, warning logged and chip skipped.
+FIX_TE_SKIPS=$(grep -cE 'FIX TE.*Skipping order_ethernet_channels|FIX TE.*not found in topology mapper' "$CLEAN" 2>/dev/null || echo 0)
+# FIX TF (#42429): assemble_2d_fabric_packet_header_args TT_FATAL guard — replaces opaque
+# bad_optional_access thrown when inter-mesh relay is broken (get_forwarding_direction returns nullopt).
+# Log (TT_FATAL, appears before SIGABRT): "FIX TF: No forwarding direction from physical chip N"
+# Regression evidence: without FIX TF, GTest sees "bad optional access" with no chip context;
+#   with FIX TF, TT_FATAL names src/dst chip IDs and fabric node IDs.
+FIX_TF_FIRES=$(grep -cE 'FIX TF: No forwarding direction' "$CLEAN" 2>/dev/null || echo 0)
 # FIX M2 (#42429): Secondary check in compile_and_configure_fabric() — channel showed 0x49706550 (base-UMD relay)
 # but peer non-MMIO device is confirmed dead-relay → remove from base_umd_channels so configure_fabric_cores()
 # performs a hard soft-reset (no relay reads in flight, safe to reset).
@@ -1049,6 +1062,26 @@ if [ "${FIX_PL_FIRES:-0}" -gt 0 ]; then
     echo "     All four routes through the ERISC relay on non-MMIO chips — when the relay is dead,"
     echo "     the call would hang indefinitely without the FIX PL timeout guard."
     echo "     Each timed-out call logs a warning and continues (best-effort, no throw)."
+fi
+if [ "${FIX_TE_SKIPS:-0}" -gt 0 ]; then
+    echo "  => [FIX TE] control_plane: FIX TB-excluded chip(s) skipped in routing table config (${FIX_TE_SKIPS} skip(s))."
+    echo "     FIX TB excluded chip(s) from topology mapper (unknown ASIC ID — degraded topology)."
+    echo "     FIX TE guards configure_routing_tables_for_fabric_ethernet_channels() and"
+    echo "     order_ethernet_channels() so they skip chips with no topology mapper entry"
+    echo "     instead of TT_FATAL on the mandatory lookup."
+fi
+if [ "${FIX_TF_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TF] assemble_2d_fabric_packet_header_args: no inter-mesh route found (${FIX_TF_FIRES} occurrence(s))."
+    echo "     get_forwarding_direction() returned nullopt for a cross-mesh chip pair."
+    echo "     Before FIX TF: .value() threw bad_optional_access → GTest caught opaque error in SetUp()."
+    echo "     FIX TF: TT_FATAL with src/dst physical chip IDs and fabric node IDs for diagnosis."
+    echo "     Indicates inter-mesh relay is broken (chips in degraded mode, no routing table entry)."
+elif grep -qE 'bad optional access' "$CLEAN" 2>/dev/null; then
+    echo "  => [FIX TF MISSING] 'bad optional access' found in log — FIX TF may be absent or reverted."
+    echo "     Source: assemble_2d_fabric_packet_header_args in relay_mux.hpp calling .value() on"
+    echo "     get_forwarding_direction() result without has_value() check."
+    echo "     When inter-mesh relay is broken, this throws bad_optional_access caught by GTest in SetUp()."
+    echo "     Fix: add TT_FATAL(forwarding_direction.has_value(), \"FIX TF: ...\") before .value() call."
 fi
 echo ""
 echo "========================================================================"
