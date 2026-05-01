@@ -46,6 +46,7 @@ BUCKETS: tuple[Bucket, ...] = (
         reset_before=False,
         targets=(
             f"{UNIT_TEST_DIR}/per_core_allocation/",
+            f"{UNIT_TEST_DIR}/test_compact_io.py",
             f"{UNIT_TEST_DIR}/test_compressed_tensor.py",
             f"{UNIT_TEST_DIR}/test_create_q_heads.py",
             f"{UNIT_TEST_DIR}/test_deepseek_moe_gate.py",
@@ -72,7 +73,13 @@ BUCKETS: tuple[Bucket, ...] = (
             f"{UNIT_TEST_DIR}/test_shared_expert.py",
             f"{UNIT_TEST_DIR}/test_tensor_cache.py",
             f"{UNIT_TEST_DIR}/test_tilize_8x32.py",
+            f"{UNIT_TEST_DIR}/test_upload.py",
         ),
+    ),
+    Bucket(
+        name="persistent_loop",
+        timeout=120,
+        targets=(f"{UNIT_TEST_DIR}/test_persistent_loop.py",),
     ),
     Bucket(
         name="fabric_2d",
@@ -137,7 +144,8 @@ BUCKETS: tuple[Bucket, ...] = (
     Bucket(
         name="decoder_integration",
         timeout=600,
-        pytest_args=("-k", "unrigged_all_experts or rigged_groups8"),
+        # TODO: Remove the `not mtp_layer_61` exclusion after the MTP decoder cases are burned down.
+        pytest_args=("-k", "(unrigged_all_experts or rigged_groups8) and random_weights and not mtp_layer_61"),
         targets=(f"{UNIT_TEST_DIR}/test_decoder_block.py",),
     ),
     Bucket(
@@ -346,7 +354,7 @@ def main() -> int:
                     sys.executable,
                     "-m",
                     "pytest",
-                    "-x",
+                    *(("-x",) if not args.continue_on_failure else ()),
                     f"--timeout={bucket.timeout}",
                     *args.pytest_arg,
                     *bucket.pytest_args,

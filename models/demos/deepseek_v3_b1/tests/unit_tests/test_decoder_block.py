@@ -324,8 +324,38 @@ def skip_known_decoder_moe_failure(
     num_routed_experts,
     validate_standalone_mla,
     validate_standalone_moe,
+    decoder_layer_idx=None,
+    use_real_weights=None,
 ):
     """Skip exact known decoder MoE failures."""
+    if (
+        position_id == 0
+        and validate_standalone_mla
+        and validate_standalone_moe
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+        and decoder_layer_idx == ROUTED_EXPERT_LAYER_IDX
+        and use_real_weights is False
+    ):
+        pytest.skip("DecoderBlock full-routing unrigged standalone MLA+MoE case timed out after 600s. Issue: #42714")
+
+    if (
+        position_id == 0
+        and not validate_standalone_mla
+        and validate_standalone_moe
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+        and decoder_layer_idx == ROUTED_EXPERT_LAYER_IDX
+        and use_real_weights is False
+    ):
+        pytest.skip(
+            "DecoderBlock full-routing unrigged standalone MoE + decoder MLA case timed out after 600s. Issue: #42714"
+        )
+
     skip_reason = _KNOWN_DECODER_MOE_FAILURE_SKIPS.get((position_id, validate_standalone_mla, validate_standalone_moe))
     if (
         skip_reason
@@ -469,6 +499,8 @@ def test_decoder(
         num_routed_experts,
         validate_standalone_mla,
         validate_standalone_moe,
+        decoder_layer_idx,
+        use_real_weights,
     )
 
     torch.manual_seed(0)

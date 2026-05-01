@@ -771,6 +771,11 @@ def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, toke
     ],
     indirect=True,
 )
+# TODO(#43085): Root-cause this Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for test_pipeline_block_host_loopback cases hit "
+    "Fabric Router Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43085"
+)
 def test_pipeline_block_host_loopback(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     """No-fabric loopback: last stage D2H sends embeddings back to rank 0 via host MPI."""
     if not is_slow_dispatch():
