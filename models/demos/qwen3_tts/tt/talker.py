@@ -63,28 +63,31 @@ class Talker(LightweightModule):
             """[out, in] checkpoint -> [1, 1, in, out] host tensor for ttnn.linear (transpose on CPU; single H2D upload)."""
             return w_torch.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
 
-        # Codec embedding (for audio codec tokens)
+        # Codec embedding (for audio codec tokens). Stored ROW_MAJOR so
+        # ttnn.embedding can index it directly without a per-call untilize of
+        # the [vocab, hidden] table. (CodePredictor's codec_embeddings_tt do the
+        # same; the inconsistency was costing ~3.2 ms one-time on text_embedding.)
         codec_embedding_weight = state_dict["talker.model.codec_embedding.weight"]
         self.codec_embedding = ttnn.as_tensor(
             codec_embedding_weight.unsqueeze(0).unsqueeze(0),
             device=device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            cache_file_name=get_cache_name("codec_embedding"),
+            cache_file_name=get_cache_name("codec_embedding_rm"),
             mesh_mapper=_mesh_mapper,
         )
 
-        # Text embedding (for text tokens - used in real TTS)
+        # Text embedding (for text tokens — used in real TTS).
         if "talker.model.text_embedding.weight" in state_dict:
             text_embedding_weight = state_dict["talker.model.text_embedding.weight"]
             self.text_embedding = ttnn.as_tensor(
                 text_embedding_weight.unsqueeze(0).unsqueeze(0),
                 device=device,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_file_name=get_cache_name("text_embedding"),
+                cache_file_name=get_cache_name("text_embedding_rm"),
                 mesh_mapper=_mesh_mapper,
             )
             self.text_vocab_size = text_embedding_weight.shape[0]
