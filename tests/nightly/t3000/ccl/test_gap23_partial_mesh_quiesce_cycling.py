@@ -74,7 +74,7 @@ def test_partial_mesh_quiesce_cycling(mesh_device):
 
         # Quiesce — must not throw for out-of-mesh peers (FIX AK).
         t0 = time.time()
-        ttnn.synchronize_devices(mesh_device)
+        ttnn.synchronize_device(mesh_device)
         ttnn.set_fabric_config(mesh_device, ttnn.FabricConfig.DISABLED)
         ttnn.set_fabric_config(mesh_device, ttnn.FabricConfig.FABRIC_2D)
         elapsed = time.time() - t0
