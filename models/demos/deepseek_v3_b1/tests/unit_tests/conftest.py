@@ -288,5 +288,7 @@ def _group_collected_items_by_file(items: list[pytest.Item]) -> list[pytest.Item
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_finish(session: pytest.Session) -> None:
-    # Override pytest's fixture-based interleaving so this suite runs one file at a time.
+    # Keep DeepSeek unit tests grouped by file. A/B testing with this hook removed
+    # showed pytest's fixture-based interleaving can run the suite in a bad order
+    # for shared Blackhole fabric/device state.
     session.items[:] = _group_collected_items_by_file(session.items)
