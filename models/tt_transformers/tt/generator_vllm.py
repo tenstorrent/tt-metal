@@ -122,8 +122,117 @@ def _check_per_group_kwargs(kwargs, model_name):
             f"{model_name} does not yet support per-group block tables for "
             "hybrid attention models. Override prefill_forward / "
             "decode_forward to consume `page_tables_per_group` (one block "
-            "table per kv_cache_group)."
+            "table per kv_cache_group), or migrate the model to inherit "
+            "from HybridAttentionForCausalLM."
         )
+
+
+class HybridAttentionForCausalLM(Generator):
+    """vLLM wrapper base for hybrid attention models.
+
+    Models with mixed sliding-window + full-attention layers (Gemma3,
+    Gemma4, GPT-OSS, ...) inherit from this class instead of plain
+    :class:`Generator` so they can opt in to upstream's hybrid kv cache
+    manager. The shared ``get_kv_cache_spec`` classmethod here builds
+    the per-layer KV cache spec from ``hf_config.text_config.layer_types``
+    — the standard HF convention used by all of these models — emitting
+    ``SlidingWindowSpec`` for sliding layers and ``FullAttentionSpec``
+    for full-attention layers.
+
+    Subclasses are responsible for the model-specific pieces:
+
+    * ``initialize_vllm_model``: load the underlying TT model.
+    * ``prefill_forward`` / ``decode_forward``: consume the
+      ``page_tables_per_group`` list (one per kv_cache_group, in upstream's
+      group order) and route per layer to the right group's page table.
+      The underlying TT model must accept this routing.
+    * ``allocate_kv_cache_per_layer``: typically just delegates to
+      :func:`allocate_vllm_kv_cache_per_layer` with the model handles.
+
+    Until a subclass overrides them, ``prefill_forward`` and
+    ``decode_forward`` raise :class:`NotImplementedError` to make the
+    contract explicit; vLLM's runtime check (``_check_per_group_kwargs``)
+    only fires for legacy models that haven't migrated to this base.
+    """
+
+    @classmethod
+    def get_kv_cache_spec(cls, vllm_config):
+        """Build per-layer KVCacheSpec from HF config ``layer_types``.
+
+        Returns a dict keyed by ``model.layers.<idx>.self_attn`` (the
+        upstream attention-layer naming convention vLLM's KVCacheGroup
+        machinery understands) so :func:`_parse_layer_index` on the
+        runner side can map each spec back to its model layer index.
+        """
+        from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
+        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
+
+        model_config = vllm_config.model_config
+        cache_config = vllm_config.cache_config
+
+        hf_config = model_config.hf_config
+        text_config = getattr(hf_config, "text_config", hf_config)
+        layer_types = getattr(text_config, "layer_types", None)
+        if layer_types is None:
+            raise ValueError(
+                f"{cls.__name__}.get_kv_cache_spec requires "
+                "hf_config.text_config.layer_types (one of 'full_attention' / "
+                "'sliding_attention' per layer); none found on this model"
+            )
+
+        sliding_window = getattr(text_config, "sliding_window", None)
+        num_kv_heads = model_config.get_num_kv_heads(vllm_config.parallel_config)
+        head_size = model_config.get_head_size()
+        dtype = (
+            model_config.dtype
+            if cache_config.cache_dtype == "auto"
+            else STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
+        )
+        block_size = cache_config.block_size
+
+        common = dict(
+            block_size=block_size,
+            num_kv_heads=num_kv_heads,
+            head_size=head_size,
+            dtype=dtype,
+        )
+
+        spec_per_layer = {}
+        for i, lt in enumerate(layer_types):
+            name = f"model.layers.{i}.self_attn"
+            if lt == "sliding_attention":
+                if sliding_window is None:
+                    raise ValueError(
+                        f"layer_types[{i}] is 'sliding_attention' but "
+                        f"hf_config.sliding_window is None on {cls.__name__}"
+                    )
+                spec_per_layer[name] = SlidingWindowSpec(**common, sliding_window=sliding_window)
+            elif lt == "full_attention":
+                spec_per_layer[name] = FullAttentionSpec(**common)
+            else:
+                raise ValueError(
+                    f"Unsupported layer_type {lt!r} at layer {i} on "
+                    f"{cls.__name__}; expected 'full_attention' or "
+                    "'sliding_attention'"
+                )
+        return spec_per_layer
+
+    def prefill_forward(self, *args, **kwargs):
+        raise NotImplementedError(
+            f"{type(self).__name__} must override prefill_forward to consume "
+            "`page_tables_per_group` and route per layer to the right "
+            "kv_cache_group's page table."
+        )
+
+    def decode_forward(self, *args, **kwargs):
+        raise NotImplementedError(
+            f"{type(self).__name__} must override decode_forward to consume "
+            "`page_tables_per_group` and route per layer to the right "
+            "kv_cache_group's page table."
+        )
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 def initialize_vllm_text_transformer(
