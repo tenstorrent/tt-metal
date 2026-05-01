@@ -44,7 +44,7 @@
 
   __text_size -- space for code
   __data_size -- space for globals
-  __tls_size  -- space for TLS & stack (& legacy kernel globals)
+  __tls_size  -- space for TLS & stack (& legacy kernel globals) defaults to __local_stride
   __min_stack -- minimum stack size limit
 */
 
@@ -54,7 +54,7 @@
 #define TEXT_START IF_FIRMWARE(__fw_text)IF_KERNEL(__kn_text)
 
 #define DATA_SIZE __data_size
-#define TLS_SIZE __tls_size
+#define TLS_SIZE (DEFINED (__tls_size) ? __tls_size : __local_stride)
 #define TEXT_SIZE __text_size
 #define STACK_MIN_SIZE __min_stack
 
