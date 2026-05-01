@@ -351,7 +351,51 @@ The guide should:
   `experimental::CircularBuffer` if they want Gen2 coverage, and that
   `experimental::DataflowBuffer` is the portable choice.
 
-### 13. `program_id` / `unique_id` collision rules are not stated
+### 13. `kernel_lib` helpers depend on Gen1-only `DataFormat` enumerators and Gen1-only `_with_dt` LLKs
+
+Two unrelated arch-coupled assumptions are baked into the merged kernel helper
+library (`ttnn/cpp/ttnn/kernel_lib/`):
+
+1. **`cb_helpers_compute.inl::get_full_tile_size_impl`** is a `constexpr`
+   switch on `DataFormat` enumerators. Several of those enumerators
+   (`Lf8`, `UInt32`, `Bfp8`, `Bfp8_b`, `Bfp4`, `Bfp4_b`, `Bfp2`, `Bfp2_b`)
+   only exist on Gen1 (`tt-1xx/.../tensix_types.h`). Quasar
+   (`tt-2xx/quasar/tensix_types.h`) declares a different set —
+   `Tf32`, `Fp8R`, `Fp8P`, `MxFp8R/P`, `MxFp6R/P`, `MxFp4`, `MxInt8/4/2`,
+   `Int16/4`, etc. Compilation of the helper for Quasar fails with eight
+   `'X' is not a member of 'DataFormat'` errors.
+
+2. **`reduce_helpers_compute.inl`** defines `reduce_with_matmul_init_with_dt`
+   (non-template) and `reduce_init_short_with_dt` (template) whose bodies call
+   `llk_unpack_reconfig_data_format_srca` / `llk_math_reconfig_data_format_srca`.
+   These LLKs are absent from the Quasar LLK API. Even though both functions
+   are only reachable from `reload_accumulator_if_needed` (which is gated on
+   `is_accumulate_v` and never instantiated for our `NoAccumulation` callers),
+   GCC's `-Wtemplate-body` checks non-dependent names eagerly, so both bodies
+   are checked even when never instantiated. Compilation fails with
+   `'llk_unpack_reconfig_data_format_srca' was not declared in this scope`.
+
+Pragmatic fix applied here: `#ifndef ARCH_QUASAR` guards around the offending
+case labels and function bodies. The `_with_dt` helpers fall back to
+`ASSERT(false)` on Quasar so accidental accumulation use surfaces clearly
+rather than silently misbehaving. The Quasar tile-size formulas for
+`Tf32 / Fp8R/P / MxFp* / MxInt*` are not added — none of the W-reduction tests
+exercise them — but should be added under `#ifdef ARCH_QUASAR` when needed.
+
+The user's stated preference was templating over `#ifdef`, but this case is
+fundamentally non-portable: the enumerators *literally do not exist* on the
+other arch, so no template / SFINAE wrapper can hide the unresolved name.
+The idiomatic option is `#ifdef`-gating, exactly as
+`tt_metal/hw/inc/experimental/circular_buffer.h` already does for its
+`reserve_back` / `push_back` LLK selection.
+
+The guide should:
+- Inventory which `kernel_lib` helpers call out to LLKs whose names differ by
+  arch, and which rely on `DataFormat` enumerators that aren't shared.
+- State whether helper authors are expected to keep Gen2-equivalent
+  implementations behind `#ifdef ARCH_QUASAR` (and what those equivalents are).
+
+### 14. `program_id` / `unique_id` collision rules are not stated
 
 `ProgramSpec::program_id`, `WorkUnitSpec::unique_id`, `KernelSpec::unique_id`,
 `DFBSpecName`, `SemaphoreSpecName` are all strings. Validation rejects
@@ -386,4 +430,5 @@ A short "naming and uniqueness" subsection would help.
 | 10 | **Upstream bug**: `MakeGen1ComputeConfig` undersizes `unpack_to_dest_mode` | **Critical — blocks all compute kernels** |
 | 11 | **Upstream bug**: TRISC prolog doesn't pre-include `api/compute/common.h` for Metal 2.0 compute kernels | **Critical — blocks all compute kernels** |
 | 12 | Helper libraries hard-coded to Gen1 CBs; needed buffer-type abstraction for Quasar | **High — blocks Quasar port of any helper-using kernel** |
-| 13 | `unique_id` / `program_id` naming/uniqueness rules unstated | Low |
+| 13 | `kernel_lib` helpers reference Gen1-only `DataFormat` enumerators and Gen1-only `_with_dt` LLKs in non-template / eagerly-checked template bodies | **High — blocks compilation of any `compute_kernel_lib::reduce`-using kernel on Quasar** |
+| 14 | `unique_id` / `program_id` naming/uniqueness rules unstated | Low |
