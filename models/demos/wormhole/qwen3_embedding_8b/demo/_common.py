@@ -22,6 +22,9 @@ shell:
     QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1
                               # split nlp_create_qkv_heads by (seq tile, KV-head group);
                               # bs=1 ISL=512 goes 16 -> 128 work units / cores.
+    QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1
+                              # split nlp_concat_heads by (seq tile, head group);
+                              # bs=1 ISL=512 goes 16 -> 128 work units / cores.
     QWEN_ROPE_PREFILL_L1=1
     QWEN_LN_BLOCK_SHARDED=1
     TT_SKIP_KV_CACHE_FILL=1
@@ -78,6 +81,7 @@ def apply_recommended_env(batched_l1: bool) -> None:
     os.environ.setdefault("QWEN_FFNORM_IN_BFP8", "1")
     os.environ.setdefault("QWEN_RESIDUAL_BFP8", "1")
     os.environ.setdefault("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "1")
+    os.environ.setdefault("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "1")
     os.environ.setdefault("QWEN_ROPE_PREFILL_L1", "1")
     os.environ.setdefault("QWEN_LN_BLOCK_SHARDED", "1")
     os.environ.setdefault("TT_SKIP_KV_CACHE_FILL", "1")

@@ -9,6 +9,9 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <cstdlib>
+#include <string>
+
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
@@ -40,11 +43,21 @@ NLPConcatHeadsProgramFactory::cached_program_t NLPConcatHeadsProgramFactory::cre
     uint32_t in0_c = per_tensor_tiles / in0_w_tiles;  // num_heads
     uint32_t in0_HtWt = in0_h_tiles * in0_w_tiles;
     uint32_t in0_CHtWt = in0_c * in0_HtWt;
+    const char* head_split_env = std::getenv("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT");
+    const uint32_t head_groups = 8;
+    const bool head_split_enabled = head_split_env != nullptr && std::string(head_split_env) == "1" && !in_sharded &&
+                                    !out_sharded && in0_c % head_groups == 0 && in0_w_tiles > 0;
+    const uint32_t heads_per_group = head_split_enabled ? in0_c / head_groups : 0;
 
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of per_tensor_tiles per core
     uint32_t num_blocks = ashape[0] * ashape[2] / TILE_HEIGHT;
+    if (head_split_enabled) {
+        // Split each sequence tile into head groups. Qwen3-Embedding bs=1/ISL=512 goes
+        // from 16 sequence-only blocks to 16 * 8 = 128 smaller contiguous output groups.
+        num_blocks *= head_groups;
+    }
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
     CoreRangeSet all_cores = CoreRangeSet(), core_group_1 = CoreRangeSet(), core_group_2 = CoreRangeSet();
     bool row_major = false;
@@ -102,27 +115,54 @@ NLPConcatHeadsProgramFactory::cached_program_t NLPConcatHeadsProgramFactory::cre
             all_cores,
             tt_metal::WriterDataMovementConfig(compile_time_args));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)in0_h_tiles,
-            (std::uint32_t)in0_w_tiles,
-            (std::uint32_t)in0_c,
-            (std::uint32_t)in0_HtWt,
-        };
+        std::vector<uint32_t> reader_compile_time_args;
+        if (head_split_enabled) {
+            reader_compile_time_args = {
+                (std::uint32_t)in0_h_tiles,
+                (std::uint32_t)in0_w_tiles,
+                (std::uint32_t)in0_c,
+                (std::uint32_t)in0_HtWt,
+                (std::uint32_t)head_groups,
+                (std::uint32_t)heads_per_group,
+            };
+        } else {
+            reader_compile_time_args = {
+                (std::uint32_t)in0_h_tiles,
+                (std::uint32_t)in0_w_tiles,
+                (std::uint32_t)in0_c,
+                (std::uint32_t)in0_HtWt,
+            };
+        }
         tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+        std::vector<uint32_t> writer_compile_time_args;
+        if (head_split_enabled) {
+            writer_compile_time_args = {
+                (std::uint32_t)head_groups,
+                (std::uint32_t)heads_per_group,
+                (std::uint32_t)in0_w_tiles,
+                (std::uint32_t)per_tensor_tiles,
+            };
+        } else {
+            writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+        }
         tt_metal::TensorAccessorArgs(*out_buffer).append_to(writer_compile_time_args);
+        const char* reader_kernel_path =
+            head_split_enabled
+                ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"
+                  "reader_tm_tile_layout_nlp_concat_heads_head_split.cpp"
+                : "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"
+                  "reader_tm_tile_layout_nlp_concat_heads.cpp";
+        const char* writer_kernel_path =
+            head_split_enabled
+                ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"
+                  "writer_tm_tile_layout_nlp_concat_heads_head_split.cpp"
+                : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                  "writer_unary_interleaved_start_id.cpp";
         reader_kernel_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"
-            "reader_tm_tile_layout_nlp_concat_heads.cpp",
-            all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+            program, reader_kernel_path, all_cores, tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
         writer_kernel_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-            all_cores,
-            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+            program, writer_kernel_path, all_cores, tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
 
     // Create circular buffers
@@ -170,21 +210,37 @@ NLPConcatHeadsProgramFactory::cached_program_t NLPConcatHeadsProgramFactory::cre
             const CoreCoord& core = cores[i];
             uint32_t num_blocks_per_core = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
-            uint32_t in0_h_dim = num_blocks_written % in0_h_tiles;
-            uint32_t in0_tensor_tile_id = (num_blocks_written / in0_h_tiles * in0_CHtWt) + (in0_h_dim * in0_w_tiles);
+            std::vector<uint32_t> reader_runtime_args;
+            std::vector<uint32_t> writer_runtime_args;
+            if (head_split_enabled) {
+                reader_runtime_args = {
+                    (std::uint32_t)in0_buffer->address(),
+                    num_blocks_per_core,  // num_work_units
+                    num_blocks_written,   // work_unit_start
+                };
+                writer_runtime_args = {
+                    (std::uint32_t)out_buffer->address(),
+                    num_blocks_per_core,  // num_work_units
+                    num_blocks_written,   // work_unit_start
+                };
+            } else {
+                uint32_t in0_h_dim = num_blocks_written % in0_h_tiles;
+                uint32_t in0_tensor_tile_id =
+                    (num_blocks_written / in0_h_tiles * in0_CHtWt) + (in0_h_dim * in0_w_tiles);
 
-            std::vector<uint32_t> reader_runtime_args = {
-                (std::uint32_t)in0_buffer->address(),
-                num_blocks_per_core,  // num_blocks
-                in0_h_dim,            // in0_h_dim
-                in0_tensor_tile_id,   // in0_tensor_tile_id
-            };
+                reader_runtime_args = {
+                    (std::uint32_t)in0_buffer->address(),
+                    num_blocks_per_core,  // num_blocks
+                    in0_h_dim,            // in0_h_dim
+                    in0_tensor_tile_id,   // in0_tensor_tile_id
+                };
 
-            std::vector<uint32_t> writer_runtime_args = {
-                (std::uint32_t)out_buffer->address(),  // out_tensor_addr
-                num_blocks_per_core * per_tensor_tiles,
-                num_blocks_written * per_tensor_tiles,
-            };
+                writer_runtime_args = {
+                    (std::uint32_t)out_buffer->address(),  // out_tensor_addr
+                    num_blocks_per_core * per_tensor_tiles,
+                    num_blocks_written * per_tensor_tiles,
+                };
+            }
 
             tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
             tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);

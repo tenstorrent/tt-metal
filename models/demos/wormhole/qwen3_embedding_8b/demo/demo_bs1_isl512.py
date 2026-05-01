@@ -7,11 +7,10 @@ Qwen3-Embedding-0.6B perf demo, fixed at batch=1 / ISL=512 / DP=1 / single devic
 
 All recommended optimizations are turned on by default (FF1/FF3 BFP4 baseline +
 QKV/WO BFP4 + FF1/FF3 output BFP8 + FFNORM input BFP8 + RoPE tables in L1 + LN
-block-sharding + head-split NlpCreateHeads). Head-split create-heads is the
-bs=1-critical TM optimization: it changes the per-layer QKV split from 16
-sequence-only work units to 128 (sequence, KV-head-group) work units. Each env
-var is `setdefault`'d so you can still override one from the shell for A/B knob
-comparisons.
+block-sharding + head-split NlpCreateHeads/NLPConcatHeads). The head-split TM
+paths are bs=1-critical: each changes the per-layer sequence-only split from 16
+work units to 128 head-grouped work units. Each env var is `setdefault`'d so you
+can still override one from the shell for A/B knob comparisons.
 
 Usage:
     pytest models/demos/wormhole/qwen3_embedding_8b/demo/demo_bs1_isl512.py -sv

@@ -9,7 +9,7 @@ ONE measured iteration with signpost markers around the trace-replay forward.
 bs=32 keeps activations DRAM-resident (L1 budget would be exceeded) and turns
 on `QWEN_MM_BIG_GRID_BH=1` to push MinimalMatmuls onto the (8,10)=80-core grid
 on Blackhole. Same config as `demo_bs32_isl512.py`, including the head-split
-NlpCreateHeads path.
+NlpCreateHeads/NLPConcatHeads paths.
 
 Usage:
     HF_MODEL=Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=P150 \\

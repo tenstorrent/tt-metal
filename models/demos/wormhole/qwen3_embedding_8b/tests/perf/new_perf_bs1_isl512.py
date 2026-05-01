@@ -11,9 +11,9 @@ The signposted zone is what you filter on in Tracy/the CSV post-processor to
 get a clean device-time number — uncluttered by the compile pass.
 
 Uses the same all-optimizations-on environment as `demo_bs1_isl512.py`,
-including `QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1`, so Tracy should show
-`NlpCreateHeadsDeviceOperation` at ~128 cores rather than the generic 16-core
-sequence-only split.
+including `QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1` and
+`QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1`, so Tracy should show both TM ops at ~128
+cores rather than the generic 16-core sequence-only split.
 
 Usage (Tracy device profile):
     HF_MODEL=Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=P150 \\

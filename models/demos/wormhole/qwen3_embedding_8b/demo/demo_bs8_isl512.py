@@ -9,9 +9,9 @@ Qwen3-Embedding-0.6B perf demo, fixed at batch=8 / ISL=512 / DP=1 / single devic
 (8 * 512 * 1024 * 2 B = 8 MB) fits in P150 L1 with the 8 MiB cap and yields
 a ~21% speedup vs. DRAM-resident activations. All other recommended knobs are
 also defaulted on (BFP4 weights, BFP8 outputs, RoPE in L1, LN block-shard, and
-head-split NlpCreateHeads). Head-split is roughly neutral at bs=8 because the
-generic path already has enough sequence/batch blocks, but keeping it on makes
-the workload match the bs=1/bs=32 optimized path.
+head-split NlpCreateHeads/NLPConcatHeads). Head-split is roughly neutral at bs=8
+because the generic path already has enough sequence/batch blocks, but keeping
+it on makes the workload match the bs=1/bs=32 optimized path.
 
 Usage:
     pytest models/demos/wormhole/qwen3_embedding_8b/demo/demo_bs8_isl512.py -sv

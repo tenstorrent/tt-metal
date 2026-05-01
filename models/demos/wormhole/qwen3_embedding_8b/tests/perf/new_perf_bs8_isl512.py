@@ -9,7 +9,7 @@ ONE measured iteration with signpost markers, exactly like the BGE-M3
 `new_perf.py` pattern. `TT_BATCHED_L1_PREFILL=1` is set by default so
 activations stay L1-resident through the prefill — same config as the
 matching standalone `demo_bs8_isl512.py`, including the head-split
-NlpCreateHeads path.
+NlpCreateHeads/NLPConcatHeads paths.
 
 Usage:
     HF_MODEL=Qwen/Qwen3-Embedding-0.6B MESH_DEVICE=P150 \\

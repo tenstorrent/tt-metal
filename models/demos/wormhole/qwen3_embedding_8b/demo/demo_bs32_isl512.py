@@ -9,8 +9,9 @@ bs=32 ISL=512 has a 16384-token activation (32 MB at bf16) which exceeds the
 P150 L1 budget for `TT_BATCHED_L1_PREFILL=1`, so this entry point intentionally
 leaves activations DRAM-resident and instead leans on the BFP4/BFP8/RoPE-in-L1
 + MinimalMatmul-on-(8,10)-grid path (`QWEN_MM_BIG_GRID_BH=1`). The shared
-optimization setup also enables head-split NlpCreateHeads; bs=32 already has
-many sequence/batch work units, so the gain is small but non-negative.
+optimization setup also enables head-split NlpCreateHeads/NLPConcatHeads; bs=32
+already has many sequence/batch work units, so the gain is small but
+non-negative.
 
 LN block-sharding auto-disables for this shape (per-core block_h=64 > 16) so
 QWEN_LN_BLOCK_SHARDED=1 is set but inert.
