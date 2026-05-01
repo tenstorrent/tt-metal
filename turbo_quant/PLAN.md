@@ -1,6 +1,6 @@
 # TurboQuant KV Cache Quantization
 
-## 🚦 Next Steps (2026-04-30 EOD)
+## 🚦 Next Steps (2026-05-01)
 
 **Where we are:**
 - Track A K=1 works on N150 (37 ms/tok, 88.9% top-1) and T3K (56.8 ms/tok,
@@ -12,10 +12,72 @@
 - Compressed KV cache (memory_efficient=True) verified end-to-end through
   prefill+decode on the needle test.
 - Long context up to 128K validated for both tracks (needle retrieval).
+- **K=1 fp32_dest_acc_en protection committed** (commit 8fe227b5ebd):
+  the dequant cascade `copy_dest_values<Float32>` fix and ComputeConfig
+  `fp32_dest_acc_en=true`. Maintains K=1 correctness, lets the kernel
+  use FP32 dst safely.
+- **LLK improvements committed** (commit 60daae3811f):
+  `max_block` now reconfigs srcA between its two `copy_tile` reads via
+  `copy_tile_to_dst_init_short_with_dt`, and
+  `sub_exp_block_bcast_cols_inplace` adds `pack_reconfig_data_format`
+  between its two pack-loop targets. No-op for uniform-format callers
+  (vanilla SDPA), needed for mixed-format use.
 
 **Open blockers / next priorities, ordered by impact:**
 
-### 🥇 1. Fix K-split kernel for FP32 dst mode
+### 🥇 1. Fix K-split kernel for FP32 dst mode (still WIP)
+
+Diagnostic findings from 2026-05-01 session below. The full FP32 path
+hits a deterministic numerical bug in the chunk loop that's not yet
+pinned down — even with the LLK improvements above in place.
+
+What was tried:
+- **All-FP32 path** (`im_df → Float32` in factory; alias state, qk_im,
+  merge cluster all FP32): K=1 cos vs torch ref drops to 0.863 (vs
+  0.997 BF16 baseline). Output magnitude 0.1729 vs ref 0.2397.
+  Systematic, deterministic; first8 values differ in sign and
+  magnitude. Kernel JIT-rebuilds correctly. The LLK pack_reconfig
+  fixes above are in place but didn't change the K=1 result.
+- **Conservative path** (alias state BF16, only merge cluster FP32 +
+  pack_reconfig per merge step + `_with_dt` in max_block): K=1 stays
+  correct (cos 0.997) but K>1 cos drops to 0.77/0.61 — worse than the
+  BF16 baseline (cos 0.9998). Suspect: `add_block_inplace(BF16
+  alias_prev_sum, FP32 cb_partial_sum)` with mixed-format inputs
+  produces wrong results even though `add_tiles_init` should configure
+  srcA/srcB independently.
+- **Hybrid path** (cb_partial_max reuse on reducer for FP32
+  alias_prev_max only, alias_prev_sum/out stay BF16): same K>1 drift
+  as baseline (~5e-3). Other merge ops still see mixed inputs.
+
+What's clear:
+- The LLK fixes (max_block, sub_exp_block_bcast_cols_inplace) are
+  correct generic improvements; verified no regression on uniform
+  callers.
+- The current FP32 alias path produces the wrong values for an
+  unidentified reason. The error is systematic (deterministic 0.1729
+  output vs expected 0.2397).
+- Mixed BF16/FP32 inputs to binary helpers (add_tiles, mul_tiles,
+  sub_tiles) probably DO have an issue — `add_tiles_init` reconfigs
+  both srcA/srcB but the actual op may still misread one of them. Not
+  yet verified.
+
+Next steps (in order):
+1. **DPRINT inside the chunk loop** to capture cb_qk_im after the QK
+   matmul, alias_cur_max after reduce_c, alias_cur_sum after
+   sub_exp_block_bcast_cols_inplace, etc. Compare against torch values
+   to find the first divergence step. This is the path I should have
+   taken first instead of bisecting CB formats.
+2. **Try `reconfig_data_format_srca` and `reconfig_data_format_srcb`
+   explicitly** before mixed-format binary ops. The pattern would be:
+   ```cpp
+   reconfig_data_format(in0_cb, in1_cb);  // both srcs explicitly
+   add_tiles(in0_cb, in1_cb, ...);
+   ```
+3. Once K=1 in the FP32 path is correct, K>1 should follow because all
+   merge inputs share format (no mixed-format issue).
+4. Run T3K K=14 latency benchmark to confirm projected ~28 ms/tok.
+
+### 🥇 (original 2026-04-30) Fix K-split kernel for FP32 dst mode
 The single biggest perf lever on T3K. Estimated **~28 ms/tok savings**
 (56.8 → 28.9 ms K=14, then K-split + hybrid simultaneous).
 
