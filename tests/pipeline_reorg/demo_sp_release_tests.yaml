@@ -87,26 +87,53 @@
   team: models
 
 # ============================================================================
-# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole Single Card
+# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole Galaxy
 # ============================================================================
 
-- name: bh_p150b_civ2_viommu_DeepSeek_B1_Full_Unit_Tests_SlowDispatch
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_DecoderIntegration
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --bucket decoder_integration
   model: deepseek_decode
   skus:
-    bh_p150b_civ2_viommu:
+    bh_galaxy:
+      timeout: 70
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalSingleDevice
+  cmd: |
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --bucket pure_local_single_device
+  model: deepseek_decode
+  skus:
+    bh_galaxy:
+      timeout: 70
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_FastDispatch
+  cmd: |
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --bucket fast_dispatch --bucket lm_head_sampling_perf
+  model: deepseek_decode
+  skus:
+    bh_galaxy:
       timeout: 20
   owner_id: U03HY7MK4BT
   team: models
 
-- name: bh_p150b_civ2_viommu_DeepSeek_B1_Full_Unit_Tests_FastDispatch
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_FabricHostPersistent
   cmd: |
-    pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket fabric_2d \
+      --bucket fabric_1d \
+      --bucket fabric_2d_torus_x \
+      --bucket fabric_2d_torus_y \
+      --bucket fabric_2d_torus_y_xy_skip_only \
+      --bucket host_io_risk \
+      --bucket lm_head_sampling_persistent_mode
   model: deepseek_decode
   skus:
-    bh_p150b_civ2_viommu:
-      timeout: 20
+    bh_galaxy:
+      timeout: 70
   owner_id: U03HY7MK4BT
   team: models
 
