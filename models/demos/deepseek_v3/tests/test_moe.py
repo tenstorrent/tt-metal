@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -42,6 +42,10 @@ def reference_model(hf_config):
     return DeepseekV3MoE(moe_config).eval()
 
 
+def _clone_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    return {name: tensor.detach().clone() for name, tensor in state_dict.items()}
+
+
 def load_real_moe_input(mode: str, module_path: str, num_tokens: int) -> torch.Tensor:
     if mode == "prefill":
         torch_input, _ = load_reference_io_tensors_for_module(mode, module_path, num_tokens, 1)
@@ -75,20 +79,30 @@ def generate_reference_io(
     mode: str,
     num_tokens: int,
     reference_model: DeepseekV3MoE,
-    checkpoint_state_dict: dict[str, torch.Tensor],
-    module_path: str,
+    hf_config,
+    weight_type: str,
+    checkpoint_state_dict: dict[str, torch.Tensor] | None = None,
+    module_path: str | None = None,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
-    moe_state_dict = {
-        name: tensor
-        for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
-        if not name.startswith("shared_experts.")
-    }
-    if not moe_state_dict:
-        pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
+    if weight_type == "random":
+        # Preserve random-init dtypes, especially the fp32 gate score-correction bias.
+        state_dict_out = _clone_state_dict(reference_model.state_dict())
+        torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
+    else:
+        assert weight_type == "real"
+        assert checkpoint_state_dict is not None
+        assert module_path is not None
+        moe_state_dict = {
+            name: tensor
+            for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
+            if not name.startswith("shared_experts.")
+        }
+        if not moe_state_dict:
+            pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
 
-    state_dict_out = moe_state_dict
-    reference_model.load_state_dict(state_dict_out)
-    torch_input = load_real_moe_input(mode, module_path, num_tokens)
+        state_dict_out = moe_state_dict
+        reference_model.load_state_dict(state_dict_out)
+        torch_input = load_real_moe_input(mode, module_path, num_tokens)
 
     reference_model.eval()
     reference_model.to(torch.bfloat16)
@@ -113,6 +127,8 @@ def run_test_forward_pass_moe(
     cache_path,
     mesh_device,
     ccl,
+    topk_fallback,
+    weight_type,
     force_recalculate_weight_config,
     device_params,
 ):
@@ -120,12 +136,14 @@ def run_test_forward_pass_moe(
 
     moe_cls = _moe_cls(mesh_device, device_params["fabric_config"])
 
-    module_path = "model.layers.3.mlp"
-    checkpoint_state_dict = request.getfixturevalue("state_dict")
+    module_path = "model.layers.3.mlp" if weight_type == "real" else None
+    checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
     state_dict, torch_input, reference_output = generate_reference_io(
         mode=mode,
         num_tokens=num_tokens,
         reference_model=reference_model,
+        hf_config=hf_config,
+        weight_type=weight_type,
         checkpoint_state_dict=checkpoint_state_dict,
         module_path=module_path,
     )
@@ -138,7 +156,7 @@ def run_test_forward_pass_moe(
         mesh_device,
         force_recalculate=force_recalculate_weight_config,
         test_name="test_moe",
-        real_weights=True,
+        real_weights=weight_type == "real",
         layer_id=module_path,
     )
 
@@ -149,6 +167,7 @@ def run_test_forward_pass_moe(
         mesh_device,
         device_params["fabric_config"],
         batch_size_per_row=batch_size_per_row,
+        topk_fallback=topk_fallback,
     )
     model_state = moe_cls.create_state(hf_config, mesh_device, ccl)
     model_shared_state = moe_cls.create_shared_state(hf_config, mesh_device)
@@ -180,7 +199,7 @@ def run_test_forward_pass_moe(
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_output)
 
-    logger.info(f"Mode: {mode}, Num tokens: {num_tokens}")
+    logger.info(f"Mode: {mode}, Num tokens: {num_tokens}, Weight type: {weight_type}")
     assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.97)
 
 
@@ -199,6 +218,13 @@ def run_test_forward_pass_moe(
         ("prefill", 1, _prefill_seq_len),
     ],
 )
+@pytest.mark.parametrize(
+    "topk_fallback",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize("weight_type", ["real"])
 def test_forward_pass(
     device_params,
     mode,
@@ -211,6 +237,8 @@ def test_forward_pass(
     cache_path,
     mesh_device,
     ccl,
+    topk_fallback,
+    weight_type,
     force_recalculate_weight_config,
 ):
     run_test_forward_pass_moe(
@@ -223,6 +251,8 @@ def test_forward_pass(
         cache_path=cache_path,
         mesh_device=mesh_device,
         ccl=ccl,
+        topk_fallback=topk_fallback,
+        weight_type=weight_type,
         force_recalculate_weight_config=force_recalculate_weight_config,
         device_params=device_params,
     )
@@ -257,6 +287,8 @@ def test_mode_decode_forward_pass_batch_8_users_per_row(
         cache_path=cache_path,
         mesh_device=mesh_device,
         ccl=ccl,
+        topk_fallback=True,
+        weight_type="real",
         force_recalculate_weight_config=force_recalculate_weight_config,
         device_params=device_params,
     )
