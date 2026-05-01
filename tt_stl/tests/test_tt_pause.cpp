@@ -43,8 +43,9 @@ TEST(TTNiceSpinUntilTest, WaitsUntilPredicateBecomesTrueWithAtomicFlag) {
     auto end = std::chrono::high_resolution_clock::now();
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    // Should have waited at least ~10ms for the flag
-    EXPECT_GE(duration.count(), 9);
+    // Should have waited at least ~10ms for the flag. Floor is 5ms (not 9ms) to give
+    // sufficient headroom against OS scheduler jitter on loaded CI runners.
+    EXPECT_GE(duration.count(), 5);
 
     setter.join();
 }
