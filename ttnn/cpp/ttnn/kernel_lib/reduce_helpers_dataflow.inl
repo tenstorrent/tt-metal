@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include "llk_defs.h"
+#include "api/debug/dprint.h"
 #include "experimental/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
@@ -266,6 +267,10 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     cb.reserve_back(1);
     uint32_t write_addr = cb.get_write_ptr();
 
+    // #region agent log
+    DPRINT << "PRS:enter cb=" << cb_id << " wp=0x" << HEX() << write_addr << ENDL();
+    // #endregion
+
     zero_tile<cb_id>(write_addr);
 
     if constexpr (use_matmul) {
@@ -280,6 +285,11 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
         }
     } else {
         uint32_t scaler = float_to_scaler_bits<data_format>(scaler_f);
+        // #region agent log
+        DPRINT << "PRS:scaler_bits=0x" << HEX() << scaler << " full_dim=" << full_dim
+               << " valid=" << valid_reduce_dim_elements_in_tile << " use_matmul=" << (uint32_t)use_matmul
+               << ENDL();
+        // #endregion
         if (scaler != 0) {
             if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
                 fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
@@ -293,6 +303,14 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
             }
         }
     }
+
+    // #region agent log
+    {
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+        DPRINT << "PRS:after_fill @0x" << HEX() << write_addr << " : 0x" << HEX() << p[0] << " 0x" << HEX()
+               << p[1] << " 0x" << HEX() << p[2] << " 0x" << HEX() << p[3] << ENDL();
+    }
+    // #endregion
 
     cb.push_back(1);
 }
