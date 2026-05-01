@@ -16,6 +16,101 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
 from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
 
 
+DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
+WELFORD_MODES = ("legacy", "welford_normal", "welford_reciprocal")
+
+GROUP_NORM_DRAM_SHAPES = [
+    (8, 768, 1, 512, 32, 2, 8, 8),  # base case
+    (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
+    (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
+    (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
+    (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
+    (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
+    (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
+    (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
+    (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
+    (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
+    (
+        1,
+        128,
+        1,
+        512,
+        32,
+        2,
+        4,
+        4,
+    ),  # test all groups on core fit in less than one tile, so need to reduce col core count
+    # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
+    # SDXL Base
+    (1, 1920, 16, 16, 32, 1, 4, 4),
+    # SDXL VAE
+    (1, 256, 256, 256, 32, 4, 8, 8),
+    (1, 512, 256, 256, 32, 4, 8, 8),
+    # SDXL Refiner
+    (1, 1536, 8, 8, 32, 1, 2, 8),
+    (1, 1152, 128, 128, 32, 2, 8, 4),
+    (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
+    (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
+    (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
+    (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
+    # sd35. 4 indicates the number of device.
+    (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
+    (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
+    (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
+    # mochi
+    # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
+]
+
+GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES = [
+    (8, 768, 1, 512, 32, 2, 8, 8),  # base case
+    (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
+    (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
+]
+
+SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
+    # (1, 256, 1024, 1024, 32, 32), # does not fit -> input is [16384, 8] per core (~260kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in)
+    (
+        1,
+        256,
+        512,
+        512,
+        32,
+        8,
+    ),  # Can fit in 8 slices, each slice does: (0,8ms for split, 0.3ms for interleavedToSharded + 0.68ms for GN) = 1.78ms, 8 slices x 1.78ms = 14.24ms + 4.6ms for concat = 18.84ms (original is 15.7ms)
+    (
+        1,
+        512,
+        128,
+        128,
+        32,
+        1,
+    ),  # Can fit in 1 slice, i2s = 0.09ms GN = 1.5ms, s2i = 0.135ms = 1.725ms against 1.57ms of dram GN. Is block shardable as well, in that case it GN takes 0.35ms
+    (
+        1,
+        512,
+        256,
+        256,
+        32,
+        4,
+    ),  # Can fit in 4 slice, split= 0.3ms i2s = 0.1ms GN = 0.6ms, s2i = 0.421ms = 5.6ms + 1ms for concat = 6.6ms (original is 6.1ms)
+    (
+        1,
+        512,
+        512,
+        512,
+        32,
+        16,
+    ),  # Can fit in 16 slice, split= 0.8ms i2s = 0.33ms GN = 0.38ms, s2i = 1.58ms = 49.44ms + 7.806ms for concat = 57.246ms (original is 24ms)
+    # (1, 128, 1024, 1024, 32, 32), # does not fit -> input is [16384, 4] per core (~130kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in). in addition to that, RM stick of size 4 is not L1 aligned
+]
+
+GROUP_NORM_DRAM_OFT_PARAMS = [
+    ### oft
+    (1, 256, 159, 159, 16, 3, 4, 4, 1e-5),
+    (1, 64, 192, 640, 16, 10, 2, 4, 1e-5),
+]
+
+
 # perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
 def run_group_norm_DRAM(
     device,
@@ -172,53 +267,10 @@ def run_group_norm_DRAM(
         )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize(
-    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
-    [
-        (8, 768, 1, 512, 32, 2, 8, 8),  # base case
-        (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
-        (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
-        (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
-        (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
-        (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
-        (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
-        (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
-        (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
-        (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
-        (
-            1,
-            128,
-            1,
-            512,
-            32,
-            2,
-            4,
-            4,
-        ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-        # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
-        # SDXL Base
-        (1, 1920, 16, 16, 32, 1, 4, 4),
-        # SDXL VAE
-        (1, 256, 256, 256, 32, 4, 8, 8),
-        (1, 512, 256, 256, 32, 4, 8, 8),
-        # SDXL Refiner
-        (1, 1536, 8, 8, 32, 1, 2, 8),
-        (1, 1152, 128, 128, 32, 2, 8, 4),
-        (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
-        (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
-        (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
-        (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
-        # sd35. 4 indicates the number of device.
-        (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
-        (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
-        (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
-        # mochi
-        # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
-    ],
-)
-@pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SHAPES)
+@pytest.mark.parametrize("welford_mode", WELFORD_MODES)
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_DRAM(
     device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid, perf_test_mode=False
 ):
@@ -239,17 +291,12 @@ def test_group_norm_DRAM(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
-    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
-    [
-        (8, 768, 1, 512, 32, 2, 8, 8),  # base case
-        (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
-        (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
-    ],
+    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES
 )
-@pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("welford_mode", WELFORD_MODES)
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_no_input_mask_DRAM(
     device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
 ):
@@ -269,47 +316,9 @@ def test_group_norm_no_input_mask_DRAM(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize(
-    "N, C, H, W, num_groups, num_splits",
-    [
-        # (1, 256, 1024, 1024, 32, 32), # does not fit -> input is [16384, 8] per core (~260kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in)
-        (
-            1,
-            256,
-            512,
-            512,
-            32,
-            8,
-        ),  # Can fit in 8 slices, each slice does: (0,8ms for split, 0.3ms for interleavedToSharded + 0.68ms for GN) = 1.78ms, 8 slices x 1.78ms = 14.24ms + 4.6ms for concat = 18.84ms (original is 15.7ms)
-        (
-            1,
-            512,
-            128,
-            128,
-            32,
-            1,
-        ),  # Can fit in 1 slice, i2s = 0.09ms GN = 1.5ms, s2i = 0.135ms = 1.725ms against 1.57ms of dram GN. Is block shardable as well, in that case it GN takes 0.35ms
-        (
-            1,
-            512,
-            256,
-            256,
-            32,
-            4,
-        ),  # Can fit in 4 slice, split= 0.3ms i2s = 0.1ms GN = 0.6ms, s2i = 0.421ms = 5.6ms + 1ms for concat = 6.6ms (original is 6.1ms)
-        (
-            1,
-            512,
-            512,
-            512,
-            32,
-            16,
-        ),  # Can fit in 16 slice, split= 0.8ms i2s = 0.33ms GN = 0.38ms, s2i = 1.58ms = 49.44ms + 7.806ms for concat = 57.246ms (original is 24ms)
-        # (1, 128, 1024, 1024, 32, 32), # does not fit -> input is [16384, 4] per core (~130kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in). in addition to that, RM stick of size 4 is not L1 aligned
-    ],
-)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", SDXL_BASE_GROUP_NORM_SPLIT_SHAPES)
+@pytest.mark.parametrize("specify_grid", [True])
 def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
@@ -403,16 +412,9 @@ def _nearest_32_per_core(x, core):
     return math.ceil(x / core / 32) * 32 * core
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize(
-    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps",
-    [
-        ### oft
-        (1, 256, 159, 159, 16, 3, 4, 4, 1e-5),
-        (1, 64, 192, 640, 16, 10, 2, 4, 1e-5),
-    ],
-)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps", GROUP_NORM_DRAM_OFT_PARAMS)
+@pytest.mark.parametrize("specify_grid", [True])
 @run_for_blackhole("blackhole specific tests")
 def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid):
     skip_if_not_blackhole_20_cores(device)

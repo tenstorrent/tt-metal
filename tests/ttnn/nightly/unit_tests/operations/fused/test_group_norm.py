@@ -7,6 +7,9 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from models.common.utility_functions import run_for_blackhole
+
+import tests.ttnn.unit_tests.operations.fused.test_group_norm as base
 
 
 @pytest.mark.parametrize("specify_grid", [True, False])
@@ -191,4 +194,123 @@ def test_group_norm_sharded_ex_external_cb_gap(device, specify_grid):
         rtol=0.04,
         atol=0.04,
         frobenius_threshold=0.01,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Nightly wrappers: run each unit-test shape with specify_grid=False so the
+# auto-grid path is exercised without bloating the regular CI pipeline.
+# All parametrize data is sourced from base.<CONST> / base.<func>() so
+# nightly stays in sync when unit-test parameters change.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups", base.HEIGHT_SHARDED_SHAPES)
+@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford, specify_grid):
+    base.test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", base.BLOCK_SHARDED_V2_8X4_SHAPES)
+@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups, use_welford, specify_grid):
+    base.test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups, use_welford, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", base.BLOCK_SHARDED_V2_8X8_SHAPES)
+@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford, specify_grid):
+    base.test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", base.BLOCK_SHARDED_V2_8X8_TILE_LAYOUT_SHAPES)
+@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(
+    device, N, C, H, W, num_groups, use_welford, specify_grid
+):
+    base.test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(
+        device, N, C, H, W, num_groups, use_welford, specify_grid
+    )
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("input_shape", base.generate_sdxl_test_inputs())
+@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("specify_grid", [False])
+# Paramemeters need to stay consistent with usage in
+# models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl_performance
+def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid):
+    base.test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("input_shape", base.generate_sdxl_test_inputs())
+@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize("specify_grid", [False])
+# Oppositive of previous test in terms of inplace, for full coverage purposes.
+def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, specify_grid):
+    base.test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, specify_grid)
+
+
+@pytest.mark.parametrize("input_shape", base.SDXL_BASE_GROUP_NORM_BH_SHAPES)
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("specify_grid", [False])
+@run_for_blackhole("blackhole specific tests")
+def test_sdxl_base_group_norm_bh(device, input_shape, specify_grid):
+    base.test_sdxl_base_group_norm_bh(device, input_shape, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
+@pytest.mark.parametrize("input_shape", base.generate_sdxl_test_inputs_neg_mask())
+@pytest.mark.parametrize("specify_grid", [False])
+def test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid):
+    base.test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", base.COMPUTE_CONFIG_SHAPES)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_compute_config(device, N, C, H, W, num_groups, specify_grid):
+    base.test_group_norm_compute_config(device, N, C, H, W, num_groups, specify_grid)
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, shard, eps, use_negative_mask", base.GROUP_NORM_OFT_PARAMS)
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("specify_grid", [False])
+@run_for_blackhole("blackhole specific tests")
+def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative_mask, specify_grid):
+    base.test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative_mask, specify_grid)
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", base.NO_INPUT_MASK_SHAPES)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
+    base.test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid)
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups", base.DRAM_GRID_SIZE_SHAPES)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid):
+    base.test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups", base.OPTIONAL_WEIGHT_BIAS_SHAPES)
+@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+@pytest.mark.parametrize(
+    "has_weight, has_bias", base.OPTIONAL_WEIGHT_BIAS_AFFINE_PARAMS, ids=base.OPTIONAL_WEIGHT_BIAS_AFFINE_IDS
+)
+@pytest.mark.parametrize("specify_grid", [False])
+def test_group_norm_optional_weight_bias(
+    device, N, C, H, W, num_groups, use_welford, has_weight, has_bias, specify_grid
+):
+    base.test_group_norm_optional_weight_bias(
+        device, N, C, H, W, num_groups, use_welford, has_weight, has_bias, specify_grid
     )

@@ -19,6 +19,97 @@ welford_flavors, welford_ids = (True, False), ("welford", "legacy")
 
 TEST_PADDING_VALUE = -42
 
+DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
+DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK = [{"l1_small_size": 47000}]
+
+HEIGHT_SHARDED_SHAPES = [
+    (1, 320, 32, 32, 16),
+]
+
+BLOCK_SHARDED_V2_8X4_SHAPES = [
+    (1, 1280, 16, 16, 32),
+    (1, 320, 1, 8192, 32),
+    (1, 960, 1, 1024, 32),
+    # not fit in L1 for GS
+    # (1, 960, 1, 4096, 32),
+]
+
+BLOCK_SHARDED_V2_8X8_SHAPES = [
+    (2, 320, 64, 64, 32),
+    (1, 640, 1, 2048, 32),
+    (1, 640, 1, 4096, 32),
+    (1, 960, 1, 2048, 32),
+    (1, 960, 1, 4096, 32),
+    (1, 1280, 1, 512, 32),
+    (1, 1280, 1, 2048, 32),
+    (1, 1920, 1, 512, 32),
+    (1, 1920, 1, 2048, 32),
+    (1, 2560, 1, 512, 32),
+    # not fit in L1 for GS
+    # (2, 960, 64, 64, 32),
+    # (1, 640, 1, 8192, 32),
+]
+
+BLOCK_SHARDED_V2_8X8_TILE_LAYOUT_SHAPES = [
+    (1, 1280, 1, 512, 32),
+    (1, 1280, 1, 2048, 32),
+    (1, 2560, 1, 512, 32),
+]
+
+SDXL_BASE_GROUP_NORM_BH_SHAPES = [
+    # UNet
+    (1, 1280, 64, 64),
+    (1, 1280, 32, 32),
+    (1, 1920, 64, 64),
+    (1, 1920, 32, 32),
+    (1, 2560, 32, 32),
+    (1, 320, 128, 128),
+    (1, 320, 64, 64),
+    (1, 640, 64, 64),
+    (1, 640, 32, 32),
+    (1, 960, 64, 64),
+    # VAE
+    (1, 512, 128, 128),
+]
+
+COMPUTE_CONFIG_SHAPES = [
+    (1, 1920, 64, 64, 32),
+]
+
+GROUP_NORM_OFT_PARAMS = [
+    (1, 256, 12, 40, 16, "BS", 1e-5, False),
+    (1, 256, 24, 80, 16, "HS", 1e-5, False),
+    (1, 256, 48, 160, 16, "HS", 1e-5, False),
+    (1, 512, 12, 40, 16, "BS", 1e-5, False),
+    (1, 64, 96, 320, 16, "HS", 1e-5, False),
+    (1, 32, 192, 640, 8, "HS", 1e-5, True),  # half of (1, 64, 192, 640, 16, 10, 2, 4, 1e-5),
+]
+
+NO_INPUT_MASK_SHAPES = [
+    (1, 256, 64, 64, 32),
+]
+
+DRAM_GRID_SIZE_SHAPES = [
+    (1, 480, 8, 8, 16),
+    (1, 320, 32, 32, 32),
+    (1, 1280, 16, 16, 32),
+]
+
+OPTIONAL_WEIGHT_BIAS_SHAPES = [
+    (1, 128, 64, 1, 32),
+]
+
+OPTIONAL_WEIGHT_BIAS_AFFINE_PARAMS = [
+    (False, False),
+    (True, False),
+    (False, True),
+]
+OPTIONAL_WEIGHT_BIAS_AFFINE_IDS = ["no_affine", "weight_only", "bias_only"]
+
+NEGATIVE_TESTS_PARAMS = [
+    ((2, 1, 16, 32), 8, "must be a multiple of the tile height"),
+]
+
 
 # for debug purpose
 def manual_group_norm(input_tensor, num_groups, eps=1e-2):
@@ -41,13 +132,9 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
-@pytest.mark.parametrize("N", [1])
-@pytest.mark.parametrize("C", [320])
-@pytest.mark.parametrize("H", [32])
-@pytest.mark.parametrize("W", [32])
-@pytest.mark.parametrize("num_groups", [16])
+@pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford, specify_grid):
     torch.manual_seed(0)
 
@@ -137,19 +224,10 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize(
-    "N, C, H, W, num_groups",
-    [
-        (1, 1280, 16, 16, 32),
-        (1, 320, 1, 8192, 32),
-        (1, 960, 1, 1024, 32),
-        # not fit in L1 for GS
-        # (1, 960, 1, 4096, 32),
-    ],
-)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", BLOCK_SHARDED_V2_8X4_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups, use_welford, specify_grid):
     torch.manual_seed(0)
 
@@ -244,27 +322,10 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize(
-    "N, C, H, W, num_groups",
-    [
-        (2, 320, 64, 64, 32),
-        (1, 640, 1, 2048, 32),
-        (1, 640, 1, 4096, 32),
-        (1, 960, 1, 2048, 32),
-        (1, 960, 1, 4096, 32),
-        (1, 1280, 1, 512, 32),
-        (1, 1280, 1, 2048, 32),
-        (1, 1920, 1, 512, 32),
-        (1, 1920, 1, 2048, 32),
-        (1, 2560, 1, 512, 32),
-        # not fit in L1 for GS
-        # (2, 960, 64, 64, 32),
-        # (1, 640, 1, 8192, 32),
-    ],
-)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", BLOCK_SHARDED_V2_8X8_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford, specify_grid):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
@@ -362,17 +423,10 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize(
-    "N, C, H, W, num_groups",
-    [
-        (1, 1280, 1, 512, 32),
-        (1, 1280, 1, 2048, 32),
-        (1, 2560, 1, 512, 32),
-    ],
-)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", BLOCK_SHARDED_V2_8X8_TILE_LAYOUT_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(
     device, N, C, H, W, num_groups, use_welford, specify_grid
 ):
@@ -600,10 +654,10 @@ def run_sdxl_base_group_norm_test(
         )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("specify_grid", [True])
 # Paramemeters need to stay consistent with usage in
 # models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl_performance
 def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid, perf_test_mode=False):
@@ -615,10 +669,10 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, specify_grid, pe
     run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, specify_grid, perf_test_mode)
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("specify_grid", [True])
 # Oppositive of previous test in terms of inplace, for full coverage purposes.
 def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, specify_grid, perf_test_mode=False):
     # Only one test case has C == 512, which has TILE_LAYOUT and inplace True
@@ -629,26 +683,9 @@ def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, speci
     run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, specify_grid, perf_test_mode)
 
 
-@pytest.mark.parametrize(
-    "input_shape",
-    [
-        # UNet
-        (1, 1280, 64, 64),
-        (1, 1280, 32, 32),
-        (1, 1920, 64, 64),
-        (1, 1920, 32, 32),
-        (1, 2560, 32, 32),
-        (1, 320, 128, 128),
-        (1, 320, 64, 64),
-        (1, 640, 64, 64),
-        (1, 640, 32, 32),
-        (1, 960, 64, 64),
-        # VAE
-        (1, 512, 128, 128),
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("input_shape", SDXL_BASE_GROUP_NORM_BH_SHAPES)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("specify_grid", [True])
 @run_for_blackhole("blackhole specific tests")
 def test_sdxl_base_group_norm_bh(device, input_shape, specify_grid, perf_test_mode=False):
     torch.manual_seed(0)
@@ -725,9 +762,9 @@ def generate_sdxl_test_inputs_neg_mask():
     return inputs
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs_neg_mask())
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("specify_grid", [True])
 def test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
@@ -827,13 +864,9 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape, specify_grid, p
         )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("N", [1])
-@pytest.mark.parametrize("C", [1920])
-@pytest.mark.parametrize("H", [64])
-@pytest.mark.parametrize("W", [64])
-@pytest.mark.parametrize("num_groups", [32])
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", COMPUTE_CONFIG_SHAPES)
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_compute_config(device, N, C, H, W, num_groups, specify_grid):
     """
     Test that a high-accuracy compute kernel config produces a higher PCC with torch
@@ -921,19 +954,9 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups, specify_grid)
     ), "High-accuracy config should have lower Frobenius error than low-accuracy config"
 
 
-@pytest.mark.parametrize(
-    "N, C, H, W, num_groups, shard, eps, use_negative_mask",
-    [
-        (1, 256, 12, 40, 16, "BS", 1e-5, False),
-        (1, 256, 24, 80, 16, "HS", 1e-5, False),
-        (1, 256, 48, 160, 16, "HS", 1e-5, False),
-        (1, 512, 12, 40, 16, "BS", 1e-5, False),
-        (1, 64, 96, 320, 16, "HS", 1e-5, False),
-        (1, 32, 192, 640, 8, "HS", 1e-5, True),  # half of (1, 64, 192, 640, 16, 10, 2, 4, 1e-5),
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("N, C, H, W, num_groups, shard, eps, use_negative_mask", GROUP_NORM_OFT_PARAMS)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("specify_grid", [True])
 @run_for_blackhole("blackhole specific tests")
 def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative_mask, specify_grid):
     assert C % num_groups == 0, "Number of channels must be divisible by number of groups"
@@ -1035,13 +1058,9 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("N", [1])
-@pytest.mark.parametrize("C", [256])
-@pytest.mark.parametrize("H", [64])
-@pytest.mark.parametrize("W", [64])
-@pytest.mark.parametrize("num_groups", [32])
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups", NO_INPUT_MASK_SHAPES)
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
     """
     Test that a group norm without an input mask produces the same result as torch.
@@ -1119,12 +1138,7 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
     ), "High-accuracy config should have lower Frobenius error than low-accuracy config"
 
 
-@pytest.mark.parametrize(
-    "input_shape, num_groups, msg_pattern",
-    [
-        ((2, 1, 16, 32), 8, "must be a multiple of the tile height"),
-    ],
-)
+@pytest.mark.parametrize("input_shape, num_groups, msg_pattern", NEGATIVE_TESTS_PARAMS)
 def test_group_norm_negative_tests(
     input_shape,
     num_groups,
@@ -1141,15 +1155,8 @@ def test_group_norm_negative_tests(
         )
 
 
-@pytest.mark.parametrize(
-    "N, C, H, W, num_groups",
-    [
-        (1, 480, 8, 8, 16),
-        (1, 320, 32, 32, 32),
-        (1, 1280, 16, 16, 32),
-    ],
-)
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("N, C, H, W, num_groups", DRAM_GRID_SIZE_SHAPES)
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid):
     """Use determine_expected_group_norm_dram_grid_size to pick a grid, then
     run DRAM-interleaved group norm and compare against torch."""
@@ -1218,23 +1225,12 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
     )
 
 
-@pytest.mark.parametrize(
-    "N, C, H, W, num_groups",
-    [
-        (1, 128, 64, 1, 32),
-    ],
-)
+@pytest.mark.parametrize("N, C, H, W, num_groups", OPTIONAL_WEIGHT_BIAS_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
 @pytest.mark.parametrize(
-    "has_weight, has_bias",
-    [
-        (False, False),
-        (True, False),
-        (False, True),
-    ],
-    ids=["no_affine", "weight_only", "bias_only"],
+    "has_weight, has_bias", OPTIONAL_WEIGHT_BIAS_AFFINE_PARAMS, ids=OPTIONAL_WEIGHT_BIAS_AFFINE_IDS
 )
-@pytest.mark.parametrize("specify_grid", [True, False])
+@pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_optional_weight_bias(
     device, N, C, H, W, num_groups, use_welford, has_weight, has_bias, specify_grid
 ):
