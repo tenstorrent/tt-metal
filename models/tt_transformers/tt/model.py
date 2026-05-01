@@ -693,7 +693,29 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
+        page_tables_per_group=None,
+        layer_to_group=None,
     ):
+        """
+        Args:
+            page_tables_per_group: optional list of per-kv-cache-group page
+                tables (one per group, in upstream's group order). When
+                provided, layer i uses
+                ``page_tables_per_group[layer_to_group[i]]`` instead of the
+                single ``page_table`` arg, so hybrid attention models served
+                via vLLM's hybrid kv cache manager can route sliding-window
+                layers to a smaller paged pool than full-attention layers.
+            layer_to_group: list[int] of length ``num_hidden_layers`` mapping
+                each model layer index to its kv_cache_group index. Required
+                when ``page_tables_per_group`` is provided.
+        """
+        if page_tables_per_group is not None and layer_to_group is None:
+            raise ValueError("page_tables_per_group requires layer_to_group to route per " "layer to the right group")
+        if layer_to_group is not None and len(layer_to_group) != len(self.layers):
+            raise ValueError(
+                f"layer_to_group has {len(layer_to_group)} entries but model " f"has {len(self.layers)} layers"
+            )
+
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
             if self.prefetcher is not None:
@@ -714,6 +736,15 @@ class Transformer(LightweightModule):
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
+            # Per-group page table routing for hybrid kv cache groups (vLLM
+            # path). Sliding-window layers may index into a smaller paged
+            # pool than full-attention layers, so each layer picks up its
+            # group's block table instead of a shared one.
+            if page_tables_per_group is not None:
+                layer_page_table = page_tables_per_group[layer_to_group[i]]
+            else:
+                layer_page_table = page_table
+
             x = layer(
                 x,
                 current_pos,
@@ -721,7 +752,7 @@ class Transformer(LightweightModule):
                 rot_mats_local=rot_mats_local,
                 user_id=user_id,
                 mode=mode,
-                page_table=page_table,
+                page_table=layer_page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
