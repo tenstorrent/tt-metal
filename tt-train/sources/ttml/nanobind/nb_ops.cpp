@@ -25,6 +25,7 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
+#include "ops/moe_group_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
@@ -58,6 +59,10 @@ void py_module_types(nb::module_& m) {
     }
 
     m.def_submodule("matmul");
+    {
+        auto py_moe = m.def_submodule("moe");
+        nb::class_<ttml::ops::MoEGroupOutputs>(py_moe, "MoEGroupOutputs");
+    }
     m.def_submodule("multi_head_utils");
     m.def_submodule("attention");
     m.def_submodule("reshape");
@@ -234,6 +239,32 @@ void py_module(nb::module_& m) {
             nb::arg("b"),
             nb::arg("transpose_a") = false,
             nb::arg("transpose_b") = false);
+    }
+
+    {
+        auto py_moe = static_cast<nb::module_>(m.attr("moe"));
+        auto py_moe_group_outputs = static_cast<nb::class_<ttml::ops::MoEGroupOutputs>>(py_moe.attr("MoEGroupOutputs"));
+        py_moe_group_outputs.def_ro("grouped", &ttml::ops::MoEGroupOutputs::grouped);
+        py_moe_group_outputs.def_ro("grouped_scores", &ttml::ops::MoEGroupOutputs::grouped_scores);
+        py_moe_group_outputs.def_ro("k_slot", &ttml::ops::MoEGroupOutputs::k_slot);
+        py_moe_group_outputs.def_ro("counts", &ttml::ops::MoEGroupOutputs::counts);
+        py_moe_group_outputs.def_ro("offsets", &ttml::ops::MoEGroupOutputs::offsets);
+        py_moe_group_outputs.def_ro("plan", &ttml::ops::MoEGroupOutputs::plan);
+
+        py_moe.def(
+            "moe_group_op",
+            &ttml::ops::moe_group_op,
+            nb::arg("dispatched"),
+            nb::arg("metadata"),
+            nb::arg("scores"),
+            nb::arg("local_expert_ids"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            "Autograd wrapper around metal::moe_group. Forward gathers tokens by\n"
+            "local expert and per-token routing weights into grouped layout.\n"
+            "Backward uses metal::moe_ungroup to scatter d(grouped) back to\n"
+            "d(dispatched) (H = hidden_dim) and d(grouped_scores) back to\n"
+            "d(scores) (H = K, via K-wide one-hot expansion of k_slot).");
     }
 
     {
