@@ -94,21 +94,6 @@ class SpeakerEncoder(LightweightModule):
             shard_layout=None,
             deallocate_activation=False,
         )
-        # High-precision compute config used for the ASP convs that replace the
-        # CPU F.conv1d path. fp32 dest accumulation keeps the speaker embedding
-        # numerically aligned with the CPU F.conv1d output so the autoregressive
-        # sampling trajectory doesn't drift.
-        self._compute_kernel_config_hifi = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        self._conv1d_config_hifi = ttnn.Conv1dConfig(
-            weights_dtype=ttnn.float32,
-            shard_layout=None,
-            deallocate_activation=False,
-        )
         self._ttnn_conv1d = ttnn.conv1d
 
     def compute_mel_spectrogram(
@@ -185,29 +170,21 @@ class SpeakerEncoder(LightweightModule):
             self._mel_stft_key = key
         return self._mel_basis_cpu, self._hann_window_cpu
 
-    def _conv1d_params_to_ttnn(
-        self,
-        weight: torch.Tensor,
-        bias: torch.Tensor,
-        *,
-        dtype: "ttnn.DataType" = None,
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        if dtype is None:
-            dtype = ttnn.bfloat16
-        key = (weight.data_ptr(), bias.data_ptr(), dtype)
+    def _conv1d_params_to_ttnn(self, weight: torch.Tensor, bias: torch.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        key = (weight.data_ptr(), bias.data_ptr())
         hit = self._conv1d_param_tt_cache.get(key)
         if hit is None:
             w_tt = ttnn.from_torch(
                 weight,
                 device=self.device,
-                dtype=dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             b_tt = ttnn.from_torch(
                 bias,
                 device=self.device,
-                dtype=dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -241,22 +218,14 @@ class SpeakerEncoder(LightweightModule):
         *,
         padding: int = 0,
         dilation: int = 1,
-        hifi: bool = False,
     ) -> Tuple[ttnn.Tensor, int, int]:
-        """Single TTNN conv1d entry point used by speaker encoder.
-
-        ``hifi=True`` switches to fp32 weights + HiFi4 math + fp32 dest accum,
-        matching the precision of the host F.conv1d path it replaces.
-        """
+        """Single TTNN conv1d entry point used by speaker encoder."""
         mc = ttnn.DRAM_MEMORY_CONFIG
         out_channels = int(weight.shape[0])
         kernel_size = int(weight.shape[-1] if len(tuple(weight.shape)) == 3 else weight.shape[-2])
         bias_tt = bias
         if len(tuple(bias_tt.shape)) == 1:
             bias_tt = ttnn.reshape(bias_tt, (1, 1, 1, out_channels), memory_config=mc)
-        conv_cfg = self._conv1d_config_hifi if hifi else self._conv1d_config
-        compute_cfg = self._compute_kernel_config_hifi if hifi else self._compute_kernel_config
-        out_dtype = ttnn.float32 if hifi else ttnn.bfloat16
         y, y_len = self._ttnn_conv1d(
             input_tensor=x_nlc,
             weight_tensor=weight,
@@ -270,9 +239,9 @@ class SpeakerEncoder(LightweightModule):
             padding=padding,
             dilation=dilation,
             bias_tensor=bias_tt,
-            conv_config=conv_cfg,
-            compute_config=compute_cfg,
-            dtype=out_dtype,
+            conv_config=self._conv1d_config,
+            compute_config=self._compute_kernel_config,
+            dtype=ttnn.bfloat16,
             memory_config=mc,
             return_output_dim=True,
         )
@@ -428,58 +397,26 @@ class SpeakerEncoder(LightweightModule):
         conv_bias: torch.Tensor,
         eps: float = 1e-12,
     ) -> ttnn.Tensor:
-        """Attentive Statistics Pooling in TTNN, NLC input/output.
-
-        The two ASP convs are kernel=1, equivalent to per-position linears, so
-        we run native ttnn.conv1d (no reflect padding needed) and split the
-        first conv along the input-channel dim into 3 chunks (x / mean / std)
-        + broadcast-add. This eliminates two ttnn.repeat + one ttnn.concat.
-
-        Numerics-preserving: the conv path here uses fp32 math + fp32 dest
-        accumulation (matching the CPU F.conv1d that this replaces). bf16
-        compute would shift the speaker embedding enough to drift the
-        autoregressive sampling trajectory.
-        """
+        """Attentive Statistics Pooling in TTNN, NLC input/output."""
         mc = ttnn.L1_MEMORY_CONFIG
         x_nlc = (
             x if len(tuple(x.shape)) == 3 else ttnn.reshape(x, (x.shape[0], x.shape[2], x.shape[3]), memory_config=mc)
         )
         seq_len = int(x_nlc.shape[1])
-        batch = int(x_nlc.shape[0])
-        C = int(x_nlc.shape[2])
-        assert int(tdnn_weight.shape[-1]) == 1, "ASP TDNN expects kernel=1"
-        assert int(conv_weight.shape[-1]) == 1, "ASP attention head expects kernel=1"
-        assert int(tdnn_weight.shape[1]) == 3 * C, "ASP TDNN input channels must be 3*C (x|mean|std)"
 
         mean = ttnn.mean(x_nlc, dim=1, keepdim=True)
         centered = ttnn.subtract(x_nlc, mean, memory_config=mc)
         std = ttnn.sqrt(ttnn.clamp(ttnn.mean(ttnn.multiply(centered, centered), dim=1, keepdim=True), min=eps))
 
-        # Split tdnn_weight [out, 3*C, 1] into per-input-source chunks.
-        # Bias added once via the x branch; mean/std branches use zero bias.
-        W_x_torch = tdnn_weight[:, 0:C, :].contiguous()
-        W_m_torch = tdnn_weight[:, C : 2 * C, :].contiguous()
-        W_s_torch = tdnn_weight[:, 2 * C :, :].contiguous()
-        zero_bias_torch = torch.zeros_like(tdnn_bias)
-        wx_tt, bx_tt = self._conv1d_params_to_ttnn(W_x_torch, tdnn_bias, dtype=ttnn.float32)
-        wm_tt, bm_tt = self._conv1d_params_to_ttnn(W_m_torch, zero_bias_torch, dtype=ttnn.float32)
-        ws_tt, bs_tt = self._conv1d_params_to_ttnn(W_s_torch, zero_bias_torch, dtype=ttnn.float32)
+        mean_expanded = ttnn.repeat(mean, (1, seq_len, 1))
+        std_expanded = ttnn.repeat(std, (1, seq_len, 1))
+        attention_input = ttnn.concat([x_nlc, mean_expanded, std_expanded], dim=2, memory_config=mc)
 
-        a_x, _, out_ch_a = self._run_ttnn_conv1d(x_nlc, wx_tt, bx_tt, input_length=seq_len, hifi=True)
-        a_m, _, _ = self._run_ttnn_conv1d(mean, wm_tt, bm_tt, input_length=1, hifi=True)
-        a_s, _, _ = self._run_ttnn_conv1d(std, ws_tt, bs_tt, input_length=1, hifi=True)
-        # ttnn.conv1d returns a flat [N, 1, 1, C] view; reshape to NLC for broadcast add.
-        a_x = ttnn.reshape(a_x, (batch, seq_len, out_ch_a), memory_config=mc)
-        a_m = ttnn.reshape(a_m, (batch, 1, out_ch_a), memory_config=mc)
-        a_s = ttnn.reshape(a_s, (batch, 1, out_ch_a), memory_config=mc)
-        a_tt = ttnn.add(a_x, a_m, memory_config=mc)
-        a_tt = ttnn.add(a_tt, a_s, memory_config=mc)
-
+        tw_tt, tb_tt = self._conv1d_params_to_ttnn(tdnn_weight, tdnn_bias)
+        cw_tt, cb_tt = self._conv1d_params_to_ttnn(conv_weight, conv_bias)
+        a_tt = self._conv1d_same_padding(attention_input, tw_tt, tb_tt)
         a_tt = ttnn.tanh(a_tt)
-
-        cw_tt, cb_tt = self._conv1d_params_to_ttnn(conv_weight, conv_bias, dtype=ttnn.float32)
-        a_tt, _, out_ch_b = self._run_ttnn_conv1d(a_tt, cw_tt, cb_tt, input_length=seq_len, hifi=True)
-        a_tt = ttnn.reshape(a_tt, (batch, seq_len, out_ch_b), memory_config=mc)
+        a_tt = self._conv1d_same_padding(a_tt, cw_tt, cb_tt)
         attention = ttnn.softmax(a_tt, dim=1, memory_config=mc)
 
         weighted_mean = ttnn.sum(ttnn.multiply(attention, x_nlc), dim=1, keepdim=True)
