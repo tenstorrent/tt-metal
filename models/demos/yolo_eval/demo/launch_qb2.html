@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Yolo Live Camera Demo - BH QB2</title>
+<title>Yolo Demo - BH QB2</title>
 <style>
   :root {
     --bg-0: #0a0612;
@@ -21,6 +21,8 @@
     --v8s-rgb: 90, 242, 163;
     --v11s-rgb: 92, 184, 255;
     --v8l-rgb: 124, 92, 255;
+    --v8l640-rgb: 255, 176, 90;
+    --v11l640-rgb: 255, 110, 199;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
@@ -114,11 +116,25 @@
   body.mode-side-by-side .video-grid {
     grid-template-columns: 1fr 1fr;
   }
+  /* 4-box video-mode side-by-side: 2x2 grid sized so each cell holds a
+     640×360 (16:9) video at native quality. Total grid block:
+     2×640 + gap = 1292 px wide, 2×360 + gap = 732 px tall. Fits 1080p
+     comfortably. `justify-content: center` centers it in the column. */
+  body.mode-side-by-side.video-mode .video-grid {
+    grid-template-columns: 640px 640px;
+    grid-template-rows: 360px 360px;
+    justify-content: center;
+  }
   body.mode-large-model .video-grid {
     grid-template-columns: 1fr;
   }
   body.mode-side-by-side #card_v8l { display: none; }
   body.mode-large-model  #card_v8s, body.mode-large-model #card_v11s { display: none; }
+  /* The 640x640 LARGE-model variants only exist in video-mode side-by-side. */
+  body:not(.video-mode) #card_v8l_640,
+  body:not(.video-mode) #card_v11l_640,
+  body.mode-large-model #card_v8l_640,
+  body.mode-large-model #card_v11l_640 { display: none; }
 
   .video-card {
     position: relative;
@@ -126,13 +142,44 @@
     border: 1px solid var(--card-border);
     border-radius: 12px;
     overflow: hidden;
-    min-height: 240px;
+    min-height: 200px;
     max-height: calc(100vh - 130px);
     box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  /* Video-mode source files are 1280×720 (16:9 native content). Force
+     the card to 16:9 so the video fills it edge-to-edge with no black
+     bars and the canvas overlay maps 1:1 to the displayed pixels. */
+  body.video-mode .video-card {
+    aspect-ratio: 16 / 9;
+    width: 100%;
+    margin: 0 auto;
+    min-height: 0;
+  }
+  body.video-mode .video-card video {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+  }
+  /* 4-box layout: cards fill their 640×360 grid cell. */
+  body.mode-side-by-side.video-mode .video-card {
+    width: 640px;
+    height: 360px;
+  }
+  /* Single-card layout (large-model in video-mode): 1280×720 (16:9
+     content, source has been pre-cropped to remove the black bars that
+     were baked into the 1:1 file). Inherits aspect-ratio: 16/9 from
+     `body.video-mode .video-card` above; just sets the size. */
+  body.mode-large-model.video-mode .video-card {
+    width: 1280px;
+    height: 720px;
+    max-width: none;
+    max-height: none;
   }
   .video-card.v8s  { border-color: rgba(var(--v8s-rgb),  0.55); box-shadow: 0 0 0 1px rgba(var(--v8s-rgb),  0.25), 0 8px 24px rgba(0,0,0,0.35); }
   .video-card.v11s { border-color: rgba(var(--v11s-rgb), 0.55); box-shadow: 0 0 0 1px rgba(var(--v11s-rgb), 0.25), 0 8px 24px rgba(0,0,0,0.35); }
   .video-card.v8l  { border-color: rgba(var(--v8l-rgb),  0.55); box-shadow: 0 0 0 1px rgba(var(--v8l-rgb),  0.25), 0 8px 24px rgba(0,0,0,0.35); }
+  .video-card.v8l_640  { border-color: rgba(var(--v8l640-rgb),  0.55); box-shadow: 0 0 0 1px rgba(var(--v8l640-rgb),  0.25), 0 8px 24px rgba(0,0,0,0.35); }
+  .video-card.v11l_640 { border-color: rgba(var(--v11l640-rgb), 0.55); box-shadow: 0 0 0 1px rgba(var(--v11l640-rgb), 0.25), 0 8px 24px rgba(0,0,0,0.35); }
   .card-label {
     position: absolute; top: 10px; left: 10px; z-index: 3;
     padding: 4px 12px;
@@ -146,6 +193,8 @@
   .card-label.v8s  { background: rgb(var(--v8s-rgb)); }
   .card-label.v11s { background: rgb(var(--v11s-rgb)); color: #f0eaff; text-shadow: 0 1px 1px rgba(0,0,0,0.5); }
   .card-label.v8l  { background: rgb(var(--v8l-rgb));  color: #f0eaff; text-shadow: 0 1px 1px rgba(0,0,0,0.5); }
+  .card-label.v8l_640  { background: rgb(var(--v8l640-rgb)); }
+  .card-label.v11l_640 { background: rgb(var(--v11l640-rgb)); color: #f0eaff; text-shadow: 0 1px 1px rgba(0,0,0,0.5); }
   .video-card video {
     display: block; width: 100%; height: auto;
     max-height: calc(100vh - 130px);
@@ -192,6 +241,9 @@
     text-align: center;
   }
   .galaxy-desc .arrow { color: var(--accent-hover); margin: 2px 0; }
+  /* Hide the down-arrow in the 4-box video-mode description (the
+     stacked 4-line label reads cleaner without it). */
+  body.mode-side-by-side.video-mode .galaxy-desc .arrow { display: none; }
   .galaxy-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -232,6 +284,16 @@
     border-color: rgb(var(--v11s-rgb));
     box-shadow: 0 0 12px rgba(var(--v11s-rgb), 0.35);
   }
+  body.mode-side-by-side.video-mode .chip[data-id="2"].active {
+    background: linear-gradient(135deg, rgba(var(--v8l640-rgb), 0.55), rgba(var(--v8l640-rgb), 0.30));
+    border-color: rgb(var(--v8l640-rgb));
+    box-shadow: 0 0 12px rgba(var(--v8l640-rgb), 0.35);
+  }
+  body.mode-side-by-side.video-mode .chip[data-id="3"].active {
+    background: linear-gradient(135deg, rgba(var(--v11l640-rgb), 0.55), rgba(var(--v11l640-rgb), 0.30));
+    border-color: rgb(var(--v11l640-rgb));
+    box-shadow: 0 0 12px rgba(var(--v11l640-rgb), 0.35);
+  }
   .galaxy-tiles {
     margin-top: 10px;
     text-align: center;
@@ -246,7 +308,7 @@
   }
   .fps-row .fps-lbl { text-align: right; color: var(--text-dim); font-weight: 600; }
   .fps-row .fps-val { text-align: left; }
-  #fpsCap, #aggFpsCap, #fpsCap_v8s, #fpsCap_v11s {
+  #fpsCap, #aggFpsCap, #fpsCap_v8s, #fpsCap_v11s, #fpsCap_v8l_640, #fpsCap_v11l_640 {
     margin-top: 6px;
     font: 600 20px ui-monospace, SFMono-Regular, Menlo, monospace;
     letter-spacing: 0.3px;
@@ -259,10 +321,18 @@
   body.mode-side-by-side #fpsCap,
   body.mode-side-by-side #aggFpsCap { display: none; }
   body.mode-large-model #fpsCap_v8s,
-  body.mode-large-model #fpsCap_v11s { display: none; }
+  body.mode-large-model #fpsCap_v11s,
+  body.mode-large-model #fpsCap_v8l_640,
+  body.mode-large-model #fpsCap_v11l_640 { display: none; }
+  /* The 640x640 large-variant FPS rows only show in video-mode side-by-side. */
+  body:not(.video-mode) #fpsCap_v8l_640,
+  body:not(.video-mode) #fpsCap_v11l_640 { display: none; }
   #fpsCap_v8s  .fps-val { color: rgb(var(--v8s-rgb)); }
   #fpsCap_v11s .fps-val { color: rgb(var(--v11s-rgb)); }
-  #fpsCap_v8s  .fps-lbl, #fpsCap_v11s .fps-lbl { font-size: 16px; }
+  #fpsCap_v8l_640  .fps-val { color: rgb(var(--v8l640-rgb)); }
+  #fpsCap_v11l_640 .fps-val { color: rgb(var(--v11l640-rgb)); }
+  #fpsCap_v8s  .fps-lbl, #fpsCap_v11s .fps-lbl,
+  #fpsCap_v8l_640 .fps-lbl, #fpsCap_v11l_640 .fps-lbl { font-size: 16px; }
   .switch-overlay {
     position: fixed; inset: 0;
     background: rgba(10, 6, 18, 0.78);
@@ -291,7 +361,7 @@
   }
   .err-toast.show { display: block; }
 
-  /* Slice overlay — only meaningful in large-model mode (the 2×2 SAHI grid).
+  /* Slice overlay — only meaningful in large-model mode (the 2×2 tile grid).
      Each box covers one tile-quadrant of the visible camera area; chip label
      centered. The 4 boxes form an exact 2×2 because the 1280×1280 model
      square + center letterbox puts the tile seam at 50/50 of the visible
@@ -358,7 +428,7 @@
       <img src="assets/tt_logo.png" alt="Tenstorrent" />
     </div>
     <div class="center-stack">
-      <div class="title">Yolo Live Camera Demo - BH QB2</div>
+      <div class="title">Yolo Demo - BH QB2</div>
       <div class="toggle-pill" id="toggle" role="tablist" aria-label="Mode">
         <span class="indicator" id="ind"></span>
         <button class="seg active" data-id="side-by-side" role="tab" aria-selected="true">
@@ -374,19 +444,31 @@
   <main>
     <section class="video-grid" id="videoGrid">
       <div class="video-card v8s" id="card_v8s">
-        <div class="card-label v8s">YOLOv8s · chip 0</div>
+        <div class="card-label v8s">YOLOv8s · chip 1</div>
         <div class="card-fps" id="fps_v8s_card">—.— FPS</div>
         <video id="cam_v8s" autoplay muted playsinline></video>
         <canvas id="overlay_v8s"></canvas>
       </div>
       <div class="video-card v11s" id="card_v11s">
-        <div class="card-label v11s">YOLOv11s · chip 1</div>
+        <div class="card-label v11s">YOLOv11s · chip 2</div>
         <div class="card-fps" id="fps_v11s_card">—.— FPS</div>
         <video id="cam_v11s" autoplay muted playsinline></video>
         <canvas id="overlay_v11s"></canvas>
       </div>
+      <div class="video-card v8l_640" id="card_v8l_640">
+        <div class="card-label v8l_640">YOLOv8L · chip 3</div>
+        <div class="card-fps" id="fps_v8l_640_card">—.— FPS</div>
+        <video id="cam_v8l_640" autoplay muted playsinline></video>
+        <canvas id="overlay_v8l_640"></canvas>
+      </div>
+      <div class="video-card v11l_640" id="card_v11l_640">
+        <div class="card-label v11l_640">YOLOv11L · chip 4</div>
+        <div class="card-fps" id="fps_v11l_640_card">—.— FPS</div>
+        <video id="cam_v11l_640" autoplay muted playsinline></video>
+        <canvas id="overlay_v11l_640"></canvas>
+      </div>
       <div class="video-card v8l" id="card_v8l">
-        <div class="card-label v8l">YOLOv8L SAHI · chips 0–3</div>
+        <div class="card-label v8l">YOLOv8L · chips 1–4</div>
         <div class="card-fps" id="fps_v8l_card">—.— FPS</div>
         <video id="cam_v8l" autoplay muted playsinline></video>
         <canvas id="overlay_v8l"></canvas>
@@ -402,10 +484,10 @@
           <span id="g_model">running YOLOv8s (640×640) and YOLOv11s (640×640) on 2 Chips</span>
         </div>
         <div class="galaxy-grid" id="galaxyGrid">
-          <div class="chip" data-id="0">CHIP 0</div>
-          <div class="chip" data-id="1">CHIP 1</div>
-          <div class="chip" data-id="2">CHIP 2</div>
-          <div class="chip" data-id="3">CHIP 3</div>
+          <div class="chip" data-id="0">CHIP 1</div>
+          <div class="chip" data-id="1">CHIP 2</div>
+          <div class="chip" data-id="2">CHIP 3</div>
+          <div class="chip" data-id="3">CHIP 4</div>
         </div>
         <div class="galaxy-tiles" id="galaxyTiles">2 of 4 chips active</div>
         <div class="fps-row" id="fpsCap_v8s">
@@ -413,6 +495,12 @@
         </div>
         <div class="fps-row" id="fpsCap_v11s">
           <span class="fps-lbl">YOLOv11s E2E:</span><span class="fps-val">—.—</span>
+        </div>
+        <div class="fps-row" id="fpsCap_v8l_640">
+          <span class="fps-lbl">YOLOv8L E2E:</span><span class="fps-val">—.—</span>
+        </div>
+        <div class="fps-row" id="fpsCap_v11l_640">
+          <span class="fps-lbl">YOLOv11L E2E:</span><span class="fps-val">—.—</span>
         </div>
         <div class="fps-row" id="fpsCap">
           <span class="fps-lbl">E2E FPS:</span><span class="fps-val">—.—</span>
@@ -434,7 +522,11 @@
 <script>
 "use strict";
 
-const SRC_W = 1920, SRC_H = 1080;
+/* Source dimensions used to project model-space (letterboxed) detections
+   onto the visible <video> element. Webcam mode = 1920×1080; video-file
+   mode = 640×640 (matches the per-stream input clips). Set after /api/config
+   resolves; the bbox math uses these values verbatim. */
+let SRC_W = 1920, SRC_H = 1080;
 const COCO_NAMES = [
   "person","bicycle","car","motorbike","aeroplane","bus","train","truck","boat","traffic light",
   "fire hydrant","stop sign","parking meter","bench","bird","cat","dog","horse","sheep","cow",
@@ -448,20 +540,26 @@ const COCO_NAMES = [
 
 /* DOM */
 const cams = {
-  v8s:  document.getElementById("cam_v8s"),
-  v11s: document.getElementById("cam_v11s"),
-  v8l:  document.getElementById("cam_v8l"),
+  v8s:       document.getElementById("cam_v8s"),
+  v11s:      document.getElementById("cam_v11s"),
+  v8l_640:   document.getElementById("cam_v8l_640"),
+  v11l_640:  document.getElementById("cam_v11l_640"),
+  v8l:       document.getElementById("cam_v8l"),
 };
 const overlays = {
-  v8s:  document.getElementById("overlay_v8s"),
-  v11s: document.getElementById("overlay_v11s"),
-  v8l:  document.getElementById("overlay_v8l"),
+  v8s:       document.getElementById("overlay_v8s"),
+  v11s:      document.getElementById("overlay_v11s"),
+  v8l_640:   document.getElementById("overlay_v8l_640"),
+  v11l_640:  document.getElementById("overlay_v11l_640"),
+  v8l:       document.getElementById("overlay_v8l"),
 };
 const ctxs = Object.fromEntries(Object.entries(overlays).map(([k, c]) => [k, c.getContext("2d")]));
 const fpsCards = {
-  v8s:  document.getElementById("fps_v8s_card"),
-  v11s: document.getElementById("fps_v11s_card"),
-  v8l:  document.getElementById("fps_v8l_card"),
+  v8s:       document.getElementById("fps_v8s_card"),
+  v11s:      document.getElementById("fps_v11s_card"),
+  v8l_640:   document.getElementById("fps_v8l_640_card"),
+  v11l_640:  document.getElementById("fps_v11l_640_card"),
+  v8l:       document.getElementById("fps_v8l_card"),
 };
 const switchEl  = document.getElementById("switching");
 const switchMsg = document.getElementById("switchMsg");
@@ -476,17 +574,97 @@ const chips = [...document.querySelectorAll(".chip")];
 let pc = null, dch = null, camStream = null;
 let currentMode = "side-by-side";
 let inputResByMode = { "side-by-side": 640, "large-model": 1216 };
-const COLOR = { v8s: "90,242,163", v11s: "92,184,255", v8l: "124,92,255" };
-let latest = { v8s: null, v11s: null, v8l: null };
+let appConfig = { video_mode: false, video_urls: {} };
+const COLOR = {
+  v8s: "90,242,163",
+  v11s: "92,184,255",
+  v8l: "124,92,255",
+  v8l_640: "255,176,90",
+  v11l_640: "255,110,199",
+};
+let latest = { v8s: null, v11s: null, v8l: null, v8l_640: null, v11l_640: null };
+
+/* Per-model dets index keyed by src_frame_id. Browser plays the video on
+   its own clock; the supervisor's video reader plays the same file on a
+   separate clock. Without sync, boxes lag pixels by however far the two
+   readers have drifted apart (potentially a full loop). Solution: keep
+   dets indexed by source frame id, then on each draw look up the entry
+   matching the browser's playhead (`floor(currentTime * src_fps) mod
+   src_n_frames`). Once the supervisor has cycled through the loop once,
+   every frame has a dets entry, so lookup is an exact match.
+   During bootstrap (before a full cycle), `pickDets` returns null when
+   no nearby entry exists — we'd rather show no boxes than wrong boxes. */
+const detsBuf = {
+  v8s: new Map(),
+  v11s: new Map(),
+  v8l: new Map(),
+  v8l_640: new Map(),
+  v11l_640: new Map(),
+};
+// Most recent metadata per model — needed for the playhead lookup even
+// when the buffer has no exact match yet.
+const detsMeta = {
+  v8s: null, v11s: null, v8l: null, v8l_640: null, v11l_640: null,
+};
+// Frames within ±this distance of the playhead are accepted. ~5 frames
+// at 30 fps = 166ms tolerance — wide enough to mask minor jitter, narrow
+// enough that we don't overlay obviously-wrong boxes.
+const DETS_TOL = 5;
+
+function pushDets(which, payload) {
+  const buf = detsBuf[which];
+  if (payload.src_frame_id == null) {
+    // No sync info (webcam mode); store under a sentinel key. Lookup
+    // falls back to "latest wins".
+    buf.set(-1, payload);
+    return;
+  }
+  buf.set(payload.src_frame_id, payload);
+  if (payload.src_n_frames && payload.src_fps) {
+    detsMeta[which] = { n: payload.src_n_frames, fps: payload.src_fps };
+  }
+}
+
+function pickDets(which) {
+  const buf = detsBuf[which];
+  if (!buf.size) return null;
+  const meta = detsMeta[which];
+  const v = cams[which];
+  // No sync info or no <video> playhead → "latest wins".
+  if (!meta || !v || !v.duration || isNaN(v.duration) || v.duration <= 0) {
+    let last = null;
+    for (const e of buf.values()) last = e;
+    return last;
+  }
+  const N = meta.n, fps = meta.fps;
+  const target = Math.floor(v.currentTime * fps) % N;
+  // Exact match — fast path; this is the steady-state once the
+  // supervisor has cycled through the loop.
+  if (buf.has(target)) return buf.get(target);
+  // Search ±DETS_TOL frames for a near match (covers the bootstrap
+  // window where some frames haven't been inferred yet, and also
+  // small-skew jitter in the browser's playhead).
+  for (let d = 1; d <= DETS_TOL; d++) {
+    const before = ((target - d) % N + N) % N;
+    if (buf.has(before)) return buf.get(before);
+    const after = (target + d) % N;
+    if (buf.has(after)) return buf.get(after);
+  }
+  // No nearby entry — show nothing rather than wrong boxes. Boxes will
+  // start appearing as the supervisor's reader fills in the buffer.
+  return null;
+}
 let sliceOverlayOn = false;
 /* FPS bookkeeping — server-reported per-model FPS arrives in every dets
    payload; we just stash the latest and recompute E2E + Aggr each tick.
    Stale-detection: if dets stop flowing for >2 s, blank the readout. */
 let _detsLastT = 0;
-const _e2eFpsEl     = document.querySelector("#fpsCap .fps-val");
-const _aggFpsEl     = document.querySelector("#aggFpsCap .fps-val");
-const _e2eV8sEl     = document.querySelector("#fpsCap_v8s .fps-val");
-const _e2eV11sEl    = document.querySelector("#fpsCap_v11s .fps-val");
+const _e2eFpsEl       = document.querySelector("#fpsCap .fps-val");
+const _aggFpsEl       = document.querySelector("#aggFpsCap .fps-val");
+const _e2eV8sEl       = document.querySelector("#fpsCap_v8s .fps-val");
+const _e2eV11sEl      = document.querySelector("#fpsCap_v11s .fps-val");
+const _e2eV8l640El    = document.querySelector("#fpsCap_v8l_640 .fps-val");
+const _e2eV11l640El   = document.querySelector("#fpsCap_v11l_640 .fps-val");
 
 /* UI helpers */
 function showSwitch(msg) { switchMsg.textContent = msg; switchEl.classList.add("show"); }
@@ -521,21 +699,42 @@ function setBodyMode(mode) {
 }
 function updateModeUI(mode) {
   setBodyMode(mode);
-  if (mode === "side-by-side") {
-    g_model.textContent = "running YOLOv8s (640×640) and YOLOv11s (640×640) on 2 Chips";
-    updateChips([0, 1]);
-  } else if (mode === "large-model") {
-    g_model.textContent = "running YOLOv8L (Resolution 640×640) on 4 Chips";
+  const inputLabel = document.getElementById("g_input");
+  if (mode === "side-by-side" && appConfig.video_mode) {
+    // 4-box video-mode: stacked 4-line description, no arrow.
+    if (inputLabel) inputLabel.textContent = "4 Parallel Inputs (1280×1280 resolution),";
+    g_model.innerHTML =
+      "running 4 different models,<br>" +
+      "YOLOv8s, YOLOv11s, YOLOv8L, YOLOv11L (640×640 resolution),<br>" +
+      "on 4 chips";
     updateChips([0, 1, 2, 3]);
-    if (sliceOverlayOn) rebuildSliceOverlay();
+  } else {
+    if (inputLabel) {
+      inputLabel.textContent = appConfig.video_mode
+        ? "Looping video streams (640×640)"
+        : "FHD Live Camera (Resolution 1920×1080)";
+    }
+    if (mode === "side-by-side") {
+      g_model.textContent =
+        "running YOLOv8s (640×640) and YOLOv11s (640×640) on 2 Chips";
+      updateChips([0, 1]);
+    } else if (mode === "large-model") {
+      g_model.textContent = "running YOLOv8L (Resolution 640×640) on 4 Chips";
+      updateChips([0, 1, 2, 3]);
+      if (sliceOverlayOn) rebuildSliceOverlay();
+    }
   }
 }
 
-/* Letterbox math: model coords → source coords */
-function unletterbox(x, y, modelRes) {
-  const gain = modelRes / Math.max(SRC_W, SRC_H);
-  const padX = (modelRes - SRC_W * gain) / 2;
-  const padY = (modelRes - SRC_H * gain) / 2;
+/* Letterbox math: model coords → source coords. Per-card srcW/srcH lets
+   each panel use its own native video dimensions (the 4-box video-mode
+   uses 1280×720 cropped sources; the large-model panel uses 1280×1280
+   raw). Falls back to the globals when the <video> hasn't loaded. */
+function unletterbox(x, y, modelRes, srcW, srcH) {
+  const w = srcW || SRC_W, h = srcH || SRC_H;
+  const gain = modelRes / Math.max(w, h);
+  const padX = (modelRes - w * gain) / 2;
+  const padY = (modelRes - h * gain) / 2;
   return [(x - padX) / gain, (y - padY) / gain];
 }
 
@@ -553,7 +752,7 @@ function resizeCanvas(which) {
   return true;
 }
 function resizeAllCanvases() {
-  ["v8s", "v11s", "v8l"].forEach(resizeCanvas);
+  ["v8s", "v11s", "v8l", "v8l_640", "v11l_640"].forEach(resizeCanvas);
 }
 window.addEventListener("resize", () => { resizeAllCanvases(); setActiveSeg(currentMode); });
 
@@ -564,7 +763,12 @@ function paintOne(which, dets, modelRes) {
   const cssH = parseFloat(c.style.height) || 0;
   ctx.clearRect(0, 0, cssW, cssH);
   if (!cssW || !cssH || !dets || !dets.length) return;
-  const sx = cssW / SRC_W, sy = cssH / SRC_H;
+  // Per-card native video dims so each panel projects independently
+  // (large-model is 1280×1280, side-by-side panels are 1280×720).
+  const v = cams[which];
+  const srcW = (v && v.videoWidth)  || SRC_W;
+  const srcH = (v && v.videoHeight) || SRC_H;
+  const sx = cssW / srcW, sy = cssH / srcH;
   const rgb = COLOR[which];
   ctx.strokeStyle = `rgb(${rgb})`;
   ctx.lineWidth = 2;
@@ -572,8 +776,8 @@ function paintOne(which, dets, modelRes) {
   ctx.textBaseline = "bottom";
   for (const d of dets) {
     const [x1m, y1m, x2m, y2m, score, cls] = d;
-    const [x1, y1] = unletterbox(x1m, y1m, modelRes);
-    const [x2, y2] = unletterbox(x2m, y2m, modelRes);
+    const [x1, y1] = unletterbox(x1m, y1m, modelRes, srcW, srcH);
+    const [x2, y2] = unletterbox(x2m, y2m, modelRes, srcW, srcH);
     const X1 = x1 * sx, Y1 = y1 * sy, X2 = x2 * sx, Y2 = y2 * sy;
     const W = X2 - X1, H = Y2 - Y1;
     if (W <= 1 || H <= 1) continue;
@@ -591,11 +795,24 @@ function paintOne(which, dets, modelRes) {
 function drawLoop() {
   resizeAllCanvases();
   const res = inputResByMode[currentMode] || 640;
+  // Use pickDets() in video_mode (per-frame sync via src_frame_id) and
+  // fall back to most-recent via `latest.*` in webcam mode (no sync info).
+  const picker = (which) => {
+    if (appConfig.video_mode) {
+      const e = pickDets(which);
+      return e ? e.dets : null;
+    }
+    return latest[which] ? latest[which].dets : null;
+  };
   if (currentMode === "side-by-side") {
-    paintOne("v8s",  latest.v8s  ? latest.v8s.dets  : null, res);
-    paintOne("v11s", latest.v11s ? latest.v11s.dets : null, res);
+    paintOne("v8s",  picker("v8s"),  res);
+    paintOne("v11s", picker("v11s"), res);
+    if (appConfig.video_mode) {
+      paintOne("v8l_640",  picker("v8l_640"),  res);
+      paintOne("v11l_640", picker("v11l_640"), res);
+    }
   } else if (currentMode === "large-model") {
-    paintOne("v8l", latest.v8l ? latest.v8l.dets : null, res);
+    paintOne("v8l", picker("v8l"), res);
   }
   updateFpsCaps();
   requestAnimationFrame(drawLoop);
@@ -625,12 +842,92 @@ function updateFpsCaps() {
     const live11 = !stalled && f11s > 0.5;
     if (_e2eV8sEl)  _e2eV8sEl.textContent  = live8  ? f8s.toFixed(1)  : "—.—";
     if (_e2eV11sEl) _e2eV11sEl.textContent = live11 ? f11s.toFixed(1) : "—.—";
+    if (appConfig.video_mode) {
+      const f8l_640  = latest.v8l_640  ? +(latest.v8l_640.fps  || 0) : 0;
+      const f11l_640 = latest.v11l_640 ? +(latest.v11l_640.fps || 0) : 0;
+      const live8l_640  = !stalled && f8l_640  > 0.5;
+      const live11l_640 = !stalled && f11l_640 > 0.5;
+      if (_e2eV8l640El)  _e2eV8l640El.textContent  = live8l_640  ? f8l_640.toFixed(1)  : "—.—";
+      if (_e2eV11l640El) _e2eV11l640El.textContent = live11l_640 ? f11l_640.toFixed(1) : "—.—";
+    }
   } else if (currentMode === "large-model") {
     const f = latest.v8l ? +(latest.v8l.fps || 0) : 0;
     const live = !stalled && f > 0.5;
     if (_e2eFpsEl) _e2eFpsEl.textContent = live ? f.toFixed(1)         : "—.—";
     if (_aggFpsEl) _aggFpsEl.textContent = live ? (f * 4).toFixed(1)   : "—.—";
   }
+}
+
+/* Hook the dets DataChannel up to the painter — same handler for both
+   webcam and video-file modes, since the supervisor sends identical
+   payloads either way. */
+function _wireDetsChannel(channel) {
+  channel.onmessage = (ev) => {
+    let payload;
+    try { payload = JSON.parse(typeof ev.data === "string" ? ev.data : new TextDecoder().decode(ev.data)); }
+    catch (_) { return; }
+    if (!payload || payload.k !== "dets") return;
+    if (payload.input_res && payload.mode) inputResByMode[payload.mode] = payload.input_res;
+    if (payload.v8s)      { latest.v8s      = payload.v8s;      pushDets("v8s",      payload.v8s);      fpsCards.v8s.textContent      = `${(payload.v8s.fps      ?? 0).toFixed(1)} FPS`; }
+    if (payload.v11s)     { latest.v11s     = payload.v11s;     pushDets("v11s",     payload.v11s);     fpsCards.v11s.textContent     = `${(payload.v11s.fps     ?? 0).toFixed(1)} FPS`; }
+    if (payload.v8l)      { latest.v8l      = payload.v8l;      pushDets("v8l",      payload.v8l);      fpsCards.v8l.textContent      = `${(payload.v8l.fps      ?? 0).toFixed(1)} FPS`; }
+    if (payload.v8l_640)  { latest.v8l_640  = payload.v8l_640;  pushDets("v8l_640",  payload.v8l_640);  fpsCards.v8l_640.textContent  = `${(payload.v8l_640.fps  ?? 0).toFixed(1)} FPS`; }
+    if (payload.v11l_640) { latest.v11l_640 = payload.v11l_640; pushDets("v11l_640", payload.v11l_640); fpsCards.v11l_640.textContent = `${(payload.v11l_640.fps ?? 0).toFixed(1)} FPS`; }
+    _detsLastT = performance.now();
+  };
+}
+
+/* Video-mode setup: each <video> plays its own source file natively (no
+   WebRTC video upstream). We still open a peer connection with a dets
+   DataChannel so the supervisor can push detections back. SDP offer has
+   no media tracks — recvonly DC. */
+async function startVideoMode() {
+  showSwitch("Loading video sources…");
+  const urls = appConfig.video_urls || {};
+  const map = {
+    v8s: urls.v8s,
+    v11s: urls.v11s,
+    v8l_640: urls.v8l_640,
+    v11l_640: urls.v11l_640,
+    v8l: urls.v8l,
+  };
+  await Promise.all(Object.entries(cams).map(([k, v]) => {
+    const url = map[k];
+    if (!url) return Promise.resolve();
+    v.loop = true;
+    v.src = url;
+    return new Promise(res => {
+      if (v.readyState >= 1) return res();
+      v.onloadedmetadata = () => res();
+    });
+  }));
+  // Best-effort autoplay (autoplay+muted+playsinline already on the element).
+  Object.values(cams).forEach(v => { v.play().catch(() => {}); });
+  resizeAllCanvases();
+
+  showSwitch("Opening detection channel…");
+  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  dch = pc.createDataChannel("dets", { ordered: true });
+  _wireDetsChannel(dch);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  if (pc.iceGatheringState !== "complete") {
+    await new Promise(resolve => {
+      const done = () => { pc.removeEventListener("icegatheringstatechange", check); clearTimeout(t); resolve(); };
+      const check = () => { if (pc.iceGatheringState === "complete") done(); };
+      pc.addEventListener("icegatheringstatechange", check);
+      const t = setTimeout(done, 5000);
+    });
+  }
+  const r = await fetch("/offer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+  });
+  if (!r.ok) { hideSwitch(); toast("WebRTC offer failed: " + r.status); return; }
+  const ans = await r.json();
+  await pc.setRemoteDescription(ans);
+  hideSwitch();
 }
 
 /* WebRTC: send camera, receive dets via DataChannel */
@@ -665,17 +962,7 @@ async function startWebRTC() {
   showSwitch("Connecting WebRTC…");
   pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
   dch = pc.createDataChannel("dets", { ordered: true });
-  dch.onmessage = (ev) => {
-    let payload;
-    try { payload = JSON.parse(typeof ev.data === "string" ? ev.data : new TextDecoder().decode(ev.data)); }
-    catch (_) { return; }
-    if (!payload || payload.k !== "dets") return;
-    if (payload.input_res && payload.mode) inputResByMode[payload.mode] = payload.input_res;
-    if (payload.v8s)  { latest.v8s  = payload.v8s;  fpsCards.v8s.textContent  = `${(payload.v8s.fps  ?? 0).toFixed(1)} FPS`; }
-    if (payload.v11s) { latest.v11s = payload.v11s; fpsCards.v11s.textContent = `${(payload.v11s.fps ?? 0).toFixed(1)} FPS`; }
-    if (payload.v8l)  { latest.v8l  = payload.v8l;  fpsCards.v8l.textContent  = `${(payload.v8l.fps  ?? 0).toFixed(1)} FPS`; }
-    _detsLastT = performance.now();
-  };
+  _wireDetsChannel(dch);
   stream.getVideoTracks().forEach(t => pc.addTrack(t, stream));
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
@@ -705,12 +992,28 @@ async function selectMode(mode, opts={}) {
   // Clear stale dets from the model that's about to be hidden, so old boxes
   // don't bleed onto the new layout for a frame. Also blank the FPS rows so
   // we don't flash the prior mode's values during the spawn warmup.
-  if (mode === "side-by-side") latest.v8l = null;
-  else { latest.v8s = null; latest.v11s = null; }
+  if (mode === "side-by-side") {
+    latest.v8l = null;
+    detsBuf.v8l.clear();
+    detsMeta.v8l = null;
+  } else {
+    latest.v8s = null;
+    latest.v11s = null;
+    latest.v8l_640 = null;
+    latest.v11l_640 = null;
+    detsBuf.v8s.clear();
+    detsBuf.v11s.clear();
+    detsBuf.v8l_640.clear();
+    detsBuf.v11l_640.clear();
+    detsMeta.v8s = null;
+    detsMeta.v11s = null;
+    detsMeta.v8l_640 = null;
+    detsMeta.v11l_640 = null;
+  }
   _detsLastT = 0;
   showSwitch(mode === "side-by-side"
     ? "Loading YOLOv8s + YOLOv11s…"
-    : "Loading YOLOv8L SAHI (4 chips)…");
+    : "Loading YOLOv8L (4 chips)…");
   try {
     const r = await fetch("/api/mode", {
       method: "POST",
@@ -737,7 +1040,7 @@ async function selectMode(mode, opts={}) {
 segs.forEach(s => s.addEventListener("click", () => selectMode(s.dataset.id)));
 
 /* Slice overlay (large-model only): 2×2 grid representing the four 640×640
-   SAHI tiles served by chips 0–3. The seam is at exact 50/50 of the visible
+   tiles served by chips 0–3. The seam is at exact 50/50 of the visible
    camera area because the model is square (1280×1280) with center letterbox
    when the source is wider than tall (1920×1080), so each tile's visible
    half projects to one quadrant. Off-screen halves (in the letterbox grey)
@@ -794,10 +1097,28 @@ async function pollStatus() {
 
 /* Boot */
 (async () => {
+  // Fetch supervisor config first — drives whether we wire up webcam ingress
+  // or per-card video files. SRC_W/SRC_H gates the unletterbox math.
+  try {
+    const r = await fetch("/api/config");
+    if (r.ok) appConfig = await r.json();
+  } catch (_) {}
+  if (appConfig.video_mode) {
+    // Source mp4s are 1280×720 (16:9). The supervisor letterboxes that
+    // into a 640×640 frame for the model. unletterbox()'s gain/pad math
+    // takes SRC_W/SRC_H here as the full source dims, then maps model
+    // coords into source-pixel space; canvas paint scales source→css.
+    SRC_W = 1280; SRC_H = 720;
+    document.body.classList.add("video-mode");
+  }
   setActiveSeg(currentMode);
   updateModeUI(currentMode);
   drawLoop();
-  await startWebRTC();
+  if (appConfig.video_mode) {
+    await startVideoMode();
+  } else {
+    await startWebRTC();
+  }
   await selectMode(currentMode, { force: true });
   pollStatus();
 })();

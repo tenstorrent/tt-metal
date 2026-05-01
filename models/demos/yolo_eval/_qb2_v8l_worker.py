@@ -221,6 +221,27 @@ def main() -> int:
     EMA_ALPHA = 0.15
     first = True
 
+    def _read_frame_meta(jpeg_path: str) -> dict:
+        """Read the supervisor's <jpeg>.meta sidecar so dets can be tagged
+        with the source-video frame id; used by the browser to align
+        overlays to its <video> playhead. See unified_video_demo.py for
+        the format."""
+        try:
+            with open(jpeg_path + ".meta") as f:
+                lines = f.read().strip().splitlines()
+        except (FileNotFoundError, OSError):
+            return {}
+        if len(lines) < 3:
+            return {}
+        try:
+            return {
+                "src_frame_id": int(lines[0]),
+                "src_n_frames": int(lines[1]),
+                "src_fps": float(lines[2]),
+            }
+        except ValueError:
+            return {}
+
     try:
         while not stop:
             got = _read_frame_file(args.frame_input_file, last_mtime)
@@ -228,6 +249,7 @@ def main() -> int:
                 print(f"{TAG} frame source idle — exiting.", flush=True)
                 break
             bgr, last_mtime = got
+            frame_meta = _read_frame_meta(args.frame_input_file)
 
             # The supervisor letterboxes to exactly 1280x1280; a guard helps on
             # the (rare) first frame where the file is the wrong size.
@@ -321,6 +343,7 @@ def main() -> int:
                     "input_res": _LETTERBOX_RES,
                     "fps": round(ema_fps, 1),
                     "dets": dets,
+                    **frame_meta,
                 },
             )
             frame_id += 1

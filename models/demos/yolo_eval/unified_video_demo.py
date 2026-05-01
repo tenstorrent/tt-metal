@@ -70,6 +70,9 @@ _EMA_ALPHA = 0.15
 
 _CONF_FLOOR = {
     "yolov8l": 0.50,
+    # yolov8l_640 is the same model at native 640x640 — bfloat8 sigmoid floor
+    # behaviour is identical, so apply the same floor.
+    "yolov8l_640": 0.50,
 }
 
 
@@ -106,8 +109,9 @@ def parse_args() -> argparse.Namespace:
         "--model",
         type=str,
         default="yolov8s",
-        choices=["yolov8s", "yolov11s", "yolov8l"],
-        help="Which model to run in single-model mode (default: yolov8s). " "yolov8l runs natively at 1280x1280.",
+        choices=["yolov8s", "yolov11s", "yolov8l", "yolov8l_640", "yolov11l"],
+        help="Which model to run in single-model mode (default: yolov8s). "
+        "yolov8l runs natively at 1280x1280; yolov8l_640 / yolov11l run at 640x640.",
     )
     p.add_argument(
         "--unified", action="store_true", help="Unified demo: side-by-side + large-model mode toggle via browser UI."
@@ -414,12 +418,24 @@ def _build_model(model: str, device):
         print("[init] Building YOLOv11sPerformantRunner...", flush=True)
         runner = YOLOv11sPerformantRunner(device)
         return "YOLOv11s", runner
+    elif model == "yolov11l":
+        from models.demos.yolov11l.runner.performant_runner import YOLOv11PerformantRunner
+
+        print("[init] Building YOLOv11PerformantRunner (640x640)...", flush=True)
+        runner = YOLOv11PerformantRunner(device, device_batch_size=1, resolution=(640, 640))
+        return "YOLOv11L", runner
     elif model == "yolov8l":
         from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
 
         print("[init] Building YOLOv8lPerformantRunner (1280x1280)...", flush=True)
         runner = YOLOv8lPerformantRunner(device, device_batch_size=1, inp_h=1280, inp_w=1280)
         return "YOLOv8L", runner
+    elif model == "yolov8l_640":
+        from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
+
+        print("[init] Building YOLOv8lPerformantRunner (640x640)...", flush=True)
+        runner = YOLOv8lPerformantRunner(device, device_batch_size=1, inp_h=640, inp_w=640)
+        return "YOLOv8L-640", runner
     else:
         from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
 
@@ -434,12 +450,36 @@ def _device_params(model: str) -> dict:
         from models.demos.yolov11s.common import YOLOV11S_L1_SMALL_SIZE
 
         return dict(l1_small_size=YOLOV11S_L1_SMALL_SIZE, trace_region_size=6434816, num_command_queues=2)
+    elif model == "yolov11l":
+        from models.demos.yolov11l.common import yolov11_l1_small_size_for_res
+
+        # The shared yolov11_trace_region_size_e2e_for_res formula is tuned
+        # for yolov11s (6.4MB at 640×640) — yolov11l's bigger op graph trips
+        # "Creating trace buffers of size 7233536B but only 6434816B is
+        # allocated". 12MB gives plenty of headroom; tests in
+        # yolov11l/demo/demo.py use 23.8MB at 1280×1280, so 12MB at 640×640
+        # is conservative.
+        return dict(
+            l1_small_size=yolov11_l1_small_size_for_res(640, 640),
+            trace_region_size=12000000,
+            num_command_queues=2,
+        )
     elif model == "yolov8l":
         from models.demos.yolov8l.common import yolov8l_l1_small_size_for_res
 
         return dict(
             l1_small_size=yolov8l_l1_small_size_for_res(1280, 1280),
             trace_region_size=35000000,
+            num_command_queues=2,
+        )
+    elif model == "yolov8l_640":
+        from models.demos.yolov8l.common import yolov8l_l1_small_size_for_res
+
+        # 640x640 is 1/4 the activation footprint of 1280x1280, so the trace
+        # region scales down accordingly. 8.75M is 35M/4 rounded conservatively.
+        return dict(
+            l1_small_size=yolov8l_l1_small_size_for_res(640, 640),
+            trace_region_size=8750000,
             num_command_queues=2,
         )
     else:
@@ -524,6 +564,34 @@ def _read_frame_file(path: str, last_mtime: float, timeout_s: float = 600.0) -> 
     return None
 
 
+def _read_frame_meta(jpeg_path: str) -> dict:
+    """Read the supervisor's ``<jpeg>.meta`` sidecar, if any.
+
+    The supervisor publishes the source frame index alongside each JPEG so
+    the worker can tag its dets with the source-video frame id (mod
+    n_frames). The browser uses that id to align dets to its <video>
+    element's currentTime. Returns an empty dict when the sidecar is
+    missing or malformed (the dets simply omit the sync fields, and the
+    browser falls back to "latest wins").
+    """
+    meta_path = jpeg_path + ".meta"
+    try:
+        with open(meta_path) as f:
+            lines = f.read().strip().splitlines()
+    except (FileNotFoundError, OSError):
+        return {}
+    if len(lines) < 3:
+        return {}
+    try:
+        return {
+            "src_frame_id": int(lines[0]),
+            "src_n_frames": int(lines[1]),
+            "src_fps": float(lines[2]),
+        }
+    except ValueError:
+        return {}
+
+
 def _write_dets(path: str, payload: dict) -> None:
     """Atomic single-line JSON write — parent overwrites on each tick."""
     import json
@@ -603,7 +671,9 @@ def _run_single(args):
                     print(f"[{model_name}] frame source idle — exiting.", flush=True)
                     break
                 bgr, last_mtime = got
+                frame_meta = _read_frame_meta(args.frame_input_file)
             else:
+                frame_meta = {}
                 bgr = _read_frame(static_frame, cap, args)
                 if bgr is None:
                     break
@@ -628,7 +698,7 @@ def _run_single(args):
 
             t_dev = time.perf_counter()
             preds = runner.run(torch_input_tensor=inp)
-            if args.model in ("yolov11s", "yolov8l"):
+            if args.model in ("yolov11s", "yolov11l", "yolov8l", "yolov8l_640"):
                 ttnn.synchronize_device(device)
             dt_dev = time.perf_counter() - t_dev
 
@@ -654,6 +724,11 @@ def _run_single(args):
                         "input_res": input_res[0],
                         "fps": round(ema_dev_fps, 1),
                         "dets": dets.tolist() if dets.numel() else [],
+                        # Pass through the supervisor's source-video frame
+                        # id (when present) so the browser can align dets
+                        # to its <video> playhead instead of overlaying
+                        # whatever just finished inferring.
+                        **frame_meta,
                     },
                 )
             else:
