@@ -305,10 +305,15 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     const uint32_t dst_aligned_page_size = dst_buffer->aligned_page_size();
 
     // DFBs
+    // NOTE: With Quasar's implicit-sync DFB scheduling, the runtime allocates 2 transaction
+    // IDs per side and asserts `capacity % num_txn_ids == 0`. Therefore every DFB capacity
+    // must be a multiple of 2, even when only a single tile is logically needed (scaler,
+    // accumulator, intermediate-negation). On Gen1 these can stay at 1 (CB capacity), but
+    // we standardize on 2 here to keep one factory work for both arches.
     constexpr uint32_t kNumInputEntries = 2;
-    constexpr uint32_t kNumScalerEntries = 1;
+    constexpr uint32_t kNumScalerEntries = 2;
     constexpr uint32_t kNumOutputEntries = 2;
-    constexpr uint32_t kNumScratchEntries = 1;
+    constexpr uint32_t kNumScratchEntries = 2;
 
     std::vector<m2::DataflowBufferSpec> dataflow_buffers;
     dataflow_buffers.push_back(
@@ -323,6 +328,18 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
         dataflow_buffers.push_back(MakeDFB(
             INEG_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()));
     }
+
+    // #region agent log
+    {
+        std::ofstream log("/localdev/bbradel/tt-metal/.cursor/debug-43dce3.log", std::ios::app);
+        if (log.is_open()) {
+            log << R"({"sessionId":"43dce3","hypothesisId":"dfb-capacity-even","location":"reduce_op_multi_core_w_program_factory.cpp:create","message":"DFB capacities sized","data":{"input":)"
+                << kNumInputEntries << R"(,"scaler":)" << kNumScalerEntries << R"(,"output":)" << kNumOutputEntries
+                << R"(,"scratch":)" << kNumScratchEntries << R"(,"negate":)"
+                << (operation_attributes.negate ? "true" : "false") << R"(}})" << "\n";
+        }
+    }
+    // #endregion
 
     // Defines shared by all kernels
     const std::map<std::string, std::string> reduce_defines_map =
