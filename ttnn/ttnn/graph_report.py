@@ -1373,6 +1373,8 @@ def import_report(
             base_operation_id = file_index_for_rank * _OPERATION_ID_STRIDE_PER_RANK_FILE
             import_index_by_rank[rank] = file_index_for_rank + 1
 
+            report_world_size = int((report.get("metadata") or {}).get("world_size", 1))
+
             devices_data = report.get("devices", [])
             # Normalize device IDs to 0-based sequential indices so the visualizer
             # works regardless of the physical chip IDs the C++ trace emits.
@@ -1446,7 +1448,8 @@ def import_report(
 
             # Save cluster descriptor YAML if present
             if "cluster_descriptor" in report and report["cluster_descriptor"]:
-                cluster_path = output_dir / "cluster_descriptor.yaml"
+                cd_suffix = f"_{rank + 1}_of_{report_world_size}" if report_world_size > 1 else ""
+                cluster_path = output_dir / f"cluster_descriptor{cd_suffix}.yaml"
                 if not cluster_path.exists():  # Only write once
                     with open(cluster_path, "w") as f:
                         f.write(report["cluster_descriptor"])
@@ -1454,7 +1457,11 @@ def import_report(
 
             # Save mesh coordinate mapping if present (matches old save_mesh_descriptor behavior)
             if "mesh_coordinate_mapping" in report and report["mesh_coordinate_mapping"]:
-                mesh_path = output_dir / "physical_chip_mesh_coordinate_mapping_1_of_1.yaml"
+                if report_world_size > 1:
+                    mesh_name = f"physical_chip_mesh_coordinate_mapping_{rank + 1}_of_{report_world_size}.yaml"
+                else:
+                    mesh_name = "physical_chip_mesh_coordinate_mapping.yaml"
+                mesh_path = output_dir / mesh_name
                 if not mesh_path.exists():  # Only write once
                     with open(mesh_path, "w") as f:
                         f.write(report["mesh_coordinate_mapping"])
@@ -1590,9 +1597,9 @@ def import_report(
         if total_stats.get("buffer_pages", 0) > 0:
             summary.append(f"  - {total_stats['buffer_pages']} buffer pages")
         if total_stats.get("cluster_descriptor"):
-            summary.append("  - cluster_descriptor.yaml saved")
+            summary.append("  - cluster_descriptor YAML saved")
         if total_stats.get("mesh_coordinate_mapping"):
-            summary.append("  - physical_chip_mesh_coordinate_mapping_1_of_1.yaml saved")
+            summary.append("  - physical_chip_mesh_coordinate_mapping YAML saved")
         if generate_svgs:
             summary.append(f"  - {total_stats['svgs']} SVG visualizations in {graphs_dir}/")
         logger.info("\n".join(summary))

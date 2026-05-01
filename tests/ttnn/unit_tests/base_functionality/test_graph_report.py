@@ -1014,8 +1014,8 @@ class TestImportGraphUnit:
         assert "wormhole" in content
 
         # Check mesh coordinate mapping was saved
-        mesh_path = output_dir / "physical_chip_mesh_coordinate_mapping_1_of_1.yaml"
-        assert mesh_path.exists(), "physical_chip_mesh_coordinate_mapping_1_of_1.yaml should be created"
+        mesh_path = output_dir / "physical_chip_mesh_coordinate_mapping.yaml"
+        assert mesh_path.exists(), "physical_chip_mesh_coordinate_mapping.yaml should be created"
         with open(mesh_path) as f:
             content = f.read()
         assert "chips" in content

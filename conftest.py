@@ -1205,7 +1205,10 @@ def ttnn_graph_report(request):
                 world_size = int(ttnn.distributed_context_get_size())
             else:
                 rank, world_size = 0, 1
-            json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
+            if world_size > 1:
+                json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
+            else:
+                json_path = report_path / "graph_capture.json"
             ttnn.graph.end_graph_capture_to_file(str(json_path))
             if ttnn.distributed_context_is_initialized():
                 ttnn.distributed_context_barrier()
@@ -1213,12 +1216,16 @@ def ttnn_graph_report(request):
                 from ttnn.graph_report import import_report
 
                 import_report(report_path, report_path)
-                for p in sorted(report_path.glob("graph_capture_*.json")):
+                (report_path / "graph_capture.json").unlink(missing_ok=True)
+                for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
                     p.unlink(missing_ok=True)
             if ttnn.distributed_context_is_initialized():
                 ttnn.distributed_context_barrier()
 
-            config_path = report_path / "config.json"
+            if world_size > 1:
+                config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
+            else:
+                config_path = report_path / "config.json"
             ttnn.save_config_to_json_file(config_path)
 
         if enable_detailed_buffer_report:
