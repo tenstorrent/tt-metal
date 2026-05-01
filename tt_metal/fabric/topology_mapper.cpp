@@ -1721,6 +1721,25 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     // Try all possible mesh shapes
     const MeshId mesh_id{0};
     for (const auto& mesh_shape : mesh_shapes_to_try) {
+        // FIX TJ (#42429): Skip shapes that are architecturally invalid for this hardware.
+        // For WORMHOLE_B0, a mesh where both dimensions are odd but not (1,1) is rejected
+        // by MeshGraph::generate_mesh_graph_of_shape with TT_FATAL.  Pre-filter here so
+        // the topology mapper falls through to the next smaller valid shape (e.g. 2x1, 1x1)
+        // instead of crashing.  This can happen when a degraded T3K cluster (progressive
+        // SIGKILL teardown) loses enough ETH links that 2x2 and 4x1 are unmappable and
+        // only 3x1 remains — 3x1 is WH_B0-invalid.  Root cause: CI run 25205399359.
+        if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+            bool both_odd = (mesh_shape[0] % 2 != 0) && (mesh_shape[1] % 2 != 0);
+            if (both_odd && !(mesh_shape[0] == 1 && mesh_shape[1] == 1)) {
+                log_warning(
+                    tt::LogFabric,
+                    "FIX TJ (#42429): TopologyMapper: skipping shape {}x{} — invalid for WORMHOLE_B0 "
+                    "(both dimensions are odd and not 1x1). Trying smaller shapes.",
+                    mesh_shape[0],
+                    mesh_shape[1]);
+                continue;
+            }
+        }
         auto mesh_graph = MeshGraph::generate_mesh_graph_of_shape(
             mesh_shape, fabric_type, reliability_mode, cluster.arch(), number_of_connections);
         auto logical_adjacency_matrix = tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
