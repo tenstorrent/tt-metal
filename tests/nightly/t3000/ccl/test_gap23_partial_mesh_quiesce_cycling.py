@@ -48,6 +48,9 @@ def test_partial_mesh_quiesce_cycling(mesh_device):
             f"FIX AK/AM not exercised"
         )
 
+    if mesh_device.is_fabric_degraded():
+        pytest.skip("GAP-23: fabric degraded (base-UMD channels) — skipping AllGather to avoid hang")
+
     logger.info(
         f"GAP-23: {_SUBMESH_SHAPE} submesh on {total_system_devices}-device system, "
         f"{_NUM_CYCLES} quiesce cycles"
