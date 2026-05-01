@@ -18,6 +18,7 @@
 #include <experimental/host_api.hpp>
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
+#include <fstream>
 #include <memory>
 #include <sub_device_types.hpp>
 #include <tt_metal.hpp>
@@ -1241,6 +1242,16 @@ KernelHandle CreateDataMovementKernel(
         config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
         "DataMovementKernel creation failure: Data movement kernels can only be created on DM0 or DM1 processors.");
 
+    // #region agent log
+    {
+        std::ofstream agent_log("/localdev/bbradel/tt-metal/.cursor/debug-43dce3.log", std::ios::app);
+        if (agent_log.is_open()) {
+            agent_log
+                << R"({"sessionId":"43dce3","hypothesisId":"legacy-dmk-callsite","location":"tt_metal.cpp:CreateKernel","message":"Legacy DataMovementKernel creation requested","data":{"kernel_name":")"
+                << kernel_name << R"("}})" << "\n";
+        }
+    }
+    // #endregion
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
 
     // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
