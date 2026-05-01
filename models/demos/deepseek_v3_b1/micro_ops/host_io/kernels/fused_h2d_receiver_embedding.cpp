@@ -122,6 +122,9 @@ FORCE_INLINE void send_pages_over_socket(
 }
 
 void kernel_main() {
+    DPRINT << "Starting fused H2D receiver + embedding kernel\n";
+    DPRINT << "metadata_size_bytes: " << (uint32_t)metadata_size_bytes
+           << ", embedding_page_size: " << (uint32_t)embedding_page_size << ENDL();
     size_t rt_args_idx = 0;
 
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
@@ -195,7 +198,7 @@ void kernel_main() {
         if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
-        // DPRINT << "H2D Waiting For Pages Done" << ENDL();
+        DPRINT << "H2D Waiting For Pages Done" << ENDL();
         if constexpr (pull_from_host) {
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
@@ -257,6 +260,7 @@ void kernel_main() {
         // Notify Host that pages were popped from H2D socket
         socket_notify_sender(receiver_socket);
         invalidate_l1_cache();
+        DPRINT << "H2D Page transfer done for token_id=\n";
     }
 
     update_socket_config(receiver_socket);
