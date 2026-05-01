@@ -10,7 +10,9 @@ from typing import Any
 import torch
 
 
-def standardize_per_channel(history: torch.Tensor, eps: float = 1e-5) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def standardize_per_channel(
+    history: torch.Tensor, eps: float = 1e-5
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     mean = history.mean(dim=1, keepdim=True)
     std = history.std(dim=1, keepdim=True).clamp_min(eps)
     normalized = (history - mean) / std

@@ -43,7 +43,9 @@ class GraniteTTMReferenceModel(torch.nn.Module):
         inputs = build_reference_inputs(self.model, history, future_values=future_values, extra_inputs=extra_inputs)
         return self.model(**inputs)
 
-    def predict(self, history: torch.Tensor, *, future_values: torch.Tensor | None = None, **extra_inputs) -> torch.Tensor:
+    def predict(
+        self, history: torch.Tensor, *, future_values: torch.Tensor | None = None, **extra_inputs
+    ) -> torch.Tensor:
         outputs = self.forward(history, future_values=future_values, **extra_inputs)
         return extract_prediction_tensor(outputs)
 

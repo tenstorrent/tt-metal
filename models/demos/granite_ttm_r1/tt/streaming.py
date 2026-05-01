@@ -179,7 +179,6 @@ class GraniteTTMStreamingForecaster:
     def _run_inference(self) -> torch.Tensor:
         """Run a single forward pass over the current buffer contents."""
         import ttnn
-
         from models.demos.granite_ttm_r1.tt.common import to_torch_tensor
 
         # Reconstruct chronological view from the circular buffer.
