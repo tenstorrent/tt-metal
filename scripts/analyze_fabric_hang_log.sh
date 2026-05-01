@@ -43,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PF|FIX PL|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -112,7 +112,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PF|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re, signal
@@ -223,7 +223,7 @@ echo ""
 
 # ─── PRE-INIT STATE ───
 echo "=== PRE-INIT STATE (stale/corrupt channel scan) ==="
-grep -E 'pre.?init|stale|0x49706550|canary|kBaseUmd|base.UMD.*relay|terminate_stale' "$CLEAN" 2>/dev/null | \
+grep -E 'pre.?init|stale|0x49706550|canary|kBaseUmd|base.UMD.*relay|terminate_stale|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead' "$CLEAN" 2>/dev/null | \
 grep -iE '(info|warning|error)' | \
 python3 -c "
 import sys, re, signal
@@ -616,7 +616,7 @@ for line in lines:
         force_reset_events.append(msg[:140])
     elif re.search(r'FIX AQ.*Failed to init remote device', line):
         fix_aq_events.append(line.rstrip())
-    elif re.search(r'FIX PA|erisc_app_still_running.*force.reset|fw_launch_addr.*cleared', line, re.I):
+    elif re.search(r'FIX PA|erisc_app_still_running.*force.reset', line, re.I):
         msg = re.sub(r'^.*\\|\\s*(Metal|Test|Fabric|Always)\\s*\\|\\s*', '', line).rstrip()
         fix_pa_events.append(msg[:140])
 
@@ -933,6 +933,16 @@ FIX_M2_FIRES=$(grep -cE 'FIX M2.*dead-relay|compile_and_configure_fabric: FIX M2
 # FIX PL (#42429): opt-in timeout guards on l1_barrier / dram_barrier / read_core for non-MMIO chips.
 # Fires when the ERISC relay path is dead and the barrier/read would otherwise hang indefinitely.
 FIX_PL_FIRES=$(grep -cE 'clear_l1_state: l1_barrier timed out.*dead ERISC relay|clear_dram_state: dram_barrier timed out|terminate_active_ethernet_cores_on_all_chips: l1_barrier timed out|WriteInitMagic: read_core timed out' "$CLEAN" 2>/dev/null; :)
+# FIX PF (#42429): UMD base fw heartbeat detected at Metal exit — skip writing Metal exit signal.
+# Fires in risc_firmware_initializer.cpp when BRISC is still running base-UMD fw at process shutdown.
+# Clears stale fw_launch_addr to unblock next session.  Distinct from FIX PA (which fires during init).
+FIX_PF_FIRES=$(grep -cE 'FIX PF.*skipping Metal exit signal|FIX PF.*stale fw_launch_addr' "$CLEAN" 2>/dev/null; :)
+# Invalid EDMStatus: ERISC L1 holds a value that is neither a valid EDMStatus enum nor the base-UMD
+# sentinel (0x49706550).  Seen as e.g. 0x49705180 (ROM postcode mid-boot) or other partial-write artifacts.
+# terminate_stale_erisc_routers zeros the address to break corruption cascade for next session.
+# status=0xdeaddead: firmware-written fatal-error sentinel seen in teardown timeout messages.
+INVALID_EDMSTATUS=$(grep -cE 'NOT a valid EDMStatus value|zeroed edm_status_address' "$CLEAN" 2>/dev/null; :)
+DEADDEAD_STATUS=$(grep -cE 'status=0xdeaddead' "$CLEAN" 2>/dev/null; :)
 
 if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
     DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
@@ -1106,6 +1116,25 @@ if [ "${FIX_PL_FIRES:-0}" -gt 0 ]; then
     echo "     All four routes through the ERISC relay on non-MMIO chips — when the relay is dead,"
     echo "     the call would hang indefinitely without the FIX PL timeout guard."
     echo "     Each timed-out call logs a warning and continues (best-effort, no throw)."
+fi
+if [ "${FIX_PF_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX PF] UMD base fw heartbeat detected at Metal exit — Metal exit signal skipped (${FIX_PF_FIRES} occurrence(s))."
+    echo "     BRISC was still running base-UMD firmware at process shutdown; writing the Metal exit signal"
+    echo "     would overwrite a live base-UMD relay.  FIX PF clears the stale fw_launch_addr instead."
+    echo "     Distinct from FIX PA (init cascade): FIX PF fires in risc_firmware_initializer.cpp teardown path."
+fi
+if [ "${INVALID_EDMSTATUS:-0}" -gt 0 ]; then
+    echo "  => [CORRUPT EDMSTATUS] Invalid EDMStatus value(s) in ERISC L1 (${INVALID_EDMSTATUS} occurrence(s))."
+    echo "     Value is neither a valid EDMStatus enum nor the base-UMD sentinel (0x49706550)."
+    echo "     Examples: 0x49705180 (ROM postcode mid-boot), 0x0 (zeroed), arbitrary partial-write garbage."
+    echo "     terminate_stale_erisc_routers zeros the address to break corruption cascade for next session."
+    echo "     Indicates ERISC L1 was written partially, mid-boot interrupted, or corrupted by prior crash."
+fi
+if [ "${DEADDEAD_STATUS:-0}" -gt 0 ]; then
+    echo "  => [0xdeaddead] Firmware fatal-error sentinel detected in teardown timeout (${DEADDEAD_STATUS} occurrence(s))."
+    echo "     An ERISC did not reach TERMINATED within 5000ms and its status reads as 0xdeaddead."
+    echo "     This is a firmware-written sentinel indicating the ERISC encountered a fatal error."
+    echo "     The hardware reset (assert_risc_reset_at_core) should follow to recover the channel."
 fi
 if [ "${FIX_TE_SKIPS:-0}" -gt 0 ]; then
     echo "  => [FIX TE] control_plane: FIX TB-excluded chip(s) skipped in routing table config (${FIX_TE_SKIPS} skip(s))."
