@@ -43,6 +43,17 @@ _HELPER_SCRIPT = textwrap.dedent("""
         num_devices = mesh.get_num_devices()
         if num_devices < 4:
             print(f"Only {num_devices} devices, need >=4", file=sys.stderr)
+            ttnn.close_mesh_device(mesh)
+            sys.exit(77)  # skip sentinel
+
+        # FIX RZ guard (#42429): skip AllGather when fabric is degraded (stale
+        # base-UMD channels, broken relay path, or channels not ready).  Dispatching
+        # AllGather on such a cluster causes SIGSEGV or a completion-CQ hang on
+        # non-MMIO devices.  The in-flight-close behavior under test (FIX AO/AP/AD)
+        # cannot be safely exercised on a degraded cluster.
+        if mesh.is_fabric_degraded():
+            print(f"Cycle {cycle}: fabric degraded (FIX RZ) — skipping AllGather", file=sys.stderr)
+            ttnn.close_mesh_device(mesh)
             sys.exit(77)  # skip sentinel
 
         # Dispatch AllGather non-blocking — creates in-flight ERISC traffic.
@@ -86,7 +97,7 @@ def test_allgather_inflight_close(iteration):
     stderr_tail = result.stderr.decode(errors="replace")[-1000:]
 
     if result.returncode == 77:
-        pytest.skip("Not enough devices for multi-chip test")
+        pytest.skip("Not enough devices or fabric degraded (FIX RZ #42429)")
 
     # SIGABRT = -6: FIX AO/AP regression (termination writes to broken relay).
     assert result.returncode != -6, (
