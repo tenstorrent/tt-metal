@@ -225,9 +225,14 @@ of what the user supplies.
 This port patches `MakeGen1ComputeConfig` to size to
 `max(NUM_CIRCULAR_BUFFERS, dfb_name_to_id.size())`, matching the
 "host-side allocations sized for maximum CB count across all architectures"
-contract documented in `data_format.cpp`. The same bug almost certainly affects
-`MakeQuasarComputeConfig` (Quasar uses `NUM_CIRCULAR_BUFFERS = 32`), but this
-port did not need to patch it.
+contract documented in `data_format.cpp`.
+
+**Confirmed identical bug in `MakeQuasarComputeConfig`.** When the migrated
+W reduction was first run on a Quasar emulator
+(`unit_tests_ttnn --gtest_filter=SumTensorLastDimTests/SumTensorLastDimFixture.SumTensorCorrectly/*`)
+it hit the same TT_FATAL at the same `data_format.cpp:172` site, with the same
+"vector must have 64 elements" message. The Quasar variant has been patched in
+the same way (mirrored fix and comment in `program_spec.cpp::MakeQuasarComputeConfig`).
 
 ### 11. Upstream bug: TRISC prolog for Metal 2.0 compute kernels does not pre-include `api/compute/common.h`
 
@@ -333,10 +338,10 @@ What this **does not** yet unblock for Quasar:
   or (b) an upstream `noc_traits_t<InterleavedAddrGenFast<...>>` specialization so
   the arch-agnostic `Noc` API can drive the older interleaved address gen. Neither
   is in place today; tracked under shortcoming #1.
-- `MakeQuasarComputeConfig` in `tt_metal/impl/metal2_host_api/program_spec.cpp`
+- ~~`MakeQuasarComputeConfig` in `tt_metal/impl/metal2_host_api/program_spec.cpp`
   still sizes `unpack_modes` to `dfb_name_to_id.size()` (mirror of the Gen1 bug
-  patched as #10). Almost certainly broken once a Quasar compute kernel goes
-  through it; flagged as a follow-up.
+  patched as #10).~~ **Patched** when first hit on a Quasar emulator run; see #10
+  for details.
 
 The guide should:
 - Have a "buffer-type abstraction" section showing the `BufferRef`-style pattern

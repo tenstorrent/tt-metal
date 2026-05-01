@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <bit>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <set>
@@ -1345,15 +1346,31 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     //  - The user-facing KernelSpec provides the modes keyed by DFB name.
     //  - The unpack_to_dest_mode vector in the QuasarComputeConfig is indexed by DFB ID.
     //  - DFB IDs are always issued sequentially from zero, so this works.
-
-    // Size the vector to the number of DFBs.
-    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
+    //
+    // Size to NUM_CIRCULAR_BUFFERS (the max-CB allocation expected by the JIT build
+    // framework — see get_unpack_dst_formats in tt_metal/jit_build/data_format.cpp).
+    // Sizing only to dfb_name_to_id.size() trips the framework's "must have N elements"
+    // TT_FATAL for any compute kernel that uses fewer DFBs than the architectural CB max.
+    // Mirrors the equivalent fix in MakeGen1ComputeConfig above.
+    std::vector<UnpackToDestMode> unpack_modes(
+        std::max<size_t>(NUM_CIRCULAR_BUFFERS, dfb_name_to_id.size()), UnpackToDestMode::Default);
 
     // Populate unpack_modes using DFB ID as the index
     for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
         uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
         unpack_modes[dfb_id] = mode;
     }
+
+    // #region agent log
+    {
+        std::ofstream log("/localdev/bbradel/tt-metal/.cursor/debug-43dce3.log", std::ios::app);
+        if (log.is_open()) {
+            log << R"({"sessionId":"43dce3","hypothesisId":"quasar-unpack-modes-size","location":"program_spec.cpp:MakeQuasarComputeConfig","message":"Quasar compute config unpack_modes sized","data":{"kernel":")"
+                << kernel_spec.unique_id << R"(","unpack_modes_size":)" << unpack_modes.size() << R"(,"dfb_count":)"
+                << dfb_name_to_id.size() << R"(,"NUM_CIRCULAR_BUFFERS":)" << NUM_CIRCULAR_BUFFERS << R"(}})" << "\n";
+        }
+    }
+    // #endregion
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
