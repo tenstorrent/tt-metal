@@ -43,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -112,7 +112,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re, signal
@@ -902,6 +902,30 @@ FIX_TH_FIRES=$(grep -cE 'FIX TH.*no available dispatch links' "$CLEAN" 2>/dev/nu
 # FIX TJ (#42429): topology_mapper.cpp prefilter for WH_B0-invalid mesh shapes (e.g. 3x1).
 # Log: "FIX TJ (#42429): TopologyMapper: skipping shape {}x{} — invalid for WORMHOLE_B0"
 FIX_TJ_FIRES=$(grep -cE 'FIX TJ.*invalid for WORMHOLE_B0' "$CLEAN" 2>/dev/null; :)
+# FIX TK (#42429): BaseFabricFixture::DoSetUpTestSuite — filter chip IDs against
+# is_physical_chip_in_fabric_cluster() after topology discovery.  Prevents TT_FATAL
+# in create_unit_meshes() when topology mapper degrades to 1x1 (all ETH links dead).
+# Log: "FIX TK (#42429): Physical chip {} not in fabric cluster — excluding from unit meshes."
+# Log (all excluded): "FIX TK (#42429): No chips in fabric cluster — skipping SetUpTestSuite."
+# Regression evidence: TT_FATAL "Physical chip id {} not found in control plane chip mapping"
+#   in SetUpTestSuite() after TopologyMapper downgraded to 1x1.
+FIX_TK_FIRES=$(grep -cE 'FIX TK.*not in fabric cluster|FIX TK.*No chips in fabric cluster' "$CLEAN" 2>/dev/null; :)
+# FIX TL (#42429): DoSetUpTestSuite — bail BEFORE create_unit_meshes() when FIX TK sets
+# cluster_degraded_skip_=true (partial chip set), to avoid UDM/Tensix builder TT_FATAL
+# which requires the full expected topology (>= 2 chips) and can't handle a 1x1 cluster.
+# Log: "FIX TL (#42429): Fabric cluster has only {}/{} chips — skipping create_unit_meshes"
+# Regression evidence: TT_FATAL "Device {} not found in worker tensix info map" at
+#   fabric_tensix_builder.cpp:874 in Fabric2DUDMModeFixture::SetUpTestSuite().
+FIX_TL_FIRES=$(grep -cE 'FIX TL.*skipping create_unit_meshes' "$CLEAN" 2>/dev/null; :)
+# FIX TM (#42429): expand_one_or_all_to_all_unicast in tt_fabric_test_config.cpp — return
+# early when all_pairs is empty (0 routing planes on severely degraded cluster).
+# Log: "FIX TM (#42429): No device pairs found for one_to_all_unicast — cluster too degraded"
+# Regression evidence: crash accessing all_pairs[0].first on empty vector.
+FIX_TM_FIRES=$(grep -cE 'FIX TM.*cluster too degraded' "$CLEAN" 2>/dev/null; :)
+# FIX TN (#42429): run_t3000_unit_tests.sh gtest_filter wildcard fix — removes leading '*' from
+# 'Fabric2DFixture.TestUnicast*' to prevent matching T3kCustomMeshGraphFabric2DFixture by accident.
+# Regression evidence: T3kCustomMeshGraph fixture crashes with 'Fabric node id not found in mapping'.
+FIX_TN_WILDCARD_CRASH=$(grep -cE 'T3kCustomMeshGraph.*Fabric node id not found in mapping' "$CLEAN" 2>/dev/null; :)
 # FIX M2 (#42429): Secondary check in compile_and_configure_fabric() — channel showed 0x49706550 (base-UMD relay)
 # but peer non-MMIO device is confirmed dead-relay → remove from base_umd_channels so configure_fabric_cores()
 # performs a hard soft-reset (no relay reads in flight, safe to reset).
@@ -1130,6 +1154,38 @@ if [ "${FIX_TJ_FIRES:-0}" -gt 0 ]; then
     echo "     Shape like 3x1 (both dims odd, not 1x1) rejected by MeshGraph for WH_B0."
     echo "     Degraded cluster reduced chip count below 4; topology mapper fell through to invalid shape."
     echo "     FIX TJ prefilter skips it; mapper continues to 2x1 or 1x1."
+fi
+if [ "${FIX_TK_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TK] DoSetUpTestSuite: ${FIX_TK_FIRES} chip(s) excluded — not in fabric cluster after topology discovery."
+    echo "     Topology mapper degraded to 1x1 (all ETH links dead on T3K after progressive SIGKILL teardowns)."
+    echo "     cluster_degraded_skip_ set to true — all per-test SetUp() calls will GTEST_SKIP."
+    echo "     Before FIX TK: create_unit_meshes called with all chip IDs → TT_FATAL for chips not in 1x1 cluster."
+elif grep -qE 'Physical chip id [0-9]+ not found in control plane chip mapping' "$CLEAN" 2>/dev/null; then
+    echo "  => [FIX TK MISSING?] 'Physical chip id not found in control plane chip mapping' found — FIX TK may be absent."
+    echo "     Source: create_unit_meshes → get_fabric_node_id_from_physical_chip_id() TT_FATAL."
+    echo "     Occurs when DoSetUpTestSuite passes ALL chip IDs to create_unit_meshes on a 1x1 degraded cluster."
+    echo "     Fix: filter chip IDs via is_physical_chip_in_fabric_cluster() after SetFabricConfig() in DoSetUpTestSuite()."
+fi
+if [ "${FIX_TL_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TL] DoSetUpTestSuite: bailed before create_unit_meshes (${FIX_TL_FIRES} occurrence(s)) — cluster degraded."
+    echo "     FIX TK excluded chips → cluster_degraded_skip_=true → FIX TL returns early to avoid UDM builder crash."
+    echo "     Without FIX TL: create_unit_meshes with 1-chip set in UDM mode → TT_FATAL at fabric_tensix_builder.cpp:874."
+elif grep -qE 'not found in worker tensix info map|device_it != worker_to_tensix_info_map_' "$CLEAN" 2>/dev/null; then
+    echo "  => [FIX TL MISSING?] 'not found in worker tensix info map' found — FIX TL may be absent or reverted."
+    echo "     Source: fabric_tensix_builder.cpp:874 TT_FATAL when create_unit_meshes called with partial chip set."
+    echo "     FIX TL prevents this by returning early from DoSetUpTestSuite when cluster_degraded_skip_=true."
+    echo "     Check: does DoSetUpTestSuite return before create_unit_meshes when any chip is excluded by FIX TK?"
+fi
+if [ "${FIX_TM_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TM] expand_one_or_all_to_all_unicast: skipped — all_pairs empty (${FIX_TM_FIRES} occurrence(s))."
+    echo "     get_all_to_all_unicast_pairs() returned empty vector (0 routing planes on degraded cluster)."
+    echo "     Before FIX TM: code accessed all_pairs[0].first without empty check → UB/crash."
+fi
+if [ "${FIX_TN_WILDCARD_CRASH:-0}" -gt 0 ]; then
+    echo "  => [FIX TN MISSING?] T3kCustomMeshGraph fixture 'Fabric node id not found in mapping' crash seen."
+    echo "     Possible regression: leading '*' in gtest_filter '*Fabric2DFixture.TestUnicast*' matches"
+    echo "     T3kCustomMeshGraphFabric2DFixture (class ends with Fabric2DFixture) on degraded cluster."
+    echo "     Fix (FIX TN): remove leading '*' → 'Fabric2DFixture.TestUnicast*' in run_t3000_unit_tests.sh."
 fi
 echo ""
 echo "========================================================================"
