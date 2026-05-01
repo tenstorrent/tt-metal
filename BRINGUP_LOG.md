@@ -197,7 +197,15 @@
 ## Session 7 — 2026-05-01
 
 **Status**: tt-inference-server integration complete — 98/100 accuracy via OpenAI API
-**PCC**: All 8 unit tests PASS (unchanged from session 6)
+**PCC**: All 8 unit tests PASS
+- test_prefill_mask: PASS (structural)
+- test_text_attention_pcc: 0.999832
+- test_text_mlp_pcc: 0.999970
+- test_decoder_block_pcc: 0.999905
+- test_vit_encoder_pcc: 0.999270
+- test_image_projector_pcc: 0.999775
+- test_vision_adapter_pcc: 0.999807
+- test_decoder_block_with_image_pcc: 0.999999
 **Block Hash**: COMPLETE
 
 ### Work Done
