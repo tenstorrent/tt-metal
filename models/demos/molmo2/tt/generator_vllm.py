@@ -197,15 +197,16 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         seq_len = int(prompt_lens[0].item()) if hasattr(prompt_lens[0], "item") else int(prompt_lens[0])
         input_ids = tokens[:1, :seq_len]
 
-        # Reconstruct token_type_ids from input_ids: marks image_patch_id (151938) positions
-        # as type=1 for the image-bidirectional SDPA attention mask in forward_prefill.
-        # With mm_processor_cache_gb=0 (combined path), input_ids contains all Molmo2
-        # special tokens (frame markers, row/col separators). While the HF processor's
-        # token_type_ids marks those extra tokens too, marking only 151938 positions is
-        # still more correct than causal-only (no token_type_ids).
+        # Reconstruct token_type_ids matching HF processor's output exactly:
+        # type=1 for image_patch_id (151938) AND frame markers <im_start> (151936) / <im_end> (151937).
+        # The HF processor marks all three as type=1 (4233 positions for 51 frames = 51×83).
+        # Without frame markers: only 4131 type=1 positions — markers get causal-only attention,
+        # breaking the bidirectional image↔marker attention the model was trained with.
         if token_type_ids is None and pv is not None:
             _IMAGE_PATCH_ID = 151938
-            token_type_ids = (input_ids == _IMAGE_PATCH_ID).long()
+            _IM_START = 151936  # <im_start> frame boundary token
+            _IM_END = 151937  # <im_end>   frame boundary token
+            token_type_ids = ((input_ids == _IMAGE_PATCH_ID) | (input_ids == _IM_START) | (input_ids == _IM_END)).long()
 
         self.model.reset_kv_cache(user_id=0)
         logger.info(
