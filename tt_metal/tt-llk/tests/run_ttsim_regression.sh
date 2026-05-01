@@ -24,8 +24,8 @@ HTML_PATH="${RESULTS_DIR}/ttsim_${TIMESTAMP}.html"
 LATEST_XML="${RESULTS_DIR}/latest.xml"
 LATEST_HTML="${RESULTS_DIR}/latest.html"
 
-WORKERS="${WORKERS:-20}"
-TIMEOUT="${TIMEOUT:-600}"
+WORKERS="${WORKERS:-10}"
+TIMEOUT="${TIMEOUT:-300}"
 TEST_PATHS=()
 PYTEST_ARGS=()
 
@@ -44,9 +44,9 @@ failures; junit XML + HTML report are produced in:
   ${RESULTS_DIR}
 
 Options:
-  -n, --workers N       Number of xdist workers (default: 30; env: WORKERS).
+  -n, --workers N       Number of xdist workers (default: 10; env: WORKERS).
                         Use 0 to disable xdist (serial, --forked only).
-  -t, --timeout SEC     Per-test timeout in seconds (default: 600; env: TIMEOUT).
+  -t, --timeout SEC     Per-test timeout in seconds (default: 300; env: TIMEOUT).
   -h, --help            Show this help message.
 
 Required environment:

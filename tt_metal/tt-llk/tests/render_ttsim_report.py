@@ -9,7 +9,7 @@ Adds value over `junit2html`:
   * Big-number summary cards with pass/fail/skip percentages.
   * A donut chart (pure CSS).
   * Top-N ttsim error categories (extracted from <system-out>).
-  * Sortable per-file table.
+  * Per-file summary table.
   * Per-test detail with the captured ttsim stdout inlined.
 
 Self-contained: zero JS framework, no external assets at runtime.
@@ -61,12 +61,49 @@ class FileStats:
     cases: list[Case] = field(default_factory=list)
 
 
-def parse(xml_path: Path) -> tuple[list[FileStats], list[Case]]:
+@dataclass
+class RunMeta:
+    """Run-level metadata derived from the XML and the file on disk.
+
+    `cases_time` is the SUM of per-test durations (this can exceed wall-clock
+    when tests run in parallel under pytest-xdist). `wall_time` is an
+    approximation of the actual end-to-end runtime computed from the
+    suite's start `timestamp` attribute and the XML file's mtime; it is
+    `None` when either piece is unavailable.
+    """
+
+    cases_time: float = 0.0
+    wall_time: Optional[float] = None
+    started_at: Optional[str] = None
+
+
+def _parse_iso(ts: str) -> Optional[float]:
+    """Parse an ISO-8601 timestamp into a POSIX seconds value, or None."""
+    if not ts:
+        return None
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def parse(xml_path: Path) -> tuple[list[FileStats], list[Case], RunMeta]:
     xml = JUnitXml.fromfile(str(xml_path))
     by_file: dict[str, FileStats] = {}
     all_cases: list[Case] = []
 
+    earliest_start: Optional[float] = None
+    started_at_iso: Optional[str] = None
+
     for suite in xml:
+        ts = getattr(suite, "timestamp", None)
+        if ts:
+            started_at_iso = started_at_iso or ts
+            t = _parse_iso(ts)
+            if t is not None and (earliest_start is None or t < earliest_start):
+                earliest_start = t
         for case in suite:
             classname = case.classname or "<no-class>"
             stats = by_file.setdefault(classname, FileStats(classname))
@@ -126,14 +163,44 @@ def parse(xml_path: Path) -> tuple[list[FileStats], list[Case]]:
             stats.cases.append(c)
             all_cases.append(c)
 
-    return sorted(by_file.values(), key=lambda s: s.file), all_cases
+    cases_time = sum(c.duration for c in all_cases)
+    wall_time: Optional[float] = None
+    if earliest_start is not None:
+        try:
+            end_time = xml_path.stat().st_mtime
+            if end_time > earliest_start:
+                wall_time = end_time - earliest_start
+        except OSError:
+            pass
+
+    meta = RunMeta(
+        cases_time=cases_time,
+        wall_time=wall_time,
+        started_at=started_at_iso,
+    )
+    return sorted(by_file.values(), key=lambda s: s.file), all_cases, meta
 
 
 def pct(n: int, d: int) -> float:
     return 100.0 * n / d if d else 0.0
 
 
-def render(files: list[FileStats], all_cases: list[Case], xml_path: Path) -> str:
+def _fmt_dur(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(seconds, 60)
+    if m < 60:
+        return f"{int(m)}m {int(s)}s"
+    h, m = divmod(m, 60)
+    return f"{int(h)}h {int(m)}m {int(s)}s"
+
+
+def render(
+    files: list[FileStats],
+    all_cases: list[Case],
+    xml_path: Path,
+    meta: RunMeta,
+) -> str:
     total = len(all_cases)
     passed = sum(1 for c in all_cases if c.outcome == "passed")
     failed = sum(1 for c in all_cases if c.outcome == "failed")
@@ -163,10 +230,18 @@ def render(files: list[FileStats], all_cases: list[Case], xml_path: Path) -> str
             sig = c.short.strip().splitlines()[0] if c.short.strip() else "<no message>"
             cat = None
         sig_count[sig] += 1
-        meta = sig_meta.setdefault(sig, {"category": cat, "tests": []})
-        meta["tests"].append(f"{c.classname}::{c.name}")
+        bucket = sig_meta.setdefault(sig, {"category": cat, "tests": []})
+        bucket["tests"].append(f"{c.classname}::{c.name}")
 
-    duration_total = sum(c.duration for c in all_cases)
+    cases_time = meta.cases_time
+    wall_time = meta.wall_time
+    cases_time_str = _fmt_dur(cases_time)
+    wall_time_str = _fmt_dur(wall_time) if wall_time is not None else None
+    if wall_time is not None and cases_time > 0:
+        concurrency = cases_time / wall_time
+        wall_time_str_full = f"{wall_time_str} wall · avg concurrency {concurrency:.1f}"
+    else:
+        wall_time_str_full = wall_time_str
 
     pass_pct = pct(passed, total)
     fail_pct = pct(failed + errored, total)
@@ -237,9 +312,9 @@ def render(files: list[FileStats], all_cases: list[Case], xml_path: Path) -> str
     fail_total = len(failed_for_sig) or 1
     rows_sig = []
     for rank, (sig, n) in enumerate(sig_count.most_common(), start=1):
-        meta = sig_meta[sig]
-        cat = meta["category"]
-        tests = meta["tests"]
+        bucket = sig_meta[sig]
+        cat = bucket["category"]
+        tests = bucket["tests"]
         # Split signature so the category renders as a pill and the rest as code.
         if cat:
             body = sig[len(f"[{cat}] ") :]
@@ -516,7 +591,7 @@ def render(files: list[FileStats], all_cases: list[Case], xml_path: Path) -> str
   <div class="hero-inner">
     <div class="brand">
       <h1>ttsim regression</h1>
-      <div class="meta">{html.escape(xml_path.name)} · {total} tests · {duration_total:.1f}s</div>
+      <div class="meta">{html.escape(xml_path.name)} · {total} tests · {wall_time_str_full or (cases_time_str + " test-time")}</div>
     </div>
     <div class="passrate">
       <div class="passrate-num">{pass_pct:.1f}%</div>
@@ -555,7 +630,7 @@ def render(files: list[FileStats], all_cases: list[Case], xml_path: Path) -> str
           </div>
         </div>
       </div>
-      <div class="card kpi"><div class="label">Total</div><div class="big">{total}</div><div class="sub">{duration_total:.1f}s wall-clock</div></div>
+      <div class="card kpi"><div class="label">Total</div><div class="big">{total}</div><div class="sub" title="Σ test-time = sum of per-test durations from JUnit. Wall-clock = end-to-end runtime estimated from the suite's timestamp and the XML mtime.">{("wall " + wall_time_str + " · ") if wall_time_str else ""}Σ test {cases_time_str}</div></div>
       <div class="card kpi ok"><div class="label">Passed</div><div class="big ok">{passed}</div><div class="sub">{pass_pct:.1f}%</div></div>
       <div class="card kpi bad"><div class="label">Failed</div><div class="big bad">{failed + errored}</div><div class="sub">{fail_pct:.1f}%</div></div>
       <div class="card kpi warn"><div class="label">Skipped</div><div class="big warn">{skipped}</div><div class="sub">{skip_pct:.1f}%</div></div>
@@ -634,8 +709,8 @@ def main() -> int:
         sys.stderr.write(f"ERROR: not a file: {args.xml}\n")
         return 2
 
-    files, cases = parse(args.xml)
-    out = render(files, cases, args.xml)
+    files, cases, meta = parse(args.xml)
+    out = render(files, cases, args.xml, meta)
     args.html.write_text(out, encoding="utf-8")
     print(
         f"Wrote {args.html} ({os.path.getsize(args.html)} bytes, "
