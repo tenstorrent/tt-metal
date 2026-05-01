@@ -907,11 +907,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
 // Verifies all DMs receive identical CRTA values at the same L1 address
 // TODO: Once SW supports multiple quasar clusters/cores, expand to multiple CoreRangeSets
 // to verify CRTA dispatch across different Kernel groups
-TEST_F(MeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
-    if (arch_ != tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "This test is only meant for Quasar";
-    }
-
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
     auto mesh_device = devices_[0];
     constexpr CoreCoord core = {0, 0};
     CoreRange core_range(core);
@@ -938,11 +934,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
 // Verifies each kernel receives its own distinct CRTA values at different L1 addresses
 // TODO: Once SW supports multiple quasar clusters/cores, expand to multiple CoreRangeSets
 // to verify CRTA dispatch across different Kernel groups
-TEST_F(MeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
-    if (arch_ != tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "This test is only meant for Quasar";
-    }
-
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     auto mesh_device = devices_[0];
     constexpr CoreCoord core = {0, 0};
     CoreRange core_range(core);

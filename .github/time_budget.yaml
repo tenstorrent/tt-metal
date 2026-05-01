@@ -110,11 +110,11 @@ runtime:
     bh_quietbox: 5
     bh_loudbox: 5
   unit:
-    wh_n150_civ2: 174
-    wh_n300_civ2: 72
-    bh_p150b_civ2: 169
+    wh_n150_civ2: 217
+    wh_n300_civ2: 74
+    bh_p150b_civ2: 205
     bh_p150b_civ2_viommu: 5
-    bh_p100a_civ2_viommu: 72
+    bh_p100a_civ2_viommu: 74
     bh_quietbox: 20
     wh_galaxy: 35
   integration:

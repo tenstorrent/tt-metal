@@ -146,9 +146,12 @@ void kernel_main() {
         uint32_t tmp_addr = get_write_ptr(cb_gather_tmp);
         volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
+        // Wait for ALL children to signal before reading any.
+        // A single gather_sem counter does not identify WHICH child signaled,
+        // so we must wait for all num_receive increments to guarantee every
+        // child's histogram is finalized before reading.
+        noc_semaphore_wait_min(gather_sem_ptr, num_receive);
         for (uint32_t level = 0; level < num_receive; level++) {
-            noc_semaphore_wait_min(gather_sem_ptr, level + 1);
-
             uint32_t child_noc_x = get_arg_val<uint32_t>(7 + level * 2);
             uint32_t child_noc_y = get_arg_val<uint32_t>(7 + level * 2 + 1);
 

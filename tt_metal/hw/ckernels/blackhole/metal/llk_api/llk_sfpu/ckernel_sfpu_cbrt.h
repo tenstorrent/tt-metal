@@ -64,7 +64,7 @@ inline void calculate_cube_root() {
             d = sfpi::setsgn(d, a);
             y = d * (t * t);
 
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven));
+            sfpi::dst_reg[0] = sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg++;
     }

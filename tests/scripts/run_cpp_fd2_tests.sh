@@ -28,5 +28,12 @@ run_test_with_watcher() {
     #############################################
     echo "Running test_dispatcher with fast dispatch mode..";
 
-    run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher"
+    run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher --gtest_filter=-*SlowDispatch*"
 )
+
+#############################################
+# TEST_DISPATCHER TESTS (SD)                #
+#############################################
+echo "Running test_dispatcher with slow dispatch mode..";
+
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_dispatcher --gtest_filter='*SlowDispatch*'

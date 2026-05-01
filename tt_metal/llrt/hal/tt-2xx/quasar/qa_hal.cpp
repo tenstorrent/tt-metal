@@ -303,6 +303,7 @@ public:
             params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensix ";
         cflags += "-fno-extern-tls-init ";
         cflags += "-ftls-model=local-exec ";
+        cflags += "-mno-tt-tensix-optimize-replay "; // Disable replay buffer optimization for quasar due to HW bug
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops

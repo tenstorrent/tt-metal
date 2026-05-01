@@ -629,7 +629,7 @@ def test_exp_ring_joint_attention_create_perf_table(b, nh, total_seq, d, q_chunk
 
         # Parametrize id order is inner-to-outer: config_id-dtype-payload
         command = (
-            f"pytest tests/nightly/blackhole/ccl/"
+            f"pytest tests/nightly/blackhole/sdpa/"
             f"test_exp_ring_joint_sdpa.py::"
             f"test_exp_ring_joint_attention_sdpa_sweep_perf_impl"
             f"[{config_id}-bf16-{payload_id}]"

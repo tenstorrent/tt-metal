@@ -65,7 +65,9 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     hidden_dim = 512
     num_routed_experts = 256  # Required by gate kernel
     num_experts_per_tok = 8  # Required by gate kernel
-    capacity_factor = 2
+    # ceil(N/2) of the most conservative integer N such that dgs*seq*N >= theoretical
+    # worst-case dispatch buffer. Real traffic never approaches the worst case.
+    dispatch_buffer_capacity_factor = 6
 
     # Compute constants
     num_devices = mesh_device.get_num_devices()
@@ -73,8 +75,18 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
     total_experts = num_devices * experts_per_chip
 
@@ -119,6 +131,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         gate_weights=gate_weights,
         emb_dim=emb_dim,
@@ -127,7 +140,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         topology=ttnn.Topology.Linear,
         routed_expert_weights=routed_expert_weights,
         shared_expert_weights=shared_expert_weights,
-        routed_expert_activations_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat16,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat16,
@@ -183,6 +196,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         gate_weights=None,  # Cache-only mode
         emb_dim=emb_dim,
@@ -191,7 +205,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         topology=ttnn.Topology.Linear,
         routed_expert_weights=None,
         shared_expert_weights=None,
-        routed_expert_activations_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat16,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat16,
@@ -220,6 +234,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         gate_weights=None,
         emb_dim=emb_dim,
@@ -228,7 +243,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         topology=ttnn.Topology.Linear,
         routed_expert_weights=None,
         shared_expert_weights=None,
-        routed_expert_activations_dtype=ttnn.bfloat16,
+        routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat16,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat16,
