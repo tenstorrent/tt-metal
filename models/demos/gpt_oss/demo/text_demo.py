@@ -319,6 +319,25 @@ def prepare_gpt_oss_generator_args(
             False,  # stop_at_eos
             False,  # run_in_ci
         ),
+        # Batch 8 — non-row-sharded, fits on 1x1 mesh (single P150). Exercises
+        # the batched-decode path in low-latency experts on a single device.
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            1,  # data_parallel
+            8,  # batch_size
+            1,  # repeat_batches
+            4 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # warmup_prefill
+            False,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            False,  # run_in_ci
+        ),
         # Batch 128
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -406,6 +425,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_32k",
         "prefill_64k",
         "prefill_128k",
+        "batch8",
         "batch128",
         "batch128_logprobs",
         "long_context_128k",
@@ -438,11 +458,13 @@ def test_gpt_oss_demo(
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     mesh_shape = tuple(mesh_device.shape)
     if mesh_shape[0] == 1:
-        if batch_size > 1:
+        if users_row_sharded:
+            pytest.skip(f"users_row_sharded=True requires multiple mesh rows; got shape {mesh_shape}.")
+        if batch_size > 32:
             pytest.skip(
-                f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
+                f"Batch size {batch_size} exceeds the 1xN mesh cap (32). Use a multi-row mesh for larger batches."
             )
-        elif max_seq_len > 64 * 1024:
+        if max_seq_len > 64 * 1024:
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
     if is_blackhole() and batch_size > 1:
         pytest.skip(
