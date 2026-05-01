@@ -66,6 +66,7 @@ target_sources(
         test_gap66_fixrz_stale_base_umd_flag.cpp
         test_gap67_fixtf_2d_fabric_header_args_guard.cpp
         test_gap68_fixtg_control_plane_host_rank_guard.cpp
+        test_gap69_fixth_relay_mux_no_links_guard.cpp
         test_dispatch_context.cpp
         utils.cpp
 )

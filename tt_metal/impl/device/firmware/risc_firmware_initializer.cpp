@@ -334,7 +334,16 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
 
         // Step 2: Early MMIO ETH reset when relay is broken.
         // Must run BEFORE assert_cores/l1_barrier; we poll for ERISC reboot completion.
-        if (!relay_broken_non_mmio.empty() && get_control_plane_) {
+        // FIX TG (#42429): guard all get_control_plane_() calls in teardown against lazy
+        // re-initialization.  GetControlPlaneFn is bound to MetalEnvImpl::get_control_plane()
+        // which initializes control_plane_ on first call.  When set_default_fabric_topology()
+        // resets control_plane_ to null (e.g. in CustomMeshGraphFabric2DFixture::TearDown),
+        // calling get_control_plane_() here would re-run topology discovery on degraded hardware
+        // and throw unordered_map::at — crashing the process during global GTest teardown.
+        // is_control_plane_initialized() checks control_plane_ != nullptr without initializing.
+        const bool cp_ready = get_control_plane_ && descriptor_->env_impl().is_control_plane_initialized();
+
+        if (!relay_broken_non_mmio.empty() && cp_ready) {
             log_warning(
                 tt::LogAlways,
                 "teardown: FIX AC — {} non-MMIO device(s) have fabric_relay_path_broken. "
@@ -765,7 +774,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         // which does not inherit from std::exception.
         // FIX AZ: also skip when relay_dead_detected_step3 (dead relay found mid Step 3).
         const bool any_relay_broken = !relay_broken_non_mmio.empty() || relay_dead_detected_step3;
-        if (get_control_plane_ && !any_relay_broken) {
+        if (cp_ready && !any_relay_broken) {
             try {
                 cluster_.set_internal_routing_info_for_ethernet_cores(this->get_control_plane_(), false);
             } catch (const std::exception& e) {
@@ -798,7 +807,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
         // device that wasn't explicitly in relay_broken_non_mmio but shares the relay
         // path).  Non-MMIO ERISCs with stale firmware are safely cleaned up by
         // terminate_stale_erisc_routers on the next process's init.
-        if (any_teardown_timed_out && relay_broken_non_mmio.empty() && get_control_plane_) {
+        if (any_teardown_timed_out && relay_broken_non_mmio.empty() && cp_ready) {
             // Relay path is intact (no non-MMIO relay broken), but teardown timed
             // out — some ETH channels may have stale firmware state.  Reset MMIO
             // channels now (relay_broken_non_mmio was empty so step 2 was skipped).

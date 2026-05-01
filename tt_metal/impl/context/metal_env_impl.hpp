@@ -80,6 +80,9 @@ public:
     // --- Control plane ---
     tt::tt_fabric::ControlPlane& get_control_plane();
     void initialize_control_plane();
+    // Returns true if control_plane_ is already initialized (non-null).
+    // Does NOT trigger lazy initialization.  Safe to call during teardown.
+    bool is_control_plane_initialized() const { return control_plane_ != nullptr; }
 
     // --- Custom topology ---
     // Need to call set_fabric_config to reinit the control plane after calling this

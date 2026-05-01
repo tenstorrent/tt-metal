@@ -43,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX TE|FIX TF|FIX TG|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX M2|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX PL|FIX TE|FIX TF|FIX TG|FIX TH|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -112,7 +112,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX TE|FIX TF|FIX TG|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX NS|FIX NT|FIX NU|FIX NX|FIX NY|FIX TE|FIX TF|FIX TG|FIX TH|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re, signal
@@ -891,6 +891,14 @@ FIX_TF_FIRES=$(grep -cE 'FIX TF: No forwarding direction' "$CLEAN" 2>/dev/null; 
 # Regression evidence: without FIX TG, std::bad_optional_access thrown in ControlPlane ctor
 #   during T3K SetUp() on degraded cluster → GTest catches it as opaque "bad optional access".
 FIX_TG_FIRES=$(grep -cE 'FIX TG.*has no host rank in topology mapper' "$CLEAN" 2>/dev/null; :)
+# FIX TH (#42429): relay_mux.cpp GenerateStaticConfigs() — preflight check for empty forwarding link indices.
+# After FIX NY/NY+ verified both src and dst chips are in the fabric cluster, the MMIO-to-MMIO dispatch relay
+# path can still lose ALL ETH channels if progressive teardown corruption killed every link in the routing
+# direction.  Calling get_dispatch_link_index() would TT_FATAL.  FIX TH calls get_forwarding_link_indices()
+# first; if empty, marks device channels_not_ready_for_traffic so FIX SA can GTEST_SKIP gracefully.
+# Log: "FIX TH (#42429): RelayMux::GenerateStaticConfigs — no available dispatch links from FabricNodeId"
+# Regression evidence: without FIX TH, TT_FATAL "No links available from (M0,D2) to (M0,D3)" in SetUp().
+FIX_TH_FIRES=$(grep -cE 'FIX TH.*no available dispatch links' "$CLEAN" 2>/dev/null; :)
 # FIX M2 (#42429): Secondary check in compile_and_configure_fabric() — channel showed 0x49706550 (base-UMD relay)
 # but peer non-MMIO device is confirmed dead-relay → remove from base_umd_channels so configure_fabric_cores()
 # performs a hard soft-reset (no relay reads in flight, safe to reset).
@@ -1101,6 +1109,18 @@ elif grep -qE 'bad optional access' "$CLEAN" 2>/dev/null && [ "${FIX_TE_SKIPS:-0
     echo "  => [FIX TG MISSING?] bad optional access + FIX TE skips present, but no FIX TG warning."
     echo "     Possible regression: control_plane.cpp:1212 TT_ASSERT→has_value() guard missing or reverted."
     echo "     Commit to check: FIX TG in configure_routing_tables_for_fabric_ethernet_channels."
+fi
+if [ "${FIX_TH_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TH] relay_mux GenerateStaticConfigs: no available dispatch links (${FIX_TH_FIRES} occurrence(s))."
+    echo "     get_forwarding_link_indices(src, dst) returned empty — all ETH channels between devices dead/excluded."
+    echo "     Device marked channels_not_ready_for_traffic — FIX SA will GTEST_SKIP the affected test(s)."
+    echo "     Before FIX TH: get_dispatch_link_index() would TT_FATAL with 'No links available from ... to ...'."
+elif grep -qE 'No links available from' "$CLEAN" 2>/dev/null; then
+    echo "  => [FIX TH MISSING] 'No links available from' TT_FATAL found — FIX TH may be absent or reverted."
+    echo "     Source: relay_mux.cpp get_dispatch_link_index() TT_FATAL(!available_links.empty())."
+    echo "     Occurs when MMIO device IS in fabric cluster but all ETH links to downstream device are dead."
+    echo "     Fix: add FIX TH preflight check in GenerateStaticConfigs() before get_dispatch_link_index() call."
+    echo "     See relay_mux.cpp — call get_forwarding_link_indices(src,dst); if empty, set channels_not_ready."
 fi
 echo ""
 echo "========================================================================"
