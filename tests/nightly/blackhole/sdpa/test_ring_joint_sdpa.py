@@ -978,6 +978,11 @@ def test_ring_joint_attention_create_perf_table(model_name):
         if config_id.startswith(model_name)
     ]
 
+    # Optional substring filter (e.g. "q160-k320") to narrow the sweep
+    qk_filter = os.environ.get("RING_JOINT_QK_FILTER", "")
+    if qk_filter:
+        sweep_configs = [(c, cid) for c, cid in sweep_configs if qk_filter in cid]
+
     # Look up model configuration
     model = model_configs[model_name]
 

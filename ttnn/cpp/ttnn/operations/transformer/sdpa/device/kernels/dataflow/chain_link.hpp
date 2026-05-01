@@ -22,6 +22,7 @@ struct ChainConfig {
     uint32_t next_physical_x = 0;
     uint32_t next_physical_y = 0;
     uint32_t next_core_q_chunks = 0;
+    uint32_t this_core_q_chunks = 0;
     uint32_t mcast_start_x = 0;
     uint32_t mcast_start_y = 0;
     uint32_t mcast_end_x = 0;
@@ -31,7 +32,7 @@ struct ChainConfig {
     uint32_t mcast_num_dests = 0;
     uint32_t mcast_sender_wait = 0;
 
-    // Read 18 args in canonical order matching append_to_args()
+    // Read 19 args in canonical order matching append_to_args()
     static ChainConfig read_from_args(uint32_t& argidx) {
         ChainConfig cfg;
         cfg.participates = static_cast<bool>(get_arg_val<uint32_t>(argidx++));
@@ -44,6 +45,7 @@ struct ChainConfig {
         cfg.next_physical_x = get_arg_val<uint32_t>(argidx++);
         cfg.next_physical_y = get_arg_val<uint32_t>(argidx++);
         cfg.next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
+        cfg.this_core_q_chunks = get_arg_val<uint32_t>(argidx++);
         cfg.mcast_start_x = get_arg_val<uint32_t>(argidx++);
         cfg.mcast_start_y = get_arg_val<uint32_t>(argidx++);
         cfg.mcast_end_x = get_arg_val<uint32_t>(argidx++);
@@ -94,6 +96,7 @@ public:
     const uint32_t chain_batch;
     const uint32_t chain_head;  // Only checked when is_head_level
     const uint32_t next_core_q_chunks;
+    const uint32_t this_core_q_chunks;
 
     ChainLink(
         bool is_participant,
@@ -116,13 +119,15 @@ public:
         uint32_t tile_bytes,
         uint32_t chain_batch,
         uint32_t chain_head,
-        uint32_t next_core_q_chunks) :
+        uint32_t next_core_q_chunks,
+        uint32_t this_core_q_chunks) :
         is_participant(is_participant),
         is_injector(is_injector),
         is_sink(is_sink),
         chain_batch(chain_batch),
         chain_head(chain_head),
         next_core_q_chunks(next_core_q_chunks),
+        this_core_q_chunks(this_core_q_chunks),
         sender_sem_ptr_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_sem_addr)),
         receiver_sem_ptr_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_sem_addr)),
         valid_sem_addr_(valid_sem_addr),
@@ -159,9 +164,13 @@ public:
      * Head-level chains match (batch, head), batch-level chains match batch only.
      * In mcast mode, skip batch check: mcast is only enabled for B=1, and padded
      * iterations may have garbage nb values from out-of-bounds global_q_chunk.
+     * q_iter_local >= this_core_q_chunks gates phantom iters out of receive.
      */
-    bool should_receive(uint32_t nb, uint32_t nq) const {
+    bool should_receive(uint32_t nb, uint32_t nq, uint32_t q_iter_local) const {
         if (!is_participant || is_injector) {
+            return false;
+        }
+        if (q_iter_local >= this_core_q_chunks) {
             return false;
         }
         if constexpr (!mcast_enabled) {
