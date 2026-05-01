@@ -366,6 +366,7 @@ class MoEGate(AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        breakpoint()
         mode = cfg["mode"]
         if mode == "prefill":
             output_list = []

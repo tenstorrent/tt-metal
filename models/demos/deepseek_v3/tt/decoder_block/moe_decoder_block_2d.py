@@ -216,11 +216,9 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             input_sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
             )
-            breakpoint()
             temp["memory_config"] = input_sharded_mem_config
-            temp["use_broadcast"] = True
+            # temp["use_broadcast"] = True
 
-            breakpoint()
             x_gathered = ttnn.experimental.all_gather_async(x, **temp)
         else:
             # Should always be TP-sharded at this point
