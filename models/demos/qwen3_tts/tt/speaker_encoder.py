@@ -352,9 +352,9 @@ class SpeakerEncoder(LightweightModule):
         y = ttnn.reshape(y, (batch, y_len, out2_ch), memory_config=mc)
         y = ttnn.sigmoid(y)
 
-        # Expand [B,1,C] -> [B,L,C] and apply channel-wise scale.
-        y = ttnn.repeat(y, (1, seq_len, 1))
-        return ttnn.multiply(x_nlc, y)
+        # Apply channel-wise scale via broadcasting: [B,L,C] * [B,1,C] -> [B,L,C].
+        # Skips materializing y to seq-length (saves Untilize+Repeat+Tilize chain).
+        return ttnn.multiply(x_nlc, y, memory_config=mc)
 
     def _se_res2net_block(self, x: ttnn.Tensor, block_idx: int, scale: int = 8) -> ttnn.Tensor:
         """SERes2NetBlock in TTNN (NLC): TDNN1 -> Res2Net -> TDNN2 -> SE -> residual add."""
