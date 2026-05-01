@@ -86,11 +86,13 @@ void write_file(const string& path, const string& content) {
     }
 }
 
+}  // namespace
+
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
-void write_kernel_bindings_generated_header(const string& out_dir, const JitBuildSettings& settings) {
-    const string path = out_dir + "kernel_bindings_generated.h";
+void write_kernel_bindings_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
+    const fs::path path = out_dir / "kernel_bindings_generated.h";
 
     // Get the DFB bindings from the settings callback
     // Sort them to ensure the file output is deterministic for the JIT build cache
@@ -148,7 +150,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "}  // namespace sem\n";
         }
     }
-    write_file(path, content.str());
+    write_file(path.string(), content.str());
 }
 
 // METAL 2.0 only:
@@ -228,10 +230,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << named_crta_words << " + idx); }\n";
 
-    write_file(path, content.str());
+    write_file(path.string(), content.str());
 }
-
-}  // namespace
 
 void jit_build_genfiles_kernel_include(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {

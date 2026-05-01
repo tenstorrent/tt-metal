@@ -41,6 +41,7 @@
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "jit_build/genfiles.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/device.hpp>
@@ -285,6 +286,11 @@ struct DeferredCompile {
     std::unordered_map<std::string, uint32_t> named_compile_args;
     std::map<std::string, std::string> defines;
     std::string extra_inc;
+    // Non-empty if this is a Metal 2.0 kernel with auto-generated headers
+    // (kernel_args_generated.h + kernel_bindings_generated.h) waiting in the
+    // referenced directory.  jit_compile_kernel adds -I<dir> and includes the
+    // headers from the wrapper.
+    std::string metal2_genfile_dir;
 };
 
 struct PendingKernelInfo {
@@ -484,7 +490,8 @@ static std::function<void()> jit_compile_kernel(
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
     const std::map<std::string, std::string>& defines,
     const std::string& extra_include_flags,
-    const std::string& disk_cache_so_path_arg = "") {
+    const std::string& disk_cache_so_path_arg = "",
+    const std::string& metal2_genfile_dir = "") {
     const std::string jit_inc = TT_EMULE_JIT_INCLUDE_DIR;
     const std::string parent_inc = TT_EMULE_INCLUDE_DIR;
 
@@ -525,6 +532,10 @@ static std::function<void()> jit_compile_kernel(
             }
         }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
+        if (!metal2_genfile_dir.empty()) {
+            f << "#include \"kernel_bindings_generated.h\"\n";
+            f << "#include \"kernel_args_generated.h\"\n";
+        }
         f << "#include \"" << patched_kernel_path << "\"\n";
         f << "extern \"C\" { void __emule_kernel_entry() { kernel_main(); } }\n";
     }
@@ -574,6 +585,9 @@ static std::function<void()> jit_compile_kernel(
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
         << " -I\"" << kernel_dir << "\"";
+    if (!metal2_genfile_dir.empty()) {
+        cmd << " -I\"" << metal2_genfile_dir << "\"";
+    }
     // Extra include paths (project source, ttnn, etc.)
     if (!extra_include_flags.empty()) {
         cmd << " " << extra_include_flags;
@@ -933,6 +947,76 @@ static void collect_kernels(
             auto defines = build_kernel_defines(
                 *kernel, impl, num_dram_channels, worker_col_map_str, worker_row_map_str, emule_sem_base);
 
+            // Metal 2.0 kernels need per-kernel auto-generated headers
+            // (kernel_args_generated.h + kernel_bindings_generated.h) emitted
+            // by tt_metal/jit_build/genfiles.cpp.  jit_compile_kernel adds
+            // -I<dir> and includes them from the wrapper so the kernel source's
+            // `args::*` / `dfb::*` references resolve.  Legacy kernels skip
+            // this entirely (empty dir string).
+            //
+            // The dir is created lazily — only when at least one variant of
+            // this kernel is going to be deferred for compile.  Cache hits
+            // (in-memory or disk) don't need the dir, and lazy creation also
+            // avoids leaking tmpdirs for kernels that share a cache key.
+            // jit_compile_pending removes the dir after compile completes.
+            std::string metal2_genfile_dir;
+            const bool is_metal2 = kernel->is_metal2_kernel();
+            auto ensure_metal2_genfile_dir = [&]() -> const std::string& {
+                if (!metal2_genfile_dir.empty() || !is_metal2) {
+                    return metal2_genfile_dir;
+                }
+                char tmpdir[] = "/tmp/tt_emule_metal2_XXXXXX";
+                if (!mkdtemp(tmpdir)) {
+                    throw std::runtime_error("emule: mkdtemp for metal2 genfiles failed");
+                }
+                std::filesystem::path dir(tmpdir);
+                try {
+                    tt::tt_metal::write_kernel_bindings_generated_header(dir, *kernel);
+                    tt::tt_metal::write_kernel_args_generated_header(dir, *kernel);
+                } catch (...) {
+                    std::error_code ec;
+                    std::filesystem::remove_all(dir, ec);
+                    throw;
+                }
+                metal2_genfile_dir = dir.string() + "/";
+                log_debug(
+                    tt::LogMetal,
+                    "emule: emitted Metal 2.0 headers for kernel '{}' at {}",
+                    kernel->get_full_kernel_name(),
+                    metal2_genfile_dir);
+                return metal2_genfile_dir;
+            };
+
+            // Suffix for the cache key that captures the inputs driving the
+            // generated headers' content (DFB/sem accessor handles, named
+            // RTA/CRTA names).  Without this, two Metal 2.0 kernels that share
+            // source + CTAs + defines but bind different DFB IDs collide on
+            // key and the second receives the first's cached .so with wrong
+            // IDs baked in.
+            std::string metal2_key_suffix;
+            if (is_metal2) {
+                std::vector<std::pair<std::string, uint16_t>> dfb_pairs;
+                kernel->process_dataflow_buffer_local_accessor_handles(
+                    [&dfb_pairs](const std::string& name, uint16_t id) { dfb_pairs.emplace_back(name, id); });
+                std::sort(dfb_pairs.begin(), dfb_pairs.end());
+                for (const auto& [n, id] : dfb_pairs) {
+                    metal2_key_suffix += ":dfb:" + n + "=" + std::to_string(id);
+                }
+                std::vector<std::pair<std::string, uint16_t>> sem_pairs;
+                kernel->process_semaphore_local_accessor_handles(
+                    [&sem_pairs](const std::string& name, uint16_t id) { sem_pairs.emplace_back(name, id); });
+                std::sort(sem_pairs.begin(), sem_pairs.end());
+                for (const auto& [n, id] : sem_pairs) {
+                    metal2_key_suffix += ":sem:" + n + "=" + std::to_string(id);
+                }
+                for (const auto& n : kernel->get_named_runtime_args()) {
+                    metal2_key_suffix += ":rta:" + n;
+                }
+                for (const auto& n : kernel->get_named_common_runtime_args()) {
+                    metal2_key_suffix += ":crta:" + n;
+                }
+            }
+
             auto& common_rt = kernel->common_runtime_args();
 
             // Tensix/compute kernels use bits 8+ in the DFB RISC mask (TENSIX_RISC_OFFSET),
@@ -965,6 +1049,7 @@ static void collect_kernels(
                 for (const auto& [k, v] : defs) {
                     key += ":" + k + "=" + v;
                 }
+                key += metal2_key_suffix;
                 return key;
             };
 
@@ -983,8 +1068,8 @@ static void collect_kernels(
                         resolved_fns[key] = disk_fn;
                         g_jit_cache[key] = disk_fn;
                     } else {
-                        deferred_compiles[key] =
-                            DeferredCompile{src_path, compile_args, named_compile_args, defs, extra_inc};
+                        deferred_compiles[key] = DeferredCompile{
+                            src_path, compile_args, named_compile_args, defs, extra_inc, ensure_metal2_genfile_dir()};
                     }
                 }
             };
@@ -1056,13 +1141,18 @@ static void jit_compile_pending(
         for (auto& [key, dc] : deferred_compiles) {
             std::string cache_path = disk_cache_so_path(key);
             std::string tmp_path = cache_path + ".tmp." + std::to_string(::getpid());
-            futures.emplace_back(
-                key, std::async(std::launch::async, [&dc, cache_path, tmp_path]() {
-                    auto fn = jit_compile_kernel(
-                        dc.src_path, dc.compile_args, dc.named_compile_args, dc.defines, dc.extra_inc, tmp_path);
-                    std::filesystem::rename(tmp_path, cache_path);
-                    return fn;
-                }));
+            futures.emplace_back(key, std::async(std::launch::async, [&dc, cache_path, tmp_path]() {
+                                     auto fn = jit_compile_kernel(
+                                         dc.src_path,
+                                         dc.compile_args,
+                                         dc.named_compile_args,
+                                         dc.defines,
+                                         dc.extra_inc,
+                                         tmp_path,
+                                         dc.metal2_genfile_dir);
+                                     std::filesystem::rename(tmp_path, cache_path);
+                                     return fn;
+                                 }));
         }
 
         for (auto& [key, fut] : futures) {
@@ -1070,6 +1160,21 @@ static void jit_compile_pending(
             resolved_fns[key] = fn;
             std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
             g_jit_cache[key] = fn;
+        }
+
+        // Remove Metal 2.0 per-kernel header dirs once all futures referencing
+        // them have completed.  Multiple TRISC variants of the same kernel
+        // share a dir (lazy creation reuses the path), so dedupe before
+        // removing.
+        std::set<std::string> metal2_dirs_to_remove;
+        for (const auto& [key, dc] : deferred_compiles) {
+            if (!dc.metal2_genfile_dir.empty()) {
+                metal2_dirs_to_remove.insert(dc.metal2_genfile_dir);
+            }
+        }
+        for (const auto& dir : metal2_dirs_to_remove) {
+            std::error_code ec;
+            std::filesystem::remove_all(dir, ec);
         }
     }
 
