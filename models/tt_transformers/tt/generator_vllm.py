@@ -32,13 +32,30 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer], tt_cache_path):
+    """Allocate KV cache tensors with potentially different shape per layer.
+
+    Args:
+        per_layer_specs: list of ``(kv_cache_shape, dtype)`` tuples, one per
+            layer in model layer-index order. Hybrid attention models
+            (Gemma3/4, GPT-OSS) use this so sliding-window layers can be
+            backed by a smaller paged pool than full-attention layers; for
+            uniform-attention models all entries are identical.
+        dp_model: list of replicated TT model handles, one per data-parallel
+            submesh.
+        tt_cache_path: path used for on-disk weight cache file naming.
+
+    Returns:
+        ``list[submesh][layer_idx][k_or_v]`` of TT tensors.
+    """
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []
-        for layer_num in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
+        for layer_num, (kv_cache_shape, dtype) in enumerate(
+            tqdm(per_layer_specs, desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})")
+        ):
+            cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
             # Get the dtype for the kv cache based on the configured optimizations in the model
             if dp_model[mesh_idx].args.optimizations is not None:
                 kv_cache_dtype = dp_model[mesh_idx].args.optimizations.get_tensor_dtype(
@@ -68,6 +85,20 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
             kv_tt.append(kv_tt_i)
         kv_cache.append(kv_tt)
     return kv_cache
+
+
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+    """Legacy uniform-shape KV cache allocator.
+
+    Retained for backward compatibility with vLLM's pre-kv-cache-groups
+    contract; new callers should use :func:`allocate_vllm_kv_cache_per_layer`
+    which supports hybrid attention models.
+    """
+    return allocate_vllm_kv_cache_per_layer(
+        [(kv_cache_shape, dtype)] * num_layers,
+        dp_model=dp_model,
+        tt_cache_path=tt_cache_path,
+    )
 
 
 def initialize_vllm_text_transformer(
@@ -230,6 +261,9 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
+
 
 # Mllama is currently not supported in vLLM V1.
 # TODO: Remove or re-enable when Mllama is supported in vLLM V1.
@@ -333,6 +367,9 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
+
 
 class LlamaForCausalLM(Generator):
     # Class-level capabilities
@@ -395,6 +432,9 @@ class LlamaForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
+
 
 class QwenForCausalLM(Generator):
     # Class-level capabilities
@@ -444,6 +484,9 @@ class QwenForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
+
 
 class MistralForCausalLM(Generator):
     # Class-level capabilities
@@ -492,6 +535,9 @@ class MistralForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 @MULTIMODAL_REGISTRY.register_processor(
@@ -555,6 +601,9 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
@@ -631,3 +680,6 @@ class GptOssForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def allocate_kv_cache_per_layer(self, per_layer_specs):
+        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
