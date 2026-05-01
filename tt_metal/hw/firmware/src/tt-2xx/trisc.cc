@@ -128,9 +128,15 @@ extern "C" uint32_t _start1() {
     if (neo_id == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
+        (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] =
+            SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+
+    while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
+           SHARED_GLOBALS_READY_GO) {
+    }
     // Initialize GPRs to all 0s
 #pragma GCC unroll 0
     for (int i = 0; i < 64; i++) {

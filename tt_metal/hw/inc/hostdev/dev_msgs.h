@@ -415,6 +415,8 @@ struct mailboxes_t {
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
                                                            // the 4 TRISCs per engine.
+    volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4
+                                                              // for the 4 TRISCs per engine.
     struct watcher_msg_t watcher;
     struct DevicePrintMemoryLayout dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
