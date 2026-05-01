@@ -67,6 +67,11 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
 
 /**
  * out_cb = eltwise_max(in0, in1)
+ *
+ * Handles mixed-format inputs (e.g., in0 BF16, in1 FP32) by reconfiguring
+ * srcA's data format between the two copy_tile calls. When in0 and in1
+ * share format, copy_tile_to_dst_init_short_with_dt is a no-op so this is
+ * cost-free for the uniform-format case.
  */
 template <int vector_mode = (int)VectorMode::RC>
 void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
@@ -81,10 +86,16 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     cb_reserve_back(out_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
+        // srcA already configured for in0 by the init above (or by the prior
+        // iteration's _with_dt(in1, in0) below).
         copy_tile(in0, i, dst_reg_0);
+        // Reconfigure srcA for in1 before reading it. No-op if formats match.
+        copy_tile_to_dst_init_short_with_dt(in0, in1);
         copy_tile(in1, i, dst_reg_1);
         binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, static_cast<int>(VectorMode::C));
         pack_tile(dst_reg_0, out_cb, i);
+        // Reconfigure srcA back to in0 for the next iteration's first copy_tile.
+        copy_tile_to_dst_init_short_with_dt(in1, in0);
         release_dst();
     }
     cb_push_back(out_cb, num_tiles);
@@ -347,6 +358,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_wait();
 
             if constexpr (write_result_inplace) {
+                // Configure packer for in0_cb's format (caller may have set it
+                // to a different CB before entering this helper). Required when
+                // in0_cb and reduce_cb differ in format.
+                pack_reconfig_data_format(in0_cb);
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_cb);
                 }
@@ -355,6 +370,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             }
 
             if constexpr (do_reduce) {
+                // Configure packer for reduce_cb's format. No-op when format
+                // matches the prior in0_cb pack.
+                pack_reconfig_data_format(reduce_cb);
                 // While we have results in DST, take advantage of L1 accumulation
                 // to reduce row x cols tiles to rows x 1 tiles.
                 if (u > 0) {
