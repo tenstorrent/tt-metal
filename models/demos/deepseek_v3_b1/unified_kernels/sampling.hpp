@@ -1385,12 +1385,16 @@ struct TopKSampling {
                         if constexpr (CTArgs::enable_metadata) {
                             auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(
                                 CTArgs::metadata_output_l1_addr);
-                            float temperature = metadata_ptr->temperature;
+                            // volatile-qualified fields do not deduce with std::max/min literals; load scalars first.
+                            float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 0.01f);
                             // Pack two copies of the bf16 scalar into a uint32 so that
                             // generate_bcast_unary_scalar writes a correctly-filled tile word.
                             inv_temp_bf16 = float_to_bf16_packed(1.0f / temperature);
-                            K = metadata_ptr->k;
-                            p = metadata_ptr->probability_mass_threshold;
+                            K = std::min(
+                                std::max(static_cast<uint32_t>(metadata_ptr->k), static_cast<uint32_t>(1)),
+                                static_cast<uint32_t>(32));
+                            p = std::min(
+                                std::max(static_cast<float>(metadata_ptr->probability_mass_threshold), 0.0f), 1.0f);
                         }
 
                         generate_bcast_unary_scalar(CTArgs::temp_cb, inv_temp_bf16);
