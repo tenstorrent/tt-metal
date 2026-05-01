@@ -272,7 +272,18 @@ def run_group_norm_DRAM(
 @pytest.mark.parametrize("welford_mode", WELFORD_MODES)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_DRAM(
-    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid, perf_test_mode=False
+    device,
+    N,
+    C,
+    H,
+    W,
+    num_groups,
+    num_out_blocks,
+    cores_y,
+    cores_x,
+    welford_mode,
+    specify_grid=True,
+    perf_test_mode=False,
 ):
     run_group_norm_DRAM(
         device,
