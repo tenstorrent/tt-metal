@@ -23,6 +23,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "nb_models.hpp"
 #include "nb_ops.hpp"
 #include "nb_optimizers.hpp"
+#include "nb_schedulers.hpp"
 
 namespace ttml::nanobind {
 using namespace ::nanobind;
@@ -42,6 +43,7 @@ NB_MODULE(_ttml, m) {
     auto m_ops = m.def_submodule("ops", "ops");
     auto m_core = m.def_submodule("core", "core");
     auto m_optimizers = m.def_submodule("optimizers", "optimizers");
+    auto m_schedulers = m.def_submodule("schedulers", "schedulers");
 
     // TYPES
     ttml::nanobind::autograd::py_module_types(m_autograd);
@@ -49,6 +51,7 @@ NB_MODULE(_ttml, m) {
     ttml::nanobind::ops::py_module_types(m_ops);
     ttml::nanobind::core::py_module_types(m_core);
     ttml::nanobind::optimizers::py_module_types(m_optimizers);
+    ttml::nanobind::schedulers::py_module_types(m_schedulers);
 
     // FUNCTIONS / OPERATIONS
     ttml::nanobind::autograd::py_module(m_autograd);
@@ -56,6 +59,7 @@ NB_MODULE(_ttml, m) {
     ttml::nanobind::ops::py_module(m_ops);
     ttml::nanobind::core::py_module(m_core);
     ttml::nanobind::optimizers::py_module(m_optimizers);
+    ttml::nanobind::schedulers::py_module(m_schedulers);
 
     // MeshDevice binding is owned by ttnn; avoid re-registering here to prevent duplicate nanobind types.
 }
