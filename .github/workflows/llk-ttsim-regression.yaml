@@ -48,7 +48,7 @@ env:
 
 jobs:
   ttsim-regression:
-    name: "🧪 ttsim regression (${{ matrix.architecture }})"
+    name: "ttsim regression (${{ matrix.architecture }})"
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     strategy:
