@@ -5,18 +5,23 @@
 import pytest
 
 import models.perf.device_perf_utils as perf_utils
+from models.common.utility_functions import is_blackhole
+
+# Arch-conditional target — the linear_config_1024 / GEGLU subblock-volume fix landed in
+# 47df299ef68 ("model configs: kernel-A/B-verified subblock-volume fixes (single-chip
+# WH)") roughly doubled segformer device-kernel throughput on Blackhole only. WH stays at
+# the prior baseline of 211 samples/s. BH was Tracy A/B-verified at 391.71 samples/s on
+# p100a; the prior 211 target tripped BH's "performance suspiciously fast" upper-bound
+# assertion (measured 391.99). Single parametrize at module load — is_blackhole() is
+# evaluated once when the test module imports.
+_EXPECTED_PERF = 392 if is_blackhole() else 211
 
 
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        # 392 samples/s reflects the linear_config_1024 / GEGLU subblock-volume fix landed in
-        # 47df299ef68 ("model configs: kernel-A/B-verified subblock-volume fixes (single-chip
-        # WH)"), which roughly doubled segformer device-kernel throughput on Blackhole. The
-        # prior target of 211 was set before that fix and triggered the test's "too fast"
-        # upper-bound assertion (measured 391.99 samples/s).
-        [1, 392],
+        [1, _EXPECTED_PERF],
     ],
 )
 def test_perf_device_segformer_segmentation(batch_size, expected_perf, model_location_generator):
