@@ -88,7 +88,15 @@ struct MatmulBlockShape {
     uint32_t out_subblock_w;     // Output subblock width in tiles.
     uint32_t in0_block_w;        // K per K-block in tiles (= A's "per_core_K_block").
     uint32_t num_k_blocks;       // Number of K-blocks along the K dimension.
-    uint32_t batch = 1;          // Independent batch slices.
+    uint32_t batch = 1;          // Independent batch slices. Pass the actual batch count
+                                 // when the caller has no per-batch work between matmuls
+                                 // (matmul-only kernels): the helper's own batch loop runs
+                                 // mm_block_init exactly once across all batches, which is
+                                 // both faster and avoids the heterogeneous-tile-shape
+                                 // re-init corruption fixed in commit 76e99730d2e. Keep
+                                 // batch=1 and run the kernel's own batch loop ONLY when
+                                 // per-batch phase work (bias add, untilize, mailbox sync)
+                                 // must be interleaved between iterations.
 
     static constexpr MatmulBlockShape of(
         uint32_t in0_num_subblocks,

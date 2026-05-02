@@ -34,23 +34,22 @@ void kernel_main() {
         compute_kernel_lib::OutputLayout::SubblockMajor;
 #endif
 
-    for (uint32_t b = 0; b < batch; b++) {
-        compute_kernel_lib::matmul_block<
-            /*transpose=*/false,
-            /*packer_l1_acc=*/false,
-            compute_kernel_lib::LastBlockTarget::Out,
-            output_layout>(
-            in0_buf,
-            in1_buf,
-            out_buf,
-            interm_buf,
-            compute_kernel_lib::MatmulBlockShape::of(
-                in0_num_subblocks,
-                in1_num_subblocks,
-                out_subblock_h,
-                out_subblock_w,
-                in0_block_w,
-                num_k_blocks,
-                /*batch=*/1));
-    }
+    // Hand the batch loop to the helper: the helper's batch loop runs init once at
+    // entry (init_mode=Full default) and reuses LLK state across batches. Per-batch
+    // re-init was found to corrupt state on heterogeneous-tile-shape DRAM-sharded
+    // configs — see commit 76e99730d2e for the analogous fix in
+    // bmm_large_block_zm_fused_bias_activation.cpp, which preserves a kernel-side
+    // batch loop because it interleaves bias-add / untilize phases per batch. This
+    // simpler bmm has no per-batch phase work, so helper-batched is the right shape.
+    compute_kernel_lib::matmul_block<
+        /*transpose=*/false,
+        /*packer_l1_acc=*/false,
+        compute_kernel_lib::LastBlockTarget::Out,
+        output_layout>(
+        in0_buf,
+        in1_buf,
+        out_buf,
+        interm_buf,
+        compute_kernel_lib::MatmulBlockShape::of(
+            in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_w, num_k_blocks, batch));
 }
