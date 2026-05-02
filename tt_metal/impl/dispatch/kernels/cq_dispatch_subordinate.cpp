@@ -15,6 +15,7 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "api/debug/device_print_dispatch.h"
 
 // dispatch_s has a customized command buffer allocation for NOC 1.
 // Cmd Buf 0 is used for regular writes.
@@ -43,6 +44,24 @@ constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
+
+#if DEVICE_PRINT_DISPATCH_ENABLED
+constexpr uint32_t device_print_noc_locations_addr = DEVICE_PRINT_NOC_LOCATIONS_ADDR;
+constexpr uint32_t device_print_noc_locations_count = DEVICE_PRINT_NOC_LOCATIONS_COUNT;
+constexpr uint32_t device_print_l1_cache_addr = DEVICE_PRINT_L1_CACHE_ADDR;
+constexpr uint32_t device_print_l1_cache_size = DEVICE_PRINT_L1_CACHE_SIZE;
+constexpr uint16_t device_print_dram_x = DEVICE_PRINT_DRAM_X;
+constexpr uint16_t device_print_dram_y = DEVICE_PRINT_DRAM_Y;
+constexpr uint64_t device_print_dram_rw_ptrs = DEVICE_PRINT_DRAM_RW_PTRS;
+constexpr uint64_t device_print_dram_buf_addr = DEVICE_PRINT_DRAM_BUF_ADDR;
+constexpr uint32_t device_print_dram_buf_size = DEVICE_PRINT_DRAM_BUF_SIZE;
+constexpr uint64_t device_print_cycles_for_stall = DEVICE_PRINT_CYCLES_FOR_STALL;
+constexpr uint64_t device_print_cycles_for_full = DEVICE_PRINT_CYCLES_FOR_FULL;
+
+// TODO: If all inputs will remain compile time constants, consider providing more template arguments instead of using
+// defaults that are max values for architecture.
+static DevicePrintDispatch<true> device_print_dispatcher;
+#endif
 
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -143,6 +162,9 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(wait_count, *worker_sem)) {
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
     }
     WAYPOINT("WCD");
 }
@@ -184,6 +206,9 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
         invalidate_l1_cache();
         update_worker_completion_count_on_dispatch_d();
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
     WAYPOINT("DAPD");
@@ -274,6 +299,13 @@ void process_go_signal_mcast_cmd() {
         noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
     }
 
+#if DEVICE_PRINT_DISPATCH_ENABLED
+    // Workers have just been notified to start a new program; reset the stall-detection
+    // window so it measures THIS program's print activity rather than dispatch_s's
+    // overall lifetime.
+    device_print_dispatcher.notify_kernel_start();
+#endif
+
     update_worker_completion_count_on_dispatch_d();
     cmd_ptr += sizeof(CQDispatchCmd);
 }
@@ -293,6 +325,9 @@ void process_dispatch_s_wait_cmd() {
 
     // Wait for workers to complete
     while (stream_wrap_gt(cmd->wait.count, *worker_sem)) {
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
     }
     // Send updated worker count to dispatch_d and wait for updated count to get picked up by NOC before clearing the
     // counter. dispatch_d will clear it's own counter
@@ -347,8 +382,27 @@ void kernel_main() {
     cmd_ptr = cb_base;
     bool done = false;
     uint32_t total_pages_acquired = 0;
+#if DEVICE_PRINT_DISPATCH_ENABLED
+    device_print_dispatcher.init(
+        device_print_noc_locations_addr,
+        device_print_noc_locations_count,
+        device_print_l1_cache_addr,
+        device_print_l1_cache_size,
+        device_print_dram_x,
+        device_print_dram_y,
+        device_print_dram_rw_ptrs,
+        device_print_dram_buf_addr,
+        device_print_dram_buf_size,
+        device_print_cycles_for_stall,
+        device_print_cycles_for_full);
+    // notify_kernel_start() is invoked from process_go_signal_mcast_cmd, after the
+    // go signal is sent — the stall-detection window is per-program, not per-dispatch_s.
+#endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
@@ -388,5 +442,8 @@ void kernel_main() {
 #endif
     DPRINT << "dispatch_s : done" << ENDL();
     DEVICE_PRINT("dispatch_s : done\n");
+#if DEVICE_PRINT_DISPATCH_ENABLED
+    device_print_dispatcher.shutdown();
+#endif
     set_l1_data_cache<false>();
 }

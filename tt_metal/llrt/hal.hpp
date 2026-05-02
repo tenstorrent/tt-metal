@@ -58,9 +58,10 @@ bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 enum class HalDramMemAddrType : uint8_t {
     BARRIER = 0,
     PROFILER = 1,
-    DRAM_BACKED_COMMAND_QUEUES = 2,
-    UNRESERVED = 3,
-    COUNT = 4
+    DEVICE_PRINT_DISPATCH = 2,
+    DRAM_BACKED_COMMAND_QUEUES = 3,
+    UNRESERVED = 4,
+    COUNT = 5
 };
 
 enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
@@ -344,6 +345,10 @@ private:
     uint32_t remapper_pair_stride_{};
     uint32_t remapper_num_pairs_{};
 
+    // L1 buffer carved off in dispatch_s for the DevicePrintDispatch<> aggregator's
+    // scratch (NocLocationInputInfo array + per-core read cache).
+    uint32_t dispatch_s_device_print_l1_cache_size_{};
+
     float eps_ = 0.0f;
     float nan_ = 0.0f;
     float inf_ = 0.0f;
@@ -429,6 +434,9 @@ public:
     uint32_t get_remapper_client_r_config_base_addr() const { return remapper_client_r_config_base_addr_; }
     uint32_t get_remapper_pair_stride() const { return remapper_pair_stride_; }
     uint32_t get_remapper_num_pairs() const { return remapper_num_pairs_; }
+
+    // Size of the L1 cache buffer reserved on dispatch_s for the DevicePrintDispatch<>
+    uint32_t get_dispatch_s_device_print_l1_cache_size() const { return dispatch_s_device_print_l1_cache_size_; }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }

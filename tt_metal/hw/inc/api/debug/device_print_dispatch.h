@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "device_print.h"
 #include "internal/risc_attribs.h"
+#include "noc_parameters.h"
 #include "risc_common.h"
 
 namespace device_print_dispatch {
@@ -17,15 +18,15 @@ namespace device_print_dispatch {
 constexpr uint32_t DEFAULT_MAX_NOC_LOCATIONS = 8 * 10    // Tensix cores
                                                + 8 * 2;  // ETH cores
 // Noc reads/writes must be 16-byte aligned.
-constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = 16;
-constexpr uint32_t NOC_L1_TO_DRAM_ALIGNMENT = 32;
+constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = L1_ALIGNMENT;      // 16
+constexpr uint32_t NOC_L1_TO_DRAM_ALIGNMENT = DRAM_ALIGNMENT;  // 32
 #elif defined(ARCH_BLACKHOLE)
 constexpr uint32_t DEFAULT_MAX_NOC_LOCATIONS = 14 * 10    // Tensix cores
                                                + 14 * 1   // ETH cores
                                                + 2 * 12;  // DRAM cores
 // Noc reads/writes must be 16-byte aligned.
-constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = 16;
-constexpr uint32_t NOC_L1_TO_DRAM_ALIGNMENT = 32;
+constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = L1_ALIGNMENT;      // 16
+constexpr uint32_t NOC_L1_TO_DRAM_ALIGNMENT = DRAM_ALIGNMENT;  // 64
 #else
 constexpr uint32_t DEFAULT_MAX_NOC_LOCATIONS = 0;
 constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = 0;
@@ -108,7 +109,8 @@ public:
             // produced no payload yet" (write_pointer == 0).
             volatile tt_l1_ptr uint32_t* dram_rw_pointers = (volatile tt_l1_ptr uint32_t*)l1_dram_rw_pointers;
             dram_rw_pointers[0] = 0;
-            noc_async_write(l1_dram_rw_pointers, noc_dram_rw_pointers, sizeof(uint32_t));
+            dram_rw_pointers[1] = 0;
+            noc_async_write(l1_dram_rw_pointers, noc_dram_rw_pointers, 2 * sizeof(uint32_t));
             noc_async_write_barrier();
         }
 
@@ -124,6 +126,25 @@ public:
     }
 
     void notify_kernel_start() { next_stall_detection_timestamp = get_timestamp() + cycles_for_stall_detection; }
+
+    void shutdown() {
+        if (!enabled) {
+            return;
+        }
+
+        // Execute last full dispatch to drain any remaining buffers in DRAM before shutdown.
+        read_rw_pointers();
+        find_noc_locations_to_process<false>();
+        process_noc_locations();
+
+        // Mark the DRAM rw-pointer cell as "finished" so the host knows
+        // it can stop polling DRAM and fall back to per-L1 polling.
+        volatile tt_l1_ptr uint32_t* dram_rw_pointers = (volatile tt_l1_ptr uint32_t*)l1_dram_rw_pointers;
+        dram_rw_pointers[4] = 1;
+        noc_async_write(
+            l1_dram_rw_pointers + 4 * sizeof(uint32_t), noc_dram_rw_pointers + 4 * sizeof(uint32_t), sizeof(uint32_t));
+        noc_async_write_barrier();
+    }
 
     void execute() {
         if (!enabled) {
@@ -149,6 +170,13 @@ public:
             }
 
             find_noc_locations_to_process<false>();
+
+            // Everything up until now was only in local L1. Before we do any processing,
+            // that might involve DRAM, check for host reset. On host side, we will wait
+            // for at least one full dispatch window after writing the reset magic before
+            // we rely on it, so we are guaranteed to see it here if the host reset happened.
+            check_for_host_reset();
+
             process_noc_locations();
 
             // Update timestamp for next full dispatch
@@ -220,6 +248,19 @@ private:
         this->num_noc_locations_to_process = num_noc_locations_to_process;
     }
 
+    void check_for_host_reset() {
+        volatile tt_l1_ptr uint32_t* dram_rw_pointers = (volatile tt_l1_ptr uint32_t*)l1_dram_rw_pointers;
+        noc_async_read(noc_dram_rw_pointers, l1_dram_rw_pointers, sizeof(uint32_t));
+        noc_async_read_barrier();
+        if (dram_rw_pointers[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
+            dram_read_pointer = 0;
+            dram_write_pointer = 0;
+            dram_rw_pointers[0] = 0;
+            noc_async_write(l1_dram_rw_pointers, noc_dram_rw_pointers, sizeof(uint32_t));
+            noc_async_write_barrier();
+        }
+    }
+
     void process_noc_locations() {
         uint32_t current_l1_buffer_address = l1_device_print_buffer_start;
         uint32_t next_index_to_dispatch = 0;
@@ -253,8 +294,8 @@ private:
             uint32_t remote_buffer_size;
 
             if constexpr (EnableNocLocationCache) {
-                remote_buffer_address = cache_buffer_offsets[i] + remote_rw_ptr_address;
-                remote_buffer_size = cache_buffer_sizes[i];
+                remote_buffer_address = cache_buffer_offsets[location_index] + remote_rw_ptr_address;
+                remote_buffer_size = cache_buffer_sizes[location_index];
             } else {
                 remote_buffer_address = noc_location->buf_offset + remote_rw_ptr_address;
                 remote_buffer_size = noc_location->buf_size;
