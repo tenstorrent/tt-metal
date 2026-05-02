@@ -448,11 +448,10 @@ def ode_solve(
         if capture_intermediates:
             caps[f"step_{step}_x"] = x_t.clone()
 
-    # Quantize to 21 FSQ levels (0..20)
-    # FSQ: tanh(x / scale) * scale, then round, then clamp
-    # From params: acoustic_codebook_size=21 → levels 0..20
-    # The model outputs continuous values; quantize via round+clamp
-    acoustic_codes = x_t.round().long().clamp(0, 20)
+    # FSQ quantization: 21 levels in [-1, 1] with step 0.1.
+    # Continuous x_t ∈ approx [-1, 1] → code = round(x * 10 + 10), clamped to [0, 20].
+    # x_t.round() alone was wrong: maps [-1, 1] → {-1, 0, 1} → all codes near 0.
+    acoustic_codes = (x_t * 10 + 10).round().long().clamp(0, 20)
 
     if capture_intermediates:
         caps["final_x_continuous"] = x_t

@@ -209,6 +209,10 @@ class TtVoxtralTextAttention(LightweightModule):
         k_mem_cfg = k_pre.memory_config()
         v_mem_cfg = v.memory_config()
 
+        # Move to L1 before reshape to avoid WIDTH_SHARDED error in rotary_embedding
+        q_pre = ttnn.to_memory_config(q_pre, ttnn.L1_MEMORY_CONFIG)
+        k_pre = ttnn.to_memory_config(k_pre, ttnn.L1_MEMORY_CONFIG)
+
         q_pre_r = ttnn.reshape(q_pre, [1, self.n_heads, 1, self.head_dim])
         k_pre_r = ttnn.reshape(k_pre, [1, self.n_kv_heads, 1, self.head_dim])
         ttnn.deallocate(q_pre)

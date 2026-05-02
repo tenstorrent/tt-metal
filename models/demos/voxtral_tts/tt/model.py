@@ -82,10 +82,12 @@ class TtVoxtralDecoderLayer(LightweightModule):
         self.ffn_norm_w = _norm("ffn_norm.weight")
         self.norm_eps = config.norm_eps
 
-    def forward(self, x_tt, rot_mats, kv_cache=None, mask=None, mode="prefill"):
+    def forward(self, x_tt, rot_mats, current_pos=None, kv_cache=None, mask=None, mode="prefill"):
         # Attention sublayer
         normed = ttnn.rms_norm(x_tt, weight=self.attn_norm_w, epsilon=self.norm_eps)
-        attn_out = self.attention.forward(normed, rot_mats=rot_mats, mode=mode, kv_cache=kv_cache, mask=mask)
+        attn_out = self.attention.forward(
+            normed, current_pos=current_pos, rot_mats=rot_mats, mode=mode, kv_cache=kv_cache, mask=mask
+        )
         x_tt = ttnn.add(x_tt, attn_out)
         ttnn.deallocate(attn_out)
 
@@ -195,102 +197,160 @@ class VoxtralTTSModel(LightweightModule):
         sd = load_state_dict(model_dir / "consolidated.safetensors")
         return cls(device, config, sd)
 
-    def _prefill(self, inputs_embeds: torch.Tensor) -> ttnn.Tensor:
-        """Prefill: inputs_embeds [1, S, D] → hidden [1, 1, S, D] on device."""
-        B, S, D = inputs_embeds.shape
+    # Audio embedding table index scheme (from analysis of embedding norms):
+    #   rows 0..8191: semantic token embeddings (8192 codebook entries)
+    #   rows 8192 + k*21 + v: acoustic codebook k (0..35), level v (0..20)
+    _ACOUSTIC_STRIDE = 21
+    _SEMANTIC_SIZE = 8192
+    # EoA (End-of-Audio) semantic token: code 8192 signals end of generation
+    _EOA_TOKEN = 8192
 
+    def _embed_audio_frame(self, sem_code: int, acoustic_codes: torch.Tensor) -> torch.Tensor:
+        """Map (semantic_code, acoustic_codes[36]) → summed 3072-dim embedding."""
+        emb = self.audio_emb_w[sem_code].to(torch.float32)
+        for k in range(36):
+            idx = self._SEMANTIC_SIZE + k * self._ACOUSTIC_STRIDE + int(acoustic_codes[k].item())
+            if idx < self.audio_emb_w.shape[0]:
+                emb = emb + self.audio_emb_w[idx].to(torch.float32)
+        return emb.bfloat16()  # [3072]
+
+    def _prefill(self, inputs_embeds: torch.Tensor) -> ttnn.Tensor:
+        """Prefill all layers; populate KV cache. Returns final norm hidden [1,1,S,D]."""
+        _, S, D = inputs_embeds.shape
         x_tt = ttnn.from_torch(
-            inputs_embeds.to(torch.bfloat16).unsqueeze(0),  # [1, 1, S, D]
+            inputs_embeds.to(torch.bfloat16).unsqueeze(0),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         rot_mats = [self.cos_tt, self.sin_tt]
-
         for layer in self.layers:
             x_tt = layer.forward(x_tt, rot_mats=rot_mats, mode="prefill")
+        x_tt = ttnn.rms_norm(x_tt, weight=self.norm_w, epsilon=self.config.norm_eps)
+        return x_tt
 
-        # Final norm
+    def _decode_one_step(self, frame_emb: torch.Tensor, current_pos: int) -> ttnn.Tensor:
+        """Decode one token. Returns final-norm hidden [1,1,1,D] on device."""
+        x_tt = ttnn.from_torch(
+            frame_emb.reshape(1, 1, 1, self.config.dim).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Decode rotation matrices at current_pos (HF concatenated-halves format)
+        cos_1 = self.cos_tt[:, :, current_pos : current_pos + 1, :]
+        sin_1 = self.sin_tt[:, :, current_pos : current_pos + 1, :]
+        rot_mats = [cos_1, sin_1]
+
+        cur_pos_t = ttnn.from_torch(
+            torch.tensor([current_pos], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for layer in self.layers:
+            x_tt = layer.forward(x_tt, rot_mats=rot_mats, current_pos=cur_pos_t, mode="decode")
+        ttnn.deallocate(cur_pos_t)
         x_tt = ttnn.rms_norm(x_tt, weight=self.norm_w, epsilon=self.config.norm_eps)
         return x_tt
 
     def generate_tts(
         self,
         text_token_ids: torch.Tensor,  # [1, T] int64
-        voice_emb: torch.Tensor,  # [1, V, 3072] float32 or bfloat16
+        voice_emb: torch.Tensor,  # [1, V, 3072] bfloat16 or float32
         n_ode_steps: int = 8,
         cfg_alpha: float = 1.2,
+        max_audio_frames: int = 200,
     ) -> torch.Tensor:
         """
-        End-to-end TTS: text + voice → waveform.
+        End-to-end TTS: text + voice → waveform (autoregressive).
+
+        Inference flow:
+          1. Prefill [voice_emb + text_emb + begin_audio_token] through 26-layer decoder.
+          2. Autoregressively decode audio frames until EoA or max_audio_frames:
+             a. One decode step → h_new [3072]
+             b. ODE solve (8 steps) on h_new → acoustic_codes[36]
+             c. Predict semantic_code from acoustic_transformer(h_new, x_final, t=1.0)
+             d. Embed (sem_code, acoustic_codes) → next frame input
+          3. Codec decode → 24kHz waveform.
 
         Returns: waveform [1, N_samples] float32 at 24kHz
         """
-        # Embed text tokens
-        text_emb = torch.nn.functional.embedding(
-            text_token_ids, self.tok_emb_w.to(torch.float32)
-        ).bfloat16()  # [1, T, 3072]
+        import torch.nn.functional as F
 
-        # Concatenate voice (pre-computed) + text embeddings
-        prefill_emb = torch.cat([voice_emb.bfloat16(), text_emb], dim=1)  # [1, V+T, 3072]
-        S = prefill_emb.shape[1]
         V = voice_emb.shape[1]
+        text_emb = F.embedding(text_token_ids, self.tok_emb_w.to(torch.float32)).bfloat16()
         T = text_emb.shape[1]
 
-        # Prefill all layers
-        h_tt = self._prefill(prefill_emb)  # [1, 1, V+T, 3072]
+        # begin_audio_token embedding (token ID 25 = begin_audio_token_id)
+        begin_audio_emb = self.tok_emb_w[25].to(torch.bfloat16).reshape(1, 1, self.config.dim)
 
-        # Extract text positions for acoustic conditioning
-        h_text_tt = h_tt[:, :, V:, :]  # [1, 1, T, 3072]
+        # Prefill: [voice(V) + text(T) + begin_audio(1)]
+        prefill_emb = torch.cat([voice_emb.bfloat16(), text_emb, begin_audio_emb], dim=1)
+        S_prefill = prefill_emb.shape[1]
 
-        # ODE solve: generate acoustic tokens from semantic hidden states
-        acoustic_codes, x_continuous = ode_solve_ttnn(
-            h_text_tt,
-            self.acoustic_transformer,
-            self.device,
-            n_steps=n_ode_steps,
-            cfg_alpha=cfg_alpha,
-        )  # acoustic_codes: [T, 36]
-        ttnn.deallocate(h_tt)
-        ttnn.deallocate(h_text_tt)
+        h_prefill = self._prefill(prefill_emb)
+        ttnn.deallocate(h_prefill)  # discard prefill output, KV cache is populated
 
-        # Semantic token prediction from final hidden state
-        # Use acoustic transformer's semantic head on x_continuous
-        h_text_cpu = ttnn.to_torch(
-            ttnn.from_torch(
-                torch.zeros(1, 1, T, 3072, dtype=torch.bfloat16),
+        # Autoregressive audio frame generation
+        semantic_codes_list = []
+        acoustic_codes_list = []
+
+        # Initial frame input: embedding of begin_audio_token (last prefill position)
+        frame_emb = begin_audio_emb.squeeze(0).squeeze(0)  # [3072]
+        current_pos = S_prefill  # start generating at position S_prefill
+
+        for frame_idx in range(max_audio_frames):
+            if current_pos >= self.config.max_seq_len:
+                break
+
+            # Decode step: get hidden state for this position
+            h_tt = self._decode_one_step(frame_emb, current_pos)
+
+            # ODE solve for one audio frame
+            acoustic_codes, x_continuous = ode_solve_ttnn(
+                h_tt,
+                self.acoustic_transformer,
+                self.device,
+                n_steps=n_ode_steps,
+                cfg_alpha=cfg_alpha,
+            )  # acoustic_codes: [1, 36]
+
+            # Predict semantic token from (h, x_final)
+            x_cont_tt = ttnn.from_torch(
+                x_continuous.unsqueeze(0).unsqueeze(0),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        )
-        # Actually use the text decoder hidden states for semantic prediction
-        # by running acoustic transformer at t=1.0 (final ODE step)
-        h_for_sem = ttnn.from_torch(
-            torch.zeros(1, 1, T, 3072, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        x_cont_tt = ttnn.from_torch(
-            x_continuous.unsqueeze(0).unsqueeze(0),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        _, sem_logits_tt = self.acoustic_transformer.forward(h_for_sem, x_cont_tt, t=1.0)
-        ttnn.deallocate(h_for_sem)
-        ttnn.deallocate(x_cont_tt)
+            _, sem_tt = self.acoustic_transformer.forward(h_tt, x_cont_tt, t=1.0)
+            ttnn.deallocate(h_tt)
+            ttnn.deallocate(x_cont_tt)
 
-        sem_logits = ttnn.to_torch(sem_logits_tt).squeeze(0).squeeze(0)  # [T, 8320]
-        ttnn.deallocate(sem_logits_tt)
-        semantic_codes = sem_logits[:, :8192].argmax(dim=-1).unsqueeze(0)  # [1, T]
+            sem_logits = ttnn.to_torch(sem_tt).squeeze()  # [8320]
+            ttnn.deallocate(sem_tt)
+            sem_code = int(sem_logits[:8192].argmax().item())
 
-        # Codec decode
-        acoustic_codes_batched = acoustic_codes.unsqueeze(0)  # [1, T, 36]
-        waveform = self.codec_decoder.forward(semantic_codes, acoustic_codes_batched)
-        return waveform
+            # Stop on End-of-Audio token
+            if sem_code == self._EOA_TOKEN:
+                break
+
+            semantic_codes_list.append(sem_code)
+            acoustic_codes_list.append(acoustic_codes.squeeze(0))  # [36]
+
+            # Embed generated frame for next decode step
+            frame_emb = self._embed_audio_frame(sem_code, acoustic_codes.squeeze(0))
+            current_pos += 1
+
+        if not semantic_codes_list:
+            # No frames generated (EoA on first token) — return silence
+            return torch.zeros(1, 1920, dtype=torch.float32)
+
+        # Stack frames and codec decode
+        sem_codes_batch = torch.tensor(semantic_codes_list).unsqueeze(0)  # [1, N]
+        aco_codes_batch = torch.stack(acoustic_codes_list, dim=0).unsqueeze(0)  # [1, N, 36]
+        return self.codec_decoder.forward(sem_codes_batch, aco_codes_batch)

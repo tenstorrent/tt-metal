@@ -398,9 +398,10 @@ def ode_solve_ttnn(
 
     ttnn.deallocate(null_h_tt)
 
-    # Quantize: round x to FSQ levels [0, 20]
+    # FSQ quantization: 21 levels, step 0.1, x ∈ [-1, 1] → code = round(x*10+10) ∈ [0, 20].
+    # x_continuous.round() was wrong — it maps all values in (-0.5, 0.5) to code 0.
     x_continuous = ttnn.to_torch(x_t_tt).squeeze(0).squeeze(0)  # [N, 36]
     ttnn.deallocate(x_t_tt)
-    acoustic_codes = x_continuous.round().long().clamp(0, 20)
+    acoustic_codes = (x_continuous * 10 + 10).round().long().clamp(0, 20)
 
     return acoustic_codes, x_continuous
