@@ -281,6 +281,11 @@ class VoxtralTTSModel(LightweightModule):
 
         V = voice_emb.shape[1]
         D = self.config.dim
+        # text_token_ids must be RAW text tokens (no BOS/EOS/instruction markers).
+        # Use mistral_common SpeechRequest tokenizer, not ChatCompletionRequest:
+        #   tok.instruct_tokenizer.tokenizer.encode(text, bos=False, eos=False)
+        # Passing ChatCompletion tokens (which include BOS=1, marker=3, EOS=4)
+        # breaks the TTS format by injecting extra tokens in the text segment.
         text_emb = F.embedding(text_token_ids, self.tok_emb_w.to(torch.float32)).bfloat16()
         T = text_emb.shape[1]
 

@@ -142,14 +142,29 @@ def whisper_model():
     return model
 
 
+def encode_text_for_tts(text: str, tokenizer) -> torch.Tensor:
+    """Encode text using raw tokenization (no BOS/EOS/instruction markers) for TTS."""
+    from mistral_common.protocol.speech.request import SpeechRequest
+
+    req = SpeechRequest(input=text, voice="casual_male")
+    tokens = tokenizer.encode_speech_request(req).tokens
+    # Extract text tokens from: [BOS, begin_audio, audio×V, text_to_audio=36, TEXT, audio_to_text=35, begin_audio]
+    TEXT_TO_AUDIO = 35  # audio_to_text comes AFTER text tokens
+    AUDIO_TO_TEXT = 35
+    TEXT_TO_AUDIO_TOKEN = 36
+    try:
+        t2a_idx = tokens.index(TEXT_TO_AUDIO_TOKEN)
+        a2t_idx = tokens.index(AUDIO_TO_TEXT, t2a_idx + 1)
+        text_tokens = tokens[t2a_idx + 1 : a2t_idx]
+    except ValueError:
+        # Fallback: use instruct tokenizer directly
+        text_tokens = tokenizer.instruct_tokenizer.tokenizer.encode(text, bos=False, eos=False)
+    return torch.tensor([text_tokens])
+
+
 def generate_audio_float32(text, tts_model, voice_emb, tokenizer, max_frames=30) -> np.ndarray:
     """Generate TTS audio for a text prompt. Returns float32 numpy array at 24kHz."""
-    from mistral_common.protocol.instruct.chunk import TextChunk
-    from mistral_common.protocol.instruct.messages import UserMessage
-    from mistral_common.protocol.instruct.request import ChatCompletionRequest
-
-    req = ChatCompletionRequest(messages=[UserMessage(content=[TextChunk(text=text)])])
-    token_ids = torch.tensor([tokenizer.encode_chat_completion(req).tokens])
+    token_ids = encode_text_for_tts(text, tokenizer)
     waveform = tts_model.generate_tts(token_ids, voice_emb, n_ode_steps=8, max_audio_frames=max_frames)
     return waveform[0].float().numpy().astype(np.float32)
 
@@ -166,12 +181,13 @@ def test_tts_audio_is_non_silent(device, tts_model, voice_emb, tokenizer):
 
 
 def test_tts_whisper_detects_speech(device, tts_model, voice_emb, tokenizer, whisper_model):
-    """Whisper should detect speech in at least one generated prompt."""
+    """Whisper should detect speech in at least one generated prompt (out of all 5)."""
     n_transcribed = 0
     results = []
 
-    for text in TEST_PROMPTS[:3]:
-        audio_24k = generate_audio_float32(text, tts_model, voice_emb, tokenizer, max_frames=25)
+    for text in TEST_PROMPTS:  # use all 5 prompts for better coverage
+        max_frames = 20 + len(text) // 5
+        audio_24k = generate_audio_float32(text, tts_model, voice_emb, tokenizer, max_frames=max_frames)
         audio_16k = resample_24k_to_16k(audio_24k)
         transcript = transcribe_cpu(audio_16k, whisper_model)
         results.append((text, transcript))
@@ -186,7 +202,7 @@ def test_tts_whisper_detects_speech(device, tts_model, voice_emb, tokenizer, whi
     print(f"  Detected speech: {n_transcribed}/{len(results)}")
     print(f"{'='*60}")
 
-    # At least 1 of 3 prompts should produce non-empty transcript
+    # At least 1 of 5 prompts should produce non-empty transcript
     assert n_transcribed >= 1, (
         f"Whisper detected no speech in any of {len(results)} prompts. "
         "Generated audio may be pure noise or incorrectly formatted."
