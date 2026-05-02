@@ -137,6 +137,17 @@ def needs_row_major(h: int, w: int, per_core_N: int) -> bool:
     return h > 1 and w != per_core_N
 
 
+def _capacity_flags_from(compute_kernel_config: Any) -> tuple[bool, bool]:
+    """Extract (fp32_dest_acc_en, dst_full_sync_en) from a ttnn compute kernel config.
+
+    Falls back to (False, True) — the default WH/BH bf16 full-sync DST layout — when
+    an attribute is absent (older config types or test stubs).
+    """
+    fp32 = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", False))
+    full_sync = bool(getattr(compute_kernel_config, "dst_full_sync_en", True))
+    return fp32, full_sync
+
+
 def upgrade_subblock(
     program_config: Any,
     fp32_dest_acc_en: bool = False,
@@ -144,6 +155,7 @@ def upgrade_subblock(
     dst_full_sync_en: bool = True,
     enable_tile_pack_row_major: bool = True,
     require_legacy_writer: bool = False,
+    compute_kernel_config: Optional[Any] = None,
 ) -> Any:
     """Mutate ``program_config`` to use the largest legal (h, w) and return it.
 
@@ -153,8 +165,20 @@ def upgrade_subblock(
     is True), also flips ``tile_pack_row_major`` on. Pass
     ``require_legacy_writer=True`` to force a legacy-compatible pick (no rmo).
 
+    When ``compute_kernel_config`` is supplied, its ``fp32_dest_acc_en`` and
+    ``dst_full_sync_en`` attributes are used in preference to the keyword
+    arguments — saves the caller from re-stating them. Pass either form;
+    explicit kwargs override when both are given.
+
     Returns the same config object for chaining.
     """
+    if compute_kernel_config is not None:
+        fp32_from_ckc, full_sync_from_ckc = _capacity_flags_from(compute_kernel_config)
+        # Only override when the kwargs are still at their defaults — explicit values win.
+        if fp32_dest_acc_en is False:
+            fp32_dest_acc_en = fp32_from_ckc
+        if dst_full_sync_en is True:
+            dst_full_sync_en = full_sync_from_ckc
     pm = int(program_config.per_core_M)
     pn = int(program_config.per_core_N)
     h, w = largest_subblock(

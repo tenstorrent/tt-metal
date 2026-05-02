@@ -163,6 +163,33 @@ def test_upgrade_subblock_legacy_only_skips_rmo():
     assert cfg.tile_pack_row_major is False
 
 
+def test_upgrade_subblock_reads_compute_kernel_config():
+    """When compute_kernel_config is passed, its fp32_dest_acc_en and dst_full_sync_en
+    attributes should drive the DST-capacity decision without requiring the caller to
+    re-state the flags. ttnn's default WormholeComputeKernelConfig uses
+    dst_full_sync_en=False (half-sync), which doubles the DST tile budget."""
+    cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=2,
+        per_core_M=4,
+        per_core_N=8,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    # fp32_dest_acc_en=True halves cap; default dst_full_sync_en=False doubles it.
+    # Net cap = 16 / 2 = 8 → can pick (1, 8).
+    ckc = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    at.upgrade_subblock(cfg, compute_kernel_config=ckc)
+    assert (cfg.out_subblock_h, cfg.out_subblock_w) == (1, 8)
+
+
 def test_upgrade_subblock_1d_mcast():
     cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(4, 8),
@@ -303,9 +330,9 @@ def test_upgraded_config_runs_through_matmul(device):
     out_torch = ttnn.to_torch(out_tt)
     expected = (a_t.float() @ b_t.float()).bfloat16()
 
-    # PCC threshold matches typical bf16 matmul tolerance
-    delta = (out_torch.float() - expected.float()).abs()
-    rel = delta / (expected.float().abs().clamp_min(1e-3))
-    # 0.05 absolute tolerance is generous but bf16+HiFi2 produces noticeable rounding
-    assert delta.max() < 5.0, f"max abs error too large: {delta.max():.3f}"
+    # PCC tolerance matches the typical bf16+HiFi2 matmul threshold used elsewhere
+    # in the matmul test suite (see test_matmul.py).
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    assert_with_pcc(expected, out_torch, pcc=0.99)
     ttnn.deallocate(out_tt)
