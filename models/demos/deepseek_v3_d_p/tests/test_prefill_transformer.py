@@ -96,14 +96,16 @@ SEQ_LEN_25K = 25 * 1024
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 2), (SEQ_LEN_25K, 2)],
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
 )
 @pytest.mark.parametrize(
     "num_layers",
     [
+        5,
         12,
         pytest.param(61, marks=pytest.mark.skipif(not is_galaxy(), reason="Testing entire-prefill only on Galaxy")),
     ],
+    ids=["5_layers", "12_layers", "61_layers"],
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
@@ -111,10 +113,11 @@ SEQ_LEN_25K = 25 * 1024
         (64, GateComputeMode.HOST_ALL),
         (256, GateComputeMode.HOST_ALL),
         (256, GateComputeMode.DEVICE),
+        (256, GateComputeMode.DEVICE_FP32),
     ],
-    ids=["e64_host", "e256_host", "e256_device"],
+    ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
 )
-@pytest.mark.parametrize("num_iterations", [1])
+@pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [

@@ -181,7 +181,7 @@ void kernel_main() {
     for (uint32_t c = 0; c < num_cores; c++) {
         noc_semaphore_inc(all_core_barrier_noc_addrs[c], 1);
     }
-    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
