@@ -127,4 +127,42 @@ def ensure_cluster_healthy():
         "Running tt-smi -r to restore clean state…"
     )
     _run_smi_reset()
+
+    # ── FIX GS-2b (#42429): warm-up cycle after tt-smi reset ─────────────────
+    # tt-smi -r reloads base-UMD firmware on ALL ETH channels, including non-MMIO.
+    # If the next mesh_device fixture opens with FABRIC_2D, Metal's ControlPlane
+    # constructor crashes with SIGBUS because non-MMIO channels are still in
+    # base-UMD state during FABRIC_2D init (metal_env.cpp:295 reinit path).
+    #
+    # Solution: open/close FABRIC_1D once — FIX M (device.cpp:664) transitions
+    # all non-MMIO base-UMD channels via launch_msg, loading proper Metal firmware.
+    # Close cleanly → firmware properly terminated.  After this warm-up, no
+    # channels are in base-UMD state and the test's FABRIC_2D init succeeds.
+    print(
+        "\n[conftest] FIX GS-2b (#42429): warm-up open/close cycle (FABRIC_1D) "
+        "to clear base-UMD state from tt-smi before FABRIC_2D tests run…"
+    )
+    warmup_handler = signal.signal(signal.SIGALRM, _sigalrm_handler)
+    signal.alarm(_HEALTH_CHECK_OPEN_TIMEOUT_S)
+    try:
+        warmup = ttnn.open_mesh_device(ttnn.MeshShape(*_HEALTH_CHECK_MESH_SHAPE))
+        signal.alarm(0)
+        ttnn.close_mesh_device(warmup)
+        print("[conftest] FIX GS-2b: warm-up complete — channels clean for FABRIC_2D.")
+    except _OpenMeshTimeout:
+        signal.alarm(0)
+        print(
+            "[conftest] FIX GS-2b: WARNING: warm-up timed out — "
+            "FABRIC_2D tests may still hit Bus error."
+        )
+    except Exception as exc:
+        signal.alarm(0)
+        print(
+            f"[conftest] FIX GS-2b: WARNING: warm-up failed ({exc}) — "
+            "FABRIC_2D tests may fail due to residual base-UMD channels."
+        )
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, warmup_handler)
+
     yield
