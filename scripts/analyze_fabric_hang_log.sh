@@ -943,6 +943,17 @@ FIX_PF_FIRES=$(grep -cE 'FIX PF.*skipping Metal exit signal|FIX PF.*stale fw_lau
 # status=0xdeaddead: firmware-written fatal-error sentinel seen in teardown timeout messages.
 INVALID_EDMSTATUS=$(grep -cE 'NOT a valid EDMStatus value|zeroed edm_status_address' "$CLEAN" 2>/dev/null; :)
 DEADDEAD_STATUS=$(grep -cE 'status=0xdeaddead' "$CLEAN" 2>/dev/null; :)
+# FIX RZ (#42429): configure_fabric() sets fabric_stale_base_umd_channels_=true when
+# skip_soft_reset_channels is non-empty on a non-MMIO device (FIX M path).  Enables
+# is_fabric_degraded() to return true so Python AllGather tests skip instead of hang.
+STALE_BASE_UMD_FIRES=$(grep -cE 'Setting fabric_stale_base_umd_channels_=true' "$CLEAN" 2>/dev/null; :)
+# Python-level skip in test_gap23 — is_fabric_degraded() returns true (FIX RZ flag set)
+# and AllGather is skipped to avoid hang on base-UMD cluster (commit 74cb2aa7591).
+FIX_RZ_SKIP_FIRES=$(grep -cE 'fabric degraded.*base-UMD channels.*skipping AllGather|GAP-23.*fabric degraded.*base-UMD' "$CLEAN" 2>/dev/null; :)
+# FIX QW-B (#42429): C++ fixture skip guard fires because stale_base_umd_channels=true.
+# Combined check (relay_broken || channels_not_ready || stale_base_umd) caught the FIX M
+# degraded state that the old guard (relay_broken || channels_not_ready) missed.
+FIX_QW_B_SKIP=$(grep -cE 'stale_base_umd_channels=true.*skipping to avoid dispatch core hang|skipping to avoid dispatch core hang on base-UMD cluster' "$CLEAN" 2>/dev/null; :)
 
 if [[ "${HAS_DISPATCH_CASCADE:-0}" -gt 0 ]]; then
     DIAGNOSIS="500ms dispatch cascade (FIX PA/PB/PC pattern): ${HAS_DISPATCH_CASCADE} Timeout(500ms)
@@ -1135,6 +1146,23 @@ if [ "${DEADDEAD_STATUS:-0}" -gt 0 ]; then
     echo "     An ERISC did not reach TERMINATED within 5000ms and its status reads as 0xdeaddead."
     echo "     This is a firmware-written sentinel indicating the ERISC encountered a fatal error."
     echo "     The hardware reset (assert_risc_reset_at_core) should follow to recover the channel."
+fi
+if [ "${STALE_BASE_UMD_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX RZ] configure_fabric() set fabric_stale_base_umd_channels_=true on ${STALE_BASE_UMD_FIRES} non-MMIO device(s)."
+    echo "     FIX M (launch_msg transition) detected base-UMD relay firmware retained on non-MMIO ERISCs."
+    echo "     FIX RZ sets fabric_stale_base_umd_channels_=true so is_fabric_degraded() returns true,"
+    echo "     enabling Python AllGather tests and C++ fixture guards to skip instead of hang."
+fi
+if [ "${FIX_RZ_SKIP_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX RZ SKIP] is_fabric_degraded() returned true (base-UMD channels) — AllGather skipped ${FIX_RZ_SKIP_FIRES} time(s)."
+    echo "     Python test_gap23 guard (commit 74cb2aa7591) detected stale base-UMD state and skipped AllGather."
+    echo "     Without this guard, AllGather on stale-firmware devices causes completion_queue_wait_front hang."
+fi
+if [ "${FIX_QW_B_SKIP:-0}" -gt 0 ]; then
+    echo "  => [FIX QW-B] C++ fixture skip guard fired on stale_base_umd_channels=true (${FIX_QW_B_SKIP} occurrence(s))."
+    echo "     Combined guard (relay_broken || channels_not_ready || stale_base_umd) caught the FIX M degraded state"
+    echo "     that the old guard (relay_broken || channels_not_ready) would have missed."
+    echo "     Without FIX QW-B, AllGather would proceed on stale-firmware cluster → dispatch core timeout (~100s)."
 fi
 if [ "${FIX_TE_SKIPS:-0}" -gt 0 ]; then
     echo "  => [FIX TE] control_plane: FIX TB-excluded chip(s) skipped in routing table config (${FIX_TE_SKIPS} skip(s))."
