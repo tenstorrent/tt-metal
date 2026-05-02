@@ -240,6 +240,11 @@ public:
                     tt::LogTest,
                     "open_devices_internal failed (degraded runner / topology mismatch): {} — skipping test group",
                     e.what());
+                // FIX CD-6 (#42429): Mark hardware fault so the test loop breaks instead of
+                // continuing to the next group. After a fatal exception, the peer MPI rank may
+                // have aborted; attempting collective control-plane reinit for the next group
+                // would hang indefinitely (up to the 15-minute CI timeout).
+                hardware_fault_during_open_ = true;
                 try {
                     close_devices();
                 } catch (...) {
@@ -294,6 +299,11 @@ public:
         }
         return false;
     }
+
+    // FIX CD-6 (#42429): Returns true when open_devices_internal() threw an unrecoverable
+    // exception. The test loop should break (not continue) to avoid hanging in collective
+    // control plane reinit with a peer MPI rank that may have already aborted.
+    bool had_hardware_fault() const { return hardware_fault_during_open_; }
 
     void close_devices() {
         if (!are_devices_open_) {
@@ -1825,6 +1835,10 @@ private:
 
     bool are_devices_open_ = false;
     bool wrap_around_mesh_ = false;
+    // FIX CD-6 (#42429): Set when open_devices_internal() throws an exception (hardware fault /
+    // unrecoverable topology mismatch). Signals the test loop to abort remaining groups —
+    // continuing after a fatal exception risks a collective hang when the peer MPI rank died.
+    bool hardware_fault_during_open_ = false;
     mutable std::map<FabricNodeId, uint32_t> device_frequency_cache_;
     mutable bool frequency_validated_ = false;
 

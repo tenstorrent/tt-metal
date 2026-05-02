@@ -190,6 +190,15 @@ int main(int argc, char** argv) {
         if (!open_devices_success) {
             log_warning(
                 tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
+            // FIX CD-6 (#42429): If open_devices threw an exception (hardware fault), stop
+            // processing further test groups. Continuing after a fatal exception risks hanging
+            // in collective control-plane reinit when the peer MPI rank has already aborted.
+            if (test_context.had_hardware_fault()) {
+                log_warning(
+                    tt::LogTest,
+                    "Hardware fault during open_devices — aborting remaining test groups (#42429 FIX CD-6)");
+                break;
+            }
             continue;
         }
 
