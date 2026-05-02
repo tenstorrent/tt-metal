@@ -104,6 +104,7 @@ void AdamWFullPrecision::step() {
 serialization::StateDict AdamWFullPrecision::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
+    dict["lr"] = m_config.lr;
     dict["master_weights"] = m_master_weights;
     dict["exp_avg"] = m_exp_avg;
     dict["exp_avg_sq"] = m_exp_avg_sq;
@@ -116,6 +117,9 @@ serialization::StateDict AdamWFullPrecision::get_state_dict() const {
 
 void AdamWFullPrecision::set_state_dict(const serialization::StateDict& dict) {
     set_steps(serialization::get_value_type<size_t>(dict, "steps"));
+    if (dict.contains("lr")) {
+        set_lr(serialization::get_value_type<float>(dict, "lr"));
+    }
     m_master_weights = std::get<serialization::NamedParameters>(dict.at("master_weights"));
     m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
     m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));

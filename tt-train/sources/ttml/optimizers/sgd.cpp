@@ -84,12 +84,16 @@ serialization::StateDict SGD::get_state_dict() const {
     serialization::StateDict dict;
     dict["momentum"] = m_momentum;
     dict["steps"] = m_steps;
+    dict["lr"] = m_config.lr;
     return dict;
 }
 
 void SGD::set_state_dict(const serialization::StateDict& dict) {
     m_momentum = std::get<serialization::NamedParameters>(dict.at("momentum"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
+    if (dict.contains("lr")) {
+        set_lr(serialization::get_value_type<float>(dict, "lr"));
+    }
 }
 
 size_t SGD::get_steps() const {

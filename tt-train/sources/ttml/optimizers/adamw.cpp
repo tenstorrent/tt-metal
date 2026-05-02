@@ -93,6 +93,7 @@ void AdamW::step() {
 serialization::StateDict AdamW::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
+    dict["lr"] = m_config.lr;
     dict["exp_avg"] = m_exp_avg;
     dict["exp_avg_sq"] = m_exp_avg_sq;
     dict["amsgrad"] = m_config.amsgrad;
@@ -104,6 +105,9 @@ serialization::StateDict AdamW::get_state_dict() const {
 
 void AdamW::set_state_dict(const serialization::StateDict& dict) {
     set_steps(serialization::get_value_type<size_t>(dict, "steps"));
+    if (dict.contains("lr")) {
+        set_lr(serialization::get_value_type<float>(dict, "lr"));
+    }
     m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
     m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
 
