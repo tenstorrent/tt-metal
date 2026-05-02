@@ -99,6 +99,7 @@ void kernel_main() {
     uint64_t sender_scratch_slot_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, sender_scratch_base + core_id * sizeof(uint32_t));
     noc_inline_dw_write(sender_scratch_slot_noc_addr, mailbox_l1_addr);
+    noc_async_write_barrier();  // ensure mailbox L1 addr has landed before atomic wakes sender
     uint64_t sender_mbox_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(mbox_ready_semaphore_id));
     noc_semaphore_inc(sender_mbox_ready_noc_addr, 1);
