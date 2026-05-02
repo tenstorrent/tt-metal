@@ -228,7 +228,24 @@ public:
             setup_channel_trimming_rtoptions(channel_trimming_mode);
 
             log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
-            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
+            // FIX CD-5 (#42429): open_devices_internal() can throw (e.g. ControlPlane
+            // validate_requested_intermesh_connections unordered_map::at on degraded runner
+            // where not all mesh node IDs exist in the physical topology mapping).
+            // Catch and return false so the test loop treats it as an unsupported config skip,
+            // consistent with the is_fabric_config_valid() try/catch above.
+            try {
+                open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogTest,
+                    "open_devices_internal failed (degraded runner / topology mismatch): {} — skipping test group",
+                    e.what());
+                try {
+                    close_devices();
+                } catch (...) {
+                }
+                return false;
+            }
 
             topology_ = topology;
             current_channel_trimming_mode_ = channel_trimming_mode;
