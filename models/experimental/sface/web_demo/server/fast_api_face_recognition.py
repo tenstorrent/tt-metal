@@ -72,7 +72,7 @@ from models.experimental.yunet.common import (
 from models.experimental.yunet.tt.ttnn_yunet import create_yunet_model
 
 # SFace imports
-from models.experimental.sface.common import get_sface_onnx_path, SFACE_L1_SMALL_SIZE
+from models.experimental.sface.common import get_sface_onnx_path
 from models.experimental.sface.reference.sface_model import load_sface_from_onnx
 from models.experimental.sface.tt.ttnn_sface import create_sface_model
 
@@ -152,8 +152,9 @@ async def startup():
     ttnn.CONFIG.enable_model_cache = True
     logging.info("Enabled TTNN model cache")
 
-    # Use larger L1 size for both models
-    l1_size = max(YUNET_L1_SMALL_SIZE, SFACE_L1_SMALL_SIZE)
+    # Use YuNet's L1 size — it's the tighter constraint (tuned for WH compatibility)
+    # SFace uses auto sharding + DRAM slicing so it works with smaller L1 too
+    l1_size = YUNET_L1_SMALL_SIZE
     logging.info(f"Initializing Tenstorrent device with l1_small_size={l1_size}...")
     device = ttnn.open_device(device_id=0, l1_small_size=l1_size)
 

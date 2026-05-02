@@ -19,11 +19,10 @@ if [[ -z "$VIRTUAL_ENV" ]]; then
     exit 1
 fi
 
-# Install dependencies to user site-packages
+# Install dependencies into the virtualenv
 echo "Installing dependencies..."
-/usr/bin/python3 -m pip install -q fastapi uvicorn python-multipart Pillow
+uv pip install -q fastapi uvicorn python-multipart Pillow
 
-# Run server with access to both virtualenv (ttnn) and user site-packages (uvicorn)
+# Run server
 echo "Starting Face Recognition server on http://0.0.0.0:8000"
-PYTHONPATH="$VIRTUAL_ENV/lib/python3.10/site-packages:$PYTHONPATH" \
-/usr/bin/python3 -m uvicorn models.experimental.sface.web_demo.server.fast_api_face_recognition:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn models.experimental.sface.web_demo.server.fast_api_face_recognition:app --host 0.0.0.0 --port 8000 --reload

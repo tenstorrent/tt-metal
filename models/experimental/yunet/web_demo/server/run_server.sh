@@ -22,11 +22,10 @@ echo "TT_METAL_HOME: $TT_METAL_HOME"
 echo "Server will start on: http://0.0.0.0:8000"
 echo ""
 
-# Check if uvicorn is installed
+# Install dependencies if needed
 if ! python -c "import uvicorn" 2>/dev/null; then
-    echo "ERROR: uvicorn not found. Install with:"
-    echo "  pip install fastapi uvicorn python-multipart"
-    exit 1
+    echo "Installing dependencies..."
+    uv pip install -q fastapi uvicorn python-multipart Pillow
 fi
 
 # Start the server

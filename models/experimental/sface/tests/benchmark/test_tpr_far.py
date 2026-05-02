@@ -582,10 +582,9 @@ def run_benchmark(dataset: str = "lfw", num_pairs: int = 1000):
         return None
 
     # Initialize TTNN device with proper L1 size (same as server)
-    from models.experimental.sface.common import SFACE_L1_SMALL_SIZE
     from models.experimental.yunet.common import YUNET_L1_SMALL_SIZE
 
-    l1_size = max(SFACE_L1_SMALL_SIZE, YUNET_L1_SMALL_SIZE)
+    l1_size = YUNET_L1_SMALL_SIZE  # Use YuNet's tighter L1 constraint (WH compatible)
 
     logger.info("\n[2/4] Initializing TTNN device and models...")
     logger.info(f"Using l1_small_size={l1_size}")
