@@ -309,7 +309,8 @@ protected:
         // turning a data-path race condition test into an uninformative crash.
         for (const auto& mesh_dev : devices_) {
             for (auto* dev : mesh_dev->get_devices()) {
-                if (dev->is_fabric_relay_path_broken() || dev->is_fabric_channels_not_ready_for_traffic()) {
+                if (dev->is_fabric_relay_path_broken() || dev->is_fabric_channels_not_ready_for_traffic() ||
+                    dev->is_fabric_stale_base_umd_channels()) {
                     GTEST_SKIP() << "Fabric2DFixture: device " << dev->id()
                                  << " has broken relay path or channels not ready"
                                  << " — skipping unicast test on degraded cluster";
@@ -406,7 +407,8 @@ public:
         // from SetUpTestSuite which is also a hook, so they are fine too.
         for (const auto& mesh_dev : devices_) {
             for (auto* dev : mesh_dev->get_devices()) {
-                if (dev->is_fabric_relay_path_broken() || dev->is_fabric_channels_not_ready_for_traffic()) {
+                if (dev->is_fabric_relay_path_broken() || dev->is_fabric_channels_not_ready_for_traffic() ||
+                    dev->is_fabric_stale_base_umd_channels()) {
                     GTEST_SKIP() << "CustomMeshGraphFabric2DFixture: device " << dev->id()
                                  << " has broken relay path or channels not ready"
                                  << " — skipping unicast test on degraded cluster";

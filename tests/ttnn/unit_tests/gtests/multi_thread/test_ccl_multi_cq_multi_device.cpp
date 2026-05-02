@@ -110,11 +110,13 @@ protected:
         // fabric_channels_not_ready_for_traffic_ (FIX AN/QD/QU), so the flags are
         // accurate by the time we reach this check.
         for (auto* idev : mesh_device_->get_devices()) {
-            if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic()) {
+            if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic() ||
+                idev->is_fabric_stale_base_umd_channels()) {
                 GTEST_SKIP() << "FIX QW (#42429): cluster degraded (device " << idev->id()
                              << " fabric_relay_path_broken=" << idev->is_fabric_relay_path_broken()
                              << " channels_not_ready=" << idev->is_fabric_channels_not_ready_for_traffic()
-                             << ") — skipping to avoid ~100 s quiesce burn before FIX AA SKIP.";
+                             << " stale_base_umd_channels=" << idev->is_fabric_stale_base_umd_channels()
+                             << ") — skipping to avoid dispatch core hang on base-UMD cluster.";
             }
         }
     }
