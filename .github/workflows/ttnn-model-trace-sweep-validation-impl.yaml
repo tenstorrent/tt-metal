@@ -120,6 +120,7 @@ jobs:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
           MANIFEST_PATH: ${{ inputs.manifest-path }}
           MODELS_FILTER: ${{ inputs.models-filter }}
+          SCOPE_TARGET: ${{ inputs.scope-targets }}
         run: |
           mkdir -p model_tracer/traced_operations
           # Build args as an array so a multi-token MODELS_FILTER value (e.g.
@@ -129,6 +130,15 @@ jobs:
             "$MANIFEST_PATH"
             model_tracer/traced_operations/ttnn_operations_master.json
           )
+          # Pass an explicit scope positional arg when the caller chose
+          # lead_models or model_traced. Without this, reconstruct-manifest
+          # iterates ALL scopes in the registry's `targets:` section and the
+          # scope filter the dispatch UI thinks it's enforcing is silently
+          # ignored. "all" deliberately omits the positional so the loader
+          # iterates every group.
+          if [[ "$SCOPE_TARGET" == "lead_models" || "$SCOPE_TARGET" == "model_traced" ]]; then
+            RECONSTRUCT_ARGS+=("$SCOPE_TARGET")
+          fi
           if [[ -n "$MODELS_FILTER" ]]; then
             RECONSTRUCT_ARGS+=(--models-filter "$MODELS_FILTER")
           fi
