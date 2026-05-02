@@ -276,6 +276,16 @@ protected:
     std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
     std::optional<experimental::PrecompiledKernelConfig> precompiled_config_;
 
+    // User-supplied include paths (-I), resolved to absolute paths
+    // Populated by subclass constructors via set_compiler_include_paths()
+    std::vector<std::string> resolved_compiler_include_paths_;
+
+    // Resolve user-supplied include paths and store them on the kernel. Absolute
+    // paths pass through unmodified; relative paths are resolved against the current
+    // working directory and must point at an existing directory (typos throw at
+    // kernel construction rather than producing a confusing build failure later).
+    void set_compiler_include_paths(const std::vector<std::filesystem::path>& paths);
+
     virtual std::string config_hash() const = 0;
 
     std::vector<std::string> file_paths(IDevice& device, const std::string& binary_root) const;
@@ -315,6 +325,7 @@ public:
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
             "DataMovementKernel is not supported on Quasar. Use QuasarDataMovementKernel instead.");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~DataMovementKernel() override = default;
@@ -329,8 +340,6 @@ public:
     Config config() const override { return this->config_; }
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
-
-    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     std::string_view get_compiler_opt_level() const override;
 
@@ -451,6 +460,7 @@ public:
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
             "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead.");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~ComputeKernel() override = default;
@@ -466,8 +476,6 @@ public:
     Config config() const override { return this->config_; }
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
-
-    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     std::string_view get_compiler_opt_level() const override;
 
@@ -542,6 +550,7 @@ public:
             "Number of DM cores per cluster specified in config must match number of DM cores per cluster that have "
             "been reserved");
         TT_FATAL(std::is_sorted(dm_processors_.begin(), dm_processors_.end()), "DM cores must be ordered");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~QuasarDataMovementKernel() override = default;
@@ -557,8 +566,6 @@ public:
     Config config() const override { return this->config_; }
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
-
-    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     std::string_view get_compiler_opt_level() const override;
 
@@ -615,6 +622,7 @@ public:
             "per Tensix engine must match number of compute cores per cluster that have been reserved");
         TT_FATAL(
             std::is_sorted(compute_processors_.begin(), compute_processors_.end()), "Compute cores must be ordered");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~QuasarComputeKernel() override = default;
@@ -629,8 +637,6 @@ public:
     Config config() const override { return this->config_; }
 
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
-
-    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     std::string_view get_compiler_opt_level() const override;
 

@@ -88,6 +88,25 @@ fs::path resolve_path(const fs::path& given_file_name) {
     // Not found
     TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", given_file_name);
 }
+
+// Resolve a user-supplied compiler include path (-I). Absolute paths pass through
+// unchanged (the user has been explicit; gcc itself will warn at compile time if the
+// directory doesn't exist). Relative paths are resolved against the current working
+// directory and must point at an existing directory — typos fail fast at kernel
+// construction rather than producing a confusing build failure later.
+fs::path resolve_compiler_include_dir(const fs::path& given) {
+    if (given.is_absolute()) {
+        return given;
+    }
+    auto resolved = fs::current_path() / given;
+    if (!fs::is_directory(resolved)) {
+        TT_THROW(
+            "Compiler include directory '{}' not found relative to current working directory '{}'.",
+            given.string(),
+            fs::current_path().string());
+    }
+    return resolved;
+}
 }  // namespace
 
 KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
@@ -272,20 +291,6 @@ std::string_view DramKernel::get_compiler_opt_level() const { return enchantum::
 
 std::string_view DramKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
-void DataMovementKernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
-    Kernel::process_include_paths(callback);
-    for (const auto& path : this->config_.compiler_include_paths) {
-        callback(path.string());
-    }
-}
-
-void ComputeKernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
-    Kernel::process_include_paths(callback);
-    for (const auto& path : this->config_.compiler_include_paths) {
-        callback(path.string());
-    }
-}
-
 void Kernel::process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)> callback) const {
     callback(this->compile_time_args());
 }
@@ -323,6 +328,17 @@ void Kernel::process_include_paths(const std::function<void(const std::string& p
     // source is transformed and inlined (as with simplified compute kernel syntax).
     if (kernel_src_.source_type_ == KernelSource::FILE_PATH) {
         callback(kernel_src_.path_.parent_path().string());
+    }
+    for (const auto& path : this->resolved_compiler_include_paths_) {
+        callback(path);
+    }
+}
+
+void Kernel::set_compiler_include_paths(const std::vector<std::filesystem::path>& paths) {
+    this->resolved_compiler_include_paths_.clear();
+    this->resolved_compiler_include_paths_.reserve(paths.size());
+    for (const auto& p : paths) {
+        this->resolved_compiler_include_paths_.push_back(resolve_compiler_include_dir(p).string());
     }
 }
 
@@ -1112,14 +1128,6 @@ std::string_view QuasarDataMovementKernel::get_compiler_opt_level() const {
 
 std::string_view QuasarDataMovementKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
-void QuasarDataMovementKernel::process_include_paths(
-    const std::function<void(const std::string& path)>& callback) const {
-    Kernel::process_include_paths(callback);
-    for (const auto& path : this->config_.compiler_include_paths) {
-        callback(path.string());
-    }
-}
-
 std::string QuasarDataMovementKernel::config_hash() const {
     // DataMovementProcessor values must be sorted to ensure consistent ordering for hash generation
     TT_ASSERT(std::is_sorted(this->dm_processors_.begin(), this->dm_processors_.end()));
@@ -1205,13 +1213,6 @@ std::string_view QuasarComputeKernel::get_compiler_opt_level() const {
 }
 
 std::string_view QuasarComputeKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
-
-void QuasarComputeKernel::process_include_paths(const std::function<void(const std::string& path)>& callback) const {
-    Kernel::process_include_paths(callback);
-    for (const auto& path : this->config_.compiler_include_paths) {
-        callback(path.string());
-    }
-}
 
 std::string QuasarComputeKernel::config_hash() const {
     // QuasarComputeProcessor values must be sorted to ensure consistent ordering for hash generation
