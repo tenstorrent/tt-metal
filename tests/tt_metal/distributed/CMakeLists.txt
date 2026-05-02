@@ -72,6 +72,7 @@ target_sources(
         test_gap73_fixqwb_stale_base_umd_skip_guard.cpp
         test_gap74_fixrx_base_fixture_teardown_guard.cpp
         test_gap75_fixbc_setup_not_active_skip_guard.cpp
+        test_gap76_fixsb_idle_eth_init_fabric_guard.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
