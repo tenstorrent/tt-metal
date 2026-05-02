@@ -103,10 +103,11 @@ CombineDeviceOperation::spec_return_value_t CombineDeviceOperation::compute_outp
     auto mem_config = operation_attributes.output_mem_config;
     auto layout = tt::tt_metal::Layout::ROW_MAJOR;
 
-    // Create TensorSpec with BFLOAT16 dtype (output of expert computations)
+    // FP8 combine uses UINT8 (1 byte/element) for DRAM allocation; actual content is Fp8_e4m3.
+    auto output_dtype = operation_attributes.use_fp8_combine ? DataType::UINT8 : DataType::BFLOAT16;
+
     auto output_spec = TensorSpec(
-        Shape(output_shape),
-        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(layout), mem_config));
+        Shape(output_shape), tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(layout), mem_config));
 
     return output_spec;
 }
@@ -135,7 +136,8 @@ ttnn::Tensor prefill_combine(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool init_zeros,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    bool use_fp8_combine) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::combine::CombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -149,7 +151,8 @@ ttnn::Tensor prefill_combine(
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set,
             .init_zeros = init_zeros,
-            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
+            .use_fp8_combine = use_fp8_combine},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,

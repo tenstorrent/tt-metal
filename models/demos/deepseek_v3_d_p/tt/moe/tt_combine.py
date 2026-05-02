@@ -31,6 +31,8 @@ from other dispatch groups contain uninitialized values. The per-device output s
 TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 """
 
+from loguru import logger
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -58,6 +60,7 @@ class TtCombineModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
+        fp8_output: bool = False,
     ):
         """
         Initialize combine module with configuration parameters.
@@ -74,7 +77,11 @@ class TtCombineModule(LightweightModule):
             topology: Fabric topology for remote token writes.
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
             init_zeros: Whether to zero-initialize the output buffer before writing.
+            fp8_output: Emit the combined output in fp8_e4m3 (stored as uint8 since ttnn lacks
+                a native fp8 dtype). Requires Blackhole hardware.
         """
+        if fp8_output and "blackhole" not in ttnn.get_arch_name():
+            raise ValueError("fp8_output requires Blackhole hardware")
         super().__init__()
         self.mesh_device = mesh_device
         self.dispatch_group_size = dispatch_group_size
@@ -87,6 +94,7 @@ class TtCombineModule(LightweightModule):
         self.topology = topology
         self.memory_config = memory_config
         self.init_zeros = init_zeros
+        self.fp8_output = fp8_output
 
     def forward(
         self,
@@ -140,5 +148,15 @@ class TtCombineModule(LightweightModule):
             topology=self.topology,
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
+            use_fp8_combine=self.fp8_output,
         )
+
+        if output.dtype == ttnn.uint8:
+            logger.warning(
+                """combine output dtype is uint8 but the actual content is fp8_e4m3fn. \
+                Workaround until fp8_e4m3fn is supported as a data type. \
+                Use custom kernels to typecast. See test_fp8_typecast.py
+                """
+            )
+
         return output
