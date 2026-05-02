@@ -1,0 +1,8 @@
+﻿ttnn.tilize\_with\_zero\_padding
+================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.tilize_with_zero_padding:
+
+.. autooperation:: ttnn.tilize_with_zero_padding
