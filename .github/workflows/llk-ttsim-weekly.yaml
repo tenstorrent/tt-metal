@@ -143,12 +143,15 @@ jobs:
                   lines.append(f"• *{label}*: no report produced (infra error — see run logs).")
               else:
                   lines.append(
-                      f"• *{label}*: {s['passed']}/{s['total']} passing "
+                      f"• *{label}*: "
+                      f"✅ {s['passed']}/{s['total']} passing "
                       f"({s['pass_pct']:.1f}%) · "
-                      f"{s['failed']} failed · {s['errored']} errored · {s['skipped']} skipped"
+                      f"❌ {s['failed']} failed · "
+                      f"💥 {s['errored']} errored · "
+                      f"⏭️ {s['skipped']} skipped"
                   )
 
-          header = ":bar_chart: *LLK ttsim weekly digest* :bar_chart:"
+          header = "📊 *LLK ttsim weekly digest* 📊"
           if REG_RESULT != "success":
               # Only flag infra-level issues — ttsim test failures are expected
               # and are reflected in the counts below, not in this banner.
