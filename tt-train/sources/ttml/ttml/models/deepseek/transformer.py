@@ -44,14 +44,16 @@ class DeepSeekBlock(AbstractModuleBase):
     def __init__(self, layer_id: int, config, rope_params) -> None:
         # Lazy imports to avoid circular dependency (mla/moe import RMSNormLayer from here)
         from .mla import MultiHeadLatentAttention
-        from .moe import MoE
+        from .moe_sparse import SparseMoE
 
         super().__init__()
         self.attn = MultiHeadLatentAttention(config, rope_params)
         if layer_id < config.n_dense_layers:
             self.ffn = DeepSeekMLP(config.dim, config.inter_dim)
         else:
-            self.ffn = MoE(config)
+            # Sparse path: route → moe_group → moe_ffn_swiglu_fw → moe_ungroup.
+            # Functionally equivalent to dense MoE per parity tests.
+            self.ffn = SparseMoE(config)
         self.attn_norm = RMSNormLayer(config.dim)
         self.ffn_norm = RMSNormLayer(config.dim)
 
