@@ -93,6 +93,18 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceIds) {
+    // FIX CD (#42429): Skip if any chip has a broken relay. Explicit-device-ID topology
+    // mapping uses STRICT inter-mesh validation — dead ETH channels cause TT_FATAL in
+    // topology_mapper.cpp. Both ranks must skip independently (no MPI sync) to prevent
+    // rank 1 from hanging on "chip info header" when rank 0 crashes.
+    auto& cluster_for_relay_check = tt::tt_metal::MetalContext::instance().get_cluster();
+    for (ChipId chip_id : cluster_for_relay_check.all_chip_ids()) {
+        if (cluster_for_relay_check.is_relay_broken(chip_id)) {
+            GTEST_SKIP() << "Skipping: chip " << chip_id
+                         << " has dead relay (#42429) — explicit-ID inter-mesh mapping would fail";
+        }
+    }
+
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
@@ -141,6 +153,16 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
+    // FIX CD (#42429): Same guard as TestOpenMeshDeviceWithExplicitPhysicalDeviceIds.
+    // create_unit_meshes uses explicit physical device IDs internally — same failure path.
+    auto& cluster_for_relay_check = tt::tt_metal::MetalContext::instance().get_cluster();
+    for (ChipId chip_id : cluster_for_relay_check.all_chip_ids()) {
+        if (cluster_for_relay_check.is_relay_broken(chip_id)) {
+            GTEST_SKIP() << "Skipping: chip " << chip_id
+                         << " has dead relay (#42429) — unit-mesh topology mapping would fail";
+        }
+    }
+
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
