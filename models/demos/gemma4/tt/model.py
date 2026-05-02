@@ -328,13 +328,21 @@ class Gemma4Model:
     def _compute_per_layer_inputs(self, input_ids_torch, embeds_torch):
         """Compute per-layer input embeddings on CPU (E2B/E4B).
 
-        Returns list of [1, seq_len, pli_size] tensors, one per layer, or None.
-        Returns None if input_ids_torch or embeds_torch are not provided (e.g. trace mode).
+        Returns list of [1, seq_len, pli_size] tensors, one per layer, or None
+        if the model is not configured with per-layer inputs.
+
+        Raises ValueError if the model has PLI configured but input_ids_torch or
+        embeds_torch are missing — silently dropping PLI produces garbage decode
+        output without any other failure signal.
         """
         if not self.hidden_size_per_layer_input or not self.per_layer_input_weights:
             return None
         if input_ids_torch is None or embeds_torch is None:
-            return None
+            raise ValueError(
+                "Model has per-layer inputs configured but input_ids_torch/embeds_torch "
+                "are missing. Pass pli_combined (decode) or pli_device_tensors instead, "
+                "or supply input_ids_torch and embeds_torch."
+            )
 
         import torch.nn.functional as F
 
@@ -695,6 +703,7 @@ class Gemma4Model:
         kv_cache=None,
         sampling_on_device=False,
         capture_sampling_trace=False,
+        pli_combined=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
@@ -709,6 +718,8 @@ class Gemma4Model:
             kv_cache: Optional KV cache override.
             sampling_on_device: If True and self.sampling exists, sample on device.
             capture_sampling_trace: If True, return logits for split-trace sampling.
+            pli_combined: Optional [1,1,n_layers,pli_size] device tensor of host-precomputed
+                per-layer inputs (E2B/E4B). Required for Gemma3n-style models in decode.
         """
         # Convert ROW_MAJOR host data to TILE on device
         input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
@@ -716,12 +727,7 @@ class Gemma4Model:
         # RoPE: always use internal 2D caches with on-device embedding lookup
         token_index = None if self.rope_caches_2d else 0
 
-        # Unpack extra inputs if present (PLI from prepare_decode_inputs_host)
-        # Generator passes (x, pos, pos_int32, page_table, pli) via *device_inputs
-        # but the standard signature only has (x, current_pos, ..., page_table, ...)
-        # PLI is passed as a separate tensor in the tuple from prepare_inputs_decode
-        position_idx_cache = rot_mat_idxs  # Generator passes pos_int32 as rot_mat_idxs (3rd tuple element)
-        precomputed_pli = None  # PLI comes from 5th tuple element if present
+        position_idx_cache = rot_mat_idxs  # Generator passes pos_int32 as rot_mat_idxs
 
         logits = self(
             hidden_states=input_embeds,
@@ -731,7 +737,7 @@ class Gemma4Model:
             is_decode=True,
             token_index=token_index,
             position_idx_cache=position_idx_cache,
-            pli_combined=ttnn.to_layout(precomputed_pli, ttnn.TILE_LAYOUT) if precomputed_pli is not None else None,
+            pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
         )
 
         # On-device sampling

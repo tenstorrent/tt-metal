@@ -66,7 +66,8 @@ std::vector<CBInfo> get_cb_info(
     bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create,
-    uint32_t input_channels_padded) {
+    uint32_t input_channels_padded,
+    std::optional<uint32_t> reader_indices_actual_page_size) {
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -293,10 +294,27 @@ std::vector<CBInfo> get_cb_info(
         .data_format = output_df});
 
     // Reader indices CB
+    // Worst case is 1 uint16 index per output row (segment headers and discontinuity markers
+    // empirically stay below this bound for supported configs). When the factory has the real
+    // DRAM config buffer it passes its actual per-core page size so the predicted CB footprint
+    // matches the CB the factory creates; auto-shard estimation passes std::nullopt.
+    const uint32_t reader_indices_worst_case_page_size =
+        pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * sizeof(uint16_t);
+    if (reader_indices_actual_page_size.has_value()) {
+        // Sanity: the worst-case formula is also what auto-shard L1 estimation uses, so if it ever
+        // underestimates the real config tensor we want to catch it here rather than silently
+        // running auto-shard with the wrong budget.
+        TT_FATAL(
+            reader_indices_actual_page_size.value() <= reader_indices_worst_case_page_size,
+            "Reader indices buffer page size {} exceeds worst-case CB size {} (config tensor "
+            "layout changed?)",
+            reader_indices_actual_page_size.value(),
+            reader_indices_worst_case_page_size);
+    }
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
-        .page_size = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index
+        .page_size = reader_indices_actual_page_size.value_or(reader_indices_worst_case_page_size),
         .is_globally_allocated = !conv_config.config_tensors_in_dram,
         .data_format = tt::DataFormat::UInt16});
 
@@ -674,7 +692,8 @@ void post_conv2d_op_memory_checks(
     tt::tt_metal::Program& program,
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
-    Tensor& /*output_tensor*/) {
+    Tensor& /*output_tensor*/,
+    std::optional<uint32_t> reader_indices_actual_page_size) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
     const auto& input_tensor_bias = tensor_args.bias;
@@ -740,7 +759,8 @@ void post_conv2d_op_memory_checks(
             input_tensor_shape[1],
             has_bias),
         input_channels_padded,
-        skip_mcast.skip_activation_mcast);
+        skip_mcast.skip_activation_mcast,
+        reader_indices_actual_page_size);
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,
