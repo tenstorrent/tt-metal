@@ -143,7 +143,13 @@ def run(
         _seq_len = shape_b[2]
         _bidx = int(op_kwargs.get("batch_idx", 0))
         _page_idx_row = torch_input_tensor_c.to(torch.int64).reshape(torch_input_tensor_c.shape[0], -1)
-        if 0 <= _bidx < _page_idx_row.shape[0]:
+        # On a sharded mesh, page_table.shape[0] (= "batch slots") and
+        # input_b.shape[0] (= per-chip-replicated batch dim) may not agree —
+        # e.g. text_demo traces have page_table batch=4 but input_b
+        # batch=1. The device op reads the per-chip slice; the torch
+        # golden must guard both indices to avoid an IndexError on the
+        # input_b side when batch_idx >= input_b.shape[0].
+        if 0 <= _bidx < _page_idx_row.shape[0] and _bidx < torch_input_tensor_b.shape[0]:
             _pages = _page_idx_row[_bidx].tolist()
             for _chunk_idx, _page in enumerate(_pages):
                 _start = _chunk_idx * _page_size
