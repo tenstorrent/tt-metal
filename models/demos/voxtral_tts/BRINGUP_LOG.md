@@ -145,11 +145,24 @@ Target device: T3K (8× Wormhole B0)
 | "The quick brown fox jumps." | "I don't see how much of a..." | 2.80 |
 | **Average** | | **1.52** |
 
-**Root cause of high WER**: Our simplified inference generates N_audio_frames = N_text_tokens (7 for "Hello, world.") via PARALLEL prediction, not SEQUENTIAL. The semantic codes are nearly constant (2-3 unique codes) because the acoustic transformer sees the same h_text for every frame. The codec generates repetitive speech-like noise, not intelligible speech.
+**Root cause of WER=100% (definitive, 2026-05-02):**
 
-**Known limitation**: Full WER < 30% requires proper autoregressive semantic token generation where:
-1. The text decoder runs one DECODE STEP per audio frame
-2. Each step's input embeds the previously generated (semantic, acoustic) frame
-3. The model accumulates audio context to predict the next phoneme
+After implementing full autoregressive loop with correct format
+`[BOS=1] [begin_audio=25] [voice×147] [text_to_audio=36] [text×T] [audio_to_text=35] [begin_audio=25]`
+and using the prefill's last-position hidden state (not a redundant decode step):
+
+The semantic prediction is near-uniform even in float32:
+- Max logit ≈ 1.6-1.7 for 8192 tokens (expected: 5-15 for good predictions)
+- Normalized entropy = 0.9911 in float32 (1.0 = fully uniform)
+- Same 5 codes dominate: {3127, 5671, 5840, 6147, 7494} regardless of text/voice/conditioning
+- 20 different voice frame embeddings as conditioning → all predict same code (7494)
+- Removing voice prefix entirely → same behavior
+
+Root cause: **missing codec encoder**. The model needs semantic codes from the voice reference
+(computed by the codec encoder) in the input context to bootstrap text-conditioned predictions.
+The codec encoder was not released in the model weights. Without it, cold-start ODE noise gives
+entropy=0.99 semantic predictions, and the feedback loop with random audio codes provides no signal.
+
+Path to WER < 30%: access to Mistral's codec encoder weights or vllm-omni inference code.
 
 **Files added:** tests/test_e2e_whisper_verification.py

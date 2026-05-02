@@ -268,49 +268,60 @@ class VoxtralTTSModel(LightweightModule):
         """
         End-to-end TTS: text + voice → waveform (autoregressive).
 
-        Inference flow:
-          1. Prefill [voice_emb + text_emb + begin_audio_token] through 26-layer decoder.
-          2. Autoregressively decode audio frames until EoA or max_audio_frames:
-             a. One decode step → h_new [3072]
-             b. ODE solve (8 steps) on h_new → acoustic_codes[36]
-             c. Predict semantic_code from acoustic_transformer(h_new, x_final, t=1.0)
-             d. Embed (sem_code, acoustic_codes) → next frame input
-          3. Codec decode → 24kHz waveform.
+        Correct input format (from mistral_common encode_speech_request):
+          [BOS=1] [begin_audio=25] [voice_frames × V] [text_to_audio=36]
+          [text_tokens × T] [audio_to_text=35] [begin_audio=25]
+
+        Then autoregressive decode: one audio frame per step, fed back as input,
+        until EoA (semantic code 8192) or max_audio_frames reached.
 
         Returns: waveform [1, N_samples] float32 at 24kHz
         """
         import torch.nn.functional as F
 
         V = voice_emb.shape[1]
+        D = self.config.dim
         text_emb = F.embedding(text_token_ids, self.tok_emb_w.to(torch.float32)).bfloat16()
         T = text_emb.shape[1]
 
-        # begin_audio_token embedding (token ID 25 = begin_audio_token_id)
-        begin_audio_emb = self.tok_emb_w[25].to(torch.bfloat16).reshape(1, 1, self.config.dim)
+        def _tok(token_id):
+            return self.tok_emb_w[token_id].bfloat16().reshape(1, 1, D)
 
-        # Prefill: [voice(V) + text(T) + begin_audio(1)]
-        prefill_emb = torch.cat([voice_emb.bfloat16(), text_emb, begin_audio_emb], dim=1)
+        # Full prefill: [BOS] [begin_audio] [voice×V] [text_to_audio] [text×T] [audio_to_text] [begin_audio]
+        prefill_emb = torch.cat(
+            [
+                _tok(1),  # BOS
+                _tok(25),  # begin_audio (marks start of voice reference)
+                voice_emb.bfloat16(),  # V pre-computed audio frame embeddings
+                _tok(36),  # text_to_audio separator
+                text_emb,  # T text token embeddings
+                _tok(35),  # audio_to_text separator
+                _tok(25),  # begin_audio (marks start of output audio)
+            ],
+            dim=1,
+        )
         S_prefill = prefill_emb.shape[1]
 
+        # Prefill and keep the output: h[S_prefill-1] (last position = begin_audio)
+        # predicts the FIRST audio frame — no extra decode step needed for frame 0.
         h_prefill = self._prefill(prefill_emb)
-        ttnn.deallocate(h_prefill)  # discard prefill output, KV cache is populated
+        h_last = h_prefill[:, :, -1:, :]  # [1, 1, 1, D] — hidden at last prefill position
+        # (h_prefill contains all positions; h_last is a view, not a copy)
 
-        # Autoregressive audio frame generation
         semantic_codes_list = []
         acoustic_codes_list = []
+        current_pos = S_prefill  # next frame goes at this position in the KV cache
 
-        # Initial frame input: embedding of begin_audio_token (last prefill position)
-        frame_emb = begin_audio_emb.squeeze(0).squeeze(0)  # [3072]
-        current_pos = S_prefill  # start generating at position S_prefill
+        # Bootstrap: use the prefill's last hidden state for frame 0
+        h_tt = h_last
 
         for frame_idx in range(max_audio_frames):
             if current_pos >= self.config.max_seq_len:
                 break
 
-            # Decode step: get hidden state for this position
-            h_tt = self._decode_one_step(frame_emb, current_pos)
+            # h_tt is already computed (either from prefill or previous decode step)
 
-            # ODE solve for one audio frame
+            # ODE solve for one audio frame conditioned on h_tt
             acoustic_codes, x_continuous = ode_solve_ttnn(
                 h_tt,
                 self.acoustic_transformer,
@@ -319,7 +330,7 @@ class VoxtralTTSModel(LightweightModule):
                 cfg_alpha=cfg_alpha,
             )  # acoustic_codes: [1, 36]
 
-            # Predict semantic token from (h, x_final)
+            # Predict semantic token from (h_tt, x_final, t=1.0)
             x_cont_tt = ttnn.from_torch(
                 x_continuous.unsqueeze(0).unsqueeze(0),
                 dtype=ttnn.bfloat16,
@@ -328,12 +339,13 @@ class VoxtralTTSModel(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             _, sem_tt = self.acoustic_transformer.forward(h_tt, x_cont_tt, t=1.0)
-            ttnn.deallocate(h_tt)
             ttnn.deallocate(x_cont_tt)
+            # h_tt kept alive until after frame embedding (used for acoustic transformer)
 
             sem_logits = ttnn.to_torch(sem_tt).squeeze()  # [8320]
             ttnn.deallocate(sem_tt)
             sem_code = int(sem_logits[:8192].argmax().item())
+            ttnn.deallocate(h_tt)  # done with this frame's hidden state
 
             # Stop on End-of-Audio token
             if sem_code == self._EOA_TOKEN:
@@ -342,15 +354,23 @@ class VoxtralTTSModel(LightweightModule):
             semantic_codes_list.append(sem_code)
             acoustic_codes_list.append(acoustic_codes.squeeze(0))  # [36]
 
-            # Embed generated frame for next decode step
+            # Embed generated frame → input for next decode step
             frame_emb = self._embed_audio_frame(sem_code, acoustic_codes.squeeze(0))
+
+            # Decode step: frame_emb at position current_pos → h for next frame
+            h_tt = self._decode_one_step(frame_emb, current_pos)
             current_pos += 1
 
+        # Clean up remaining h_tt if loop exited without deallocating it
+        try:
+            ttnn.deallocate(h_tt)
+        except Exception:
+            pass
+        ttnn.deallocate(h_prefill)
+
         if not semantic_codes_list:
-            # No frames generated (EoA on first token) — return silence
             return torch.zeros(1, 1920, dtype=torch.float32)
 
-        # Stack frames and codec decode
         sem_codes_batch = torch.tensor(semantic_codes_list).unsqueeze(0)  # [1, N]
         aco_codes_batch = torch.stack(acoustic_codes_list, dim=0).unsqueeze(0)  # [1, N, 36]
         return self.codec_decoder.forward(sem_codes_batch, aco_codes_batch)
