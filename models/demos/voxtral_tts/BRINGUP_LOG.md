@@ -1,8 +1,9 @@
 # Voxtral-4B-TTS-2603 Bringup Log
 
 ## Current Status
-Phase: End-to-End Verification | Status: PARTIAL (structural pass, WER=1.52 — simplified inference)
-Next: Phase 4 complete requires full autoregressive decode; Phase 5 tt-inference-server
+Phase: End-to-End Verification | Status: BLOCKED — semantic prediction near-uniform (entropy=0.9911)
+Blocker: TTS inference algorithm not matching vllm-omni. All TTNN blocks pass PCC but demo produces wrong speech.
+Next: Need vllm-omni source for Voxtral TTS to understand correct inference algorithm.
 
 ---
 
