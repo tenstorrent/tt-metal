@@ -148,7 +148,7 @@ jobs:
                       f"({s['pass_pct']:.1f}%) · "
                       f"❌ {s['failed']} failed · "
                       f"💥 {s['errored']} errored · "
-                      f"⏭️ {s['skipped']} skipped"
+                      f"⏩ {s['skipped']} skipped"
                   )
 
           header = "📊 *LLK ttsim weekly digest* 📊"

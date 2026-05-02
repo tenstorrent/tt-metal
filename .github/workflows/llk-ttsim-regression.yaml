@@ -193,7 +193,7 @@ jobs:
             echo "| ✅ Passed | ${passed} |"
             echo "| ❌ Failed | ${failed} |"
             echo "| 💥 Errored | ${errored} |"
-            echo "| ⏭️ Skipped | ${skipped} |"
+            echo "| ⏩ Skipped | ${skipped} |"
             echo "| 📈 Pass rate | ${pass_pct}% |"
             echo ""
             echo "HTML report: available in the \`ttsim-report-${ARCH}\` artifact of this run."
