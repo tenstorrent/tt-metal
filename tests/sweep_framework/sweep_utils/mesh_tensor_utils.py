@@ -969,13 +969,49 @@ def reconcile_golden_to_actual(
 ) -> torch.Tensor:
     """Tile a per-chip torch golden along sharded dims so it matches the gathered actual shape.
 
-    Iterates the supplied placements (typically input_a_tensor_placement and
-    input_b_tensor_placement). Each call to tile_torch_to_global tiles by Shard
-    factors. Stops as soon as the golden's shape matches the actual gathered
-    output. No-op when shapes already match or no Shard entries are present.
+    Try strategies in order:
+
+    1. Shapes already match: return as-is.
+    2. Per-dim integer-ratio tile: every dim of `actual` is an integer
+       multiple of the corresponding dim of `golden`, with at least one
+       dim > 1. This handles the common trace-validation case where the
+       inputs were produced via `replicate_with_topology` (so all chips
+       hold identical data) and the device op's mesh-aware stitching
+       only tiles along a subset of dims (e.g. concat-style ops that
+       reassemble along one mesh axis but not the other). Picking up the
+       actual's per-dim repeat factor works regardless of which mesh
+       axis the device chose to stitch along.
+    3. Original placement-driven tile via tile_torch_to_global: relies
+       on the master's recorded `placement` + `distribution_shape` to
+       repeat by the per-axis Shard factor. This is correct for genuine
+       sharded inputs (inputs split across the mesh, each chip computing
+       its slice) but produces the wrong shape when the mesh stitch
+       only fired along a subset of axes.
+
+    Strategy 2 is tried first because the trace-validation framework's
+    default is to replicate inputs and rely on stitch-driven tiling on
+    the output.
     """
     if torch_golden.shape == actual_global.shape:
         return torch_golden
+
+    # Strategy 2: per-dim integer-ratio tile.
+    if torch_golden.ndim == actual_global.ndim:
+        repeats = []
+        ok = True
+        for d in range(torch_golden.ndim):
+            g = torch_golden.shape[d]
+            a = actual_global.shape[d]
+            if g == 0 or a % g != 0:
+                ok = False
+                break
+            repeats.append(a // g)
+        if ok and any(r > 1 for r in repeats):
+            tiled = torch_golden.repeat(*repeats)
+            if tiled.shape == actual_global.shape:
+                return tiled
+
+    # Strategy 3: placement-driven tile (legacy path).
     out = torch_golden
     for plac in placements:
         if out.shape == actual_global.shape:
