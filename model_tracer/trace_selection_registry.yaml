@@ -44,10 +44,8 @@ targets:
     - model:
         - gpt_oss
         - tt_dit
-      trace: [9,15]
-    - model:
         - deepseek_v3
-      trace: [13]
+      trace: [9, 15, 13]
 
   model_traced:
     - model:
@@ -175,7 +173,7 @@ registry:
     tt_metal_sha: 1a6fb7d120edfbf67f43be3e83f83095cff794c4
     config_count: 331
     loaded_at: '2026-04-17'
-    notes: 'promoted from draft to active for deepseek_v3 lead-model validation'
+    notes: ''
 
   - trace_id: 15
     status: active
