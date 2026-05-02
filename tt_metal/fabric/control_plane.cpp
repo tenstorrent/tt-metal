@@ -2953,8 +2953,9 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
         mesh_edge_ports_to_chip_id[*my_mesh_id].begin(),
         mesh_edge_ports_to_chip_id[*my_mesh_id].end());
     std::sort(sorted_edge_ports.begin(), sorted_edge_ports.end(), [](const auto& a, const auto& b) {
-        if (a.first.first != b.first.first)
+        if (a.first.first != b.first.first) {
             return static_cast<int>(a.first.first) < static_cast<int>(b.first.first);
+        }
         return a.first.second < b.first.second;
     });
 
