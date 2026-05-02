@@ -69,7 +69,18 @@ protected:
     void TearDown() override {
         auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         if (control_plane.is_local_host_on_switch_mesh()) {
-            tt::tt_fabric::FabricSwitchManager::instance().teardown();
+            // FIX CD-7 (#42429): if FIX CD-4b caught an exception from setup(), the switch
+            // manager was never fully initialized — calling teardown() on uninitialized state
+            // may crash or hang.  Skip teardown when setup never completed.
+            if (!setup_failed_) {
+                try {
+                    tt::tt_fabric::FabricSwitchManager::instance().teardown();
+                } catch (const std::exception& ex) {
+                    fprintf(stderr,
+                        "[MeshDeviceTTSwitchFixture::TearDown] FIX CD-7 (#42429): "
+                        "FabricSwitchManager::teardown() threw — swallowed: %s\n", ex.what());
+                }
+            }
         } else if (!setup_failed_) {
             // FIX CD-4 (#42429): if SetFabricConfig(FABRIC_2D) never completed in SetUp,
             // fabric_context_ is uninitialized — calling SetFabricConfig(DISABLED) here

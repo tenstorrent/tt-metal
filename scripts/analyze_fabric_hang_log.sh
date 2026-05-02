@@ -1026,6 +1026,16 @@ FIX_CD4B_FIRES=$(grep -cE 'FIX CD-4b.*FabricSwitchManager.*setup failed' "$CLEAN
 # validate_requested_intermesh_connections unordered_map::at on degraded runner.
 # Log: "open_devices_internal failed (degraded runner / topology mismatch)"
 FIX_CD5_FIRES=$(grep -cE 'open_devices_internal failed.*degraded runner|open_devices_internal failed.*topology mismatch' "$CLEAN" 2>/dev/null; :)
+# FIX CD-6 (#42429): After FIX CD-5 catches an open_devices_internal exception, the test loop
+# must break (not continue) because the peer MPI rank may have aborted. Continuing to the next
+# test group would hang in collective control-plane reinit waiting for the dead rank.
+# Log: "Hardware fault during open_devices — aborting remaining test groups (#42429 FIX CD-6)"
+FIX_CD6_FIRES=$(grep -cE 'Hardware fault during open_devices.*aborting remaining test groups|hardware fault.*aborting.*FIX CD-6' "$CLEAN" 2>/dev/null; :)
+# FIX CD-7 (#42429): MeshDeviceTTSwitchFixture TearDown — skip FabricSwitchManager::teardown()
+# when setup_failed_=true (FIX CD-4b caught exception in SetUp). Prevents tearing down
+# uninitialized switch manager state which may crash or hang.
+# Log: "FIX CD-7 (#42429): FabricSwitchManager::teardown() threw — swallowed:"
+FIX_CD7_FIRES=$(grep -cE 'FIX CD-7.*FabricSwitchManager.*teardown.*threw' "$CLEAN" 2>/dev/null; :)
 # FIX GS-3 (#42429): FABRIC_1D warm-up open/close after every tt-smi -r in run_t3000_unit_tests.sh.
 # Prevents base-UMD reset cycle where GTest SKIPs → tt-smi -r → base-UMD reloaded → FIX M → SKIP → loop.
 # Log: "[FIX GS-3] initial warm-up complete" / "[FIX GS-3] post-reset warm-up complete"
@@ -1327,6 +1337,19 @@ if [ "${FIX_CD5_FIRES:-0}" -gt 0 ]; then
     echo "     ControlPlane::validate_requested_intermesh_connections threw std::out_of_range"
     echo "     (unordered_map::at) — physical topology mapping missing expected fabric node IDs."
     echo "     FIX CD-5 wraps open_devices_internal() in try/catch → close_devices() + return false."
+fi
+if [ "${FIX_CD6_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX CD-6] Hardware fault abort: test loop broke after open_devices exception (${FIX_CD6_FIRES} occurrence(s))."
+    echo "     FIX CD-5 caught the exception; FIX CD-6 breaks out of the test loop instead of continuing."
+    echo "     Without FIX CD-6: rank 0 continues to next test group, calls SetFabricConfig(FABRIC_2D) which"
+    echo "     reinitializes control plane (collective op). Rank 1 already aborted (TT_FATAL) → rank 0 hangs"
+    echo "     indefinitely in collective init waiting for dead rank 1 (up to 15-min CI timeout)."
+fi
+if [ "${FIX_CD7_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX CD-7] FabricSwitchManager::teardown() threw on switch mesh (${FIX_CD7_FIRES} occurrence(s))."
+    echo "     FIX CD-4b caught exception in SetUp → setup_failed_=true. Without FIX CD-7: TearDown"
+    echo "     calls teardown() on uninitialized switch manager → potential crash/hang on rank 1."
+    echo "     FIX CD-7 skips teardown() when setup_failed_ and wraps in try/catch as defense-in-depth."
 fi
 if [ "${FIX_GS3_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX GS-3] FABRIC_1D warm-up after tt-smi -r succeeded (${FIX_GS3_FIRES} occurrence(s))."
