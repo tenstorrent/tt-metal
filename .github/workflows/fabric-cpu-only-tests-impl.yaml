@@ -52,7 +52,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          hang-detection-timeout: 20.0
       - name: Run fabric cpu-only unit tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
