@@ -197,22 +197,38 @@ class VoxtralTTSModel(LightweightModule):
         sd = load_state_dict(model_dir / "consolidated.safetensors")
         return cls(device, config, sd)
 
-    # Audio embedding table index scheme (from analysis of embedding norms):
-    #   rows 0..8191: semantic token embeddings (8192 codebook entries)
-    #   rows 8192 + k*21 + v: acoustic codebook k (0..35), level v (0..20)
-    _ACOUSTIC_STRIDE = 21
+    # Audio embedding table layout (from vllm-omni MultiVocabEmbeddings):
+    #   2 AudioSpecialTokens: EMPTY_AUDIO=0, END_AUDIO=1
+    #   Semantic codebook (8192 codes + 2 special = 8194, padded to 8320):
+    #     row 0:        EMPTY_AUDIO (special)
+    #     row 1:        END_AUDIO (EoA — stop generation when predicted)
+    #     rows 2..8193: semantic codes 0..8191
+    #   Acoustic codebooks (36 × 23 = 828, offset 8194):
+    #     codebook k (0..35): rows 8194 + k*23 to 8194 + k*23 + 22
+    #       row +0: EMPTY_ACOUSTIC
+    #       row +1: END_ACOUSTIC
+    #       rows +2..+22: acoustic levels 0..20
+    #   Total: 8194 + 828 = 9022, padded to 9088.
+    _N_SPECIAL = 2  # EMPTY_AUDIO, END_AUDIO
     _SEMANTIC_SIZE = 8192
-    # EoA (End-of-Audio) semantic token: code 8192 signals end of generation
-    _EOA_TOKEN = 8192
+    _ACOUSTIC_STRIDE = 23  # 21 levels + 2 special tokens per codebook
+    _ACOUSTIC_OFFSET = 8194  # 8192 semantic + 2 special
+    _EOA_TOKEN = 1  # END_AUDIO token position in semantic logits
 
-    def _embed_audio_frame(self, sem_code: int, acoustic_codes: torch.Tensor) -> torch.Tensor:
-        """Map (semantic_code, acoustic_codes[36]) → summed 3072-dim embedding."""
-        emb = self.audio_emb_w[sem_code].to(torch.float32)
+    def _embed_audio_frame(self, sem_code_pos: int, acoustic_codes: torch.Tensor) -> torch.Tensor:
+        """Map (sem_code_pos, acoustic_codes[36]) → summed 3072-dim embedding.
+
+        sem_code_pos: raw argmax position (2..8193), already includes the +2 offset.
+        acoustic_codes: [36] int tensor, levels 0..20 (will be offset by +2 for embedding).
+        """
+        emb = self.audio_emb_w[sem_code_pos].to(torch.float32)
         for k in range(36):
-            idx = self._SEMANTIC_SIZE + k * self._ACOUSTIC_STRIDE + int(acoustic_codes[k].item())
+            # Level v → row 8194 + k*23 + (v+2)
+            level = int(acoustic_codes[k].item())
+            idx = self._ACOUSTIC_OFFSET + k * self._ACOUSTIC_STRIDE + level + self._N_SPECIAL
             if idx < self.audio_emb_w.shape[0]:
                 emb = emb + self.audio_emb_w[idx].to(torch.float32)
-        return emb.bfloat16()  # [3072]
+        return emb.bfloat16()  # [D]
 
     def _prefill(self, inputs_embeds: torch.Tensor) -> ttnn.Tensor:
         """Prefill all layers; populate KV cache. Returns final norm hidden [1,1,S,D]."""
@@ -347,20 +363,25 @@ class VoxtralTTSModel(LightweightModule):
             ttnn.deallocate(x_cont_tt)
             # h_tt kept alive until after frame embedding (used for acoustic transformer)
 
-            sem_logits = ttnn.to_torch(sem_tt).squeeze()  # [8320]
+            sem_logits = ttnn.to_torch(sem_tt).squeeze().float()  # [8320]
             ttnn.deallocate(sem_tt)
-            sem_code = int(sem_logits[:8192].argmax().item())
-            ttnn.deallocate(h_tt)  # done with this frame's hidden state
+
+            # Semantic prediction: mask EMPTY_AUDIO (row 0) and padding (rows 8194+),
+            # then find argmax. Row 1 = END_AUDIO (EoA), rows 2..8193 = codes 0..8191.
+            sem_logits[0] = float("-inf")  # mask EMPTY_AUDIO
+            sem_logits[self._ACOUSTIC_OFFSET :] = float("-inf")  # mask padding
+            sem_code_pos = int(sem_logits.argmax().item())  # raw position: 1=EoA or 2..8193
+            ttnn.deallocate(h_tt)
 
             # Stop on End-of-Audio token
-            if sem_code == self._EOA_TOKEN:
+            if sem_code_pos == self._EOA_TOKEN:
                 break
 
-            semantic_codes_list.append(sem_code)
-            acoustic_codes_list.append(acoustic_codes.squeeze(0))  # [36]
+            semantic_codes_list.append(sem_code_pos)  # store raw position (used for embedding)
+            acoustic_codes_list.append(acoustic_codes.squeeze(0))  # [36], levels 0..20
 
-            # Embed generated frame → input for next decode step
-            frame_emb = self._embed_audio_frame(sem_code, acoustic_codes.squeeze(0))
+            # Embed: sem_code_pos is already the correct row in audio_emb_w
+            frame_emb = self._embed_audio_frame(sem_code_pos, acoustic_codes.squeeze(0))
 
             # Decode step: frame_emb at position current_pos → h for next frame
             h_tt = self._decode_one_step(frame_emb, current_pos)
@@ -376,6 +397,9 @@ class VoxtralTTSModel(LightweightModule):
         if not semantic_codes_list:
             return torch.zeros(1, 1920, dtype=torch.float32)
 
-        sem_codes_batch = torch.tensor(semantic_codes_list).unsqueeze(0)  # [1, N]
+        # Convert raw logit positions (2..8193) to actual semantic codes (0..8191)
+        sem_codes = [pos - self._N_SPECIAL for pos in semantic_codes_list]
+        sem_codes_batch = torch.tensor(sem_codes).unsqueeze(0)  # [1, N], values 0..8191
+        # Acoustic codes are already in [0, 20] range
         aco_codes_batch = torch.stack(acoustic_codes_list, dim=0).unsqueeze(0)  # [1, N, 36]
         return self.codec_decoder.forward(sem_codes_batch, aco_codes_batch)
