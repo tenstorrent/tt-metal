@@ -145,7 +145,7 @@ def test_fixat_phase5_skip_on_fixas_timeout(cycle):
         )
         inp = ttnn.to_device(inp, mesh)
         out = ttnn.all_gather(inp, dim=-1, num_links=1, topology=ttnn.Topology.Linear)
-        ttnn.synchronize_devices(mesh)
+        ttnn.synchronize_device(mesh)
 
         elapsed = time.time() - t_start
         assert elapsed < kBudgetPerCycleSec, (

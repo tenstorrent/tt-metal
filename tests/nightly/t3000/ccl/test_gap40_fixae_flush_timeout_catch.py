@@ -109,7 +109,7 @@ try:
         mesh_mapper=ShardTensorToMesh(mesh, dim=3),
     )
     out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-    ttnn.synchronize_devices(mesh)
+    ttnn.synchronize_device(mesh)
 except Exception:
     pass
 
@@ -146,7 +146,7 @@ try:
             mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=3),
         )
         out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-        ttnn.synchronize_devices(mesh)
+        ttnn.synchronize_device(mesh)
     except Exception:
         pass
 

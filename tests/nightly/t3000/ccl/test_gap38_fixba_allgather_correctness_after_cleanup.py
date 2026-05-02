@@ -84,7 +84,7 @@ try:
         mesh_mapper=ShardTensorToMesh(mesh, dim=3),
     )
     out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-    ttnn.synchronize_devices(mesh)
+    ttnn.synchronize_device(mesh)
     del out, inp
 except Exception as exc:
     print(f"PREDECESSOR_SETUP_ERROR: {{exc}}", flush=True)
@@ -122,7 +122,7 @@ try:
             mesh_mapper=ShardTensorToMesh(mesh, dim=3),
         )
         out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-        ttnn.synchronize_devices(mesh)
+        ttnn.synchronize_device(mesh)
         del out, inp
     except Exception:
         pass
@@ -180,7 +180,7 @@ try:
     )
 
     out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-    ttnn.synchronize_devices(mesh)
+    ttnn.synchronize_device(mesh)
 
     # Gather back to host and compare each shard against full reference.
     out_host = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh, dim=3))

@@ -122,7 +122,7 @@ try:
         mesh_mapper=ShardTensorToMesh(mesh, dim=3),
     )
     out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-    ttnn.synchronize_devices(mesh)
+    ttnn.synchronize_device(mesh)
 except Exception:
     pass
 
@@ -212,7 +212,7 @@ def test_gap36_fixav_relay_dead_per_device_skip(mesh_device, tmp_path):
         )
         t_dispatch = time.time()
         out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-        ttnn.synchronize_devices(mesh_device)
+        ttnn.synchronize_device(mesh_device)
         dispatch_s = time.time() - t_dispatch
         logger.info(f"GAP-36: AllGather dispatch in {dispatch_s:.2f}s")
     except Exception as exc:

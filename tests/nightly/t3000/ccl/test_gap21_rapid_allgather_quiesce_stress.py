@@ -85,9 +85,9 @@ def test_rapid_allgather_quiesce_stress(mesh_device):
         _run_allgather_and_verify(mesh_device, iteration=cycle)
 
         t0 = time.time()
-        ttnn.synchronize_devices(mesh_device)
-        ttnn.set_fabric_config(mesh_device, ttnn.FabricConfig.DISABLED)
-        ttnn.set_fabric_config(mesh_device, ttnn.FabricConfig.FABRIC_2D)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
         elapsed = time.time() - t0
 
         logger.info(f"GAP-21: cycle {cycle}/{_NUM_CYCLES} quiesce elapsed={elapsed:.2f}s")

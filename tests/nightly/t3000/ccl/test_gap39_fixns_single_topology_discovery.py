@@ -99,7 +99,7 @@ try:
         mesh_mapper=ShardTensorToMesh(mesh, dim=3),
     )
     out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-    ttnn.synchronize_devices(mesh)
+    ttnn.synchronize_device(mesh)
 except Exception as e:
     pass
 
@@ -136,7 +136,7 @@ try:
             mesh_mapper=ShardTensorToMesh(mesh, dim=3),
         )
         out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-        ttnn.synchronize_devices(mesh)
+        ttnn.synchronize_device(mesh)
     except Exception:
         # AllGather may fail in degraded mode (relay dead) — that's OK for timing test.
         pass

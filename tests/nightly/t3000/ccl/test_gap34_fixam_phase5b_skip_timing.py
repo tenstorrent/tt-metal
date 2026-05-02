@@ -133,7 +133,7 @@ try:
         mesh_mapper=ShardTensorToMesh(mesh, dim=3),
     )
     out = ttnn.all_gather(inp, dim=3, topology=ttnn.Topology.Linear)
-    ttnn.synchronize_devices(mesh)
+    ttnn.synchronize_device(mesh)
 except Exception:
     pass
 
@@ -244,7 +244,7 @@ def test_gap34_fixam_phase5b_skip_timing(mesh_device, tmp_path):
                 )
                 t_dispatch = time.time()
                 out = ttnn.all_gather(inp, dim=_AG_DIM, topology=ttnn.Topology.Linear)
-                ttnn.synchronize_devices(mesh_device)
+                ttnn.synchronize_device(mesh_device)
                 dispatch_duration = time.time() - t_dispatch
                 logger.info(
                     f"[cycle {cycle}] AllGather dispatch in {dispatch_duration:.2f}s"
