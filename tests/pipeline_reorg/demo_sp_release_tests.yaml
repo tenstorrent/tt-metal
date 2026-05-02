@@ -120,16 +120,30 @@
   owner_id: U03HY7MK4BT
   team: models
 
-- name: bh_galaxy_DeepSeek_B1_Unit_Tests_FabricHostPersistent
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostPersistent
   cmd: |
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
       --bucket fabric_2d \
+      --bucket host_io_risk \
+      --bucket lm_head_sampling_persistent_mode
       --bucket fabric_1d \
       --bucket fabric_2d_torus_x \
       --bucket fabric_2d_torus_y \
       --bucket fabric_2d_torus_y_xy_skip_only \
-      --bucket host_io_risk \
-      --bucket lm_head_sampling_persistent_mode
+  model: deepseek_decode
+  skus:
+    bh_galaxy:
+      timeout: 70
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_MoreFabric
+  cmd: |
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket fabric_2d_torus_x \
+      --bucket fabric_2d_torus_y \
+      --bucket fabric_2d_torus_y_xy_skip_only \
+      --bucket fabric_1d \
   model: deepseek_decode
   skus:
     bh_galaxy:
