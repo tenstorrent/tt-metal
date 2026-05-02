@@ -255,7 +255,21 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 auto mesh_coord_x = mesh_coord[0];
                 auto mesh_coord_y = mesh_coord[1];
 
-                const auto& port_directions = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
+                // FIX TF (#42429): FIX TB may have excluded this chip from the topology mapper
+                // (degraded topology — corrupt ERISC L1). If the chip is absent from the map,
+                // skip it here to avoid throwing std::out_of_range BEFORE the MPI all_gather
+                // below, which would leave the peer rank(s) blocking in all_gather indefinitely.
+                auto port_dirs_it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
+                if (port_dirs_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                    log_warning(
+                        tt::LogFabric,
+                        "FIX TF (#42429): FabricNodeId (M{}, D{}) not in router_port_directions map — "
+                        "excluded by degraded-topology guard.  Skipping routing-plane count for this chip.",
+                        *mesh_id,
+                        fabric_chip_id);
+                    continue;
+                }
+                const auto& port_directions = port_dirs_it->second;
 
                 const auto& golden_counts = golden_link_counts.at(MeshId{mesh_id}).at(fabric_chip_id);
                 apply_min(port_directions, RoutingDirection::E, golden_counts, row_min_planes.at(mesh_coord_x));
@@ -891,8 +905,12 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination chip as the ethernet channel on the same plane
-                for (const auto& [direction, eth_chans_on_side] :
-                     this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+                // FIX TF (#42429): excluded chips (degraded topology) are absent from the map — skip them.
+                auto intra_port_dirs_it = this->router_port_directions_to_physical_eth_chan_map_.find(src_fabric_node_id);
+                if (intra_port_dirs_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                    continue;
+                }
+                for (const auto& [direction, eth_chans_on_side] : intra_port_dirs_it->second) {
                     for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_fabric_chip_id == dst_fabric_chip_id) {
                             TT_ASSERT(
@@ -943,8 +961,12 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination mesh as the ethernet channel on the same plane
-                for (const auto& [direction, eth_chans_on_side] :
-                     this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+                // FIX TF (#42429): excluded chips (degraded topology) are absent from the map — skip them.
+                auto inter_port_dirs_it = this->router_port_directions_to_physical_eth_chan_map_.find(src_fabric_node_id);
+                if (inter_port_dirs_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                    continue;
+                }
+                for (const auto& [direction, eth_chans_on_side] : inter_port_dirs_it->second) {
                     for (const auto& src_chan_id : eth_chans_on_side) {
                         if (src_mesh_id_val == dst_mesh_id_val) {
                             TT_ASSERT(
