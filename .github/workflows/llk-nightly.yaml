@@ -49,7 +49,7 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
 
   ttsim-regression:
-    name: "🧪 ttsim regression"
+    name: "🧪 LLK ttsim regression"
     needs: build-images
     uses: ./.github/workflows/llk-ttsim-regression.yaml
     secrets: inherit
@@ -143,12 +143,15 @@ jobs:
                   lines.append(f"• *{label}*: no report produced (infra error — see run logs).")
               else:
                   lines.append(
-                      f"• *{label}*: {s['passed']}/{s['total']} passing "
+                      f"• *{label}*: "
+                      f"✅ {s['passed']}/{s['total']} passing "
                       f"({s['pass_pct']:.1f}%) · "
-                      f"{s['failed']} failed · {s['errored']} errored · {s['skipped']} skipped"
+                      f"❌ {s['failed']} failed · "
+                      f"💥 {s['errored']} errored · "
+                      f"⏩ {s['skipped']} skipped"
                   )
 
-          header = ":bar_chart: *LLK ttsim weekly digest* :bar_chart:"
+          header = "📊 *LLK ttsim weekly digest* 📊"
           if REG_RESULT != "success":
               # Only flag infra-level issues — ttsim test failures are expected
               # and are reflected in the counts below, not in this banner.
@@ -183,17 +186,15 @@ jobs:
           # Channel id comes from repo secret `LLK_CI_STATUS_CHANNEL_ID`
           # (same secret that .github/actions/report-failure uses, so the
           # digest lands in the same Slack channel as the nightly report).
-          # `toJSON` on the message text handles JSON-escaping newlines,
-          # quotes, and the backtick/star characters in Slack mrkdwn.
+          # No `attachments` — Slack renders the attachment body below the
+          # top-level `text`, which duplicated the title, and the `color`
+          # attribute is the only thing producing the colored vertical
+          # sidebar. The neutral tone is carried by the 📊 emoji and the
+          # "Informational run" disclaimer in the body instead.
+          # `toJSON` JSON-escapes newlines, quotes, and the backticks/
+          # stars in the Slack mrkdwn body.
           payload: |
             {
               "channel": "${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}",
-              "text": "LLK ttsim weekly digest",
-              "attachments": [
-                {
-                  "color": "#5A9FD4",
-                  "text": ${{ toJSON(steps.message.outputs.text) }},
-                  "mrkdwn_in": ["text"]
-                }
-              ]
+              "text": ${{ toJSON(steps.message.outputs.text) }}
             }
