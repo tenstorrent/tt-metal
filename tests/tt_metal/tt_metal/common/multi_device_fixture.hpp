@@ -122,6 +122,15 @@ protected:
     explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
 
     void SetUp() override {
+        log_info(
+            tt::LogMetal,
+            "[fixture_setup] MeshDeviceFixtureBase::SetUp() ENTRY — mesh_shape={}, fabric_config={}, num_cqs={}",
+            config_.mesh_shape.has_value()
+                ? fmt::format("{}x{}", (*config_.mesh_shape)[0], (*config_.mesh_shape)[1])
+                : "auto",
+            static_cast<int>(config_.fabric_config),
+            config_.num_cqs);
+
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
@@ -199,6 +208,23 @@ protected:
             throw;
         }
 
+        // Log fabric state after successful create — aids post-mortem diagnosis.
+        for (auto* idev : mesh_device_->get_devices()) {
+            if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic() ||
+                idev->is_fabric_stale_base_umd_channels()) {
+                log_warning(
+                    tt::LogMetal,
+                    "[fixture_setup] MeshDeviceFixtureBase::SetUp() device {} fabric state: "
+                    "relay_broken={} channels_not_ready={} stale_base_umd={}",
+                    idev->id(),
+                    idev->is_fabric_relay_path_broken(),
+                    idev->is_fabric_channels_not_ready_for_traffic(),
+                    idev->is_fabric_stale_base_umd_channels());
+            }
+        }
+        log_info(tt::LogMetal, "[fixture_setup] MeshDeviceFixtureBase::SetUp() EXIT — mesh_device created with {} devices",
+                 mesh_device_->num_devices());
+
         // Opt-in watchdog: kill the process if the test body exceeds its budget.
         if (config_.test_budget_ms.has_value()) {
             watchdog_stop_.store(false, std::memory_order_relaxed);
@@ -232,7 +258,23 @@ protected:
         }
 
         if (!mesh_device_) {
+            log_info(tt::LogMetal, "[fixture_teardown] MeshDeviceFixtureBase::TearDown() ENTRY — mesh_device_ is null, returning early");
             return;
+        }
+
+        // Log per-device fabric state at TearDown entry for diagnosis.
+        for (auto* idev : mesh_device_->get_devices()) {
+            if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic() ||
+                idev->is_fabric_stale_base_umd_channels()) {
+                log_warning(
+                    tt::LogMetal,
+                    "[fixture_teardown] MeshDeviceFixtureBase::TearDown() ENTRY device {} fabric state: "
+                    "relay_broken={} channels_not_ready={} stale_base_umd={}",
+                    idev->id(),
+                    idev->is_fabric_relay_path_broken(),
+                    idev->is_fabric_channels_not_ready_for_traffic(),
+                    idev->is_fabric_stale_base_umd_channels());
+            }
         }
 
         // FIX RX (base class, #42429): if fabric is broken, skip quiesce_devices() and call
@@ -330,14 +372,32 @@ protected:
                 config_.fabric_tensix_config,
                 config_.fabric_udm_mode);
         }
-        mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
-            config_.l1_small_size,
-            config_.trace_region_size,
-            config_.num_cqs,
-            core_type,
-            {},
-            config_.worker_l1_size);
+        // FIX BC (audit, #42429): same try/catch as MeshDeviceFixtureBase::SetUp() —
+        // this override bypasses the base class SetUp entirely, so it needs its own guard.
+        try {
+            mesh_device_ = MeshDevice::create(
+                MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
+                config_.l1_small_size,
+                config_.trace_region_size,
+                config_.num_cqs,
+                core_type,
+                {},
+                config_.worker_l1_size);
+        } catch (const std::exception& e) {
+            std::string what = e.what();
+            if (what.find("is not active") != std::string::npos ||
+                what.find("devices are available") != std::string::npos) {
+                if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
+                    tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
+                }
+                GTEST_SKIP() << fmt::format(
+                    "FIX BC (#42429): MeshDevice::create() threw degraded-cluster exception — "
+                    "non-MMIO ETH relay dead or system mesh missing devices after corrupt teardown; "
+                    "skipping test. ({})",
+                    what.substr(0, 300));
+            }
+            throw;
+        }
     }
 };
 
