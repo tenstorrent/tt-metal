@@ -2947,6 +2947,17 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
             *neighbor_mesh_id);
     }
 
+    // Build once outside the per-exit-node loop: mesh_edge_ports_to_chip_id[my_mesh_id] is
+    // constant throughout this function, so there is no need to re-sort on every iteration.
+    std::vector<std::pair<port_id_t, ChipId>> sorted_edge_ports(
+        mesh_edge_ports_to_chip_id[*my_mesh_id].begin(),
+        mesh_edge_ports_to_chip_id[*my_mesh_id].end());
+    std::sort(sorted_edge_ports.begin(), sorted_edge_ports.end(), [](const auto& a, const auto& b) {
+        if (a.first.first != b.first.first)
+            return static_cast<int>(a.first.first) < static_cast<int>(b.first.first);
+        return a.first.second < b.first.second;
+    });
+
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
@@ -2971,15 +2982,9 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
 
         // Deferred intermesh_* updates until after rank-0 pairing (Z/NESW may change).
+        // sorted_edge_ports is computed once before this loop (mesh_edge_ports_to_chip_id[my_mesh_id]
+        // is constant for the lifetime of this function).
         auto try_assign_port = [&](bool use_z_direction) -> bool {
-            std::vector<std::pair<port_id_t, ChipId>> sorted_edge_ports(
-                mesh_edge_ports_to_chip_id[*my_mesh_id].begin(),
-                mesh_edge_ports_to_chip_id[*my_mesh_id].end());
-            std::sort(sorted_edge_ports.begin(), sorted_edge_ports.end(), [](const auto& a, const auto& b) {
-                if (a.first.first != b.first.first)
-                    return static_cast<int>(a.first.first) < static_cast<int>(b.first.first);
-                return a.first.second < b.first.second;
-            });
             for (const auto& [port_id_pair, port_chip_id] : sorted_edge_ports) {
                 if (exit_node_chip != port_chip_id) {
                     continue;
