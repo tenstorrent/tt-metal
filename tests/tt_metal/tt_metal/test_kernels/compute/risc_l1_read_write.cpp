@@ -7,16 +7,17 @@
 #include "api/compute/experimental/semaphore.h"
 #include "dev_mem_map.h"
 #include "ckernel.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
 #ifdef TRISC_MATH
     const uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
 
-    const uint32_t base_src_l1_address = get_arg_val<uint32_t>(0);
-    const uint32_t base_dst_l1_address = get_arg_val<uint32_t>(1);
+    const uint32_t base_src_l1_address = get_arg(args::base_src_l1_address);
+    const uint32_t base_dst_l1_address = get_arg(args::base_dst_l1_address);
 
-    ckernel::Semaphore semaphore(get_compile_time_arg_val(0));
-    const uint32_t base_semaphore_value = get_compile_time_arg_val(1);
+    ckernel::Semaphore semaphore(get_arg(args::sem_id));
+    const uint32_t base_semaphore_value = get_arg(args::base_semaphore_value);
     semaphore.wait(base_semaphore_value + neo_id);
 
     const uint32_t l1_src_address = base_src_l1_address + neo_id * sizeof(uint32_t);

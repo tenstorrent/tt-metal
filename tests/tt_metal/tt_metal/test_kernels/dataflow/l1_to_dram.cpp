@@ -8,18 +8,19 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dram_dst_address = get_arg_val<uint32_t>(0);
-    const uint32_t l1_src_address = get_arg_val<uint32_t>(1);
-    const uint32_t dram_buffer_size = get_arg_val<uint32_t>(2);
-    const uint32_t dram_dst_bank_id = get_arg_val<uint32_t>(3);
-    const uint32_t signal_value = get_arg_val<uint32_t>(4);
+    const uint32_t dram_dst_address = get_vararg(0);
+    const uint32_t l1_src_address = get_vararg(1);
+    const uint32_t dram_buffer_size = get_vararg(2);
+    const uint32_t dram_dst_bank_id = get_vararg(3);
+    const uint32_t signal_value = get_vararg(4);
 
     Noc noc;
     CoreLocalMem<std::uint32_t> l1_buffer(l1_src_address);
     AllocatorBank<AllocatorBankType::DRAM> dst_dram;
-    Semaphore semaphore(get_compile_time_arg_val(0));
+    Semaphore semaphore(sem::sem);
 
     semaphore.wait(signal_value);
 

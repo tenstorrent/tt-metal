@@ -7,21 +7,22 @@
 #include "api/compute/experimental/semaphore.h"
 #include "dev_mem_map.h"
 #include "ckernel.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
 #ifdef TRISC_MATH
-    const uint32_t num_elements = get_compile_time_arg_val(0);
+    const uint32_t num_elements = get_arg(args::num_elements);
 #if defined(INCOMING_SEM) && defined(OUTGOING_SEM)
-    ckernel::Semaphore sem_in(get_compile_time_arg_val(1));
-    ckernel::Semaphore sem_out(get_compile_time_arg_val(2));
+    ckernel::Semaphore sem_in(get_arg(args::sem_in_id));
+    ckernel::Semaphore sem_out(get_arg(args::sem_out_id));
 #elif defined(INCOMING_SEM)
-    ckernel::Semaphore sem_in(get_compile_time_arg_val(1));
+    ckernel::Semaphore sem_in(get_arg(args::sem_in_id));
 #elif defined(OUTGOING_SEM)
-    ckernel::Semaphore sem_out(get_compile_time_arg_val(1));
+    ckernel::Semaphore sem_out(get_arg(args::sem_out_id));
 #endif
 
-    const uint32_t buf_a = get_arg_val<uint32_t>(0);
-    const uint32_t buf_b = get_arg_val<uint32_t>(1);
+    const uint32_t buf_a = get_arg(args::buf_a);
+    const uint32_t buf_b = get_arg(args::buf_b);
 
     for (uint32_t i = 0; i < num_elements; i++) {
 #if defined(INCOMING_SEM)

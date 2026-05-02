@@ -8,20 +8,21 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dram_dst_address = get_arg_val<uint32_t>(0);
-    const uint32_t l1_src_address = get_arg_val<uint32_t>(1);
-    const uint32_t num_elements = get_arg_val<uint32_t>(2);
-    const uint32_t dram_dst_bank_id = get_arg_val<uint32_t>(3);
+    const uint32_t dram_dst_address = get_vararg(0);
+    const uint32_t l1_src_address = get_vararg(1);
+    const uint32_t num_elements = get_vararg(2);
+    const uint32_t dram_dst_bank_id = get_vararg(3);
 
     Noc noc;
     AllocatorBank<AllocatorBankType::DRAM> dst_dram;
-    Semaphore sem(get_compile_time_arg_val(0));
+    Semaphore sem(sem::sem);
 #ifdef INCREMENT_REMOTE_SEM
-    Semaphore remote_sem(get_compile_time_arg_val(1));
-    const uint32_t remote_noc_x = get_arg_val<uint32_t>(4);
-    const uint32_t remote_noc_y = get_arg_val<uint32_t>(5);
+    Semaphore remote_sem(sem::remote_sem);
+    const uint32_t remote_noc_x = get_vararg(4);
+    const uint32_t remote_noc_y = get_vararg(5);
 #endif
 
     for (uint32_t i = 0; i < num_elements; i++) {
