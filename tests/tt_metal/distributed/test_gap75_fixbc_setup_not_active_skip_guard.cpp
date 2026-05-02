@@ -87,6 +87,7 @@
 #include <thread>
 
 #include <experimental/fabric/fabric_types.hpp>
+#include <experimental/fabric/fabric.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
