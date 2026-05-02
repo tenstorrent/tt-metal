@@ -896,6 +896,17 @@ def test_decoder(
     logger.info(f"  [4096:4104]:  {_d[4096:4104]}")
     logger.info(f"  [last 8]:     {_d[-8:]}")
 
+    # DEBUG: dump top-K worst-mismatch indices for the decoder MoE output (root
+    # device's post-reduce output). With reduce-to-one, each output position is
+    # the sum of all per-device partial contributions, so a wild value here came
+    # from at least one device's matmul. Cross-reference flat_idx with per-N-tile
+    # dst dumps to identify which device + N tile produced the contamination.
+    _abs_err = (_d.float() - _g.float()).abs()
+    _topk_err, _topk_idx = torch.topk(_abs_err, k=min(40, _abs_err.numel()))
+    logger.info(f"Top-40 worst MoE output mismatches (length={_d.numel()}):")
+    for _e, _i in zip(_topk_err.tolist(), _topk_idx.tolist()):
+        logger.info(f"  flat_idx={_i} got={_d[_i].item():.4g} expected={_g[_i].item():.4g} abs_err={_e:.4g}")
+
     if validate_standalone_moe:
         pure_moe_passing, pure_moe_pcc = comp_pcc(moe_output.flatten(), moe_device_output_valid.flatten(), 0.97)
         logger.info(f"Pure MoE PCC (standalone vs golden): {pure_moe_pcc}")

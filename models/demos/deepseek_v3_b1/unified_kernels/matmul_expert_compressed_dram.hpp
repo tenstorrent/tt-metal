@@ -626,14 +626,16 @@ struct MatmulExpertCompressedDRAM {
             constexpr uint32_t act_k_slice_byte_offset =
                 CTArgs::k_slice_idx * num_subblocks_k_local * CTArgs::subblock_k * in0_page_size;
 
-            reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
-            pack_reconfig_data_format<true>(CTArgs::cb_out);
-            compressed_custom_mm_block_init_short<false, true, false>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             if constexpr (CTArgs::accum_experts) {
                 cb_wait_front(CTArgs::cb_in0, num_tiles_k * num_active_experts);
             } else {
                 cb_wait_front(CTArgs::cb_in0, num_tiles_k);
             }
+
+            // deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
+            pack_reconfig_data_format<true>(CTArgs::cb_out);
+            compressed_custom_mm_block_init_short<false, true, false>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
             uint32_t in0_base = 0, in0_cb_base = 0;
             UNPACK(({ in0_cb_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
@@ -732,6 +734,18 @@ struct MatmulExpertCompressedDRAM {
                     for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
                         tile_regs_acquire();
 
+                        // DEBUG: pre-K dst dump for all N tiles. If any dst[sn] is
+                        // non-zero here, the slot inherited stale state from prior
+                        // compute (rules in/out the stale-dst hypothesis).
+                        if constexpr (CTArgs::primary_at_last_offset && CTArgs::is_in_bank_primary) {
+                            if (exp_i == 0 && ng == 0) {
+                                for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
+                                    DPRINT_MATH({ DPRINT << "[exp_i=0 ng=0 PRE-K N=" << sn << "]:" << ENDL(); });
+                                    dprint_tensix_dest_reg(sn);
+                                }
+                            }
+                        }
+
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
                             cb_wait_front(CTArgs::cb_in1, tiles_per_block);
 
@@ -798,41 +812,18 @@ struct MatmulExpertCompressedDRAM {
                                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                                                 CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
 
+                                        // Walk ALL (K, N) tiles in DRAM order, print fmt + offset + size.
                                         uint32_t walk_byte_off = 0;
                                         for (uint32_t k = 0; k < CTArgs::num_tiles_k; k++) {
-                                            // Accumulate tile sizes for N=0, N=1 to reach (K=k, N=2).
-                                            for (uint32_t n = 0; n < 2; n++) {
+                                            for (uint32_t n = 0; n < 7; n++) {
                                                 uint32_t ti = 7 * k + n;
                                                 uint32_t fmt_w = fmt_p[ti / 10];
                                                 uint32_t f = (fmt_w >> (3 + 3 * (ti % 10))) & 0x3;
-                                                walk_byte_off += f == 0 ? 0 : f == 1 ? 320 : f == 2 ? 576 : 1088;
-                                            }
-                                            // Tile (K=k, N=2)
-                                            uint32_t target_ti = 7 * k + 2;
-                                            uint32_t target_w = fmt_p[target_ti / 10];
-                                            uint32_t target_f = (target_w >> (3 + 3 * (target_ti % 10))) & 0x3;
-                                            uint32_t target_sz = target_f == 0   ? 0
-                                                                 : target_f == 1 ? 320
-                                                                 : target_f == 2 ? 576
-                                                                                 : 1088;
-                                            DPRINT << "[exp_i=0 K=" << k << " N=2 fmt=" << target_f << " off=" << HEX()
-                                                   << walk_byte_off << " sz=" << target_sz << "]:";
-                                            if (target_sz > 0) {
-                                                volatile tt_l1_ptr uint32_t* tile_p =
-                                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                                        in1_addr_for_print + walk_byte_off);
-                                                for (uint32_t i = 0; i < target_sz / 4; i++) {
-                                                    DPRINT << " " << HEX() << tile_p[i];
-                                                }
-                                            }
-                                            DPRINT << ENDL();
-                                            // Advance through tile (K=k, N=2..6) so next iteration starts at K+1, N=0.
-                                            walk_byte_off += target_sz;
-                                            for (uint32_t n = 3; n < 7; n++) {
-                                                uint32_t ti = 7 * k + n;
-                                                uint32_t fmt_w = fmt_p[ti / 10];
-                                                uint32_t f = (fmt_w >> (3 + 3 * (ti % 10))) & 0x3;
-                                                walk_byte_off += f == 0 ? 0 : f == 1 ? 320 : f == 2 ? 576 : 1088;
+                                                uint32_t sz = f == 0 ? 0 : f == 1 ? 320 : f == 2 ? 576 : 1088;
+                                                DPRINT << "[exp_i=0 K=" << k << " N=" << n << " fmt=" << f
+                                                       << " off=" << HEX() << walk_byte_off << " sz=" << sz << "]"
+                                                       << ENDL();
+                                                walk_byte_off += sz;
                                             }
                                         }
 
@@ -878,8 +869,11 @@ struct MatmulExpertCompressedDRAM {
                         // rows that finalize ELWADD'd into dst[2].
                         if constexpr (CTArgs::primary_at_last_offset && CTArgs::is_in_bank_primary) {
                             if (exp_i == 0 && ng == 0) {
-                                DPRINT_MATH({ DPRINT << "[exp_i=0 ng=0 POST-FINALIZE] dst[2]:" << ENDL(); });
-                                dprint_tensix_dest_reg(2);
+                                for (uint32_t sn = 0; sn < CTArgs::subblock_n; sn++) {
+                                    DPRINT_MATH(
+                                        { DPRINT << "[exp_i=0 ng=0 POST-FINALIZE N=" << sn << "]:" << ENDL(); });
+                                    dprint_tensix_dest_reg(sn);
+                                }
                             }
                         }
 
