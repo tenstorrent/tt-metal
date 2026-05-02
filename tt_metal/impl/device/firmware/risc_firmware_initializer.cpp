@@ -396,6 +396,10 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             //
             // hal_.get_eth_fw_mailbox_val(HEARTBEAT) == 0 means arch not yet wired up —
             // fall back to 500ms sleep so we don't silently skip the wait.
+            // FIX PG (#42429): track whether ANY MMIO ETH core confirmed its heartbeat.
+            // If none do, the relay is NOT restored and FIX AY must be skipped.
+            // Declared outside the heartbeat block so it is visible at the FIX AY gate below.
+            bool ac_heartbeat_any_ready = false;
             {
                 const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
                 if (hb_addr == 0u) {
@@ -455,7 +459,9 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         std::this_thread::sleep_for(kPollInterval);
                     }
                     for (const auto& ps : poll_states) {
-                        if (!ps.ready) {
+                        if (ps.ready) {
+                            ac_heartbeat_any_ready = true;
+                        } else {
                             log_warning(
                                 tt::LogAlways,
                                 "teardown: FIX AC — ETH core {} did not report base firmware "
@@ -466,7 +472,14 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     }
                 }
             }
-            log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channels rebooted; relay should be restored.");
+            if (ac_heartbeat_any_ready) {
+                log_info(tt::LogAlways, "teardown: FIX AC — MMIO ETH channels rebooted; relay should be restored.");
+            } else {
+                log_warning(
+                    tt::LogAlways,
+                    "teardown: FIX PG (#42429): ALL MMIO ETH heartbeats timed out — relay NOT restored; "
+                    "skipping FIX AY to avoid N x 5s wasted timeouts.");
+            }
 
             // FIX AQ (#42429): Secondary poll of edm_status_address after the FIX AR heartbeat
             // poll — closes the race between "heartbeat incrementing" and "UMD relay has written
@@ -587,7 +600,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             //   warning and continue.  FIX AC registered the channels in
             //   force_reset_channels_ so the next session's verify_all_fabric_channels_
             //   healthy() can distinguish "was force-reset" from "fresh crash".
-            if (get_control_plane_) {
+            if (get_control_plane_ && ac_heartbeat_any_ready) {
                 log_info(
                     tt::LogAlways,
                     "teardown: FIX AY — attempting deferred ETH ERISC reset for {} "
@@ -667,6 +680,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         ay_succeeded + ay_failed,
                         ay_failed);
                 }
+            } else if (get_control_plane_ && !relay_broken_non_mmio.empty()) {
+                log_warning(
+                    tt::LogAlways,
+                    "teardown: FIX PG: skipping FIX AY — relay not restored, {} non-MMIO "
+                    "device(s) will be handled by FIX BC on next SetUp.",
+                    relay_broken_non_mmio.size());
             }
 
             // FIX AE supersedes FIX AW: ~Cluster() now marks ALL remote chips relay-broken
@@ -2333,7 +2352,15 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             hal_.get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
         initialize_firmware(
             device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
-        not_done_cores.insert(virtual_core);
+        // FIX SB (GAP-76): initialize_firmware() for IDLE_ETH returns early (breaks) when
+        // INIT_FABRIC is not set — it writes no go_msg and does not assert risc reset.
+        // If we add the core to not_done_cores unconditionally, deassert_risc_reset_at_core
+        // is later called for it, the core starts from stale L1 firmware that writes 0x55
+        // to run_mailbox, and wait_until_cores_done TT_FATALs.
+        // Guard matches the early-break condition inside initialize_firmware() itself.
+        if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            not_done_cores.insert(virtual_core);
+        }
     }
 
     std::unordered_set<CoreCoord> dram_not_done_cores;
