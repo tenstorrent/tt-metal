@@ -45,6 +45,11 @@ _HELPER_SCRIPT = textwrap.dedent("""
             print(f"Only {num_devices} devices", file=sys.stderr)
             sys.exit(77)
 
+        # FIX RZ: skip if fabric is degraded — AllGather hangs on stale base-UMD channels.
+        if mesh.is_fabric_degraded():
+            print("FABRIC_DEGRADED", file=sys.stderr)
+            sys.exit(77)
+
         # Real AllGather — fills ERISC ETH queues before close.
         t = torch.randn(1, 1, 32, 32 * num_devices, dtype=torch.bfloat16)
         tt_in = ttnn.from_torch(

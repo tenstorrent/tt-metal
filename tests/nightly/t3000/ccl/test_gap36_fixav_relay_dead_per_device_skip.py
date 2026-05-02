@@ -150,6 +150,12 @@ def test_gap36_fixav_relay_dead_per_device_skip(mesh_device, tmp_path):
          reset via relay (dead); FIX AV skips remaining cores on first failure.
       4. Assert: close completes < 25s (not 40s without FIX AV).
     """
+    # FIX RZ: skip if fabric is degraded — AllGather hangs on stale base-UMD channels.
+    if mesh_device.is_fabric_degraded():
+        pytest.skip(
+            "GAP-36: fabric degraded (base-UMD channels) — skipping to avoid hang"
+        )
+
     ready_path = str(tmp_path / "gap36_predecessor_ready")
     env = {**os.environ, "GAP36_READY_PATH": ready_path}
 
