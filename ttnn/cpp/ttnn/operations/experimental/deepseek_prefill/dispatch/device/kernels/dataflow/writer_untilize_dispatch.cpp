@@ -174,4 +174,8 @@ void kernel_main() {
         // 6. Release untilize CB
         cb_pop_front(cb_untilize_id, read_batch_size);
     }
+    // Ensure all in-flight NOC traffic has landed before kernel exit. The all-local path only
+    // calls noc_async_writes_flushed (departure-from-source); without this barrier its
+    // noc_async_write_page DRAM writes can still be in flight at program end.
+    noc_async_full_barrier();
 }
