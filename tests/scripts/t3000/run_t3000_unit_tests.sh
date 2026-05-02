@@ -102,6 +102,22 @@ run_t3000_ttnn_tests() {
   # 120s is generous for a normal PCIe reset cycle; if it exceeds that we bail
   # rather than letting the whole test script hang forever.
   timeout 30 tt-smi -r || true
+  # FIX GS-3 (#42429): warm-up open/close FABRIC_1D after initial tt-smi -r to clear
+  # base-UMD state from non-MMIO channels.  Without this, the first GTest that opens
+  # with FABRIC_2D sees fabric_stale_base_umd_channels_=true (FIX RZ), GTEST_SKIP()s,
+  # record_test treats the skip as failure, issues another tt-smi -r, and the cycle
+  # repeats until the hardware degrades into "failed to initialize FW!".
+  # The warm-up mirrors FIX GS-2b in tests/nightly/t3000/ccl/conftest.py.
+  python3 -u -c "
+import sys, time
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX GS-3] initial warm-up complete — base-UMD channels cleared for GTest')
+except Exception as e:
+    print(f'[FIX GS-3] WARNING: initial warm-up failed ({e}) — GTests may skip due to stale base-UMD', file=sys.stderr)
+" 2>&1 || true
 
   # T3K topology sanity check — fail immediately if fewer than 8 chips are visible.
   # A degraded N300 host (FIX AQ path) shrinks the topology to 4 MMIO-only chips.
@@ -163,6 +179,21 @@ run_t3000_ttnn_tests() {
     if [[ $rc -ne 0 ]]; then
       echo "LOG_METAL: test returned rc=$rc — resetting hardware via tt-smi"
       timeout 30 tt-smi -r || true
+      # FIX GS-3 (#42429): warm-up after per-test reset to prevent base-UMD reset cycle.
+      # After tt-smi -r, non-MMIO ETH channels reload base-UMD firmware. If the next
+      # GTest opens with FABRIC_2D without this warm-up, FIX M transitions the channels
+      # but sets fabric_stale_base_umd_channels_=true, causing GTEST_SKIP() → another
+      # tt-smi -r → loop until hardware cannot initialize FW at all.
+      python3 -u -c "
+import sys
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX GS-3] post-reset warm-up complete — base-UMD channels cleared')
+except Exception as e:
+    print(f'[FIX GS-3] WARNING: post-reset warm-up failed ({e}) — next test may still skip', file=sys.stderr)
+" 2>&1 || true
     fi
   }
 
@@ -218,7 +249,19 @@ run_t3000_ttnn_tests() {
   # GAP-21: Rapid AllGather+quiesce stress (FIX AE/AF/AN)
   # Explicit reset and settle before GAP-21 stress test — prior tests may leave hardware in marginal state
   tt-smi -r || true
-  sleep 15
+  sleep 10
+  # FIX GS-3: warm-up after explicit reset to clear base-UMD state before Python conftest runs.
+  python3 -u -c "
+import sys
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX GS-3] pre-GAP21 warm-up complete — base-UMD channels cleared')
+except Exception as e:
+    print(f'[FIX GS-3] WARNING: pre-GAP21 warm-up failed ({e})', file=sys.stderr)
+" 2>&1 || true
+  sleep 5
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
   # GAP-22: AllGather interrupted mid-flight by mesh close (FIX AO/AP/AD)
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test

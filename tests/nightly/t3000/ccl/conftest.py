@@ -164,6 +164,25 @@ def ensure_cluster_healthy():
         )
     except Exception as exc:
         signal.alarm(0)
+        exc_msg = str(exc)
+        # FIX GS-3b (#42429): When warm-up fails with "failed to initialize FW", the hardware
+        # is in a state where tt-smi -r did not recover it and no test can open a device.
+        # Rather than yielding and letting each test fail individually (then getting killed by
+        # the outer 300s bash timeout → exit code 124), abort the session cleanly so CI gets
+        # an explicit failure message instead of a timeout kill.
+        if "failed to initialize FW" in exc_msg or "Try resetting the board" in exc_msg:
+            print(
+                f"\n[conftest] FIX GS-3b (#42429): warm-up failed with fatal FW init error — "
+                "hardware cannot be recovered by tt-smi -r alone (board needs physical reset).\n"
+                f"Error: {exc_msg[:300]}\n"
+                "[conftest] Aborting session to avoid outer bash timeout (exit code 124)."
+            )
+            signal.signal(signal.SIGALRM, warmup_handler)
+            pytest.exit(
+                "FIX GS-3b: hardware FW init failed after tt-smi -r — board needs physical reset",
+                returncode=1,
+            )
+            return
         print(
             f"[conftest] FIX GS-2b: WARNING: warm-up failed ({exc}) — "
             "FABRIC_2D tests may fail due to residual base-UMD channels."
