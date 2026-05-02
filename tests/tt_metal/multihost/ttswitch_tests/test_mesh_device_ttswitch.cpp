@@ -94,20 +94,45 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceIds) {
-    // FIX CD (#42429): Skip if any device has degraded fabric. Explicit-device-ID topology
-    // mapping uses STRICT inter-mesh validation — dead ETH channels (relay_path_broken,
-    // channels_not_ready, OR stale base-UMD firmware) cause TT_FATAL in
-    // topology_mapper.cpp. Both ranks must skip independently (no MPI sync) to prevent
-    // rank 1 from hanging on "chip info header" when rank 0 crashes.
-    // FIX CD-2 (#42429): Original guard used cluster.is_relay_broken() which only catches
-    // relay_broken_chips_ (set via write_core() failures), missing probe_dead_channels and
-    // stale_base_umd cases. Use per-device fabric state flags instead.
-    for (auto* dev : tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_devices()) {
-        if (dev->is_fabric_relay_path_broken() ||
-            dev->is_fabric_channels_not_ready_for_traffic() ||
-            dev->is_fabric_stale_base_umd_channels()) {
-            GTEST_SKIP() << "Skipping: device " << dev->id()
-                         << " has degraded fabric (#42429) — explicit-ID inter-mesh mapping would fail";
+    // FIX CD-3 (#42429): Pre-probe via SystemMesh (RELAXED topology mapping) to detect
+    // degraded fabric before attempting STRICT inter-mesh mapping with explicit device IDs.
+    // FIX CD-2 used get_all_active_devices() which returns empty after
+    // TestOpenCloseComputeMeshDevice closes its MeshDevice — device fabric flags are not
+    // queryable when no device is open. The probe opens SystemMesh briefly (RELAXED mode
+    // succeeds even when fabric is degraded), reads per-device fabric flags, then closes.
+    // If any device is degraded, skip before topology_mapper.cpp:547 TT_FATAL fires.
+    // Both ranks skip independently (no MPI barrier) to prevent rank 1 hanging on
+    // "chip info header" when rank 0 would otherwise crash.
+    {
+        auto& ctrl = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto probe_shape = ctrl.get_mesh_graph().get_mesh_shape(tt::tt_fabric::MeshId(0));
+
+        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> probe_mesh;
+        try {
+            probe_mesh = tt::tt_metal::distributed::MeshDevice::create(
+                tt::tt_metal::distributed::MeshDeviceConfig(probe_shape),
+                l1_small_size_,
+                trace_region_size_,
+                1,
+                tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER});
+        } catch (const std::exception& ex) {
+            GTEST_SKIP() << "Skipping: probe MeshDevice open failed — cluster degraded (#42429): " << ex.what();
+        }
+
+        bool degraded = false;
+        for (auto* dev : probe_mesh->get_devices()) {
+            if (dev->is_fabric_relay_path_broken() ||
+                dev->is_fabric_channels_not_ready_for_traffic() ||
+                dev->is_fabric_stale_base_umd_channels()) {
+                degraded = true;
+                break;
+            }
+        }
+        probe_mesh->close();
+        probe_mesh.reset();
+
+        if (degraded) {
+            GTEST_SKIP() << "Skipping: fabric degraded (#42429) — explicit-ID STRICT inter-mesh mapping would fail";
         }
     }
 
@@ -159,15 +184,40 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
-    // FIX CD (#42429): Same comprehensive guard as TestOpenMeshDeviceWithExplicitPhysicalDeviceIds.
-    // create_unit_meshes uses explicit physical device IDs internally — same failure path.
-    // FIX CD-2 (#42429): Use per-device fabric state flags (not cluster.is_relay_broken()).
-    for (auto* dev : tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_devices()) {
-        if (dev->is_fabric_relay_path_broken() ||
-            dev->is_fabric_channels_not_ready_for_traffic() ||
-            dev->is_fabric_stale_base_umd_channels()) {
-            GTEST_SKIP() << "Skipping: device " << dev->id()
-                         << " has degraded fabric (#42429) — unit-mesh topology mapping would fail";
+    // FIX CD-3 (#42429): Same pre-probe guard as TestOpenMeshDeviceWithExplicitPhysicalDeviceIds.
+    // create_unit_meshes uses explicit physical device IDs internally — same STRICT topology
+    // mapping failure path. get_all_active_devices() is empty here for the same reason
+    // (prior test closed its device). Probe via SystemMesh to detect degraded state first.
+    {
+        auto& ctrl = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto probe_shape = ctrl.get_mesh_graph().get_mesh_shape(tt::tt_fabric::MeshId(0));
+
+        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> probe_mesh;
+        try {
+            probe_mesh = tt::tt_metal::distributed::MeshDevice::create(
+                tt::tt_metal::distributed::MeshDeviceConfig(probe_shape),
+                l1_small_size_,
+                trace_region_size_,
+                1,
+                tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER});
+        } catch (const std::exception& ex) {
+            GTEST_SKIP() << "Skipping: probe MeshDevice open failed — cluster degraded (#42429): " << ex.what();
+        }
+
+        bool degraded = false;
+        for (auto* dev : probe_mesh->get_devices()) {
+            if (dev->is_fabric_relay_path_broken() ||
+                dev->is_fabric_channels_not_ready_for_traffic() ||
+                dev->is_fabric_stale_base_umd_channels()) {
+                degraded = true;
+                break;
+            }
+        }
+        probe_mesh->close();
+        probe_mesh.reset();
+
+        if (degraded) {
+            GTEST_SKIP() << "Skipping: fabric degraded (#42429) — unit-mesh STRICT topology mapping would fail";
         }
     }
 

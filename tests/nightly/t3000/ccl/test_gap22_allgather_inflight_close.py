@@ -26,16 +26,31 @@ _HELPER_SCRIPT = textwrap.dedent("""
     import torch
     import sys
     import time
+    import signal
     from ttnn import ShardTensorToMesh
 
     NUM_CYCLES = 5
     REOPEN_DEADLINE_S = 45
+    _OPEN_TIMEOUT_S = 30  # FIX GS-2 (#42429): guard open_mesh_device() from hanging
+
+    def _open_alarm_handler(signum, frame):
+        raise TimeoutError("open_mesh_device timed out")
+
+    signal.signal(signal.SIGALRM, _open_alarm_handler)
 
     for cycle in range(NUM_CYCLES):
         try:
-            mesh = ttnn.open_mesh_device(
-                ttnn.MeshShape(1, 8),
-            )
+            signal.alarm(_OPEN_TIMEOUT_S)
+            try:
+                mesh = ttnn.open_mesh_device(
+                    ttnn.MeshShape(1, 8),
+                )
+            except TimeoutError:
+                print(f"Cycle {cycle}: open_mesh_device hung >{_OPEN_TIMEOUT_S}s — cluster degraded (FIX GS-2 #42429)", file=sys.stderr)
+                signal.alarm(0)
+                sys.exit(77)  # skip sentinel
+            finally:
+                signal.alarm(0)
         except Exception as e:
             print(f"Cycle {cycle}: open_mesh_device failed: {e}", file=sys.stderr)
             sys.exit(2)
