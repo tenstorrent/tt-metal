@@ -1362,5 +1362,75 @@ if [ "${FIX_TN_WILDCARD_CRASH:-0}" -gt 0 ]; then
     echo "     T3kCustomMeshGraphFabric2DFixture (class ends with Fabric2DFixture) on degraded cluster."
     echo "     Fix (FIX TN): remove leading '*' → 'Fabric2DFixture.TestUnicast*' in run_t3000_unit_tests.sh."
 fi
+# ─── PROCESS CRASH / SIGNAL CLASSIFICATION ───
+echo ""
+echo "=== PROCESS CRASH / SIGNAL CLASSIFICATION ==="
+# SIGBUS (exit 135 = 128+7): typically SiliconSysmemManager destructor throw after ENODEV
+SIGBUS_COUNT=$(grep -ciE 'Bus error|SIGBUS|signal 7|exit.*135' "$CLEAN" 2>/dev/null; :)
+# SIGABRT (exit 134 = 128+6): TT_FATAL, std::terminate, destructor throw
+SIGABRT_COUNT=$(grep -ciE 'SIGABRT|Aborted|signal 6|exit.*134' "$CLEAN" 2>/dev/null; :)
+# SIGSEGV (exit 139 = 128+11)
+SIGSEGV_COUNT=$(grep -ciE 'Segmentation fault|SIGSEGV|signal 11|exit.*139' "$CLEAN" 2>/dev/null; :)
+# SIGKILL (exit 137 = 128+9): watchdog, OOM, CI timeout
+SIGKILL_COUNT=$(grep -ciE 'SIGKILL|Killed|signal 9|exit.*137' "$CLEAN" 2>/dev/null; :)
+# UMD destructor throw pattern: SiliconSysmemManager ENODEV
+UMD_DTOR_THROW=$(grep -ciE 'unpin_or_unmap_sysmem|TENSTORRENT_IOCTL_UNPIN|SiliconSysmemManager|ENODEV.*unmap' "$CLEAN" 2>/dev/null; :)
+# Exit code 77: skip sentinel from subprocess tests (GAP-22)
+EXIT_77=$(grep -ciE 'exit.*77|sys\.exit\(77\)' "$CLEAN" 2>/dev/null; :)
+# Exit code 124: timeout(1) killed subprocess
+EXIT_124=$(grep -ciE 'exit.*124|Command timed out' "$CLEAN" 2>/dev/null; :)
+# Core dump
+CORE_DUMP=$(grep -ciE 'core dump|core\..*dumped' "$CLEAN" 2>/dev/null; :)
+
+if [ "${SIGBUS_COUNT:-0}" -gt 0 ]; then
+    echo "  => SIGBUS (exit 135) detected: ${SIGBUS_COUNT} occurrence(s)."
+    echo "     Common cause: SiliconSysmemManager::~SiliconSysmemManager() throws UmdException"
+    echo "     when unpin_or_unmap_sysmem() -> TENSTORRENT_IOCTL_UNPIN_PAGES returns ENODEV."
+    echo "     Destructor throw -> std::terminate() -> process crash."
+    echo "     Fix: FIX SA (UMD submodule) wraps destructor with try/catch."
+fi
+if [ "${SIGABRT_COUNT:-0}" -gt 0 ]; then
+    echo "  => SIGABRT (exit 134) detected: ${SIGABRT_COUNT} occurrence(s)."
+    echo "     Common causes: TT_FATAL, std::terminate from destructor throw, or assert()."
+fi
+if [ "${SIGSEGV_COUNT:-0}" -gt 0 ]; then
+    echo "  => SIGSEGV (exit 139) detected: ${SIGSEGV_COUNT} occurrence(s)."
+    echo "     Common cause: null dereference on closed device, stale pointer after partial teardown."
+fi
+if [ "${SIGKILL_COUNT:-0}" -gt 0 ]; then
+    echo "  => SIGKILL (exit 137) detected: ${SIGKILL_COUNT} occurrence(s)."
+    echo "     Common causes: watchdog timeout, OOM, CI timeout kill, or test_budget_ms exceeded."
+fi
+if [ "${UMD_DTOR_THROW:-0}" -gt 0 ]; then
+    echo "  => UMD destructor throw pattern: ${UMD_DTOR_THROW} occurrence(s)."
+    echo "     SiliconSysmemManager::~SiliconSysmemManager() threw exception."
+    echo "     Fix: FIX SA (UMD submodule at 5a2e723c) wraps unpin_or_unmap_sysmem() in try/catch."
+    echo "     If SIGBUS/SIGABRT also present: FIX SA may be missing or reverted."
+fi
+if [ "${EXIT_77:-0}" -gt 0 ]; then
+    echo "  => Exit code 77 (skip sentinel): ${EXIT_77} occurrence(s)."
+    echo "     Subprocess tests (GAP-22) use exit(77) to signal hardware degradation skip."
+fi
+if [ "${EXIT_124:-0}" -gt 0 ]; then
+    echo "  => Exit code 124 (timeout): ${EXIT_124} occurrence(s)."
+    echo "     bash timeout(1) killed the subprocess — likely open_mesh_device() or AllGather hang."
+fi
+if [ "${CORE_DUMP:-0}" -gt 0 ]; then
+    echo "  => Core dump detected: ${CORE_DUMP} occurrence(s)."
+fi
+if [ "${SIGBUS_COUNT:-0}" -eq 0 ] && [ "${SIGABRT_COUNT:-0}" -eq 0 ] && [ "${SIGSEGV_COUNT:-0}" -eq 0 ] && [ "${SIGKILL_COUNT:-0}" -eq 0 ] && [ "${UMD_DTOR_THROW:-0}" -eq 0 ]; then
+    echo "  (no crash signals detected)"
+fi
+
+# ─── FIX TF (test_tt_fabric degraded skip) ───
+FIX_TF_SKIP=$(grep -cE 'Skipping Test Group.*degraded fabric detected' "$CLEAN" 2>/dev/null; :)
+if [ "${FIX_TF_SKIP:-0}" -gt 0 ]; then
+    echo ""
+    echo "  => [FIX TF SKIP] test_tt_fabric skipped ${FIX_TF_SKIP} test group(s) due to degraded fabric."
+    echo "     has_degraded_fabric() returned true (relay_broken || channels_not_ready || stale_base_umd)."
+    echo "     Without FIX TF: compile_programs() would dispatch to non-MMIO device with broken relay"
+    echo "     -> FIX Z throw in enqueue_write_shards_nolock -> std::terminate -> SIGABRT."
+fi
+
 echo ""
 echo "========================================================================"

@@ -258,8 +258,11 @@ public:
 
     void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
 
-    // FIX TF (#42429): After open_devices(), check if any device has dead ETH relay or
-    // channels not ready for traffic (flags set by FIX QU during fabric init degraded mode).
+    // FIX TF (#42429): After open_devices(), check if any device has dead ETH relay,
+    // channels not ready for traffic, or stale base-UMD channels (flags set by FIX QU/FIX M
+    // during fabric init degraded mode).  Must check all three flags — stale_base_umd_channels
+    // indicates non-MMIO devices running base-UMD relay firmware instead of fabric firmware,
+    // which causes dispatch hangs just like relay_broken or channels_not_ready.
     // If true, the test binary must skip rather than crash inside compile_programs() when
     // enqueue_write_shards_nolock hits FIX Z (cannot relay through dead non-MMIO device).
     bool has_degraded_fabric() const {
@@ -267,7 +270,8 @@ public:
             return false;
         }
         for (auto* device : mesh_device_->get_devices()) {
-            if (device->is_fabric_relay_path_broken() || device->is_fabric_channels_not_ready_for_traffic()) {
+            if (device->is_fabric_relay_path_broken() || device->is_fabric_channels_not_ready_for_traffic() ||
+                device->is_fabric_stale_base_umd_channels()) {
                 return true;
             }
         }
