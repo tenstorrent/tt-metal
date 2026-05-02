@@ -18,6 +18,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -274,8 +275,9 @@ void kernel_main() {
         out_block_hw_last = out_block_h_last * block_w;
     }
     uint32_t cb_ex_external_tiles_required =
-        num_out_blocks_padded * num_cores_per_mcast_group * 16 / single_tile_size_bytes;
-    if ((num_out_blocks_padded * num_cores_per_mcast_group * 16) % single_tile_size_bytes) {
+        num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes / single_tile_size_bytes;
+    if ((num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes) %
+        single_tile_size_bytes) {
         cb_ex_external_tiles_required++;
     }
 

@@ -7,8 +7,12 @@
 #include <optional>
 
 #include "api/compute/common_globals.h"
+#include "api/compute/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_welfords_sfpu_entry.h"
+#endif
+#ifdef TRISC_UNPACK
+#include "llk_unpack_A_api.h"
 #endif
 #include "api/debug/assert.h"
 
@@ -22,6 +26,25 @@ namespace ckernel {
 ALWI void welford_init() {
     MATH((llk_math_welfords_sfpu_init()));
     MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
+}
+
+/**
+ * @brief Re-establish UNPACK and MATH state for Welford after another op has reconfigured them
+ * (e.g. FPU `mul_tiles_bcast_scalar`). Does not reprogram the SFPU replay buffer or clear the
+ * running mean/M2 accumulators in LREG4/5. Example usage of this is in `welford_update` - this is called once per tile
+ * when the `do_scale` path runs `mul_tiles_bcast_scalar` in the same DST window.
+ */
+ALWI void welford_reinit(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
+    state_configure(cbid, call_line);
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        /*transpose=*/0, /*transpose_within_16x16_face=*/false, cbid)));
+    MATH((llk_math_welfords_sfpu_reinit<DST_ACCUM_MODE>(cbid)));
+#else
+    (void)cbid;
+    (void)call_line;
+    ASSERT(false && "welford_reinit is unsupported on ARCH_QUASAR");
+#endif
 }
 
 /**

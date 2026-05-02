@@ -203,6 +203,67 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Gemma-4 unit tests: one entry per model variant, multiple SKUs per entry.
+# parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
+# runner when CI=true is set, so the same `pytest` invocation runs 1x1 on N150,
+# 1x2 on N300, 1x8 on T3K — no per-SKU `-k` filter needed.
+
+- name: Gemma-4-E2B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
+    pytest --timeout 600 models/demos/gemma4/tests/unit/
+  model: gemma-4-e2b
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-E4B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    pytest --timeout 600 models/demos/gemma4/tests/unit/
+  model: gemma-4-e4b
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 2
+    # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
+    # wh_n300:
+    #   timeout: 5
+    #   tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-26B-A4B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
+    pytest --timeout 900 models/demos/gemma4/tests/unit/
+  model: gemma-4-26b-a4b
+  skus:
+    wh_llmbox:
+      timeout: 15
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-31B unit tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    pytest --timeout 900 models/demos/gemma4/tests/unit/
+  model: gemma-4-31b
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
 - name: Shallow UNet unit tests
   cmd: |
     pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py
@@ -285,7 +346,7 @@
 #     wh_llmbox_perf:
 #       timeout: 15
 #       tier: 2
-#   owner_id: U08TJ70UFRT # Stuti Raizada
+#   owner_id: U08TJ70UFRT # Harry Andrews
 #   team: models
 
 - name: GPT-OSS 120B unit tests (Galaxy, high batch)
@@ -298,7 +359,7 @@
     wh_galaxy_perf:
       timeout: 25
       tier: 1
-  owner_id: U08TJ70UFRT # Stuti Raizada
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Whisper unit tests

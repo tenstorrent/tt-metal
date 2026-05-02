@@ -138,11 +138,21 @@ ResolvedBindings resolve_bindings(
         }
     }
 
-    auto program_cbs = program.circular_buffers();
-    for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
-        if (desc.cbs[ci].buffer) {
-            result.cbs.push_back(
-                {program_cbs[ci]->id(), find_idx(desc.cbs[ci].buffer, "cbs"), desc.cbs[ci].address_offset});
+    // Only resolve CB bindings when the factory actually opted into the fast path
+    // by declaring at least one runtime-arg buffer binding, whether via
+    // emplace_runtime_args() or emplace_common_runtime_args()
+    // (i.e. when !result.rt_args.empty()).
+    // Without this guard, sharded operations that use the old API (passing
+    // buffer->address() as uint32_t) would have non-empty resolved_bindings
+    // due to CB entries alone, causing the adapter to take the fast path and
+    // skip the full runtime-arg rebuild on cache hits.
+    if (!result.rt_args.empty()) {
+        auto program_cbs = program.circular_buffers();
+        for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
+            if (desc.cbs[ci].buffer) {
+                result.cbs.push_back(
+                    {program_cbs[ci]->id(), find_idx(desc.cbs[ci].buffer, "cbs"), desc.cbs[ci].address_offset});
+            }
         }
     }
 

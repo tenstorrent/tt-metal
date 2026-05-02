@@ -151,6 +151,9 @@ std::optional<ttnn::CoreGrid> find_expected_dram_grid(
     TT_FATAL(num_batches >= 1, "find_expected_dram_grid: num_batches must be >= 1, got {}", num_batches);
     uint32_t Ht = static_cast<uint32_t>(std::ceil(static_cast<double>(input_nhw) / ttnn::types::TILE_SIZE));
 
+    // Prefer gx values where all x-columns are fully utilized (gx % nvc == 0),
+    // falling back to grids with unused columns only if no fully-utilized grid exists.
+    std::optional<ttnn::CoreGrid> fallback;
     for (uint32_t gx = max_x; gx >= 1; --gx) {
         uint32_t nvc = compute_num_virtual_cols(gx, num_groups, num_channels);
         if (nvc == 0) {
@@ -169,10 +172,18 @@ std::optional<ttnn::CoreGrid> find_expected_dram_grid(
             if (num_virtual_rows >= num_batches && num_virtual_rows % num_batches != 0) {
                 continue;
             }
-            return ttnn::CoreGrid(gx, gy);
+            if (gx % nvc == 0) {
+                return ttnn::CoreGrid(gx, gy);
+            }
+            if (!fallback.has_value()) {
+                fallback = ttnn::CoreGrid(gx, gy);
+            }
+            // nvc depends only on gx, so gx % nvc is fixed for this gx; smaller gy can only produce
+            // additional partial-utilization candidates we'd discard. Move on to the next gx.
+            break;
         }
     }
-    return std::nullopt;
+    return fallback;
 }
 
 }  // namespace ttnn::operations::normalization

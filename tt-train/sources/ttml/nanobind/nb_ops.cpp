@@ -108,6 +108,8 @@ void py_module(nb::module_& m) {
                 &ttml::ops::operator/),
             nb::arg("a"),
             nb::arg("b"));
+        py_binary.def("min", &ttml::ops::min, nb::arg("a"), nb::arg("b"));
+        py_binary.def("max", &ttml::ops::max, nb::arg("a"), nb::arg("b"));
     }
 
     {
@@ -446,6 +448,8 @@ void py_module(nb::module_& m) {
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
+        py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
+        py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
         py_unary.def(
             "polynorm3",
             &ttml::ops::polynorm3,

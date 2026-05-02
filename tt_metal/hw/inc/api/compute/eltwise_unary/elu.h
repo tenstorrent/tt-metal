@@ -6,12 +6,14 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_elu.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Performs element-wise computation of elu (relu(x) + slope*(exp(x) - 1)*(x <= 0 )) on each element of a tile
@@ -33,5 +35,5 @@ ALWI void elu_tile(uint32_t idst, uint32_t param0) { MATH(SFPU_UNARY_ONE_PARAM_K
  * Please refer to documentation for any_init.
  */
 ALWI void elu_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(elu, APPROX)); }
-
+#endif
 }  // namespace ckernel

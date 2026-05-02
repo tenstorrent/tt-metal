@@ -331,8 +331,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
-    // Compute CB sizes centrally - used for both CB creation and L1 validation
+    // Compute CB sizes centrally - used for both CB creation and L1 validation.
+    // When the DRAM config-tensor path is active, the reader indices tensor is already built on
+    // host so we pass its real per-core page size. Auto-shard evaluation in pool_utils.cpp still
+    // falls back to the worst case because the buffers do not exist yet there. The scalar config
+    // tensor (only created for avg pool without one_scalar_per_core) is not yet known at this
+    // point, so its prediction remains the worst case; that matches how the CB is created below.
     auto output_shard_shape = outputs[0].shard_spec().value().shape;
+    std::optional<uint32_t> reader_indices_actual_page_size;
+    if (config_tensor_in_dram) {
+        reader_indices_actual_page_size = reader_indices_storage.get_buffer()->page_size();
+    }
     PoolCBSizes cb_sizes = calculate_pool_cb_sizes(
         params,
         one_scalar_per_core,
@@ -340,7 +349,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         output_layout,
         outputs[0].dtype(),
         {output_shard_shape[0], output_shard_shape[1]},
-        config_tensor_in_dram);
+        config_tensor_in_dram,
+        reader_indices_actual_page_size);
 
     const auto& input_shape = input.padded_shape();
     const uint32_t shard_width = input.shard_spec()->shape[1];
@@ -403,17 +413,18 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const uint32_t max_reader_indices_size =
         (max_out_nhw_per_core * 3 * sizeof(uint16_t)) + 2;  // worst case of 3 indices per output element
+    const uint32_t actual_reader_indices_buffer_page_size = reader_indices_storage.get_buffer()->page_size();
     TT_FATAL(
-        reader_indices_storage.get_buffer()->page_size() <= max_reader_indices_size,
+        actual_reader_indices_buffer_page_size <= max_reader_indices_size,
         "Reader indices buffer page size {} exceeds max expected size {}",
-        reader_indices_storage.get_buffer()->page_size(),
+        actual_reader_indices_buffer_page_size,
         max_reader_indices_size);
 
     tt::tt_metal::create_cb(
         in_reader_indices_cb_id,
         program,
         all_cores,
-        config_tensor_in_dram ? max_reader_indices_size : in_reader_indices_cb_pagesize,
+        config_tensor_in_dram ? actual_reader_indices_buffer_page_size : in_reader_indices_cb_pagesize,
         in_reader_indices_cb_npages,
         tt::DataFormat::UInt16,
         config_tensor_in_dram ? nullptr : reader_indices_storage.get_buffer());
