@@ -69,7 +69,7 @@ jobs:
     # Only broadcast on scheduled runs — manual triggers are typically
     # ad-hoc debugging and don't need Slack noise. `always()` so the job
     # still runs when the regression reports failures (it's expected to).
-    if: always() && github.event_name == 'schedule'
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     needs: ttsim-regression
     steps:
       - name: Download blackhole report
@@ -188,11 +188,12 @@ jobs:
           payload: |
             {
               "channel": "${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}",
-              "text": ${{ toJSON(steps.message.outputs.text) }},
+              "text": "LLK ttsim weekly digest",
               "attachments": [
                 {
                   "color": "#5A9FD4",
-                  "fallback": ${{ toJSON(steps.message.outputs.text) }}
+                  "text": ${{ toJSON(steps.message.outputs.text) }},
+                  "mrkdwn_in": ["text"]
                 }
               ]
             }

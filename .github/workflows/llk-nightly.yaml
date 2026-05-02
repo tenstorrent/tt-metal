@@ -188,11 +188,12 @@ jobs:
           payload: |
             {
               "channel": "${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}",
-              "text": ${{ toJSON(steps.message.outputs.text) }},
+              "text": "LLK ttsim weekly digest",
               "attachments": [
                 {
                   "color": "#5A9FD4",
-                  "fallback": ${{ toJSON(steps.message.outputs.text) }}
+                  "text": ${{ toJSON(steps.message.outputs.text) }},
+                  "mrkdwn_in": ["text"]
                 }
               ]
             }
