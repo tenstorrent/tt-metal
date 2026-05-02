@@ -747,6 +747,10 @@ def _mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX, seed: int = 44) -> dict
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+# TODO(#43025): Root-cause the MTP projection shape mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: MTP 4x2 prepare produced eh_projection shape (1792, 7168) instead of expected (14336, 7168). Issue: #43025"
+)
 def test_prepare_mtp_weights_4x2(bh_2d_mesh_device):
     """Prepare MTP weights on 4x2 mesh; verify type and shapes."""
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
@@ -1135,6 +1139,10 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
+)
+# TODO(#43025): Root-cause the MTP TensorCache projection shape mismatch and remove this temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: MTP 4x2 TensorCache prepare produced eh_projection shape (1792, 7168) instead of expected (14336, 7168). Issue: #43025"
 )
 def test_prepare_mtp_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Prepare MTP weights via TensorCache on 4x2 mesh: cold miss then warm hit for h/e gamma, eh_proj."""

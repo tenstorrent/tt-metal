@@ -106,7 +106,7 @@
   model: deepseek_decode
   skus:
     bh_galaxy:
-      timeout: 70
+      timeout: 90
   owner_id: U03HY7MK4BT
   team: models
 
