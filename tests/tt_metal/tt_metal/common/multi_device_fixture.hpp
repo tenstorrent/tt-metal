@@ -207,10 +207,34 @@ protected:
         if (!mesh_device_) {
             return;
         }
+
+        // FIX RX (base class, #42429): if fabric is broken, skip quiesce_devices() and call
+        // close() directly.  Calling quiesce_devices() on a broken cluster burns ~72 s
+        // (Phase 2.5 force-resets + Phase 5 relay-read timeouts) and leaves ETH channels in
+        // 0x49705180 Metal-fw-stale state, causing the next test's SetUp to fail with
+        // "Device N not active".  This is the same guard already present in
+        // MultiCQFabricMeshDevice2x4Fixture::TearDown(); promoting it to the base class so
+        // ALL mesh device fixtures (including MeshDevice1x4Fixture) benefit.
+        bool fabric_broken = false;
+        if (!mesh_device_->is_remote_only()) {
+            for (auto* idev : mesh_device_->get_devices()) {
+                if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic() ||
+                    idev->is_fabric_stale_base_umd_channels()) {
+                    fabric_broken = true;
+                    break;
+                }
+            }
+        }
+
         // Skip quiesce on remote-only MeshDevices (no local devices on this host).
         // quiesce_internal() calls get_active_sub_device_manager_id() which requires
         // sub_device_manager_tracker_ — null on remote-only devices — and would throw.
-        if (!mesh_device_->is_remote_only()) {
+        if (fabric_broken) {
+            log_warning(
+                tt::LogMetal,
+                "[fixture_teardown] MeshDeviceFixtureBase::TearDown() FIX RX (#42429): fabric broken — "
+                "skipping quiesce_devices() (~72 s) and calling close() directly.");
+        } else if (!mesh_device_->is_remote_only()) {
             log_info(tt::LogMetal, "[fixture_teardown] MeshDeviceFixtureBase::TearDown() calling mesh_device_->quiesce_devices()");
             mesh_device_->quiesce_devices();
             log_info(tt::LogMetal, "[fixture_teardown] mesh_device_->quiesce_devices() returned, calling mesh_device_->close()");
