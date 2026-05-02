@@ -2,35 +2,30 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from functools import partial
+
 import torch
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
-from functools import partial
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
+    broadcast_torch_inputs_to_global,
     create_mesh_device,
     create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
 )
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
-# Import V2 master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
-
-# Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
-# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("subtract_")
+model_traced_params = loader.get_suite_parameters("lerp")
 
-# Parameters provided to the test vector generator are defined here.
 parameters = {
-    # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
         "input_a_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
@@ -40,12 +35,12 @@ parameters = {
         "input_b_dtype": [ttnn.bfloat16],
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "arg2": [0.5],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],
     },
 }
 
-# Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
@@ -63,10 +58,11 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    input_b_shape=None,
-    input_b_dtype=None,
-    input_b_layout=None,
-    input_b_memory_config=None,
+    input_b_shape,
+    input_b_dtype,
+    input_b_layout,
+    input_b_memory_config,
+    arg2=None,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
@@ -75,19 +71,16 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement")
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement")
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg2"}, output_memory_config=output_memory_config)
+
+    pos_args = extract_positional_args(kwargs)
+    weight = arg2 if arg2 is not None else pos_args.get(2, 0.5)
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
-    shape_b = (
-        tuple(input_b_shape)
-        if input_b_shape is not None and isinstance(input_b_shape, (list, tuple))
-        else input_b_shape
-    )
-    if shape_b is None:
-        shape_b = shape_a
+    shape_b = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -95,14 +88,19 @@ def run(
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(shape_b)
-
-    # Compute expected output (in-place subtract modifies the first tensor)
-    torch_output_tensor = torch_input_tensor_a.clone().sub_(torch_input_tensor_b)
+    ref_a, ref_b = broadcast_torch_inputs_to_global(
+        torch_input_tensor_a,
+        input_a_tensor_placement,
+        torch_input_tensor_b,
+        input_b_tensor_placement,
+    )
+    torch_output_tensor = torch.lerp(ref_a, ref_b, weight)
 
     is_host = storage_type and "HOST" in str(storage_type)
-
-    # Create tensor A
-    if not is_host:
+    if is_host:
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
+    else:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor_a = create_tensor_on_mesh(
                 torch_input_tensor_a,
@@ -120,11 +118,7 @@ def run(
                 device=device,
                 memory_config=input_a_memory_config,
             )
-    else:
-        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    # Create tensor B
-    if not is_host:
         if is_mesh_device and input_b_tensor_placement:
             input_tensor_b = create_tensor_on_mesh(
                 torch_input_tensor_b,
@@ -142,16 +136,12 @@ def run(
                 device=device,
                 memory_config=input_b_memory_config,
             )
-    else:
-        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
 
     start_time = start_measuring_time()
-    # subtract_ is in-place subtraction
-    ttnn.subtract_(input_tensor_a, input_tensor_b, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
+    output_tensor = ttnn.lerp(input_tensor_a, input_tensor_b, weight, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
     if is_mesh_device:
         torch_output_tensor = reconcile_golden_to_actual(
             torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement

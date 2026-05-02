@@ -42,31 +42,15 @@
 targets:
   lead_models:
     - model:
-        - deepseek_v3
-      trace: [2]
+        - gpt_oss
+        - tt_dit
+      trace: [9,15]
 
   model_traced:
     - model:
-        - deepseek-llm-7b-chat
-        - deepseek-r1-distill-qwen-32b
         - efficientnetb0
-        - falcon7b
-        - llama-3.2-11b-vision-instruct
-        - llama-3.2-1b-instruct
-        - llama-krikri-8b-instruct
-        - mistral-7b-instruct-v0.3
-        - phi-3-mini-128k-instruct
-        - qwen2.5-coder-32b
-        - qwen2.5-coder-7b-instruct
-        - qwen3-32b
-        - qwen3-32b_2
-        - segmentation
-        - sentence_bert
-        - stable_diffusion_xl_base
-        - vit
-        - vit_2
-        - whisper
-      trace: [3,4,5,7]
+        - llama-3.2-1b
+      trace: [7, 8]
 
 registry:
   - trace_id: 1
@@ -178,7 +162,7 @@ registry:
     tt_metal_sha: bf8cdac63c32c5a1a04fa1de699af55e26851624
     config_count: 130
     loaded_at: '2026-04-17'
-    notes: ''
+    notes: 'contains configs that fail when sweep is run; superseded by trace 15'
 
   - trace_id: 13
     status: draft
@@ -189,3 +173,23 @@ registry:
     config_count: 331
     loaded_at: '2026-04-17'
     notes: ''
+
+  - trace_id: 15
+    status: active
+    models: [gpt_oss]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 1d3eeadb-ae5a-4364-b9ba-0aef89fb1160
+    tt_metal_sha: 6a06f99b3689765310a5d3d16694bc8db74cd451
+    config_count: 130
+    loaded_at: '2026-04-28'
+    notes: ''
+
+  - trace_id: 16
+    status: draft
+    models: [tt_dit_2]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 445bfb0d-eb24-454d-9d74-46a257703f13
+    tt_metal_sha: 41ae9e67ce3c9ce811ce1e0889baf51c36f58ab4
+    config_count: 209
+    loaded_at: '2026-05-01'
+    notes: 'flux 1 dev via pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py   -k "4x8sp0tp1 and encoder_device and 28 and yes_use_cache and not not_traced"'
