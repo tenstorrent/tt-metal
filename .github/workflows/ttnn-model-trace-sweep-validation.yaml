@@ -8,14 +8,13 @@ on:
     inputs:
       scope-targets:
         type: choice
-        description: "Which target group to validate. 'auto' (default) detects from the registry's `targets:` section. Override to run a single group when both lead_models and model_traced are configured."
+        description: "Which target group to validate. 'auto' (default) runs whatever is populated in the registry's `targets:` section (one group, both, etc.). Override to force just lead_models or just model_traced when both are configured."
         required: false
         default: "auto"
         options:
           - auto
           - lead_models
           - model_traced
-          - all
       models-filter:
         type: string
         description: "Comma-separated list of models to validate (e.g. 'efficientnetb0' or 'efficientnetb0,whisper'). Leave empty to validate all models in the registry."
@@ -72,7 +71,7 @@ jobs:
           models_filter = {m.strip() for m in models_filter_raw.split(",") if m.strip()} if models_filter_raw else set()
 
           scope_override = os.environ.get("SCOPE_OVERRIDE", "auto").strip() or "auto"
-          if scope_override not in {"auto", "lead_models", "model_traced", "all"}:
+          if scope_override not in {"auto", "lead_models", "model_traced"}:
               print(f"ERROR: invalid scope-targets value '{scope_override}'", file=sys.stderr)
               sys.exit(1)
 
@@ -100,10 +99,8 @@ jobs:
               targets = filtered_targets
 
           # Determine effective scope. An explicit scope_override of
-          # lead_models / model_traced / all wins over auto-detection.
-          if scope_override == "all":
-              scope_target = "all"
-          elif scope_override in {"lead_models", "model_traced"}:
+          # lead_models / model_traced wins over auto-detection.
+          if scope_override in {"lead_models", "model_traced"}:
               # Only emit the explicit scope if it actually has targets after
               # the optional models-filter; otherwise none.
               scope_target = scope_override if scope_override in targets else "none"
