@@ -121,10 +121,15 @@ protected:
         }
     }
     void TearDown() override {
-        // FIX RX (#42429): Skip TearDown quiesce when the test body already found broken fabric.
-        // After the pre-AllGather quiesce_devices() (FIX AA probe) sets
-        // fabric_channels_not_ready_for_traffic_ or fabric_relay_path_broken_, running
-        // quiesce_devices() again in TearDown burns ~72 s:
+        // FIX RX (#42429): Skip TearDown quiesce when fabric is broken.
+        // Cases:
+        //   1. The pre-AllGather quiesce_devices() (FIX AA probe) sets
+        //      fabric_channels_not_ready_for_traffic_ or fabric_relay_path_broken_.
+        //   2. FIX QW SetUp skip fires because fabric_stale_base_umd_channels_ is set —
+        //      if we still call quiesce here, Phase 5 hangs (non-MMIO ERISCs can't complete
+        //      handshake on base-UMD channels), dispatch cores get stuck, and ALL subsequent
+        //      tests in the binary crash in fixture construction (stale dispatch state).
+        // In both cases, running quiesce_devices() again in TearDown burns ~72 s:
         //   • Phase 2.5 force-resets 6 ETH channels × 2 s on each of 2 MMIO devices = 24 s
         //   • Phase 5 relay-read timeouts (3 s each) for non-MMIO devices = ~48 s
         // The result is the same degraded state we already know about. Skip directly to
@@ -135,7 +140,8 @@ protected:
         bool fabric_broken = false;
         if (mesh_device_) {
             for (auto* idev : mesh_device_->get_devices()) {
-                if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic()) {
+                if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic() ||
+                    idev->is_fabric_stale_base_umd_channels()) {
                     fabric_broken = true;
                     break;
                 }
