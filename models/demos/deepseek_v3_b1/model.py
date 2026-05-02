@@ -54,28 +54,31 @@ PCIE_PAGE_ALIGNMENT_BYTES: int = DeepseekMetadata.aligned_size_bytes()
 
 
 class OutputField:
-    """uint32 indices within the 16-word output page."""
+    """uint32 indices within the 16-word output page (matches DeepseekMetadata)."""
 
     TOKEN_0 = 0
     TOKEN_0_TYPE = 1
     TOKEN_0_POS = 2
     TOKEN_1 = 3
-    TOKEN_1_TYPE = 4
     TOKEN_1_POS = 5
+    TOKEN_2 = 6
+    TOKEN_2_POS = 8
 
 
 class InputField:
-    """uint32 indices within the 16-word input page."""
+    """uint32 indices within the 16-word input page (matches DeepseekMetadata)."""
 
     TOKEN_TYPE = 1
-    USER_ID = 6
-    TOKEN_ID = 7
-    POSITION_ID = 8
-    PREFILL_TOKEN_ID = 9
     TOKEN0_POSITION_ID = 2
-    TEMPERATURE = 10
-    TOP_K = 11
-    PROBABILITY_MASS_THRESHOLD = 12
+    PREFILL_TOKEN_ID_1 = 4  # Ground-truth token for MTP level 1 during prefill (tokens[i+2])
+    PREFILL_TOKEN_ID_2 = 7  # Ground-truth token for MTP level 2 during prefill (tokens[i+3])
+    USER_ID = 9
+    TOKEN_ID = 10
+    POSITION_ID = 11
+    PREFILL_TOKEN_ID_0 = 12
+    TEMPERATURE = 13
+    TOP_K = 14
+    PROBABILITY_MASS_THRESHOLD = 15
 
 
 class TokenType:
@@ -91,8 +94,9 @@ class DecodeResult:
     token_0_type: int
     token_0_pos: int
     token_1: int | None = None
-    token_1_type: int | None = None
     token_1_pos: int | None = None
+    token_2: int | None = None
+    token_2_pos: int | None = None
     slot_id: int | None = None
     p_indices: list[int] | None = None
     p_scores: list[float] | None = None
@@ -102,7 +106,7 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
     """Parse a DeepseekMetadata output page into a structured DecodeResult.
 
     The output buffer is 64 uint32 words (256 bytes) laid out as:
-      words  0-15 : header (tok0_id … _pad2)
+      words  0-15 : header (tok0..tok2 slots + input/sampling fields)
       words 16-47 : p_indices[32]  (uint32)
       words 48-63 : p_scores[32]   (bf16 packed as uint16)
     """
@@ -120,8 +124,9 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
         token_0_type=int(raw[OutputField.TOKEN_0_TYPE].item()),
         token_0_pos=int(raw[OutputField.TOKEN_0_POS].item()),
         token_1=int(raw[OutputField.TOKEN_1].item()),
-        token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()),
         token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()),
+        token_2=int(raw[OutputField.TOKEN_2].item()),
+        token_2_pos=int(raw[OutputField.TOKEN_2_POS].item()),
         slot_id=int(raw[InputField.USER_ID].item()),
         p_indices=p_indices,
         p_scores=p_scores,
@@ -130,7 +135,6 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
 
 def to_spec_input(
     token_id: int,
-    prefill_token_id: int,
     user_id: int,
     position_id: int,
     page_size_datums: int,
@@ -138,11 +142,19 @@ def to_spec_input(
     temperature: float,
     top_k: int,
     probability_mass_threshold: float,
+    prefill_tok0_id: int,
+    prefill_tok1_id: int = -1,
+    prefill_tok2_id: int = -1,
 ) -> ttnn.Tensor:
-    """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
+    """Build a PCIe-aligned input page carrying (token_id, user_id, position_id).
+
+    During prefill, ground-truth next tokens for each MTP level are passed:
+      prefill_tok0_id = tokens[i+1] (level 0), prefill_tok1_id = tokens[i+2] (level 1),
+      prefill_tok2_id = tokens[i+3] (level 2). Set to -1 for decode mode.
+    """
     torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
     torch_padded[0, InputField.TOKEN_ID] = token_id
-    torch_padded[0, InputField.PREFILL_TOKEN_ID] = prefill_token_id
+    torch_padded[0, InputField.PREFILL_TOKEN_ID_0] = prefill_tok0_id
     torch_padded[0, InputField.TOKEN_TYPE] = token_type
     torch_padded[0, InputField.USER_ID] = user_id
     torch_padded[0, InputField.POSITION_ID] = position_id
@@ -150,6 +162,10 @@ def to_spec_input(
     torch_padded[0, InputField.TEMPERATURE] = float_to_uint32(temperature)
     torch_padded[0, InputField.TOP_K] = top_k
     torch_padded[0, InputField.PROBABILITY_MASS_THRESHOLD] = float_to_uint32(probability_mass_threshold)
+    if prefill_tok1_id != -1:
+        torch_padded[0, InputField.PREFILL_TOKEN_ID_1] = prefill_tok1_id
+    if prefill_tok2_id != -1:
+        torch_padded[0, InputField.PREFILL_TOKEN_ID_2] = prefill_tok2_id
     return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -296,7 +312,7 @@ class DeepSeekV3:
     def write_input(
         self,
         token_id: int,
-        prefill_token_id: int,
+        prefill_tok0_id: int,
         user_id: int,
         position_id: int,
         token_type: TokenType,
@@ -307,7 +323,7 @@ class DeepSeekV3:
         """Write a single spec-decode input page (token_id, user_id, position_id) to the pipeline."""
         input_tensor = to_spec_input(
             token_id,
-            prefill_token_id,
+            prefill_tok0_id,
             user_id,
             position_id,
             self._page_size_datums,

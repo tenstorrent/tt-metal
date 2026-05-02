@@ -306,6 +306,7 @@ class LMHeadSampling:
         broadcast_topology_override=None,
         is_mtp_base_stage=False,
         is_mtp_verify_stage=False,
+        mtp_level=0,
         metadata_tensor=None,
         eh_subblock_k=None,
         reduce_semaphores=None,
@@ -2450,6 +2451,12 @@ class LMHeadSampling:
                             named_compile_time_arg="is_mtp_verify_stage",
                             core_range=all_cores,
                             value=1 if is_mtp_verify_stage else 0,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="mtp_level",
+                            core_range=all_cores,
+                            value=mtp_level,
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(

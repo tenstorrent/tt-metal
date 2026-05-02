@@ -45,18 +45,18 @@ class DeepseekMetadata:
     tok0_type: int = 0
     tok0_pos: int = 0
     tok1_id: int = 0
-    tok1_type: int = 0
+    prefill_tok1_id: int = 0
     tok1_pos: int = 0
+    tok2_id: int = 0
+    prefill_tok2_id: int = 0
+    tok2_pos: int = 0
     slot_id: int = 0
     token_id: int = 0
     position_id: int = 0
-    prefill_token_id: int = 0
+    prefill_tok0_id: int = 0
     temperature: float = 0.0
     k: int = 0
     probability_mass_threshold: float = 0.0
-    _pad0: int = 0
-    _pad1: int = 0
-    _pad2: int = 0
     p_indices: list[int] = field(default_factory=list)
     p_scores: list[float] = field(default_factory=list)
 
@@ -73,13 +73,11 @@ class DeepseekMetadata:
         # Serialize the dataclass into a list of `uint32` words that mirrors the
         # on-device DeepseekMetadata struct layout from metadata.hpp:
         #
-        #   words  0..15 : header
-        #     0..12  → 13 scalar fields (floats bit-cast as uint32)
-        #     13..15 → _pad0 / _pad1 / _pad2
+        #   words  0..15 : header (16 fields, 64 B)
+        #     0..8   → 3 output token slots (tok0/tok1/tok2, 3 words each)
+        #     9..15  → input/sampling fields
         #   words 16..47 : p_indices[32]  — one uint32 per index
         #   words 48..63 : p_scores[32]   — 32 bf16 packed two-per-uint32
-        #                                  (low halfword → even index, high → odd,
-        #                                   matches LE access of uint16_t[32] as uint32_t[16])
         #
         # Total: 64 uint32 words = METADATA_TENSOR_BYTES (256 B).
         words: list[int] = [
@@ -87,18 +85,18 @@ class DeepseekMetadata:
             self.tok0_type & 0xFFFFFFFF,
             self.tok0_pos & 0xFFFFFFFF,
             self.tok1_id & 0xFFFFFFFF,
-            self.tok1_type & 0xFFFFFFFF,
+            self.prefill_tok1_id & 0xFFFFFFFF,
             self.tok1_pos & 0xFFFFFFFF,
+            self.tok2_id & 0xFFFFFFFF,
+            self.prefill_tok2_id & 0xFFFFFFFF,
+            self.tok2_pos & 0xFFFFFFFF,
             self.slot_id & 0xFFFFFFFF,
             self.token_id & 0xFFFFFFFF,
             self.position_id & 0xFFFFFFFF,
-            self.prefill_token_id & 0xFFFFFFFF,
+            self.prefill_tok0_id & 0xFFFFFFFF,
             _f32_bits(self.temperature),
             self.k & 0xFFFFFFFF,
             _f32_bits(self.probability_mass_threshold),
-            self._pad0 & 0xFFFFFFFF,
-            self._pad1 & 0xFFFFFFFF,
-            self._pad2 & 0xFFFFFFFF,
         ]
         assert len(words) == 16, "header must occupy exactly 16 uint32 words (64 B)"
 

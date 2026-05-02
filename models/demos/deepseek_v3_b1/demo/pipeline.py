@@ -125,42 +125,54 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
+    num_mtp_levels: int = 1,
 ) -> PipelineConfiguration:
-    """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
-    P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
+    """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0 and MTP-N stages.
+
+    Stage layout for MTP-N (num_mtp_levels=N):
+      P0: SpecLMHead+Embed (terminal verify, mtp_level=N)
+      P1: BaseLMHead+MTP1 (mtp_level=0)
+      P2: BaseLMHead+MTP2 (mtp_level=1) or Passthrough (MTP decoder stand-in if mtp_level=1)
+      P3: Passthrough (MTP decoder stand-in for mtp_level= 1 or 2)
+    """
+    _MTP_BASE_LAYER_IDX = 61
+    assert num_mtp_levels <= 2, "Single galaxy pipeline supports at most MTP-2 (Each MTP level requires 2 stages or 1 stage with Passthrough to imitate decoder)"
+    assert num_mtp_levels >= 0, "Single galaxy pipeline is only configured for MTP tests (No non MTP pipeline configuration)"
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return SpecLMHeadWithEmbeddingStage(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device),
+            spec_weights=weight_provider.load_spec(device, mtp_layer_idx=_MTP_BASE_LAYER_IDX),
+            mtp_level=num_mtp_levels,
         )
 
-    def stage_1(device: ttnn.MeshDevice) -> StageKind:
-        return BaseLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            mtp_weights=weight_provider.load_mtp(device),
-            send_mtp_output_downstream=True,
-            embedding_weights=weight_provider.load_embedding(device),
-        )
+    def base_lm_head_factory(level: int):
+        def factory(device: ttnn.MeshDevice) -> StageKind:
+            mtp_layer_idx = _MTP_BASE_LAYER_IDX + level
+            if level == 0:
+                lm_head_weights = weight_provider.load_lm_head(device)
+            else:
+                lm_head_weights = weight_provider.load_spec(device, mtp_layer_idx=mtp_layer_idx).as_lm_head_weights()
+            mtp_weights = weight_provider.load_mtp(device, mtp_layer_idx=mtp_layer_idx)
+            return BaseLMHeadStage(
+                weights=lm_head_weights,
+                fp32_dest_acc_en=fp32_dest_acc_en,
+                persistent_mode=persistent_mode,
+                mtp_weights=mtp_weights,
+                send_mtp_output_downstream=True,
+                embedding_weights=weight_provider.load_embedding(device),
+                mtp_level=level,
+            )
+        return factory
 
-    def stage_2(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
-
-    def stage_3(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
-
-    return PipelineConfiguration(
-        {
-            0: stage_0,
-            1: stage_1,
-            2: stage_2,
-            3: stage_3,
-        }
-    )
+    stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {0: stage_0}
+    for k in range(num_mtp_levels):
+        stage_factories[1 + k] = base_lm_head_factory(k)
+    for k in range(num_mtp_levels+1, 4):
+        stage_factories[k] = lambda _d: PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+    return PipelineConfiguration(stage_factories)
 
 
 def create_single_pod_pipeline_configuration(

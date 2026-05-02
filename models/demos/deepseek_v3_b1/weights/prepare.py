@@ -307,6 +307,10 @@ class DeepSeekV3SpecWeights(UploadableMixin):
     shared_head_norm: ttnn.Tensor | None  # model.layers.61.shared_head.norm.weight; None when folded
     lm_head: ttnn.Tensor  # LM head projection (with shared_head_norm folded in when applicable)
 
+    def as_lm_head_weights(self) -> "DeepSeekV3LMHeadWeights":
+        """Convert to DeepSeekV3LMHeadWeights for use in intermediate BaseLMHeadStage instances."""
+        return DeepSeekV3LMHeadWeights(final_norm=self.shared_head_norm, lm_head=self.lm_head)
+
 
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = D.GATE_NUM_INDICES

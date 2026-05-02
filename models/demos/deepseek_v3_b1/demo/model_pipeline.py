@@ -46,6 +46,7 @@ class ModelPipeline:
         moe_layer_id_override: int | None = None,
         io_socket_descriptor_prefix: str | None = None,
         num_slots: int = 64,
+        num_mtp_levels: int = 1,
         relaxed_acceptance_delta: float = 0.6,
         fold_rmsnorm_weights: bool = False,
         top_k: int = 1,
@@ -63,6 +64,7 @@ class ModelPipeline:
                 "DeepSeek V3 B1 pod pipeline requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
             )
         self.mesh_device = mesh_device
+        self._num_mtp_levels = num_mtp_levels
         self.relaxed_acceptance_delta = relaxed_acceptance_delta
         self.top_k = top_k
         self.top_p = top_p
@@ -142,10 +144,11 @@ class ModelPipeline:
             raise RuntimeError("prefill_forward() should only be called on mesh id 0")
         assert self.model is not None
         logger.debug(f"Prefilling with {len(tokens)} tokens...")
+        n = len(tokens)
         prompt_token_tensors = [
             to_spec_input(
                 tokens[i],
-                tokens[i + 1] if i < len(tokens) - 1 else -1,
+                tokens[i + 1] if i + 1 < n else -1,
                 user_id=0,
                 position_id=i,
                 page_size_datums=self._page_size_datums,
@@ -153,8 +156,10 @@ class ModelPipeline:
                 temperature=self.temperature,
                 top_k=self.top_k,
                 probability_mass_threshold=self.top_p,
+                prefill_tok1_id=tokens[i + 2] if i + 2 < n else -1,
+                prefill_tok2_id=tokens[i + 3] if i + 3 < n else -1,
             )
-            for i in range(len(tokens))
+            for i in range(n)
         ]
         results = self.model.prefill(prompt_token_tensors)
         return results
@@ -174,39 +179,28 @@ class ModelPipeline:
         p_draft_prob = result.p_scores[prev_spec_token_index]
         return (p_max_prob - p_draft_prob) <= self.relaxed_acceptance_delta
 
-    def _write_spec_pair(
-        self,
-        token_0: int,
-        pos_0: int,
-        token_1: int,
-        pos_1: int,
-        user_id: int = 0,
-        temperature: float = 0.6,
-        top_k: int = 1,
-        probability_mass_threshold: float = 1.0,
-    ) -> None:
-        """Write two tokens (base + speculation) into the pipeline."""
+    def _spec_chain(self, result: DecodeResult) -> list[tuple[int, int]]:
+        """Extract (token_id, position) for each speculative token from a DecodeResult."""
+        all_specs = [
+            (result.token_1, result.token_1_pos),
+            (result.token_2, result.token_2_pos),
+        ]
+        return all_specs[: self._num_mtp_levels]
+
+    def _write_spec_tokens(self, result: DecodeResult) -> int:
+        """Write base + N spec tokens from a DecodeResult into the pipeline. Returns write count."""
         assert self.model is not None
-        self.model.write_input(
-            token_0,
-            -1,
-            user_id,
-            pos_0,
-            token_type=TokenType.BASE,
-            temperature=temperature,
-            top_k=top_k,
-            probability_mass_threshold=probability_mass_threshold,
+        sampling_params = dict(
+            temperature=self.temperature,
+            top_k=self.top_k if self._in_thinking_phase else 1,
+            probability_mass_threshold=self.top_p,
         )
         self.model.write_input(
-            token_1,
-            -1,
-            user_id,
-            pos_1,
-            token_type=TokenType.SPEC,
-            temperature=temperature,
-            top_k=top_k,
-            probability_mass_threshold=probability_mass_threshold,
+            result.token_0, -1, 0, result.token_0_pos, token_type=TokenType.BASE, **sampling_params
         )
+        for token_id, pos in self._spec_chain(result):
+            self.model.write_input(token_id, -1, 0, pos, token_type=TokenType.SPEC, **sampling_params)
+        return 1 + self._num_mtp_levels
 
     def run_inference(
         self,
@@ -217,17 +211,15 @@ class ModelPipeline:
         think_token_ids: list[int] | None = None,
         return_generated_tokens: bool = False,
     ) -> list[int] | None:
-        """Run speculative-decode inference: prefill then decode with multi-token prediction.
+        """Run speculative-decode inference: prefill then decode with MTP-N.
 
-        The pipeline produces structured 2-token output pages (base + speculation).
-        Each output page carries position IDs that the host uses directly for
-        write-back, so no manual position tracking is needed.
-
-        The host drives the ACCEPT / REJECT / STALE / CONTINUE state machine:
-          - ACCEPT:   emit confirmed token, then read CONTINUE.
-          - CONTINUE: emit bonus token, write tokens at device-supplied positions.
-          - REJECT:   emit base output, write tokens at device-supplied positions.
-          - STALE:    discard and re-read.
+        The pipeline produces (1 + N)-token output pages (base + N speculative).
+        Each cycle:
+          1. Write 1+N tokens (base + specs) from previous result.
+          2. Read 1+N result pages.
+          3. Walk acceptance chain: result[i] verifies spec[i].
+          4. Emit accepted specs + corrective/new base from the pivot result.
+          5. Extract new spec chain from pivot, repeat.
         """
         if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("run_inference() should only be called on stage 0")
@@ -235,19 +227,15 @@ class ModelPipeline:
 
         self._in_thinking_phase = False
         generated_tokens: list[int] = []
-        verified_spec_tokens: list[int] = []
-        unverified_spec_tokens: list[int] = []
         if think_token_ids is not None:
             think_open_id, think_close_id = think_token_ids
         else:
             think_open_id, think_close_id = None, None
 
         def is_eos(token_id: int) -> bool:
-            """Returns True if a token is the EOS token"""
             return eos_token_id is not None and token_id == eos_token_id
 
         def emit(token_id: int) -> None:
-            """Emit a token to the caller and update thinking-phase state."""
             if on_token is not None:
                 on_token(token_id)
             generated_tokens.append(token_id)
@@ -256,92 +244,77 @@ class ModelPipeline:
             elif token_id == think_close_id:
                 self._in_thinking_phase = False
 
+        def finished() -> bool:
+            return bool(generated_tokens) and (
+                is_eos(generated_tokens[-1]) or len(generated_tokens) >= max_new_tokens
+            )
+
         # --- Prefill --------------------------------------------------------
         prefill_results = self.prefill_forward(prompt_token_ids)
-
-        # Seed the state machine with both pages from the last prefill write,
-        # then read from the pipeline for all subsequent results.
         pending: deque[DecodeResult] = deque(prefill_results)
-        base_accept = 0
-        spec_accept = 0
-        base_reject = 0
-        spec_reject = 0
-        # --- Speculative decode state machine --------------------------------
-        iteration = 0
-        start_time = time.time()
-        num_emits = 0
+
+        tokens_per_cycle = 1 + self._num_mtp_levels
+        depth_counts = [0] * (self._num_mtp_levels + 1)
         num_writes = 0
         num_reads = 0
-        signal_to_exit = False
-        while len(generated_tokens) < max_new_tokens or signal_to_exit:
-            iteration += 1
+        start_time = time.time()
+
+        def read_one() -> DecodeResult:
+            nonlocal num_reads
             if pending:
-                result = pending.popleft()
-            else:
-                result = self.model.read_result()
-                num_reads += 1
+                return pending.popleft()
+            num_reads += 1
+            return self.model.read_result()
 
-            if not unverified_spec_tokens and not verified_spec_tokens:
-                unverified_spec_tokens.append(result.token_1)
-                emit(result.token_0)
-                num_emits += 1
-            else:
-                if result.token_0_type == TokenType.BASE:
-                    if self.check_acceptance(unverified_spec_tokens[-1], result):
-                        verified_spec_tokens.append(unverified_spec_tokens.pop())
-                        emit(result.token_0)
-                        base_accept += 1
-                        num_emits += 1
-                        signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
-                        continue
-                    else:
-                        unverified_spec_tokens.pop()
-                        unverified_spec_tokens.append(result.token_1)
-                        emit(result.token_0)
-                        base_reject += 1
-                        num_emits += 1
-                        signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
+        # --- Seed: first result from prefill, no verification yet -----------
+        seed = read_one()
+        emit(seed.token_0)
+        prev_chain = self._spec_chain(seed)
+        pivot = seed
 
-                if result.token_0_type == TokenType.SPEC:
-                    if verified_spec_tokens:
-                        verified_spec_tokens.pop()
-                        unverified_spec_tokens.append(result.token_1)
+        # --- Speculative decode loop ----------------------------------------
+        while not finished():
+            num_writes += self._write_spec_tokens(pivot)
 
-                        if signal_to_exit:
-                            break
+            cycle_results = [read_one() for _ in range(tokens_per_cycle)]
 
-                        emit(result.token_0)
-                        spec_accept += 1
-                        num_emits += 1
-                    else:
-                        if signal_to_exit:
-                            break
-                        spec_reject += 1
-                        continue
+            # Walk acceptance chain: result[i] verifies prev_chain[i]
+            depth = 0
+            for i in range(self._num_mtp_levels):
+                if self.check_acceptance(prev_chain[i][0], cycle_results[i]):
+                    depth += 1
+                else:
+                    break
+            depth_counts[depth] += 1
 
-            if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
+            # Emit accepted tokens — always use the target model's fresh prediction,
+            # not the draft MTP token, so relaxed acceptance stays faithful to the
+            # target distribution.
+            for i in range(depth):
+                emit(cycle_results[i].token_0)
+                if finished():
+                    break
+            if finished():
                 break
 
-            self._write_spec_pair(
-                result.token_0,
-                result.token_0_pos,
-                result.token_1,
-                result.token_1_pos,
-                temperature=self.temperature,
-                top_k=self.top_k if self._in_thinking_phase else 1,
-                probability_mass_threshold=self.top_p,
-            )
-            num_writes += 2
+            # Pivot: result at the first rejection gives the new/corrective base
+            pivot = cycle_results[depth]
+            emit(pivot.token_0)
+            prev_chain = self._spec_chain(pivot)
 
+        # Drain remaining in-flight results
         while num_reads < num_writes:
             self.model.read_result()
             num_reads += 1
 
-        end_time = time.time()
-        logger.debug(f"Time taken: {end_time - start_time} seconds")
-        logger.debug(f"Tokens per second: {num_emits / (end_time - start_time)}")
+        elapsed = time.time() - start_time
+        total_cycles = sum(depth_counts)
+        logger.debug(f"Time taken: {elapsed:.2f}s")
+        logger.debug(f"Tokens per second: {len(generated_tokens) / elapsed:.1f}")
         logger.debug(
-            f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
+            "Acceptance depth: {} ({} cycles)",
+            ", ".join(f"d{i}={c}" for i, c in enumerate(depth_counts)),
+            total_cycles,
         )
         logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
         return generated_tokens if return_generated_tokens else None

@@ -53,10 +53,10 @@ class WeightProvider(Protocol):
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         ...
 
-    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+    def load_mtp(self, device: ttnn.MeshDevice, mtp_layer_idx: int = _MTP_LAYER_IDX) -> DeepSeekV3MTPWeights:
         ...
 
-    def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
+    def load_spec(self, device: ttnn.MeshDevice, mtp_layer_idx: int = _MTP_LAYER_IDX) -> DeepSeekV3SpecWeights:
         ...
 
 
@@ -324,29 +324,21 @@ class CacheWeightProvider:
         )
         return self._upload_prepared_weights(device, host_weights)
 
-    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
-        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
+    def load_mtp(self, device: ttnn.MeshDevice, mtp_layer_idx: int = _MTP_LAYER_IDX) -> DeepSeekV3MTPWeights:
         return prepare_mtp_weights(
             self._state_dict,
             device,
-            move_to_device=True,
-            cache_config=self._cache_config(device),
-        )
-
-    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
-        return prepare_mtp_weights(
-            self._state_dict,
-            device,
+            mtp_layer_idx=mtp_layer_idx,
             move_to_device=True,
             cache_config=self._cache_config(device),
             fold_rmsnorm_weights=self._fold_rmsnorm_weights,
         )
 
-    def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
-        # TODO: Re-enable two-phase upload here after fast-dispatch lifecycle is managed globally.
+    def load_spec(self, device: ttnn.MeshDevice, mtp_layer_idx: int = _MTP_LAYER_IDX) -> DeepSeekV3SpecWeights:
         return prepare_spec_weights(
             self._state_dict,
             device,
+            mtp_layer_idx=mtp_layer_idx,
             move_to_device=True,
             cache_config=self._cache_config(device),
             fold_rmsnorm_weights=self._fold_rmsnorm_weights,
@@ -400,13 +392,17 @@ class SyntheticWeightProvider:
         sd = _build_synthetic_dense_state_dict(layer_id)
         return prepare_dense_layer_weights(device, sd, layer_id, move_to_device=True)
 
-    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
-        sd = _build_synthetic_mtp_state_dict()
-        return prepare_mtp_weights(sd, device, move_to_device=True, fold_rmsnorm_weights=self._fold_rmsnorm_weights)
+    def load_mtp(self, device: ttnn.MeshDevice, mtp_layer_idx: int = _MTP_LAYER_IDX) -> DeepSeekV3MTPWeights:
+        sd = _build_synthetic_mtp_state_dict(mtp_layer_idx)
+        return prepare_mtp_weights(
+            sd, device, mtp_layer_idx=mtp_layer_idx, move_to_device=True, fold_rmsnorm_weights=self._fold_rmsnorm_weights
+        )
 
-    def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
-        sd = _build_synthetic_mtp_state_dict()
-        return prepare_spec_weights(sd, device, move_to_device=True, fold_rmsnorm_weights=self._fold_rmsnorm_weights)
+    def load_spec(self, device: ttnn.MeshDevice, mtp_layer_idx: int = _MTP_LAYER_IDX) -> DeepSeekV3SpecWeights:
+        sd = _build_synthetic_mtp_state_dict(mtp_layer_idx)
+        return prepare_spec_weights(
+            sd, device, mtp_layer_idx=mtp_layer_idx, move_to_device=True, fold_rmsnorm_weights=self._fold_rmsnorm_weights
+        )
 
 
 class StateDictWeightProvider:
@@ -442,18 +438,20 @@ class StateDictWeightProvider:
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         return prepare_dense_layer_weights(device, self._state_dict, layer_id, move_to_device=True)
 
-    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+    def load_mtp(self, device: ttnn.MeshDevice, mtp_layer_idx: int = _MTP_LAYER_IDX) -> DeepSeekV3MTPWeights:
         return prepare_mtp_weights(
             self._state_dict,
             device,
+            mtp_layer_idx=mtp_layer_idx,
             move_to_device=True,
             fold_rmsnorm_weights=self._fold_rmsnorm_weights,
         )
 
-    def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
+    def load_spec(self, device: ttnn.MeshDevice, mtp_layer_idx: int = _MTP_LAYER_IDX) -> DeepSeekV3SpecWeights:
         return prepare_spec_weights(
             self._state_dict,
             device,
+            mtp_layer_idx=mtp_layer_idx,
             move_to_device=True,
             fold_rmsnorm_weights=self._fold_rmsnorm_weights,
         )
