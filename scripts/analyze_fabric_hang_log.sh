@@ -1006,6 +1006,15 @@ FIX_RM_FIRES=$(grep -cE 'FIX RM.*open_mesh_device threw FW init failure|FIX RM.*
 # FIX CD (#42429): TTSwitch explicit-ID test skip guards — per-device fabric state flags.
 # Log: "Skipping: device N has degraded fabric (#42429)"
 FIX_CD_FIRES=$(grep -cE 'FIX CD.*degraded fabric|has degraded fabric \(#42429\)' "$CLEAN" 2>/dev/null; :)
+# FIX CD-4 (#42429): SetFabricConfig(FABRIC_2D) topology mapping failure in SetUp — GTEST_SKIP.
+# Log: "FIX CD-4 (#42429): FABRIC_2D init failed in SetUp — degraded cluster"
+# Also: TearDown swallowed exception log "FIX CD-4 (#42429): SetFabricConfig(DISABLED) threw"
+FIX_CD4_FIRES=$(grep -cE 'FIX CD-4.*FABRIC_2D init failed|FIX CD-4.*SetFabricConfig.*threw' "$CLEAN" 2>/dev/null; :)
+# FIX GS-2b (#42429): warm-up open/close cycle after tt-smi -r before FABRIC_2D tests.
+# Log: "[conftest] FIX GS-2b (#42429): warm-up open/close cycle"
+# Also: warm-up degraded warning "FIX GS-2b: WARNING: warm-up mesh still reports degraded"
+FIX_GS2B_FIRES=$(grep -cE 'FIX GS-2b.*warm-up' "$CLEAN" 2>/dev/null; :)
+FIX_GS2B_DEGRADED=$(grep -cE 'FIX GS-2b.*WARNING.*warm-up.*still reports degraded' "$CLEAN" 2>/dev/null; :)
 # FIX SA (GAP-76, llrt.cpp): unknown run_mailbox value → warning + return-false (not TT_FATAL).
 # Log: "FIX SA (GAP-76): core X run_mailbox=0xNN is not a known RUN_MSG_* value"
 FIX_SA_LLRT_FIRES=$(grep -cE 'FIX SA \(GAP-76\).*run_mailbox.*is not a known RUN_MSG' "$CLEAN" 2>/dev/null; :)
@@ -1266,6 +1275,21 @@ if [ "${FIX_CD_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX CD] TTSwitch explicit-ID test skip: device has degraded fabric (${FIX_CD_FIRES} occurrence(s))."
     echo "     Per-device check: relay_path_broken || channels_not_ready || stale_base_umd."
     echo "     Both ranks skip independently before MPI comm — prevents cross-rank hang."
+fi
+if [ "${FIX_CD4_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX CD-4] TTSwitch SetUp: SetFabricConfig(FABRIC_2D) topology mapping failed (${FIX_CD4_FIRES} occurrence(s))."
+    echo "     Dead-firmware gateway ETH channels reduced physical mesh connectivity for STRICT inter-mesh mapping."
+    echo "     SetUp catches exception + GTEST_SKIP; TearDown skips SetFabricConfig(DISABLED) when setup_failed_=true."
+    echo "     TearDown belt-and-suspenders try/catch logs any swallowed exception for diagnosis."
+fi
+if [ "${FIX_GS2B_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX GS-2b] conftest warm-up open/close cycle fired (${FIX_GS2B_FIRES} occurrence(s))."
+    echo "     After tt-smi -r, open/close once to transition base-UMD ETH channels via FIX M launch_msg."
+    echo "     Prevents ControlPlane SIGBUS crash on subsequent FABRIC_2D init."
+    if [ "${FIX_GS2B_DEGRADED:-0}" -gt 0 ]; then
+        echo "     [WARNING] warm-up mesh still reported degraded AFTER tt-smi -r (${FIX_GS2B_DEGRADED} occurrence(s))."
+        echo "     Hardware may not fully recover — FABRIC_2D tests may still fail."
+    fi
 fi
 if [ "${FIX_SA_LLRT_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX SA] llrt.cpp: unknown run_mailbox value detected (${FIX_SA_LLRT_FIRES} occurrence(s))."

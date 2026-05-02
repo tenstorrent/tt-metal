@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <cstdio>
 #include <memory>
 #include <optional>
 
@@ -70,7 +71,10 @@ protected:
             } catch (const std::exception& ex) {
                 // Swallow: fabric was partially initialized (e.g., control plane ctor
                 // succeeded but topology mapping failed mid-way).  Nothing to tear down.
-                (void)ex;
+                // Audit: log the swallowed exception for post-mortem diagnosis.
+                fprintf(stderr,
+                    "[MeshDeviceTTSwitchFixture::TearDown] FIX CD-4 (#42429): "
+                    "SetFabricConfig(DISABLED) threw — swallowed: %s\n", ex.what());
             }
         }
     }

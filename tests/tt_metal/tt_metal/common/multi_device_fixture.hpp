@@ -398,6 +398,46 @@ protected:
             }
             throw;
         }
+
+        // Audit gap: log fabric state after successful create (matching base class)
+        for (auto* idev : mesh_device_->get_devices()) {
+            if (idev->is_fabric_relay_path_broken() || idev->is_fabric_channels_not_ready_for_traffic() ||
+                idev->is_fabric_stale_base_umd_channels()) {
+                log_warning(
+                    tt::LogMetal,
+                    "[fixture_setup] MeshDeviceFixture4x8DispatchAgnostic::SetUp() device {} fabric state: "
+                    "relay_broken={} channels_not_ready={} stale_base_umd={}",
+                    idev->id(),
+                    idev->is_fabric_relay_path_broken(),
+                    idev->is_fabric_channels_not_ready_for_traffic(),
+                    idev->is_fabric_stale_base_umd_channels());
+            }
+        }
+        log_info(tt::LogMetal, "[fixture_setup] MeshDeviceFixture4x8DispatchAgnostic::SetUp() EXIT — mesh_device created with {} devices",
+                 mesh_device_->num_devices());
+
+        // Audit gap: start watchdog if configured (matching base class)
+        if (config_.test_budget_ms.has_value()) {
+            watchdog_stop_.store(false, std::memory_order_relaxed);
+            uint32_t budget_ms = *config_.test_budget_ms;
+            watchdog_thread_ = std::thread([this, budget_ms]() {
+                auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(budget_ms);
+                while (!watchdog_stop_.load(std::memory_order_relaxed)) {
+                    if (std::chrono::steady_clock::now() >= deadline) {
+                        fprintf(
+                            stderr,
+                            "[MeshDeviceFixture4x8DispatchAgnostic watchdog] Test budget of %ums exceeded — "
+                            "sending SIGKILL to prevent CI stall\n",
+                            budget_ms);
+                        fflush(stderr);
+                        std::raise(SIGKILL);
+                        return;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+            });
+        }
     }
 };
 

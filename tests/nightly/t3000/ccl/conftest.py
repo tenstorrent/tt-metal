@@ -147,6 +147,13 @@ def ensure_cluster_healthy():
     try:
         warmup = ttnn.open_mesh_device(ttnn.MeshShape(*_HEALTH_CHECK_MESH_SHAPE))
         signal.alarm(0)
+        # Audit: check if warm-up mesh is still degraded after tt-smi -r.
+        # If so, the reset did not fully recover the hardware.
+        if warmup.is_fabric_degraded():
+            print(
+                "[conftest] FIX GS-2b: WARNING: warm-up mesh still reports degraded "
+                "fabric AFTER tt-smi -r — hardware may not fully recover for FABRIC_2D tests."
+            )
         ttnn.close_mesh_device(warmup)
         print("[conftest] FIX GS-2b: warm-up complete — channels clean for FABRIC_2D.")
     except _OpenMeshTimeout:
