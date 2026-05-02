@@ -172,9 +172,17 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
-    // matmul_block self-inits via init_mode=Full; reblock_and_untilize self-inits per
-    // call via the InitUninitMode template parameter (we use Neither inside the
-    // in0_subblock loop so the standalone init/uninit wrappers below handle it once).
+    // One-shot matmul init before the batch loop, mirroring the pre-refactor kernel:
+    // mm_block_init configures unpack/math/pack registers for in0 × in1 → mm_partials.
+    // Subsequent iterations re-arm via mm_block_init_short between iterations, and
+    // matmul_block is invoked with InitMode::None so it doesn't re-do the full init
+    // (which was found to corrupt state on heterogeneous-tile-shape DRAM-sharded
+    // configs — see test_matmul_batched_dram_sharded[wkv_b2] tile_h=4 case).
+    mm_block_init(
+        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    // reblock_and_untilize self-inits per call via the InitUninitMode template parameter
+    // (we use Neither inside the in0_subblock loop so the standalone init/uninit wrappers
+    // below handle it once).
 
     // ── Main loop: batch × output blocks ────────────────────────────────
     for (uint32_t b = 0; b < batch; b++) {
@@ -232,7 +240,7 @@ void kernel_main() {
                         l1_acc,
                         last_block_target,
                         output_layout,
-                        matmul_config::InitMode::Full,
+                        matmul_config::InitMode::None,
                         /*retain_in0=*/false,
                         /*retain_in1=*/false,
                         PostFn,
@@ -252,7 +260,7 @@ void kernel_main() {
                         l1_acc,
                         last_block_target,
                         output_layout,
-                        matmul_config::InitMode::Full,
+                        matmul_config::InitMode::None,
                         /*retain_in0=*/false,
                         /*retain_in1=*/false,
                         PostFn,
