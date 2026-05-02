@@ -402,8 +402,21 @@ create_program_dram_sharded(
     // vs per_core_N_in1_sender) after the subblock-growth adjustment at lines ~153-170;
     // the compute kernel threads out_block_w (padded) to the helper as out_row_width to
     // keep row-major reserve/push aligned with the actual pack stride.
-    mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
-    mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+    //
+    // Deadlock gate: matmul_block helper deadlocks in the RowMajor + FUSE_BIAS +
+    // !packer_l1_acc + num_blocks > 1 combination. The prior K-block's subblock-major
+    // spill fills interm_cb to capacity; the last K-block's per-row-group reserve_back on
+    // pack_target_buf == interm_buf blocks before the in1_subblock loop's reload pops can
+    // free space. Mirrors the auto-config gate in
+    // matmul_program_config.cpp::row_major_output_kblock_reload_safe — falls back to
+    // subblock-major (per-pair reserve+pack+push at out_num_tiles granularity) which
+    // avoids the upfront row-group reserve hazard.
+    const bool fuse_bias = bias_buffer != nullptr;
+    const bool row_major_output_safe = !(fuse_bias && !packer_l1_acc_en && num_blocks > 1);
+    if (row_major_output_safe) {
+        mm_kernel_defines["TILE_PACK_ROW_MAJOR"] = "1";
+        mm_kernel_in1_sender_writer_defines["TILE_PACK_ROW_MAJOR"] = "1";
+    }
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
