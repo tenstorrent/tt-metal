@@ -216,6 +216,9 @@ run_t3000_ttnn_tests() {
 
   # AllGather-specific GAP regression tests.
   # GAP-21: Rapid AllGather+quiesce stress (FIX AE/AF/AN)
+  # Explicit reset and settle before GAP-21 stress test — prior tests may leave hardware in marginal state
+  tt-smi -r || true
+  sleep 15
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap21_rapid_allgather_quiesce_stress.py::test_rapid_allgather_quiesce_stress ; record_test
   # GAP-22: AllGather interrupted mid-flight by mesh close (FIX AO/AP/AD)
   timeout 300 pytest -svv tests/nightly/t3000/ccl/test_gap22_allgather_inflight_close.py::test_allgather_inflight_close ; record_test
