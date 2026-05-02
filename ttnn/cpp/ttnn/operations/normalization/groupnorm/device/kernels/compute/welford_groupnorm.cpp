@@ -215,11 +215,6 @@ void kernel_main() {
         num_out_blocks_padded++;
         out_block_h_last = (block_h % num_out_blocks);
     }
-    uint32_t cb_ex_external_tiles_required =
-        num_out_blocks_padded * num_cores_per_mcast_group * 16 / single_tile_size_bytes;
-    if ((num_out_blocks_padded * num_cores_per_mcast_group * 16) % single_tile_size_bytes) {
-        cb_ex_external_tiles_required++;
-    }
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, reciprocal_size>;

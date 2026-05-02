@@ -6,13 +6,15 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_erf.h"
 #include "ckernel_sfpu_erfc.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-
+#ifndef ARCH_QUASAR
 /************** ERF *****************/
 /**
  * Please refer to documentation for any_init.
@@ -65,5 +67,7 @@ ALWI void erfc_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(erfc, sfpu::erfc_init, t
 ALWI void erfc_tile(uint32_t idst) {
     MATH(_llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_erfc<>, idst, (int)VectorMode::RC));
 }
+
+#endif
 
 }  // namespace ckernel

@@ -732,11 +732,16 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         }
         log_info(tt::LogFabric, "Found {} valid candidates by node difference", candidates_by_diff.size());
 
-        // Process difference levels from closest to farthest; stop at first level with any match
+        // Process difference levels from closest to farthest; commit only when embedding on PSD succeeds
         log_info(tt::LogFabric, "Processing difference levels from closest to farthest");
-        std::vector<std::pair<std::string, size_t>> best_matches;
+        std::vector<std::pair<std::string, size_t>> best_matches_topology;
+        std::vector<std::pair<std::string, size_t>> best_matches_psd_placed;
+
+        bool committed_pgd_matches = false;
         for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
-            (void)node_diff;
+            best_matches_topology.clear();
+            best_matches_psd_placed.clear();
+
             for (const auto& [name, idx] : name_idx_pairs) {
                 const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
                 // NOTE: If we ever want to support mixed type topologies, we need to add constraints to match the types
@@ -755,7 +760,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         "Successfully solved topology mapping for {} and {}",
                         mgd_grouping_info.name,
                         name);
-                    best_matches.emplace_back(name, idx);
+                    best_matches_topology.emplace_back(name, idx);
                 } else {
                     log_info(
                         tt::LogFabric,
@@ -765,26 +770,70 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                         mapping_result.error_message);
                 }
             }
-            if (!best_matches.empty()) {
-                break;  // Found matches at this (best) level
-            }
-        }
-        log_info(tt::LogFabric, "Found {} best matches", best_matches.size());
 
-        // Store all best matches (add all entries that are possible)
-        if (best_matches.empty()) {
-            // No match found - use the MGD grouping info itself
-            result[instance_type][instance_name].push_back(mgd_grouping_info);
-        } else {
-            for (const auto& [match_name, match_idx] : best_matches) {
-                // Look up the flattened GroupingInfo from lookup map (already contains flattened adjacency graphs)
-                auto lookup_it = mesh_flat_groupings.find(match_name);
-                if (lookup_it != mesh_flat_groupings.end() && match_idx < lookup_it->second.size()) {
-                    // Return the flattened GroupingInfo (not the original)
-                    const GroupingInfo& flattened_grouping = lookup_it->second[match_idx];
-                    result[instance_type][instance_name].push_back(flattened_grouping);
-                }
+            if (best_matches_topology.empty()) {
+                continue;
             }
+
+            if (physical_system_descriptor != nullptr) {
+                for (const auto& [name, idx] : best_matches_topology) {
+                    const GroupingInfo& flattened_candidate = mesh_flat_groupings.at(name)[idx];
+                    std::vector<std::string> psd_errors;
+                    const auto mapped_asics =
+                        find_any_in_psd(flattened_candidate, *physical_system_descriptor, psd_errors);
+                    if (!mapped_asics.empty()) {
+                        best_matches_psd_placed.emplace_back(name, idx);
+                    } else if (!psd_errors.empty()) {
+                        log_info(
+                            tt::LogFabric,
+                            "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD under current "
+                            "constraints: {}",
+                            flattened_candidate.name,
+                            mgd_grouping_info.name,
+                            psd_errors.front());
+                    } else {
+                        log_info(
+                            tt::LogFabric,
+                            "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD (no ASIC embedding "
+                            "found)",
+                            flattened_candidate.name,
+                            mgd_grouping_info.name);
+                    }
+                }
+            } else {
+                best_matches_psd_placed = best_matches_topology;
+            }
+
+            if (!best_matches_psd_placed.empty()) {
+                for (const auto& [match_name, match_idx] : best_matches_psd_placed) {
+                    auto lookup_it = mesh_flat_groupings.find(match_name);
+                    if (lookup_it != mesh_flat_groupings.end() && match_idx < lookup_it->second.size()) {
+                        const GroupingInfo& flattened_grouping = lookup_it->second[match_idx];
+                        result[instance_type][instance_name].push_back(flattened_grouping);
+                    }
+                }
+                committed_pgd_matches = true;
+                log_info(
+                    tt::LogFabric,
+                    "Committed {} PGD grouping(s) for {} that topology-match and embed in PSD",
+                    best_matches_psd_placed.size(),
+                    mgd_grouping_info.name);
+                break;
+            }
+
+            log_info(
+                tt::LogFabric,
+                "Node-diff {}: {} PGD grouping(s) matched {} topologically but none embed on PSD; trying farther "
+                "difference levels",
+                node_diff,
+                best_matches_topology.size(),
+                mgd_grouping_info.name);
+        }
+
+        if (!committed_pgd_matches) {
+            // No PGD grouping both matched MGD and placed on PSD — use the MGD grouping info itself
+            log_info(tt::LogFabric, "Using MGD mesh grouping for {} (no PSD-viable PGD match)", mgd_grouping_info.name);
+            result[instance_type][instance_name].push_back(mgd_grouping_info);
         }
     }
 
