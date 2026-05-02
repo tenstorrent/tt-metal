@@ -69,6 +69,7 @@ target_sources(
         test_gap69_fixth_relay_mux_no_links_guard.cpp
         test_gap70_fixtk_degraded_cluster_chip_filter.cpp
         test_gap71_fixtl_degraded_cluster_bail_before_create_meshes.cpp
+        test_gap73_fixqwb_stale_base_umd_skip_guard.cpp
         test_dispatch_context.cpp
         utils.cpp
 )
