@@ -305,14 +305,25 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         "expert_region_offsets");
 
     if (is_tile_layout) {
-        // c_18: receive buffer for idle-core untilized data written back via NOC (TILE_LAYOUT only)
-        detail::create_tensor_cb(
-            program,
-            sender_core_grid,
-            output_tensor,
-            /*buffering_factor=*/read_batch_size,
-            /*cb_id=*/tt::CBIndex::c_18,
-            "untilized_output");
+        // c_18: receive buffer for idle-core untilized data written back via NOC (TILE_LAYOUT only).
+        // FP8 path: configure as Fp8_e4m3 (1 byte/element) so the writer drains FP8 rows;
+        // otherwise inherit dtype/page-size from output_tensor (BFLOAT16).
+        if (operation_attributes.use_fp8_combine) {
+            uint32_t fp8_page_size = tt::round_up((uint32_t)hidden_size, l1_alignment);
+            tt::tt_metal::CircularBufferConfig fp8_cb_config =
+                tt::tt_metal::CircularBufferConfig(
+                    read_batch_size * fp8_page_size, {{tt::CBIndex::c_18, tt::DataFormat::Fp8_e4m3}})
+                    .set_page_size(tt::CBIndex::c_18, fp8_page_size);
+            tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, fp8_cb_config);
+        } else {
+            detail::create_tensor_cb(
+                program,
+                sender_core_grid,
+                output_tensor,
+                /*buffering_factor=*/read_batch_size,
+                /*cb_id=*/tt::CBIndex::c_18,
+                "untilized_output");
+        }
         // c_10: sender-side NOC scratch that receives each idle core's c_9 L1 address during
         //       the startup handshake (idle core writes its get_write_ptr(c_9) to slot
         //       core_id * sizeof(uint32_t)). Sender copies this scratch into a plain local
@@ -599,14 +610,26 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
             /*buffering_factor=*/hidden_size / (32 * cb_factor),
             /*cb_id=*/tt::CBIndex::c_0,
             "dispatched_buffer_idle");
-        // c_2 on idle cores: untilized output rows, one full batch (read_batch_size rows)
-        detail::create_tensor_cb(
-            program,
-            idle_core_grid,
-            output_tensor,
-            /*buffering_factor=*/read_batch_size,
-            /*cb_id=*/tt::CBIndex::c_2,
-            "untilize_idle");
+        // c_2 on idle cores: untilized output rows, one full batch (read_batch_size rows).
+        // FP8 path: configure as Fp8_e4m3 so pack_untilize converts BF16 tiles → FP8 row-major.
+        // Inheriting from output_tensor would give DataFormat::UInt8 (since output_tensor is
+        // UINT8 in fp8 mode), and the packer would not perform the fp8 quantization.
+        if (operation_attributes.use_fp8_combine) {
+            uint32_t fp8_page_size = tt::round_up((uint32_t)hidden_size, l1_alignment);
+            tt::tt_metal::CircularBufferConfig fp8_cb_config =
+                tt::tt_metal::CircularBufferConfig(
+                    read_batch_size * fp8_page_size, {{tt::CBIndex::c_2, tt::DataFormat::Fp8_e4m3}})
+                    .set_page_size(tt::CBIndex::c_2, fp8_page_size);
+            tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, fp8_cb_config);
+        } else {
+            detail::create_tensor_cb(
+                program,
+                idle_core_grid,
+                output_tensor,
+                /*buffering_factor=*/read_batch_size,
+                /*cb_id=*/tt::CBIndex::c_2,
+                "untilize_idle");
+        }
         // c_3 on idle cores: 1-page signal CB (reader->compute, mirrors c_17 on sender cores)
         {
             uint32_t signal_page_size = l1_alignment;

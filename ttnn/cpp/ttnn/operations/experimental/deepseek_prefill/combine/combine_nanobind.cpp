@@ -66,6 +66,9 @@ void bind_combine(nb::module_& mod) {
                 Defaults to Linear.
             init_zeros (bool, optional): Whether to zero-initialize the output buffer before writing.
                 Defaults to True.
+            use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3
+                (stored as UINT8 since ttnn lacks a native fp8 dtype). Requires Blackhole hardware.
+                Defaults to False.
 
         Returns:
             ttnn.Tensor:
@@ -91,7 +94,8 @@ void bind_combine(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("init_zeros") = true,
-        nb::arg("use_l1_small_for_semaphores") = false);
+        nb::arg("use_l1_small_for_semaphores") = false,
+        nb::arg("use_fp8_combine") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail
