@@ -318,11 +318,10 @@ def acoustic_transformer_step(
     One step of the flow-matching acoustic transformer.
     Returns: (velocity [B, N_frames, 36], semantic_logits [B, N_frames, 8320], caps)
 
-    Inputs are combined via three separate projections before the transformer:
-      h_proj:  LLM hidden state → D
-      t_proj:  sinusoidal timestep → D
-      x_proj:  36-dim acoustic noise → D
-    All three are summed to form the transformer input.
+    From vllm-omni (voxtral_tts_audio_generation.py):
+      - Semantic logit: W_semantic @ h (LLM hidden state DIRECTLY, before transformer)
+      - Velocity: acoustic transformer on CONCATENATED [x_proj, t_proj, h_proj] as 3-token sequence,
+        velocity from token position 0 (x_t position)
     """
     caps = {}
     B, N, D = h.shape
@@ -330,46 +329,49 @@ def acoustic_transformer_step(
     h = h.to(dtype)
     x_t = x_t.to(dtype)
 
-    # Project LLM hidden state
-    h_proj = F.linear(h, sd["llm_projection.weight"])
+    # --- Semantic prediction: W_semantic @ h DIRECTLY (before transformer) ---
+    semantic_logits = F.linear(h, sd["semantic_codebook_output.weight"])
 
-    # Sinusoidal timestep embedding
+    # --- Velocity: 3-token concat [x_proj, t_proj, h_proj] → transformer → token 0 ---
+    x_proj = F.linear(x_t, sd["input_projection.weight"])  # [B, N, D]
+
     t_tensor = torch.full((B,), t, device=h.device, dtype=h.dtype)
-    t_emb = time_sinusoidal_embedding(t_tensor, dim=D)  # [B, D]
-    t_emb = t_emb.to(dtype)
-    t_proj = F.linear(t_emb.unsqueeze(1).expand(-1, N, -1), sd["time_projection.weight"])
+    t_emb = time_sinusoidal_embedding(t_tensor, dim=D).to(dtype)  # [B, D]
+    t_proj = F.linear(t_emb.unsqueeze(1).expand(-1, N, -1), sd["time_projection.weight"])  # [B, N, D]
 
-    # Project acoustic noise
-    x_proj = F.linear(x_t, sd["input_projection.weight"])
-
-    combined = h_proj + t_proj + x_proj
+    h_proj = F.linear(h, sd["llm_projection.weight"])  # [B, N, D]
 
     if capture_intermediates:
         caps["h_proj"] = h_proj
         caps["t_proj"] = t_proj
         caps["x_proj"] = x_proj
-        caps["combined"] = combined
+        caps["semantic_logits_direct"] = semantic_logits
 
-    # 3-layer transformer (bidirectional — no causal mask for flow-matching)
+    # Concatenate 3 tokens: [x_proj (seq 0..N-1), t_proj (seq N..2N-1), h_proj (seq 2N..3N-1)]
+    combined = torch.cat([x_proj, t_proj, h_proj], dim=1)  # [B, 3*N, D]
+    seq_3n = combined.shape[1]
+
+    # 3-layer bidirectional transformer over 3*N tokens (no causal mask)
     hidden = combined
-    cos, sin = build_rope_cache(N, 128, 10000.0, h.device)
+    cos, sin = build_rope_cache(seq_3n, 128, 10000.0, h.device)
 
     for layer_idx in range(n_layers):
         pfx = f"layers.{layer_idx}"
 
         normed = rms_norm(hidden, sd[f"{pfx}.attention_norm.weight"])
 
-        # GQA attention (no causal mask — bidirectional)
+        # GQA attention (bidirectional, NO RoPE — vllm-omni BidirectionalAttention has no positional encoding)
         wq = sd[f"{pfx}.attention.wq.weight"]
         wk = sd[f"{pfx}.attention.wk.weight"]
         wv = sd[f"{pfx}.attention.wv.weight"]
         wo = sd[f"{pfx}.attention.wo.weight"]
         n_heads, n_kv, head_dim = 32, 8, 128
+        cur_seq = hidden.shape[1]  # may be 3*N now
 
-        q = F.linear(normed, wq).view(B, N, n_heads, head_dim).transpose(1, 2)
-        k = F.linear(normed, wk).view(B, N, n_kv, head_dim).transpose(1, 2)
-        v = F.linear(normed, wv).view(B, N, n_kv, head_dim).transpose(1, 2)
-        q, k = apply_rope(q, k, cos[:N], sin[:N])
+        q = F.linear(normed, wq).view(B, cur_seq, n_heads, head_dim).transpose(1, 2)
+        k = F.linear(normed, wk).view(B, cur_seq, n_kv, head_dim).transpose(1, 2)
+        v = F.linear(normed, wv).view(B, cur_seq, n_kv, head_dim).transpose(1, 2)
+        # No RoPE for acoustic transformer bidirectional attention
 
         repeat = n_heads // n_kv
         k = k.repeat_interleave(repeat, dim=1)
@@ -377,7 +379,7 @@ def acoustic_transformer_step(
 
         scale = head_dim**-0.5
         attn = F.softmax((torch.matmul(q, k.transpose(-2, -1)) * scale).float(), dim=-1).to(hidden.dtype)
-        attn_out = torch.matmul(attn, v).transpose(1, 2).contiguous().view(B, N, n_heads * head_dim)
+        attn_out = torch.matmul(attn, v).transpose(1, 2).contiguous().view(B, cur_seq, n_heads * head_dim)
         attn_out = F.linear(attn_out, wo)
         hidden = hidden + attn_out
 
@@ -390,15 +392,13 @@ def acoustic_transformer_step(
         if capture_intermediates:
             caps[f"layer_{layer_idx}_out"] = hidden
 
-    hidden = rms_norm(hidden, sd["norm.weight"])
+    hidden = rms_norm(hidden, sd["norm.weight"])  # [B, 3*N, D]
 
-    # Predict semantic logits and acoustic velocity
-    semantic_logits = F.linear(hidden, sd["semantic_codebook_output.weight"])  # [B, N, 8320]
-    velocity = F.linear(hidden, sd["acoustic_codebook_output.weight"])  # [B, N, 36]
+    # Velocity from token positions 0..N-1 (x_t token group)
+    velocity = F.linear(hidden[:, :N, :], sd["acoustic_codebook_output.weight"])  # [B, N, 36]
 
     if capture_intermediates:
         caps["hidden_normed"] = hidden
-        caps["semantic_logits"] = semantic_logits
         caps["velocity"] = velocity
 
     return velocity, semantic_logits, caps

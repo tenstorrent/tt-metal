@@ -283,66 +283,72 @@ class TtVoxtralAcousticTransformer(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Three projections: h, t, x_t → each [1, 1, N, 3072]
-        h_proj = ttnn.linear(
+        # --- Semantic prediction: W_semantic @ h_tt DIRECTLY (before transformer) ---
+        # From vllm-omni: semantic_logit = self.semantic_codebook_output(llm_hidden)
+        # The semantic head maps the raw LLM hidden state, NOT the transformer output.
+        semantic_logits = ttnn.linear(
             h_tt,
-            self.llm_proj,
+            self.semantic_out,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
         )
-        t_proj = ttnn.linear(
-            t_emb_tt,
-            self.time_proj,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
+
+        # --- Velocity: acoustic transformer on 3-CONCATENATED tokens ---
+        # From vllm-omni _predict_velocity: concatenate [x_proj, t_proj, h_proj] → seq_len=3
+        # Velocity = W_acoustic @ transformer_output[token_0]  (x_t position)
         x_proj = ttnn.linear(
             x_t_tt,
             self.x_proj,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
+        )  # [1, 1, N, D]
+
+        t_proj = ttnn.linear(
+            t_emb_tt,
+            self.time_proj,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+        )  # [1, 1, N, D]
+
+        h_proj = ttnn.linear(
+            h_tt,
+            self.llm_proj,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+        )  # [1, 1, N, D]
         ttnn.deallocate(t_emb_tt)
 
-        # Sum all three projections
-        combined = ttnn.add(h_proj, t_proj)
-        ttnn.deallocate(h_proj)
-        ttnn.deallocate(t_proj)
-        combined = ttnn.add(combined, x_proj)
+        # Concatenate: each token has seq_len=N, result is seq_len=3*N
+        # We handle N=1 (single audio frame): concatenate along seq dim → [1, 1, 3, D]
+        combined = ttnn.concat([x_proj, t_proj, h_proj], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_proj)
+        ttnn.deallocate(t_proj)
+        ttnn.deallocate(h_proj)
 
-        # 3-layer bidirectional transformer
+        # 3-layer bidirectional transformer over 3-token sequence
         hidden = combined
         for i in range(self.n_layers):
-            # Attention sub-layer
             normed = ttnn.rms_norm(hidden, weight=self.attn_norm_weights[i], epsilon=1e-5)
             attn_out = self._attention_layer(normed, i)
             hidden = ttnn.add(hidden, attn_out)
             ttnn.deallocate(attn_out)
 
-            # MLP sub-layer
             normed2 = ttnn.rms_norm(hidden, weight=self.ffn_norm_weights[i], epsilon=1e-5)
             mlp_out = self._mlp_layer(normed2, i)
             hidden = ttnn.add(hidden, mlp_out)
             ttnn.deallocate(mlp_out)
 
-        # Final norm
         hidden = ttnn.rms_norm(hidden, weight=self.norm_w, epsilon=1e-5)
 
-        # Predict velocity and semantic logits — use HiFi4 for better precision on small-dim outputs
+        # Velocity from token position 0 (x_t token): hidden[:, :, 0:N, :]
+        hidden_x_token = hidden[:, :, :N, :]  # [1, 1, N, D] — x_t positions
         velocity = ttnn.linear(
-            hidden,
+            hidden_x_token,
             self.acoustic_out,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-        )
-        semantic_logits = ttnn.linear(
-            hidden,
-            self.semantic_out,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
