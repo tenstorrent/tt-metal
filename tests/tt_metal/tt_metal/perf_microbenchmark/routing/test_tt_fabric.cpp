@@ -202,6 +202,19 @@ int main(int argc, char** argv) {
             }
         }
 
+        // FIX TF (#42429): degraded hardware — dead ETH relay on one or more devices causes
+        // enqueue_write_shards_nolock to throw via FIX Z when compile_programs() dispatches
+        // to a non-MMIO device with broken relay (device flags set by FIX QU during fabric
+        // init degraded-mode). Skip cleanly before attempting any dispatch work.
+        if (fixture->has_degraded_fabric()) {
+            log_warning(
+                tt::LogTest,
+                "Skipping Test Group: {} — degraded fabric detected (dead ETH relay / channels not ready, #42429)",
+                test_config.name);
+            test_context.close_devices();
+            continue;
+        }
+
         // Check topology-based skip conditions after devices are opened
         if (builder.should_skip_test_on_topology(test_config)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to topology skip policy", test_config.name);

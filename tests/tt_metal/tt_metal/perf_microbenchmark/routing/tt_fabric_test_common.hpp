@@ -258,6 +258,22 @@ public:
 
     void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
 
+    // FIX TF (#42429): After open_devices(), check if any device has dead ETH relay or
+    // channels not ready for traffic (flags set by FIX QU during fabric init degraded mode).
+    // If true, the test binary must skip rather than crash inside compile_programs() when
+    // enqueue_write_shards_nolock hits FIX Z (cannot relay through dead non-MMIO device).
+    bool has_degraded_fabric() const {
+        if (!are_devices_open_ || !mesh_device_) {
+            return false;
+        }
+        for (auto* device : mesh_device_->get_devices()) {
+            if (device->is_fabric_relay_path_broken() || device->is_fabric_channels_not_ready_for_traffic()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void close_devices() {
         if (!are_devices_open_) {
             log_info(tt::LogTest, "Devices are already closed, skipping close_devices call");
