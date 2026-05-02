@@ -96,8 +96,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "impl/context/metal_context.hpp"
-
 namespace tt::tt_metal::distributed::test {
 
 // ---------------------------------------------------------------------------
@@ -177,7 +175,7 @@ static int wait_child_budget_gap75(pid_t pid, int budget_ms) {
 //   - Test skips cleanly; binary continues to next test.
 // ---------------------------------------------------------------------------
 TEST(Gap75SetUpNotActiveSkipGuard, SetUpSkipsCleanlyWhenNonMmioDevicesNotActive) {
-    const size_t num_devices = MetalContext::instance().get_cluster().number_of_devices();
+    const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         GTEST_SKIP() << "GAP-75 requires >= 2 devices (non-MMIO devices needed for "
                      << "ETH relay kill scenario). Found " << num_devices << " device(s).";
