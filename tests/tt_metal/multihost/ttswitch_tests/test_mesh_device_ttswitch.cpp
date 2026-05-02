@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric_switch_manager.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -93,15 +94,20 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceIds) {
-    // FIX CD (#42429): Skip if any chip has a broken relay. Explicit-device-ID topology
-    // mapping uses STRICT inter-mesh validation — dead ETH channels cause TT_FATAL in
+    // FIX CD (#42429): Skip if any device has degraded fabric. Explicit-device-ID topology
+    // mapping uses STRICT inter-mesh validation — dead ETH channels (relay_path_broken,
+    // channels_not_ready, OR stale base-UMD firmware) cause TT_FATAL in
     // topology_mapper.cpp. Both ranks must skip independently (no MPI sync) to prevent
     // rank 1 from hanging on "chip info header" when rank 0 crashes.
-    auto& cluster_for_relay_check = tt::tt_metal::MetalContext::instance().get_cluster();
-    for (ChipId chip_id : cluster_for_relay_check.all_chip_ids()) {
-        if (cluster_for_relay_check.is_relay_broken(chip_id)) {
-            GTEST_SKIP() << "Skipping: chip " << chip_id
-                         << " has dead relay (#42429) — explicit-ID inter-mesh mapping would fail";
+    // FIX CD-2 (#42429): Original guard used cluster.is_relay_broken() which only catches
+    // relay_broken_chips_ (set via write_core() failures), missing probe_dead_channels and
+    // stale_base_umd cases. Use per-device fabric state flags instead.
+    for (auto* dev : tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_devices()) {
+        if (dev->is_fabric_relay_path_broken() ||
+            dev->is_fabric_channels_not_ready_for_traffic() ||
+            dev->is_fabric_stale_base_umd_channels()) {
+            GTEST_SKIP() << "Skipping: device " << dev->id()
+                         << " has degraded fabric (#42429) — explicit-ID inter-mesh mapping would fail";
         }
     }
 
@@ -153,13 +159,15 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
-    // FIX CD (#42429): Same guard as TestOpenMeshDeviceWithExplicitPhysicalDeviceIds.
+    // FIX CD (#42429): Same comprehensive guard as TestOpenMeshDeviceWithExplicitPhysicalDeviceIds.
     // create_unit_meshes uses explicit physical device IDs internally — same failure path.
-    auto& cluster_for_relay_check = tt::tt_metal::MetalContext::instance().get_cluster();
-    for (ChipId chip_id : cluster_for_relay_check.all_chip_ids()) {
-        if (cluster_for_relay_check.is_relay_broken(chip_id)) {
-            GTEST_SKIP() << "Skipping: chip " << chip_id
-                         << " has dead relay (#42429) — unit-mesh topology mapping would fail";
+    // FIX CD-2 (#42429): Use per-device fabric state flags (not cluster.is_relay_broken()).
+    for (auto* dev : tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_devices()) {
+        if (dev->is_fabric_relay_path_broken() ||
+            dev->is_fabric_channels_not_ready_for_traffic() ||
+            dev->is_fabric_stale_base_umd_channels()) {
+            GTEST_SKIP() << "Skipping: device " << dev->id()
+                         << " has degraded fabric (#42429) — unit-mesh topology mapping would fail";
         }
     }
 

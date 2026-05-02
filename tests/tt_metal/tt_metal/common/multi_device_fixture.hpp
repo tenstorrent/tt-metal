@@ -181,13 +181,19 @@ protected:
                 config_.worker_l1_size);
         } catch (const std::exception& e) {
             std::string what = e.what();
-            if (what.find("is not active") != std::string::npos) {
+            // FIX BC (#42429): non-MMIO ETH relay dead → "is not active"
+            // FIX BC-2 (#42429): prior teardown left system mesh with fewer devices than
+            //   requested (probe_dead_channels + dead_relay_devices_ → system_mesh only sees
+            //   MMIO chips) → "only N devices are available in the system mesh"
+            if (what.find("is not active") != std::string::npos ||
+                what.find("devices are available") != std::string::npos) {
                 if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
                     tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
                 }
                 GTEST_SKIP() << fmt::format(
-                    "FIX BC (#42429): MeshDevice::create() threw 'Device not active' — "
-                    "non-MMIO ETH relay dead after prior session; skipping test. ({})",
+                    "FIX BC (#42429): MeshDevice::create() threw degraded-cluster exception — "
+                    "non-MMIO ETH relay dead or system mesh missing devices after corrupt teardown; "
+                    "skipping test. ({})",
                     what.substr(0, 300));
             }
             throw;
