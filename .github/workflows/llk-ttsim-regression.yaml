@@ -164,7 +164,7 @@ jobs:
               total   += int(s.attrib.get("tests",    0) or 0)
               failed  += int(s.attrib.get("failures", 0) or 0)
               skipped += int(s.attrib.get("skipped",  0) or 0)
-          passed = max(total - faile - skipped, 0)
+          passed = max(total - failed - skipped, 0)
           pass_pct = (100.0 * passed / total) if total else 0.0
 
           print(f"total={total}")
