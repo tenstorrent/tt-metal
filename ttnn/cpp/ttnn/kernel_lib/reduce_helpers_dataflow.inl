@@ -6,7 +6,7 @@
 
 #include <cmath>
 #include "llk_defs.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
+#include "reduce_common.hpp"
 
 namespace dataflow_kernel_lib {
 

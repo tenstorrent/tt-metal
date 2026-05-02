@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
+#include "common_types.hpp"
 
 /**
  * @file binary_op_helpers.hpp
@@ -42,7 +42,7 @@
  *
  * ── Examples ────────────────────────────────────────────────────────────────
  *
- *   #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
+ *   #include "binary_op_helpers.hpp"
  *   using namespace compute_kernel_lib;
  *
  *   binary_op_init_common(cb_a, cb_b, cb_out);
@@ -372,8 +372,8 @@ ALWI void square(uint32_t icb, uint32_t ocb, BinaryInputBlockShape shape, PostOp
  *
  * ── Examples ────────────────────────────────────────────────────────────────
  *
- *   #include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
- *   #include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
+ *   #include "binary_op_helpers.hpp"
+ *   #include "copy_tile_helpers.hpp"
  *   using namespace compute_kernel_lib;
  *
  *   // One full init per kernel

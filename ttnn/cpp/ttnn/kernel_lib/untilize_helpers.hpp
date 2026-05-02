@@ -7,7 +7,7 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/cb_api.h"
 #include "internal/circular_buffer_interface.h"
-#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "dest_helpers.hpp"
 
 // This is the go-to helper for all untilize usage in compute kernels.
 // Prefer this over raw pack_untilize_init/pack_untilize_block/pack_untilize_uninit calls.
@@ -98,7 +98,7 @@ ALWI void untilize_uninit();
  *
  * ── Examples ────────────────────────────────────────────────────────────────
  *
- *   #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+ *   #include "untilize_helpers.hpp"
  *
  *   // Hardware init — only if no other init or compute_kernel_hw_startup was called before
  *   compute_kernel_hw_startup(cb_in, cb_out);

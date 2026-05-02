@@ -4,8 +4,8 @@
 // Implementation file for reduce_helpers_compute.hpp
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
+#include "cb_helpers.hpp"
+#include "reduce_common.hpp"
 
 namespace compute_kernel_lib {
 

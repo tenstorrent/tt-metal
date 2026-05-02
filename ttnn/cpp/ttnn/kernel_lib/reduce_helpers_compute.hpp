@@ -12,9 +12,9 @@
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
 #include "tt-metalium/circular_buffer_constants.h"
-#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
+#include "dest_helpers.hpp"
+#include "common_types.hpp"
+#include "reduce_common.hpp"
 /**
  * @file reduce_helpers_compute.hpp
  * @brief Single unified reduce function with automatic dispatch
@@ -39,7 +39,7 @@
  * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce().
  *
  * Basic Usage:
- *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+ *   #include "reduce_helpers_compute.hpp"
  *
  *   compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
  *
@@ -517,4 +517,7 @@ ALWI void reduce(
 
 }  // namespace compute_kernel_lib
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl"
+// Use a relative include so the matmulhelpers .inl is picked up rather than
+// tt-metal's same-named file (which has a 7-arg reduce() signature mismatched
+// with our 8-arg declaration).
+#include "reduce_helpers_compute.inl"

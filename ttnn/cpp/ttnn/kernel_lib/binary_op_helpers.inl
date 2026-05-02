@@ -18,8 +18,8 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "cb_helpers.hpp"
+#include "dest_helpers.hpp"
 
 namespace compute_kernel_lib {
 

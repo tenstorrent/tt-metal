@@ -110,4 +110,6 @@ FORCE_INLINE void write_sticks_after_untilize(
 
 }  // namespace dataflow_kernel_lib
 
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.inl"
+// Use a relative include so the matmulhelpers .inl is picked up rather than
+// tt-metal's same-named file.
+#include "tilize_helpers_dataflow.inl"

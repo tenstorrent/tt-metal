@@ -6,8 +6,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_common.hpp"
+#include "l1_helpers.hpp"
+#include "reduce_common.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace dataflow_kernel_lib {
@@ -276,4 +276,6 @@ FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f);
 
 }  // namespace dataflow_kernel_lib
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl"
+// Use a relative include so the matmulhelpers .inl is picked up rather than
+// tt-metal's same-named file.
+#include "reduce_helpers_dataflow.inl"

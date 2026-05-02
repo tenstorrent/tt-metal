@@ -58,7 +58,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
+#include "common_types.hpp"
 
 /**
  * @file sfpu_helpers.hpp
@@ -96,7 +96,7 @@
  *
  * ── Examples ────────────────────────────────────────────────────────────────
  *
- *   #include "ttnn/cpp/ttnn/kernel_lib/sfpu_helpers.hpp"
+ *   #include "sfpu_helpers.hpp"
  *   using namespace compute_kernel_lib;
  *
  *   init_sfpu(cb_in, cb_out);

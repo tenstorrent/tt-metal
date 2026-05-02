@@ -9,7 +9,7 @@
 #include "api/compute/reg_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/debug/assert.h"
-#include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
+#include "common_types.hpp"
 
 /**
  * @file copy_tile_helpers.hpp
@@ -62,7 +62,7 @@
  *
  * ── Examples ────────────────────────────────────────────────────────────────
  *
- *   #include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
+ *   #include "copy_tile_helpers.hpp"
  *   using namespace compute_kernel_lib;
  *
  *   // Hardware init — must come first

@@ -7,7 +7,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
-#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "dest_helpers.hpp"
 
 namespace compute_kernel_lib {
 

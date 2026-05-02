@@ -67,7 +67,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/debug/assert.h"
-#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "dest_helpers.hpp"
 
 namespace compute_kernel_lib {
 

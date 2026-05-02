@@ -34,7 +34,7 @@ constexpr uint32_t div_up(uint32_t a, uint32_t b) {
 //
 // TILE granularity example (reader kernel, single-core):
 //
-//   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+//   #include "tilize_helpers_dataflow.hpp"
 //   void kernel_main() {
 //       constexpr auto src_args = TensorAccessorArgs<0>();
 //       const auto accessor = TensorAccessor(src_args, get_arg_val<uint32_t>(0));
@@ -158,7 +158,7 @@ FORCE_INLINE void read_sticks_for_tilize(
 //
 // Example (writer kernel, single-core):
 //
-//   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+//   #include "tilize_helpers_dataflow.hpp"
 //   void kernel_main() {
 //       constexpr auto dst_args = TensorAccessorArgs<0>();
 //       const auto accessor = TensorAccessor(dst_args, get_arg_val<uint32_t>(0));

@@ -10,6 +10,18 @@
  * Reusable utilities for kernel library helpers (reduce, tilize, untilize, etc.)
  */
 
+// tt-metal main split this into cb_helpers_compute.hpp / cb_helpers_dataflow.hpp
+// (tt-metal commit 7fb82fd003d, 2026-04-24). When the compute version is reachable
+// via the JIT include path, defer to it so symbols aren't redefined.
+#if defined(__has_include)
+#if __has_include("ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp")
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
+#define COMPUTE_KERNEL_LIB_CB_HELPERS_USES_TTMETAL_SPLIT 1
+#endif
+#endif
+
+#ifndef COMPUTE_KERNEL_LIB_CB_HELPERS_USES_TTMETAL_SPLIT
+
 namespace compute_kernel_lib {
 
 // =============================================================================
@@ -93,3 +105,5 @@ ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id, DataFormat format);
 
 // Include implementation
 #include "cb_helpers.inl"
+
+#endif  // COMPUTE_KERNEL_LIB_CB_HELPERS_USES_TTMETAL_SPLIT

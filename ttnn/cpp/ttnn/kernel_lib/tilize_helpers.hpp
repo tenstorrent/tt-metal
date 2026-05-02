@@ -9,7 +9,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/cb_api.h"
 #include "internal/circular_buffer_interface.h"
-#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "dest_helpers.hpp"
 
 // This is the go-to helper for all tilize usage in compute kernels.
 // Prefer this over raw tilize_init/tilize_block/tilize_uninit calls.
@@ -103,7 +103,7 @@ enum class Fp32Mode : uint8_t {
  *
  * ── Examples ────────────────────────────────────────────────────────────────
  *
- *   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+ *   #include "tilize_helpers.hpp"
  *
  *   // Hardware init — must come first, pass the input and output CBs
  *   compute_kernel_hw_startup(cb_in, cb_out);
