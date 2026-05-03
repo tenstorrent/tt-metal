@@ -344,6 +344,10 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 per_core_N=int(cfg["per_core_N"]),
                 transpose_mcast=bool(cfg.get("transpose_mcast", False)),
                 fused_activation=fused_activation,
+                # Master-traced fuse_batch (default-False). Without this, the C++
+                # constructor defaults to True and the kernel asserts on the
+                # batch-shape requirement for any non-singleton-batch input_b.
+                fuse_batch=bool(cfg.get("fuse_batch", False)),
             )
             if cfg.get("out_block_h") is not None:
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
