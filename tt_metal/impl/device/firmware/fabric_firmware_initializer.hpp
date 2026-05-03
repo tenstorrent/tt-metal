@@ -153,6 +153,12 @@ private:
     // the 10s-per-device timeout.
     std::unordered_set<ChipId> mmio_dead_master_chan_devices_;
 
+    // FIX TH2 (#42429): Set to true when any device has base-UMD channels this session.
+    // Base-UMD ERISCs are transitioned via launch_msg (not soft reset), so they need extra
+    // time to quiesce the relay and complete the ring handshake — the default 10s timeout
+    // is insufficient. get_fabric_router_sync_timeout_ms() triples the timeout when set.
+    bool has_base_umd_channels_ = false;
+
     // GAP 5: Track channels that were force-reset during teardown.
     // On the next verify_all_fabric_channels_healthy() call, channels that were force-reset
     // in a previous session are expected to fail — log them as "degraded" rather than

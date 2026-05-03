@@ -1625,6 +1625,11 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                 probe_dead_channels = std::move(result.probe_dead_channels);
                 relay_broken = result.relay_broken;
                 base_umd_channels_map[dev->id()] = std::move(result.base_umd_channels);
+                // FIX TH2 (#42429): Record that this session has base-UMD channels so
+                // get_fabric_router_sync_timeout_ms() can extend the per-device timeout.
+                if (!base_umd_channels_map[dev->id()].empty()) {
+                    has_base_umd_channels_ = true;
+                }
             }
 
             // FIX E2 (#42429): Only mark non-MMIO devices as dead-relay when ETH relay is
@@ -2270,7 +2275,21 @@ uint32_t FabricFirmwareInitializer::get_fabric_router_sync_timeout_ms() const {
         return 15000;
     }
     auto timeout = rtoptions_.get_fabric_router_sync_timeout_ms();
-    return timeout.value_or(10000);
+    // FIX TH2 (#42429): Base-UMD channels transition via launch_msg instead of soft reset.
+    // After base-UMD quiesce + new firmware launch + ring handshake, they need more time.
+    // 12 channels * ~sequential polling means each times out if < 30s. Triple the default.
+    const uint32_t base_timeout = timeout.value_or(10000);
+    if (has_base_umd_channels_ && !timeout.has_value()) {
+        const uint32_t extended = base_timeout * 3;
+        log_info(
+            tt::LogMetal,
+            "FIX TH2 (#42429): base-UMD channels detected — extending fabric_router_sync_timeout "
+            "from {} ms to {} ms to allow relay quiesce + ring handshake.",
+            base_timeout,
+            extended);
+        return extended;
+    }
+    return base_timeout;
 }
 
 }  // namespace tt::tt_metal
