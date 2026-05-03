@@ -115,24 +115,19 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         from models.demos.molmo2.tt.model import TtMolmo2Model
 
         hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
-        # Use HF_MODEL env var (set by run_vllm_api_server.py to local weights symlink)
-        # to avoid downloading from HF. local_files_only prevents downloading updated code files.
+        # Use HF_MODEL env var (set by run_vllm_api_server.py to local symlink) to load
+        # weights from local path instead of downloading from HF.
         hf_path = os.environ.get("HF_MODEL", hf_model_id)
-        local_only = hf_path != hf_model_id
         logger.info(f"Initializing Molmo2 TT model from {hf_path}")
 
         logger.info("Loading HF state dict (bfloat16)...")
         hf = AutoModelForImageTextToText.from_pretrained(
-            hf_path,
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
-            device_map="cpu",
-            local_files_only=local_only,
+            hf_path, trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="cpu"
         )
         state_dict = hf.state_dict()
         del hf
 
-        processor = AutoProcessor.from_pretrained(hf_path, trust_remote_code=True, local_files_only=local_only)
+        processor = AutoProcessor.from_pretrained(hf_path, trust_remote_code=True)
 
         cfg = Molmo2Config(mesh_device=mesh_device)
         cfg.max_batch_size = max_batch_size
