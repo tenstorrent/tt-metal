@@ -55,7 +55,42 @@ The 26B-A4B and 31B variants are too large to fit on a single Wormhole device or
   ```
 - HuggingFace cache populated with `HF_HOME` set, plus `HF_HUB_OFFLINE=1` to skip network access.
 
+Gemma4 demos default to the instruct checkpoint `google/gemma-4-26B-A4B-it`. Override it with `--model-path`, `HF_MODEL`, or `GEMMA4_MODEL_PATH`; override only the tokenizer with `--tokenizer-path` or `GEMMA4_TOKENIZER_PATH`. First run creates TT tensor caches under `$TT_CACHE_PATH/tensor_cache_<dtype>/`.
+
 ## How to Run
+
+### User-facing 26B-A4B instruct demo on 1x8
+
+Run hardware commands from the built TT-Metal checkout so dispatch kernels match the installed libraries:
+
+```bash
+cd /proj_sw/user_dev/moconnor/tt-metal
+TT_METAL_CACHE=/tmp/tt-metal-cache-gemma4-it-smoke \
+TT_CACHE_PATH=/path/to/huggingface/tt_cache/google--gemma-4-26B-A4B-it \
+HF_HOME=/path/to/huggingface \
+HF_HUB_OFFLINE=1 \
+HF_MODEL=google/gemma-4-26B-A4B-it \
+/path/to/tt-metal/python_env/bin/python -u \
+  /path/to/local/tt-metal/models/demos/gemma4/demo/instruct_demo.py \
+  --prompt "Explain in two sentences why paged attention helps LLM serving." \
+  --max-new-tokens 64 \
+  --max-seq-len 512 \
+  --mesh-rows 1 \
+  --mesh-cols 8 \
+  --trace-region-size 50000000
+```
+
+`instruct_demo.py` applies the tokenizer chat template when available. With the current local Transformers package, Gemma4 tokenizers load through the `extra_special_tokens={}` workaround and do not expose `chat_template`; the fallback mirrors the upstream Gemma4 [`chat_template.jinja`](https://huggingface.co/google/gemma-4-26B-A4B-it/raw/main/chat_template.jinja) turn/channel tokens:
+
+```text
+<bos><|turn>user
+...<turn|>
+<|turn>model
+<|channel>thought
+<channel|>
+```
+
+Use `--base-completion` only for raw base-completion prompts. `--allow-cpu-sampling-fallback` is a debug-only escape hatch for meshes without `models.common.sampling`; TP meshes use device-side decode sampling.
 
 ### E2B on N150 (1×1)
 
@@ -115,9 +150,12 @@ HF_MODEL=<path-or-id> pytest models/demos/gemma4/demo/text_demo.py::test_demo_si
 
 ## Details
 
-- **Entry point:** `models/demos/gemma4/demo/text_demo.py` — single-prompt prefill + decode loop with on-device decode trace.
+- **Entry points:** `models/demos/gemma4/demo/instruct_demo.py` for CLI use and `models/demos/gemma4/demo/text_demo.py` for pytest/local harnesses.
 - **Batch size:** 1 (single-user demo).
 - **Sequence length:** up to 4096 tokens in the demo; the model itself supports the upstream context window.
+- **Sampling:** first token after prefill is currently sampled on host because prefill returns gathered logits; decode uses `models.common.sampling` device-side sampling on TP meshes. Greedy, temperature, top-p, top-k, and seed are CLI-configurable.
+- **vLLM:** `models/demos/gemma4/tt/generator_vllm.py` implements a minimum batch=1, `tt_data_parallel=1` vLLM adapter with paged attention metadata and per-layer KV-cache shapes. Continuous batching and prefix caching are not supported yet because Gemma4 mixes sliding/global cache geometry.
+- **Weight dtype probes:** `GEMMA4_ATTENTION_WEIGHT_DTYPE`, `GEMMA4_SHARED_MLP_WEIGHT_DTYPE`, `GEMMA4_EXPERT_WEIGHT_DTYPE`, and `GEMMA4_LM_HEAD_WEIGHT_DTYPE` accept `bf16`, `bfp8`/`bfloat8_b`, and `bfp4`/`bfloat4_b`. BF16 remains the default; lower-precision settings are profiling knobs and may be numerically unusable.
 - **Architecture:**
   - Mixed attention pattern: `sliding_attention` and `full_attention` layers interleaved per `hf_config.layer_types`.
   - Partial RoPE (factor 0.25) on global layers, full RoPE on sliding-window layers.

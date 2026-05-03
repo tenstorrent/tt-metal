@@ -1,6 +1,6 @@
 # Gemma 4 26B-A4B Bringup Results
 
-Status: full 30-layer `google/gemma-4-26B-A4B` decode runs on the 8-device Blackhole host under TTNN trace replay for a 128-token sequence with device-side token feedback, token embedding, sampling output handoff, RoPE position, and KV-cache position maintained on device between trace replays. The strict standalone harness meets the on-device decode acceptance target for batch=1. The default `text_demo.py` path remains useful for text output collection, but still stages token feedback from host.
+Status: full 30-layer Gemma4 26B-A4B now defaults to the instruct-tuned `google/gemma-4-26B-A4B-it` path for demos. A user-facing instruct CLI runs on the 8-device Blackhole host with Gemma4 turn/channel prompt formatting, paged-attention metadata, trace decode, and device-side decode sampling. The earlier base-weight strict standalone harness remains the strongest evidence for fully on-device token/position feedback across TTNN trace replay.
 
 ## Hardware And Software
 
@@ -22,9 +22,20 @@ Important setup note: hardware runs were launched from `/proj_sw/user_dev/moconn
 
 ## Revisions
 
-Current repo base commit: `862ed84ea14826af991e54537d096a79876b9028` (`Add agent model bringup guide`). The workspace contains uncommitted Gemma4 bringup edits and generated source-of-truth docs.
+Active branch: `yieldthought/gemma4-instruct-vllm-optimization`
+
+Continuation commits:
+
+- `43a9e735a4` (`Default Gemma4 demos to instruct sampling`)
+- `d808d669d0` (`Add Gemma4 vLLM paged attention adapter`)
+- `313438d3eb` (`Add Gemma4 weight dtype profiling knobs`)
+- `f1aefea90f` (`Fix Gemma4 instruct prompt fallback`)
+
+Earlier checkpoint commit: `1ae60f5ac1` (`Checkpoint Gemma4 strict decode bringup`)
 
 Checkpoint: `google/gemma-4-26B-A4B` at `64143b04706fadeb2f8ac198f7ecab57b94b1e0b`.
+
+Instruct checkpoint: `google/gemma-4-26B-A4B-it` at snapshot `4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a`.
 
 Primary HF source reference: HuggingFace Transformers `v5.5.0` at `c1c34249fa27deefbd4a377dfbf883a39baf5c6d`.
 
@@ -35,8 +46,11 @@ Cached files:
 - HF snapshot: `/proj_sw/user_dev/moconnor/hf-cache/hub/models--google--gemma-4-26B-A4B/snapshots/64143b04706fadeb2f8ac198f7ecab57b94b1e0b`
 - HF snapshot disk usage with symlinks resolved: `49G`
 - TT tensor cache: `/proj_sw/user_dev/moconnor/hf-cache/tt_cache/google--gemma-4-26B-A4B`, `57G`
+- Instruct HF cache: `/proj_sw/user_dev/moconnor/hf-cache/hub/models--google--gemma-4-26B-A4B-it`, `49G`
+- Instruct TT tensor cache: `/proj_sw/user_dev/moconnor/hf-cache/tt_cache/google--gemma-4-26B-A4B-it`, `55G`
 - TT program/kernel cache used for the original traced-core 1x8 runs: `/tmp/tt-metal-cache-gemma4-full-1x8-50153`, `941M`
 - TT program/kernel cache used for strict device-feedback runs: `/tmp/tt-metal-cache-gemma4-strict-full-1x8-0503`
+- TT program/kernel cache used for instruct smoke: `/tmp/tt-metal-cache-gemma4-it-smoke-0503`, `941M`
 
 ## Source Grounding
 
@@ -57,10 +71,101 @@ Code changes made or preserved toward this milestone:
 - `Gemma4ModelArgs.load_hf_config` falls back to direct `config.json` parsing when installed Transformers does not know `model_type: gemma4`.
 - TT RoPE cache creation no longer imports `transformers.models.gemma4`; it locally implements the v5.5.0 Gemma4 text RoPE formulas.
 - Router top-k probabilities are renormalized by selected-probability sum, matching HF.
-- Default paths now target non-instruct `google/gemma-4-26B-A4B`.
+- Default demo paths now target instruct `google/gemma-4-26B-A4B-it`; base `google/gemma-4-26B-A4B` remains available via explicit override.
 - Gemma4 tokenizer loading works around the local Transformers 4.57.1 `extra_special_tokens` list parsing issue.
+- Instruct prompt encoding uses `tokenizer.apply_chat_template` when available and otherwise falls back to the upstream Gemma4 `<|turn>` / `<turn|>` / `<|channel>` format.
 - Added trace region config for `gemma-4-26B` on `P150` and `P150x8`.
 - Added `models/demos/gemma4/demo/strict_device_feedback_demo.py`, a reproducible batch=1 strict decode harness that keeps next-token feedback and both position counters on device across TTNN trace replay.
+- Added `models/demos/gemma4/demo/instruct_demo.py`, a user-facing CLI around the text demo.
+- Added `models/demos/gemma4/tt/generator_vllm.py`, a minimum vLLM adapter for batch=1, `tt_data_parallel=1`, paged-attention page tables, and mixed sliding/global KV-cache geometry.
+- Added dtype profiling knobs for attention, shared MLP, routed experts, and lm head through `GEMMA4_*_WEIGHT_DTYPE`.
+
+## 2026-05-03 Instruct/VLLM/Optimization Update
+
+Instruct snapshot download:
+
+```bash
+HF_HOME=/proj_sw/user_dev/moconnor/hf-cache \
+/proj_sw/user_dev/moconnor/tt-metal/python_env/bin/python - <<'PY'
+from huggingface_hub import snapshot_download
+
+path = snapshot_download(
+    repo_id="google/gemma-4-26B-A4B-it",
+    allow_patterns=[
+        "*.safetensors",
+        "model.safetensors.index.json",
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "generation_config.json",
+        "special_tokens_map.json",
+    ],
+    local_files_only=False,
+)
+print("SNAPSHOT_OK", path)
+PY
+```
+
+Result: `SNAPSHOT_OK /proj_sw/user_dev/moconnor/hf-cache/hub/models--google--gemma-4-26B-A4B-it/snapshots/4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a`.
+
+Corrected instruct smoke command/log:
+
+```bash
+cd /proj_sw/user_dev/moconnor/tt-metal
+TT_METAL_CACHE=/tmp/tt-metal-cache-gemma4-it-smoke-0503 \
+TT_CACHE_PATH=/proj_sw/user_dev/moconnor/hf-cache/tt_cache/google--gemma-4-26B-A4B-it \
+HF_HOME=/proj_sw/user_dev/moconnor/hf-cache \
+HF_HUB_OFFLINE=1 \
+HF_MODEL=google/gemma-4-26B-A4B-it \
+/proj_sw/user_dev/moconnor/tt-metal/python_env/bin/python -u \
+  /localdev/moconnor/tt-metal-gemma-4-26b-a4b/models/demos/gemma4/demo/instruct_demo.py \
+  --model-path google/gemma-4-26B-A4B-it \
+  --prompt 'Explain in two sentences why paged attention helps LLM serving.' \
+  --max-new-tokens 8 \
+  --max-seq-len 512 \
+  --mesh-rows 1 \
+  --mesh-cols 8 \
+  --trace-region-size 50000000 \
+  2>&1 | tee /tmp/gemma4_it_instruct_template_smoke.log
+```
+
+Evidence from `/tmp/gemma4_it_instruct_template_smoke.log`:
+
+- Full 30-layer instruct model created from warmed BF16 tensor cache in `12.7s`.
+- Prompt formatted as Gemma4 instruct fallback, `26` tokens padded to `128`.
+- Prefill/TTFT `4863.11ms`; first token `202690 = 'Paged'`.
+- Decode trace captured; sampling path reported `sampling=device`.
+- 1st traced decode token `69.71ms`, `14.34 tok/s/user`.
+- Average traced decode `70.94ms`, `14.1 tok/s/user`.
+- Generated text prefix: `Paged attention optimizes LLM serving by managing the`.
+
+Earlier cold instruct run `/tmp/gemma4_it_instruct_demo_smoke.log` proved the full instruct weights and BF16 tensor cache can be generated from scratch: model creation `370.1s`, prefill `206.13s`, decode compile `213.7s`, average decode `100.92ms` at `9.91 tok/s/user`. That run used raw-token fallback before `f1aefea90f` fixed prompt formatting, so it is retained only as cold-cache evidence.
+
+vLLM status:
+
+- `models/demos/gemma4/tt/generator_vllm.py` initializes a Gemma4 vLLM-style model with vLLM page tables and per-layer KV cache shapes.
+- Supported today: batch=1, `tt_data_parallel=1`, prefill+decode with paged attention metadata, host fallback sampling only when device sampling is unavailable or explicitly disabled by the integration caller.
+- Not supported yet: continuous batching, prefix caching, async decode. The blocker is Gemma4's mixed sliding/global KV-cache geometry and the current minimum integration scope.
+- Focused metadata tests passed: `pytest -q models/demos/gemma4/tests/unit/test_vllm_integration.py`.
+
+Weight dtype probes:
+
+- BF16 remains the only default.
+- BFP8 probe command set `GEMMA4_ATTENTION_WEIGHT_DTYPE=bfp8`, `GEMMA4_SHARED_MLP_WEIGHT_DTYPE=bfp8`, `GEMMA4_EXPERT_WEIGHT_DTYPE=bfp8`, and `GEMMA4_LM_HEAD_WEIGHT_DTYPE=bfp8` for a one-layer 1x8 smoke. Log: `/tmp/gemma4_it_bfp8_1layer_probe.log`.
+- BFP8 generated BFLOAT8_B caches for lm head, attention, shared MLP, and routed experts, then executed prefill and one decode compile. It emitted EOS immediately (`first token: 1 = '<eos>'`), so BFP8 is not quality-usable as a default without numerical work.
+- BFP4 probe command set the same four env vars to `bfp4`. Final warm log: `/tmp/gemma4_it_bfp4_1layer_probe_final.log`.
+- BFP4 generated and loaded BFLOAT4_B caches for lm head, attention, shared MLP, and routed experts, then executed prefill. It also emitted EOS immediately, so BFP4 is not quality-usable as a default.
+
+Focused verification after these changes:
+
+```bash
+HF_HOME=/proj_sw/user_dev/moconnor/hf-cache HF_HUB_OFFLINE=1 \
+/proj_sw/user_dev/moconnor/tt-metal/python_env/bin/python -m pytest -q \
+  models/demos/gemma4/tests/unit/test_vllm_integration.py \
+  models/demos/gemma4/tests/unit/test_optimization_config.py
+```
+
+Result: `12 passed, 1 warning in 2.98s`.
 
 ## Commands
 

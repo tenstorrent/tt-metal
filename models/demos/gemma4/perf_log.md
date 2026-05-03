@@ -1,5 +1,74 @@
 # Gemma 4 Perf Log
 
+## 2026-05-03 Instruct 1x8 Smoke And Dtype Probes
+
+Status: accepted user-facing instruct smoke on the 8-device Blackhole host. Demos now default to `google/gemma-4-26B-A4B-it`; prompt fallback uses Gemma4 `<|turn>` / `<turn|>` / `<|channel>` markers when the local Transformers tokenizer workaround does not expose `chat_template`.
+
+Environment:
+
+- Host: `bh-lb-01-special-moconnor-for-reservation-67920`
+- Hardware: 8x Blackhole `p150b`, 16G GDDR per board
+- Python: `/proj_sw/user_dev/moconnor/tt-metal/python_env/bin/python`
+- HF checkpoint: `google/gemma-4-26B-A4B-it@4c55b528bdc40b4e79ed7fd4e2f8e46fa5aaed5a`
+- Instruct HF cache: `/proj_sw/user_dev/moconnor/hf-cache/hub/models--google--gemma-4-26B-A4B-it`, `49G`
+- Instruct TT tensor cache: `/proj_sw/user_dev/moconnor/hf-cache/tt_cache/google--gemma-4-26B-A4B-it`, `55G`
+- Program cache for BF16 instruct smoke: `/tmp/tt-metal-cache-gemma4-it-smoke-0503`, `941M`
+
+Primary command/log:
+
+```bash
+cd /proj_sw/user_dev/moconnor/tt-metal
+TT_METAL_CACHE=/tmp/tt-metal-cache-gemma4-it-smoke-0503 \
+TT_CACHE_PATH=/proj_sw/user_dev/moconnor/hf-cache/tt_cache/google--gemma-4-26B-A4B-it \
+HF_HOME=/proj_sw/user_dev/moconnor/hf-cache \
+HF_HUB_OFFLINE=1 \
+HF_MODEL=google/gemma-4-26B-A4B-it \
+/proj_sw/user_dev/moconnor/tt-metal/python_env/bin/python -u \
+  /localdev/moconnor/tt-metal-gemma-4-26b-a4b/models/demos/gemma4/demo/instruct_demo.py \
+  --model-path google/gemma-4-26B-A4B-it \
+  --prompt 'Explain in two sentences why paged attention helps LLM serving.' \
+  --max-new-tokens 8 \
+  --max-seq-len 512 \
+  --mesh-rows 1 \
+  --mesh-cols 8 \
+  --trace-region-size 50000000 \
+  2>&1 | tee /tmp/gemma4_it_instruct_template_smoke.log
+```
+
+Measured results:
+
+| Metric | Value |
+| --- | ---: |
+| Model creation from warm BF16 tensor cache | `12.7 s` |
+| Prompt tokens | `26`, padded to `128` |
+| Prefill / TTFT | `4863.11 ms` |
+| Decode compile | `3.05 s` |
+| Trace capture | yes |
+| 1st traced decode token | `69.71 ms`, `14.34 t/s/u` |
+| Average traced decode | `70.94 ms/token` |
+| Average decode throughput | `14.1 tokens/sec/user` |
+| Generated tokens | `8` |
+| Full demo runtime | `25.19 s` |
+
+Output prefix:
+
+```text
+Paged attention optimizes LLM serving by managing the
+```
+
+Dtype probes:
+
+| Probe | Command/log | Result |
+| --- | --- | --- |
+| BFLOAT8_B major weights | `/tmp/gemma4_it_bfp8_1layer_probe.log`, one layer, 1x8, `GEMMA4_{ATTENTION,SHARED_MLP,EXPERT,LM_HEAD}_WEIGHT_DTYPE=bfp8` | Created BFLOAT8_B caches for lm head, attention, shared MLP, and routed experts; prefill and one decode compile executed. Immediate EOS (`first token: 1 = '<eos>'`), so not a default-quality dtype. Cold probe runtime `392.66 s`. |
+| BFLOAT4_B major weights | `/tmp/gemma4_it_bfp4_1layer_probe_final.log`, one layer, 1x8, same env vars set to `bfp4` | Created/loaded BFLOAT4_B caches for lm head, attention, shared MLP, and routed experts; warm prefill executed. Immediate EOS, so not a default-quality dtype. Warm runtime `7.74 s`, TTFT `2685.98 ms`. |
+
+Notes:
+
+- Lower-precision caches are intentionally opt-in through env vars; BF16 remains the default.
+- The one-layer dtype probes exercise conversion and matmul execution only. Output quality is not meaningful with one layer and was numerically degraded enough to hit EOS immediately.
+- A direct executable launch of `instruct_demo.py` failed with `Permission denied`; use the Python invocation shown above.
+
 ## 2026-05-03 Full 1x8 Strict Device-Feedback Trace
 
 Status: accepted strict decode milestone. Token feedback, token embedding, sampled-token handoff, RoPE position, and KV-cache position stay on device across 128 TTNN trace replays. The default text demo remains a host-feedback path for collecting generated text.
