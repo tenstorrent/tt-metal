@@ -160,17 +160,24 @@ elif args.block == "vit_encoder":
         vit_cfg=cfg,
         weight_cache_path=WEIGHT_CACHE,
     )
+    # DP mode: shard crops across devices (1 per device) to match production.
+    # n_crops must equal num_devices so ShardTensorToMesh distributes evenly.
+    num_devices = mesh.get_num_devices()
+    n_crops_vit = args.n_crops if args.n_crops > 1 else num_devices
     pv = ttnn.from_torch(
-        torch.randn(args.n_crops, 1, 729, 588).bfloat16(),
+        torch.randn(n_crops_vit, 1, 729, 588).bfloat16(),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
     )
 
     def fwd():
-        return blk.forward(pv, patch_num=(27, 27))
+        # n_crops_per_device=1 tells forward to tile pos_emb for 1 crop/device
+        out = blk.forward(pv, patch_num=(27, 27), n_crops_per_device=1)
+        # Collect sharded output from all devices (for dealloc)
+        return out
 
 elif args.block == "vit_encoder_dp":
     # ViT encoder with DATA PARALLEL weights — no CCL (ttnn.all_reduce eliminated).
