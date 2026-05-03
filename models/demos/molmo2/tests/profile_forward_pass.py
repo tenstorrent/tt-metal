@@ -266,9 +266,9 @@ def run_profiled_forward(model, cfg, input_ids, pv, pool_idx, token_type_ids) ->
         t0 = time.perf_counter()
         H = cfg.dim
         is_patch = input_ids.view(-1) == cfg.image_patch_id
-        delta = torch.zeros(1, 1, S, H, dtype=torch.bfloat16)
-        delta.view(-1, H)[is_patch] = proj_cpu.to(torch.bfloat16)
-        delta_tt = _from_torch(delta, mesh)
+        delta = torch.zeros(1, 1, S, H, dtype=torch.float32)
+        delta.view(-1, H)[is_patch] = proj_cpu  # float32, no conversion
+        delta_tt = _from_torch(delta, mesh, dtype=ttnn.float32)
         x_tt = ttnn.to_layout(x_tt, ttnn.TILE_LAYOUT)
         x_tt = ttnn.reshape(x_tt, [1, 1, S, H])
         x_tt = ttnn.add(x_tt, delta_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
