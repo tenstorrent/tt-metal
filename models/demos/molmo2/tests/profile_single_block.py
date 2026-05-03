@@ -28,7 +28,15 @@ HF_PATH = (
 )
 WEIGHT_CACHE = pathlib.Path("/tmp/molmo2_weight_cache")
 
-BLOCKS = ["text_attention", "text_mlp", "decoder_block", "vit_encoder", "image_pooling", "image_projector"]
+BLOCKS = [
+    "text_attention",
+    "text_mlp",
+    "decoder_block",
+    "vit_encoder",
+    "vit_encoder_dp",
+    "image_pooling",
+    "image_projector",
+]
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--block", required=True, choices=BLOCKS)
@@ -163,6 +171,31 @@ elif args.block == "vit_encoder":
 
     def fwd():
         return blk.forward(pv, patch_num=(27, 27))
+
+elif args.block == "vit_encoder_dp":
+    # ViT encoder with DATA PARALLEL weights — no CCL (ttnn.all_reduce eliminated).
+    # Input SHARDED by crop across 8 devices (1 crop/device with n_crops=8).
+    # Each device: 1 crop × 16 heads = same FLOPs as TP (8 crops × 2 heads/device).
+    # Speedup comes purely from eliminating 50 CCL calls (25 blocks × 2).
+    import sys
+
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    from test_vit_dp_pcc import vit_forward_dp
+
+    num_devices = mesh.get_num_devices()
+    n_crops = args.n_crops if args.n_crops > 1 else num_devices  # 1 crop per device
+    # SHARD input across devices so each device processes n_crops/num_devices crops
+    pv_dp = ttnn.from_torch(
+        torch.randn(n_crops, 1, 729, 588).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+    )
+
+    def fwd():
+        return vit_forward_dp(pv_dp, sd, cfg, mesh)
 
 elif args.block == "image_pooling":
     # Profile the full _run_chunked_ttnn_pooling path with realistic video shapes.

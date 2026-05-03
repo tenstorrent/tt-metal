@@ -815,30 +815,38 @@ class TtMolmo2Model(LightweightModule):
         """Run full vision path and return [N_valid, 4096] CPU image features."""
         B, n_crops, n_patches, px_dim = pixel_values.shape
 
-        # TP ViT: reshape to [chunk, 1, 729, 588] and encode in batches.
-        # Processing all crops at once OOMs for long videos (87+ crops exhaust the
-        # largest contiguous free DRAM block).  Chunks of MAX_VIT_BATCH crops keep
-        # peak allocation small and allow DRAM to be fully reclaimed between chunks.
+        # DP ViT: shard crops across devices (1 crop/device), no CCL per block.
+        # Chunk size = num_devices so each chunk is evenly sharded. Last chunk is
+        # padded to num_devices with zeros and trimmed after forward.
         n_crops_flat = B * n_crops
         pv_4d = pixel_values.reshape(n_crops_flat, 1, n_patches, px_dim).to(torch.bfloat16)
 
-        _MAX_VIT_BATCH = 8  # keeps each ViT forward ≤ ~50 MB peak
+        num_devices = self.mesh_device.get_num_devices()
+        _MAX_VIT_BATCH = num_devices  # 1 crop per device per forward
         vit_chunks = []
         for start in range(0, n_crops_flat, _MAX_VIT_BATCH):
             chunk_cpu = pv_4d[start : start + _MAX_VIT_BATCH]
+            real_n = chunk_cpu.shape[0]
+            # Pad last chunk to num_devices so ShardTensorToMesh(dim=0) works evenly
+            if real_n < num_devices:
+                pad = torch.zeros(num_devices - real_n, 1, n_patches, px_dim, dtype=torch.bfloat16)
+                chunk_cpu = torch.cat([chunk_cpu, pad], dim=0)
             chunk_ttnn = ttnn.from_torch(
                 chunk_cpu,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
-            feat_ttnn = self.vit_encoder.forward(chunk_ttnn)
+            # n_crops_per_device=1: each device gets its own crop, no pos_emb tiling
+            feat_ttnn = self.vit_encoder.forward(chunk_ttnn, n_crops_per_device=1)
             ttnn.deallocate(chunk_ttnn)
-            feat_cpu = ttnn.to_torch(ttnn.get_device_tensors(feat_ttnn)[0]).float()
+            # Collect crop features from all devices (each device has 1 crop)
+            feat_parts = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(feat_ttnn)]
             ttnn.deallocate(feat_ttnn)
-            vit_chunks.append(feat_cpu.squeeze(0))  # [chunk, 729, 2304]
+            feat_chunk = torch.cat(feat_parts, dim=0)  # [num_devices, 1, 729, 2304]
+            vit_chunks.append(feat_chunk[:real_n].squeeze(1))  # [real_n, 729, 2304]
 
         vit_cpu = torch.cat(vit_chunks, dim=0).reshape(B, n_crops, n_patches, 2304)
 

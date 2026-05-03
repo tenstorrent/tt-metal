@@ -108,25 +108,29 @@ class TtMolmo2ViTEncoder(LightweightModule):
         )
         self._current_patch_num = patch_num
 
-    def forward(self, pixel_values: ttnn.Tensor, patch_num=(27, 27)) -> ttnn.Tensor:
+    def forward(self, pixel_values: ttnn.Tensor, patch_num=(27, 27), n_crops_per_device=None) -> ttnn.Tensor:
         """Run ViT encoder and return concatenated features from layers 18 and 24.
 
         Args:
-            pixel_values: [B*n_crops, 729, 588] on device (sharded across crops)
-            patch_num: (h, w) patch grid — (27, 27) for standard crops
+            pixel_values: [n_crops, 1, 729, 588] on device
+            patch_num: (h, w) patch grid
+            n_crops_per_device: when using DP sharding, the number of crops each device
+                actually holds (e.g. 1). Used for pos_emb tiling to match the per-device
+                physical tensor shape. When None, uses pixel_values.shape[0] (TP mode).
 
         Returns:
-            image_features: [B*n_crops, 729, 2304] on device (replicated after AllGather)
+            TP mode:  [1, n_crops, 729, 2304] replicated on all devices
+            DP mode:  [n_crops_per_dev, 1, 729, 2304] sharded across devices
         """
         self._upload_pos_emb(patch_num)
 
-        # pixel_values arrives as [n_crops, 1, 729, 588] (pre-shaped in run_vision_backbone).
-        # TP ViT: all crops replicated on all devices; weights sharded for head-level TP.
-        n_crops = pixel_values.shape[0]
+        n_crops = pixel_values.shape[0]  # logical total crops
         n_patches = pixel_values.shape[2]
+        # Per-device crop count: 1 in DP mode (sharded input), n_crops in TP mode
+        n_crops_dev = n_crops_per_device if n_crops_per_device is not None else n_crops
         x = ttnn.to_layout(pixel_values, ttnn.TILE_LAYOUT)
 
-        # Patch embedding: [n_crops, 1, 729, 1152]
+        # Patch embedding: [n_crops_dev, 1, 729, 1152] per device
         x = ttnn.linear(
             x,
             self.patch_emb_weight,
@@ -136,33 +140,33 @@ class TtMolmo2ViTEncoder(LightweightModule):
             compute_kernel_config=self.vit_cfg.compute_kernel_config_hifi2_fp16,
         )
 
-        # Add positional embedding: tile for n_crops → [n_crops, 1, 729, 1152]
-        if n_crops == 1:
+        # Add positional embedding — tile only to per-device crop count
+        if n_crops_dev == 1:
             x = ttnn.add(x, self._pos_emb_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
-            pos_tiles = [self._pos_emb_ttnn] * n_crops
-            pos_tiled = ttnn.concat(pos_tiles, dim=0)  # [n_crops, 1, 729, 1152]
+            pos_tiles = [self._pos_emb_ttnn] * n_crops_dev
+            pos_tiled = ttnn.concat(pos_tiles, dim=0)
             x = ttnn.add(x, pos_tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Run 25 ViT blocks. Input: [n_crops, 1, 729, 1152].
-        # Each block does per-crop SDPA (fuse_batch=False keeps crops independent).
-        # TP: each device computes 2 of 16 heads; ttnn.all_reduce combines after wo/MLP.
+        # Run 25 ViT blocks — DP: each device processes its own crops independently, no CCL
         captured = {}
         for i, block in enumerate(self.blocks):
             x = block.forward(x)
             if i in self.capture_layers:
                 captured[i] = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                # x is NOT deallocated by the block — we hold it for the next iteration
 
-        # Concatenate captured features along last dim → [n_crops, 1, 729, 2304]
+        # Concatenate captured features along last dim
         feats = [ttnn.to_layout(captured[layer], ttnn.ROW_MAJOR_LAYOUT) for layer in self.capture_layers]
-        image_features = ttnn.concat(feats, dim=-1)
+        image_features = ttnn.concat(feats, dim=-1)  # [n_crops_dev, 1, 729, 2304] per device
         for f in feats:
             ttnn.deallocate(f)
         ttnn.deallocate(x)
 
-        # Reshape to [1, n_crops, 729, 2304] for consistent downstream format
-        image_features = ttnn.to_layout(image_features, ttnn.ROW_MAJOR_LAYOUT)
-        image_features = ttnn.reshape(image_features, [1, n_crops, n_patches, 2304])
-        image_features = ttnn.to_layout(image_features, ttnn.TILE_LAYOUT)
-        return image_features  # [1, n_crops, 729, 2304] replicated on all T3K devices
+        if n_crops_per_device is None:
+            # TP mode: reshape to [1, n_crops, 729, 2304] (original format)
+            image_features = ttnn.to_layout(image_features, ttnn.ROW_MAJOR_LAYOUT)
+            image_features = ttnn.reshape(image_features, [1, n_crops, n_patches, 2304])
+            image_features = ttnn.to_layout(image_features, ttnn.TILE_LAYOUT)
+        # DP mode: return as-is ([n_crops_dev, 1, 729, 2304] sharded); caller collects
+
+        return image_features
