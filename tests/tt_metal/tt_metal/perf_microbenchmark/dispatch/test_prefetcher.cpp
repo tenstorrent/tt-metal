@@ -19,10 +19,14 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 
+#include <emmintrin.h>
+#include <umd/device/pcie/tlb_window.hpp>
+
 #include <chrono>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 /*
@@ -425,6 +429,14 @@ protected:
 
     // Exec Buf Configuration
     bool use_exec_buf_{};
+
+    void init_params(const PagedReadParams& p) {
+        page_size_ = p.page_size;
+        num_pages_ = p.num_pages;
+        num_iterations_ = p.num_iterations;
+        dram_data_size_words_ = p.dram_data_size_words;
+        use_exec_buf_ = p.use_exec_buf;
+    }
 
     void SetUp() override {
         BaseTestFixture::SetUp();
@@ -3054,6 +3066,877 @@ INSTANTIATE_TEST_SUITE_P(
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
                "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+// Slow Dispatch Prefetcher Tests
+// Validates cq_prefetch.cpp (IS_D_VARIANT=1) in isolation without FD infrastructure.
+// Two modes via PagedReadParams::use_exec_buf:
+//   false - commands written directly to prefetch_d cmddat_q L1
+//   true  - commands written banked to DRAM; a single CQ_PREFETCH_CMD_EXEC_BUF pointer in cmddat_q
+//
+// The upstream semaphore self-loop (MY_UPSTREAM_CB_SEM_ID == UPSTREAM_CB_SEM_ID on the prefetch_d
+// core, initialized to cmd_cb_pages) pre-signals all pages so the kernel sees them immediately.
+template <typename FDFixture>
+class SDPrefetchTestBase : public FDFixture {
+public:
+    void SetUp() override {
+        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
+        }
+        this->device_ = tt_metal::CreateDevice(0);
+
+        Common::DispatchPayloadGenerator::Config pgcfg;
+        pgcfg.use_coherent_data = this->cfg_.use_coherent_data;
+        pgcfg.perf_test = this->cfg_.perf_test;
+        pgcfg.min_xfer_size_bytes = this->cfg_.min_xfer_size_bytes;
+        pgcfg.max_xfer_size_bytes = this->cfg_.max_xfer_size_bytes;
+        std::random_device rd;
+        pgcfg.seed = rd();
+        this->payload_generator_ = std::make_unique<Common::DispatchPayloadGenerator>(pgcfg);
+        log_info(tt::LogTest, "Random seed set to {}", pgcfg.seed);
+
+        this->dispatch_buffer_page_size_ = this->cfg_.dispatch_buffer_page_size;
+        this->send_to_all_ = this->cfg_.send_to_all;
+        this->host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
+        // Cap inline command size to avoid cmddat_q L1 overflow on the prefetch-d core.
+        this->max_fetch_bytes_ = Common::SD_PREFETCH_SCRATCH_DB_SIZE;
+
+        this->dram_base_ = this->device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
+        this->num_banks_ = this->device_->allocator_impl()->get_num_banks(BufferType::DRAM);
+        this->l1_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::L1);
+        this->packed_write_max_unicast_sub_cmds_ =
+            this->device_->compute_with_storage_grid_size().x * this->device_->compute_with_storage_grid_size().y;
+
+        this->init_params(this->GetParam());
+    }
+
+    void TearDown() override {
+        if (this->device_) {
+            tt_metal::CloseDevice(this->device_);
+            this->device_ = nullptr;
+        }
+    }
+
+    // Launches cq_prefetch.cpp (combined IS_H_VARIANT+IS_D_VARIANT) + cq_dispatch.cpp under
+    // slow dispatch by writing commands to the PCIe hugepage and notifying the prefetcher via
+    // the FetchQ ring - the same mechanism used by the FD runtime.
+    //
+    // All hugepage writes and FetchQ entries are committed before LaunchProgram so the
+    // kernel finds all data ready when it starts.  num_cores_to_log / wait_for_* match the
+    // FD virtual signature but are unused (LaunchProgram is synchronous).
+    void execute_generated_commands(
+        const std::vector<HostMemDeviceCommand>& commands_per_iteration,
+        Common::DeviceData& device_data,
+        size_t /*num_cores_to_log*/,
+        uint32_t num_iterations,
+        bool /*wait_for_completion*/ = true,
+        bool /*wait_for_host_writes*/ = false) override {
+        using entry_t = DispatchSettings::prefetch_q_entry_type;  // uint16_t
+
+        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const uint32_t dispatch_cb_base = memmap.dispatch_buffer_base();
+        const uint32_t dispatch_buffer_pages =
+            Common::SD_DISPATCH_BUFFER_SIZE_BYTES / Common::SD_DISPATCH_BUFFER_PAGE_SIZE;
+
+        // L1 layout on the prefetch_hd core
+        // Place FetchQ ring + rd_ptr immediately after the first allocatable L1 page.
+        // cmddat_q and scratch_db follow the FetchQ.
+        const uint32_t l1_unrsv = this->device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+        const uint32_t page_size = Common::SD_PREFETCH_CMDDAT_PAGE_SIZE;
+        const uint32_t l1_unrsv_aligned = tt::align(l1_unrsv, page_size);
+
+        // prefetch_q_rd_ptr_addr (4 B) and pcie_rd_ptr_addr (next 4 B) live at l1_unrsv_aligned.
+        // The FetchQ ring starts one full page later so it is page-aligned.
+        const uint32_t prefetch_q_rd_ptr_addr = l1_unrsv_aligned;
+        const uint32_t prefetch_q_base = l1_unrsv_aligned + page_size;
+        const uint32_t prefetch_q_size = Common::SD_PREFETCH_Q_ENTRIES * sizeof(entry_t);
+
+        // cmddat_q: after FetchQ, aligned to host (NOC) alignment.
+        const uint32_t noc_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
+        const uint32_t cmddat_q_base = prefetch_q_base + tt::align(prefetch_q_size, noc_align);
+        // Use the same cmddat_q size as the FD runtime (256KB on worker). read_from_pcie issues one DMA per
+        // FetchQ entry, so cmddat_q must be >= max single command size (prefetch_max_cmd_size = 128KB).
+        const uint32_t cmddat_q_bytes = memmap.cmddat_q_size();
+        const uint32_t cmddat_q_pages = tt::align(cmddat_q_bytes / page_size, Common::SD_PREFETCH_CMDDAT_BLOCKS);
+        const uint32_t scratch_db_base = cmddat_q_base + cmddat_q_pages * page_size;
+
+        const auto& soc_desc = tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->device_->id());
+        TT_FATAL(
+            scratch_db_base + Common::SD_PREFETCH_SCRATCH_DB_SIZE <= soc_desc.worker_l1_size,
+            "SD prefetch hd: prefetch_q + cmddat_q + scratch_db exceeds worker L1");
+
+        // Hugepage addressing
+        // Use the same hugepage region that the FD runtime uses for the issue queue
+        // (safe since SD mode never runs the FD runtime concurrently).
+        const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+
+        const ChipId mmio_id =
+            tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+        const uint16_t channel =
+            tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
+        char* hugepage_bar_base =
+            static_cast<char*>(tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_id, channel));
+        hugepage_bar_base += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+        void* const host_hugepage_base = hugepage_bar_base + dev_hugepage_base;
+
+        // Physical cores
+        const CoreCoord phys_prefetch = this->device_->worker_core_from_logical_core(Common::sd_prefetch_core);
+        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(Common::sd_dispatch_core);
+        const tt_cxy_pair prefetch_cxy(this->device_->id(), phys_prefetch);
+
+        auto& cluster = tt_metal::MetalContext::instance().get_cluster();
+
+        // Init FetchQ ring and rd_ptrs in prefetch_hd L1
+        // Clear the entire FetchQ ring to zero (kernel spins on non-zero entries).
+        {
+            std::vector<uint32_t> q_zeros(prefetch_q_size / sizeof(uint32_t), 0u);
+            cluster.write_core(q_zeros.data(), q_zeros.size() * sizeof(uint32_t), prefetch_cxy, prefetch_q_base);
+        }
+        // prefetch_q_rd_ptr_addr: kernel writes its consumed position here so the host can poll.
+        // Initialise to the ring base so the host-side fence logic sees the ring as empty.
+        {
+            const uint32_t init_rd_ptr = prefetch_q_base;
+            cluster.write_core(&init_rd_ptr, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr);
+        }
+        // pcie_rd_ptr_addr (prefetch_q_rd_ptr_addr + 4): initialise to 0.
+        {
+            const uint32_t init_pcie_rd = 0u;
+            cluster.write_core(
+                &init_pcie_rd, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr + sizeof(uint32_t));
+        }
+
+        // TLB window for writing FetchQ entries
+        tt::umd::TlbWindow* prefetch_q_tlb = cluster.get_static_tlb_window(prefetch_cxy);
+
+        // Host-side FetchQ write state.
+        uint32_t prefetch_q_dev_ptr = prefetch_q_base;
+        const uint32_t prefetch_q_dev_fence = prefetch_q_base + prefetch_q_size;
+
+        // Hugepage write state.
+        uint32_t* host_mem_ptr = static_cast<uint32_t*>(host_hugepage_base);
+        const uint64_t hugepage_issue_end =
+            static_cast<uint64_t>(dev_hugepage_base) + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
+
+        // nt_memcpy: non-temporal store of n bytes (n must be a multiple of 64).
+        auto nt_memcpy_local = [](uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
+            TT_FATAL(n % 64 == 0, "nt_memcpy: size {} not a multiple of 64", n);
+            for (size_t i = 0; i < n; i += 64) {
+                for (size_t j = 0; j < 64; j += sizeof(__m128i)) {
+                    __m128i blk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + j));
+                    _mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + j), blk);
+                }
+            }
+            tt_driver_atomics::sfence();
+        };
+
+        // write_prefetcher_cmd: nt_memcpy cmd to hugepage + write one FetchQ entry via TLB.
+        // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
+        // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
+        const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
+        auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, entry_t cmd_size_entry) {
+            TT_FATAL(
+                cmd_size_bytes % host_align == 0,
+                "SD prefetch: cmd_size_bytes {} not aligned to host alignment {}",
+                cmd_size_bytes,
+                host_align);
+
+            // Poll for FetchQ ring space (should not spin in normal SD operation).
+            while (prefetch_q_dev_ptr == prefetch_q_dev_fence) {
+                uint32_t rd_ptr;
+                cluster.read_core(&rd_ptr, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr);
+                if (rd_ptr != prefetch_q_dev_ptr) {
+                    break;
+                }
+            }
+
+            // Hugepage wrap: if the command would exceed the issue buffer, reset to base.
+            const uint64_t host_offset =
+                static_cast<uint64_t>(reinterpret_cast<char*>(host_mem_ptr) - static_cast<char*>(host_hugepage_base));
+            if (dev_hugepage_base + host_offset + cmd_size_bytes > hugepage_issue_end) {
+                host_mem_ptr = static_cast<uint32_t*>(host_hugepage_base);
+            }
+
+            nt_memcpy_local(
+                reinterpret_cast<uint8_t*>(host_mem_ptr), reinterpret_cast<const uint8_t*>(src), cmd_size_bytes);
+            host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
+
+            prefetch_q_tlb->write16(prefetch_q_dev_ptr, cmd_size_entry);
+            prefetch_q_dev_ptr += sizeof(entry_t);
+            if (prefetch_q_dev_ptr >= prefetch_q_dev_fence) {
+                prefetch_q_dev_ptr = prefetch_q_base;
+            }
+        };
+
+        if (this->use_exec_buf_) {
+            // exec_buf=true
+            // 1. Build DRAM exec_buf payload: commands x iterations + dispatch_wait + exec_buf_end.
+            std::vector<uint8_t> exec_buf_data;
+            for (uint32_t i = 0; i < num_iterations; ++i) {
+                for (const auto& cmd : commands_per_iteration) {
+                    const auto* p = reinterpret_cast<const uint8_t*>(cmd.data());
+                    exec_buf_data.insert(exec_buf_data.end(), p, p + cmd.size_bytes());
+                }
+            }
+            {
+                DeviceCommandCalculator wc;
+                wc.add_dispatch_wait();
+                HostMemDeviceCommand wait_cmd(wc.write_offset_bytes());
+                wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+                const auto* p = reinterpret_cast<const uint8_t*>(wait_cmd.data());
+                exec_buf_data.insert(exec_buf_data.end(), p, p + wait_cmd.size_bytes());
+            }
+            {
+                DeviceCommandCalculator ec;
+                ec.add_prefetch_exec_buf_end();
+                HostMemDeviceCommand end_cmd(ec.write_offset_bytes());
+                end_cmd.add_prefetch_exec_buf_end();
+                const auto* p = reinterpret_cast<const uint8_t*>(end_cmd.data());
+                exec_buf_data.insert(exec_buf_data.end(), p, p + end_cmd.size_bytes());
+            }
+            const uint32_t eb_page = 1u << FDFixture::DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE;
+            const size_t padded = tt::align(exec_buf_data.size(), eb_page);
+            exec_buf_data.resize(padded, 0u);
+            const uint32_t exec_buf_pages = static_cast<uint32_t>(padded) / eb_page;
+            log_info(tt::LogTest, "SD prefetch hd exec_buf: {} bytes ({} DRAM pages)", padded, exec_buf_pages);
+
+            // 2. Write exec_buf payload to DRAM.
+            for (uint32_t page_idx = 0; page_idx < exec_buf_pages; ++page_idx) {
+                const uint32_t bank_id = page_idx % this->num_banks_;
+                const uint32_t bank_offset = (page_idx / this->num_banks_) * eb_page;
+                const uint32_t addr = FDFixture::DRAM_EXEC_BUF_DEFAULT_BASE_ADDR + bank_offset;
+                std::vector<uint8_t> pg(
+                    exec_buf_data.begin() + page_idx * eb_page, exec_buf_data.begin() + page_idx * eb_page + eb_page);
+                detail::WriteToDeviceDRAMChannel(this->device_, bank_id, addr, pg);
+            }
+            tt_metal::MetalContext::instance().get_cluster().dram_barrier(this->device_->id());
+
+            // 3. Write CQ_PREFETCH_CMD_EXEC_BUF to hugepage with MSB stall flag.
+            {
+                DeviceCommandCalculator ec;
+                ec.add_prefetch_exec_buf();
+                HostMemDeviceCommand exec_cmd(ec.write_offset_bytes());
+                exec_cmd.add_prefetch_exec_buf(
+                    FDFixture::DRAM_EXEC_BUF_DEFAULT_BASE_ADDR,
+                    FDFixture::DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE,
+                    exec_buf_pages);
+                const uint32_t cmd_size_bytes = tt::align(exec_cmd.size_bytes(), host_align);
+                entry_t cmd_size_entry =
+                    static_cast<entry_t>(cmd_size_bytes >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                // MSB stall flag: prefetcher stalls after fetching this command (exec_buf replays from DRAM).
+                cmd_size_entry |= static_cast<entry_t>(1u << (sizeof(entry_t) * 8u - 1u));
+                std::vector<uint8_t> exec_cmd_padded(cmd_size_bytes, 0u);
+                std::memcpy(exec_cmd_padded.data(), exec_cmd.data(), exec_cmd.size_bytes());
+                write_prefetcher_cmd(
+                    reinterpret_cast<const uint32_t*>(exec_cmd_padded.data()), cmd_size_bytes, cmd_size_entry);
+            }
+            // 4. Terminate: relay_inline(dispatch_wait), relay_inline(dispatch_terminate), prefetch_terminate.
+            // Each add_dispatch_*/add_prefetch_* already wraps the cmd in relay_inline internally.
+            {
+                DeviceCommandCalculator wc;
+                wc.add_dispatch_wait();
+                HostMemDeviceCommand wait_cmd(wc.write_offset_bytes());
+                wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+                const uint32_t wait_size = tt::align(wait_cmd.size_bytes(), host_align);
+                std::vector<uint8_t> wait_padded(wait_size, 0u);
+                std::memcpy(wait_padded.data(), wait_cmd.data(), wait_cmd.size_bytes());
+                entry_t wait_entry = static_cast<entry_t>(wait_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(wait_padded.data()), wait_size, wait_entry);
+            }
+            {
+                DeviceCommandCalculator dc;
+                dc.add_dispatch_terminate();
+                HostMemDeviceCommand disp_term(dc.write_offset_bytes());
+                disp_term.add_dispatch_terminate();
+                const uint32_t dterm_size = tt::align(disp_term.size_bytes(), host_align);
+                std::vector<uint8_t> dterm_padded(dterm_size, 0u);
+                std::memcpy(dterm_padded.data(), disp_term.data(), disp_term.size_bytes());
+                entry_t dterm_entry = static_cast<entry_t>(dterm_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(dterm_padded.data()), dterm_size, dterm_entry);
+            }
+            {
+                DeviceCommandCalculator pc;
+                pc.add_prefetch_terminate();
+                HostMemDeviceCommand pref_term(pc.write_offset_bytes());
+                pref_term.add_prefetch_terminate();
+                const uint32_t pterm_size = tt::align(pref_term.size_bytes(), host_align);
+                std::vector<uint8_t> pterm_padded(pterm_size, 0u);
+                std::memcpy(pterm_padded.data(), pref_term.data(), pref_term.size_bytes());
+                entry_t pterm_entry = static_cast<entry_t>(pterm_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(pterm_padded.data()), pterm_size, pterm_entry);
+            }
+        } else {
+            // exec_buf=false
+            // Write each command as a separate FetchQ entry.
+            for (uint32_t i = 0; i < num_iterations; ++i) {
+                for (const auto& cmd : commands_per_iteration) {
+                    const uint32_t cmd_size = tt::align(cmd.size_bytes(), host_align);
+                    entry_t cmd_entry = static_cast<entry_t>(cmd_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                    TT_FATAL(
+                        (cmd_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) == (uint32_t)cmd_entry,
+                        "SD prefetch: command size {} B overflows 15-bit FetchQ entry (max {} B)",
+                        cmd_size,
+                        (uint32_t)0x7FFF << DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                    std::vector<uint8_t> cmd_padded(cmd_size, 0u);
+                    std::memcpy(cmd_padded.data(), cmd.data(), cmd.size_bytes());
+                    write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(cmd_padded.data()), cmd_size, cmd_entry);
+                }
+            }
+            // Terminate: relay_inline(dispatch_wait), relay_inline(dispatch_terminate), prefetch_terminate.
+            // Each add_dispatch_*/add_prefetch_* already wraps the cmd in relay_inline internally.
+            {
+                DeviceCommandCalculator wc;
+                wc.add_dispatch_wait();
+                HostMemDeviceCommand wait_cmd(wc.write_offset_bytes());
+                wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+                const uint32_t wait_size = tt::align(wait_cmd.size_bytes(), host_align);
+                std::vector<uint8_t> wait_padded(wait_size, 0u);
+                std::memcpy(wait_padded.data(), wait_cmd.data(), wait_cmd.size_bytes());
+                entry_t wait_entry = static_cast<entry_t>(wait_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(wait_padded.data()), wait_size, wait_entry);
+            }
+            {
+                DeviceCommandCalculator dc;
+                dc.add_dispatch_terminate();
+                HostMemDeviceCommand disp_term(dc.write_offset_bytes());
+                disp_term.add_dispatch_terminate();
+                const uint32_t dterm_size = tt::align(disp_term.size_bytes(), host_align);
+                std::vector<uint8_t> dterm_padded(dterm_size, 0u);
+                std::memcpy(dterm_padded.data(), disp_term.data(), disp_term.size_bytes());
+                entry_t dterm_entry = static_cast<entry_t>(dterm_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(dterm_padded.data()), dterm_size, dterm_entry);
+            }
+            {
+                DeviceCommandCalculator pc;
+                pc.add_prefetch_terminate();
+                HostMemDeviceCommand pref_term(pc.write_offset_bytes());
+                pref_term.add_prefetch_terminate();
+                const uint32_t pterm_size = tt::align(pref_term.size_bytes(), host_align);
+                std::vector<uint8_t> pterm_padded(pterm_size, 0u);
+                std::memcpy(pterm_padded.data(), pref_term.data(), pref_term.size_bytes());
+                entry_t pterm_entry = static_cast<entry_t>(pterm_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(pterm_padded.data()), pterm_size, pterm_entry);
+            }
+        }
+
+        // Semaphores
+        tt_metal::Program program = tt_metal::CreateProgram();
+
+        // Slot 0: prefetch_sync_sem - dispatch signals prefetch when a stall round-trip is done.
+        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, 0u);
+        const uint32_t di_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
+        TT_FATAL(pf_sync_sem == di_sync_sem, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync_sem, di_sync_sem);
+
+        // Slot 1: downstream_cb_sem on prefetch (init=dispatch_buffer_pages); dispatch_cb_sem on dispatch (init=0).
+        const uint32_t pf_downstream_cb_sem =
+            tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, dispatch_buffer_pages);
+        const uint32_t di_dispatch_cb_sem = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0u);
+        TT_FATAL(
+            pf_downstream_cb_sem == di_dispatch_cb_sem,
+            "dispatch_cb sem slot mismatch ({} vs {})",
+            pf_downstream_cb_sem,
+            di_dispatch_cb_sem);
+
+        // Kernel defines and creation
+        auto prefetch_defines = Common::make_sd_prefetch_defines(
+            this->device_,
+            dev_hugepage_base,
+            Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE,
+            prefetch_q_base,
+            prefetch_q_size,
+            prefetch_q_rd_ptr_addr,
+            cmddat_q_base,
+            cmddat_q_pages,
+            scratch_db_base,
+            dispatch_cb_base,
+            dispatch_buffer_pages,
+            pf_downstream_cb_sem,
+            pf_sync_sem,
+            phys_prefetch,
+            phys_disp);
+        auto prefetch_kernel = tt_metal::CreateKernel(
+            program,
+            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+            {Common::sd_prefetch_core},
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_0,
+                .defines = prefetch_defines});
+        tt_metal::SetRuntimeArgs(program, prefetch_kernel, Common::sd_prefetch_core, {0u, 0u, 0u});
+
+        const uint32_t dev_completion_base = dev_hugepage_base + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
+        auto dispatch_defines = Common::make_sd_dispatch_defines(
+            this->device_,
+            dispatch_buffer_pages,
+            di_dispatch_cb_sem,
+            di_sync_sem,
+            phys_prefetch,
+            phys_disp,
+            memmap,
+            dev_completion_base,
+            Common::SD_COMPLETION_QUEUE_SIZE);
+        auto dispatch_kernel = tt_metal::CreateKernel(
+            program,
+            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            {Common::sd_dispatch_core},
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_0,
+                .defines = dispatch_defines});
+        tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::sd_dispatch_core, {0u, 0u, 0u});
+
+        device_data.overflow_check(this->device_);
+        tt_metal::detail::LaunchProgram(this->device_, program);
+        // Ensure host CPU sees any PCIe-written completion queue data before validating.
+        tt_driver_atomics::mfence();
+        EXPECT_TRUE(device_data.validate(this->device_)) << "SD prefetch test failed validation";
+    }
+};
+
+class SDPrefetchDRAMToL1TestFixture : public SDPrefetchTestBase<BasePrefetcherTestFixture> {};
+class SDPrefetchPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherPackedReadTestFixture> {};
+class SDPrefetchRandomTestFixture : public SDPrefetchTestBase<RandomTestFixture> {};
+
+TEST_P(SDPrefetchDRAMToL1TestFixture, DRAMToL1PagedRead) {
+    log_info(tt::LogTest, "SDPrefetchDRAMToL1TestFixture - DRAMToL1PagedRead - Test Start");
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+
+    const CoreRange worker_range(default_worker_start, default_worker_start);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+
+    auto commands_per_iteration =
+        generate_paged_read_commands(worker_range, get_page_size(), get_num_pages(), device_data);
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
+}
+
+TEST_P(SDPrefetchDRAMToL1TestFixture, TestTerminate) {
+    log_info(tt::LogTest, "SDPrefetchDRAMToL1TestFixture - TestTerminate - Test Start");
+    constexpr uint32_t xfer_size_bytes = 16;
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+
+    const CoreCoord first_worker = default_worker_start;
+    const CoreRange worker_range = {first_worker, {first_worker.x + 1, first_worker.y + 1}};
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+
+    const CoreCoord first_virt_worker = device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+    const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+    const uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+
+    std::vector<uint32_t> payload = payload_generator_->generate_payload(xfer_size_bytes);
+    std::vector<HostMemDeviceCommand> work_cmds;
+    work_cmds.push_back(Common::CommandBuilder::build_linear_write_command<true, true>(
+        payload, worker_range, false, noc_xy, l1_addr, xfer_size_bytes));
+
+    execute_generated_commands(work_cmds, device_data, worker_range.size(), num_iterations);
+}
+
+TEST_P(SDPrefetchPackedReadTestFixture, PackedReadTest) {
+    log_info(tt::LogTest, "SDPrefetchPackedReadTestFixture - PackedReadTest - Test Start");
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+
+    const CoreRange worker_range(default_worker_start, default_worker_start);
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+
+    auto commands_per_iteration = generate_packed_read_commands(default_worker_start, dram_alignment, device_data);
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
+}
+
+TEST_P(SDPrefetchPackedReadTestFixture, SmokeTest) {
+    log_info(tt::LogTest, "SDPrefetchPackedReadTestFixture - SmokeTest - Test Start");
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+
+    const CoreCoord first_worker = default_worker_start;
+    const CoreCoord last_worker = first_worker;
+    const CoreRange worker_range = {first_worker, last_worker};
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+
+    std::vector<HostMemDeviceCommand> commands_per_iteration;
+    HelperInfo info{
+        dram_base_, num_banks_, l1_alignment_, packed_write_max_unicast_sub_cmds_, dispatch_buffer_page_size_};
+    SmokeTestHelper helper(device_, device_data, commands_per_iteration, info);
+
+    helper.add_unicast_write(worker_range, 32);
+    helper.add_unicast_write(worker_range, 1026);
+    helper.add_unicast_write(worker_range, 8448);
+    helper.add_unicast_write(worker_range, dispatch_buffer_page_size_);
+    helper.add_unicast_write(worker_range, dispatch_buffer_page_size_ - sizeof(CQDispatchCmdLarge));
+    helper.add_unicast_write(worker_range, 2 * dispatch_buffer_page_size_);
+    helper.add_unicast_write(worker_range, (2 * dispatch_buffer_page_size_) - sizeof(CQDispatchCmdLarge));
+
+    helper.add_merged_unicast_writes(worker_range, {112, 608, 64, 96});
+
+    constexpr uint32_t log_packed_read_page_size = 10;
+    const uint32_t dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+    const uint32_t length_to_read = tt::align(2080, dram_alignment);
+    const uint32_t length_to_read_sdb = tt::align(DEFAULT_SCRATCH_DB_SIZE / 8, dram_alignment);
+    auto build_packed = [this](
+                            const std::vector<uint32_t>& lengths,
+                            Common::DeviceData& device_data,
+                            uint32_t log_page_sz,
+                            uint32_t n_sub_cmds) {
+        return PrefetcherPackedReadTestFixture::build_sub_cmds(lengths, device_data, log_page_sz, n_sub_cmds);
+    };
+    helper.add_packed_dram_read(worker_range, log_packed_read_page_size, {256, 512}, build_packed);
+    helper.add_packed_dram_read(worker_range, log_packed_read_page_size, {1024, 2048}, build_packed);
+    helper.add_packed_dram_read(worker_range, log_packed_read_page_size, {length_to_read}, build_packed);
+    helper.add_packed_dram_read(
+        worker_range, log_packed_read_page_size + 1, {length_to_read, length_to_read}, build_packed);
+
+    std::vector<uint32_t> lengths{
+        length_to_read_sdb,
+        length_to_read_sdb,
+        length_to_read_sdb,
+        tt::align(DEFAULT_SCRATCH_DB_SIZE / 4, dram_alignment),
+        tt::align(DEFAULT_SCRATCH_DB_SIZE / 2, dram_alignment)};
+    helper.add_packed_dram_read(worker_range, log_packed_read_page_size + 1, lengths, build_packed);
+
+    lengths.clear();
+    lengths.push_back(tt::align((DEFAULT_SCRATCH_DB_SIZE / 4) + (2 * 1024) + 32, dram_alignment));
+    lengths.push_back(tt::align((DEFAULT_SCRATCH_DB_SIZE / 4) + (3 * 1024) + 32, dram_alignment));
+    lengths.push_back(tt::align(DEFAULT_SCRATCH_DB_SIZE / 2, dram_alignment));
+    lengths.push_back(tt::align((DEFAULT_SCRATCH_DB_SIZE / 8) + (5 * 1024) + 96, dram_alignment));
+    helper.add_packed_dram_read(worker_range, log_packed_read_page_size, lengths, build_packed);
+
+    helper.add_paged_dram_read(worker_range, 0, 0, dram_alignment, num_banks_, 0);
+    helper.add_paged_dram_read(worker_range, 4, dram_alignment, dram_alignment * 2, num_banks_, 0);
+    helper.add_paged_dram_read(worker_range, 4, dram_alignment, dram_alignment * 2, num_banks_, 0);
+    helper.add_paged_dram_read(worker_range, 0, 0, 128, 128, 0);
+    helper.add_paged_dram_read(worker_range, 4, dram_alignment, 2048, num_banks_ + 4, 0);
+    helper.add_paged_dram_read(worker_range, 5, dram_alignment, 2048, (num_banks_ * 3) + 1, 0);
+    helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 0);
+    helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 0);
+    helper.add_paged_dram_read(worker_range, 0, 0, 128, 128, 32);
+    helper.add_paged_dram_read(worker_range, 4, dram_alignment, 2048, num_banks_ * 2, 1536);
+    helper.add_paged_dram_read(worker_range, 5, dram_alignment, 2048, (num_banks_ * 2) + 1, 256);
+    helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 640);
+    helper.add_paged_dram_read(worker_range, 0, 0, DEFAULT_SCRATCH_DB_SIZE / 2 + dram_alignment, 2, 128);
+    helper.add_paged_dram_read(worker_range, 0, 0, DEFAULT_SCRATCH_DB_SIZE, 2, 0);
+    uint32_t page_size = 256 + dram_alignment;
+    uint32_t length = (DEFAULT_SCRATCH_DB_SIZE / 2 / page_size * page_size) + page_size;
+    helper.add_paged_dram_read(worker_range, 3, 128, page_size, length / page_size, 160);
+
+    const CoreRange worker_range_2x2 = {default_worker_start, {default_worker_start.x + 1, default_worker_start.y + 1}};
+    std::vector<CoreCoord> worker_cores{default_worker_start};
+    helper.add_packed_write(worker_cores, 4);
+    worker_cores.clear();
+    for (uint32_t y = worker_range_2x2.start_coord.y; y <= worker_range_2x2.end_coord.y; ++y) {
+        for (uint32_t x = worker_range_2x2.start_coord.x; x <= worker_range_2x2.end_coord.x; ++x) {
+            worker_cores.push_back({x, y});
+        }
+    }
+    helper.add_packed_write(worker_cores, 12);
+    helper.add_packed_write(worker_cores, 12, true);
+    worker_cores.clear();
+    worker_cores.push_back(default_worker_start);
+    worker_cores.push_back({default_worker_start.x + 1, default_worker_start.y + 1});
+    helper.add_packed_write(worker_cores, 156);
+
+    helper.add_linear_read(worker_range, 32);
+    helper.add_linear_read(worker_range, 65 * 1024);
+    helper.add_linear_read(worker_range, dispatch_buffer_page_size_ - sizeof(CQDispatchCmdLarge));
+    helper.add_linear_read(worker_range, (2 * dispatch_buffer_page_size_) - sizeof(CQDispatchCmdLarge));
+    helper.add_linear_read(worker_range, (2 * dispatch_buffer_page_size_));
+    helper.add_unicast_write(worker_range, 1024);
+    HostMemDeviceCommand stall_cmd = CommandBuilder::build_dispatch_prefetch_stall();
+    commands_per_iteration.push_back(std::move(stall_cmd));
+    uint32_t length_bytes = 32;
+    uint32_t offset_words = device_data.size_at(worker_range.start_coord, 0) - (length_bytes / sizeof(uint32_t));
+    helper.add_linear_read(worker_range, length_bytes, offset_words * sizeof(uint32_t));
+
+    std::array<uint32_t, CQ_DISPATCH_MAX_WRITE_OFFSETS> write_offset1 = {48, 0, 0, 0};
+    std::array<uint32_t, CQ_DISPATCH_MAX_WRITE_OFFSETS> write_offset2 = {};
+    commands_per_iteration.push_back(CommandBuilder::build_dispatch_write_offset(write_offset1));
+    commands_per_iteration.push_back(CommandBuilder::build_dispatch_write_offset(write_offset2));
+
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
+}
+
+TEST_P(SDPrefetchRandomTestFixture, RandomTest) {
+    log_info(tt::LogTest, "SDPrefetchRandomTestFixture - RandomTest - Test Start");
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+
+    const CoreCoord first_worker = default_worker_start;
+    const CoreRange worker_range = {first_worker, {first_worker.x + 1, first_worker.y + 1}};
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+
+    std::vector<HostMemDeviceCommand> commands_per_iteration;
+    uint32_t remaining_bytes = DEVICE_DATA_SIZE;
+
+    while (remaining_bytes > 0) {
+        uint32_t cmd = payload_generator_->get_rand<uint32_t>(0, CQ_PREFETCH_CMD_TERMINATE - 1);
+        const uint32_t limit_x = (worker_range.end_coord.x - first_worker.x - 1);
+        const uint32_t limit_y = (worker_range.end_coord.y - first_worker.y - 1);
+        uint32_t x = payload_generator_->get_rand<uint32_t>(0, limit_x);
+        uint32_t y = payload_generator_->get_rand<uint32_t>(0, limit_y);
+        CoreCoord worker_core(first_worker.x + x, first_worker.y + y);
+        const CoreCoord worker_core_virt = device_->virtual_core_from_logical_core(worker_core, CoreType::WORKER);
+        const uint32_t noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, worker_core_virt);
+
+        switch (cmd) {
+            case CQ_PREFETCH_CMD_RELAY_LINEAR:
+            case CQ_PREFETCH_CMD_RELAY_PAGED: {
+                CoreRange single_worker_range = {worker_core, worker_core};
+                auto result =
+                    gen_random_dram_paged_cmd(device_data, worker_core, single_worker_range, noc_xy, remaining_bytes);
+                if (result.has_value()) {
+                    commands_per_iteration.push_back(std::move(*result));
+                }
+                break;
+            }
+            case CQ_PREFETCH_CMD_RELAY_INLINE: {
+                CoreRange multi_worker_range = {worker_core, {worker_core.x + 1, worker_core.y + 1}};
+                auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
+                if (result.has_value()) {
+                    commands_per_iteration.push_back(std::move(*result));
+                }
+                break;
+            }
+            default: break;
+        }
+    }
+
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchDRAMToL1TestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true},
+        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchPackedReadTestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchRandomTestFixture,
+    ::testing::Values(PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
+    });
+
+class SDPrefetchLinearPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherLinearPackedReadTestFixture> {};
+
+TEST_P(SDPrefetchLinearPackedReadTestFixture, LinearPackedReadTest) {
+    log_info(tt::LogTest, "SDPrefetchLinearPackedReadTestFixture - LinearPackedReadTest - Test Start");
+    const uint32_t num_iterations = 1;
+
+    const CoreCoord first_worker = default_worker_start;
+    const CoreRange worker_range = {first_worker, {first_worker.x + 1, first_worker.y + 1}};
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+
+    // Pre-populate L1 with sequential test data for the prefetcher to read
+    const uint32_t l1_data_size_words = DEVICE_DATA_SIZE / sizeof(uint32_t);
+    std::vector<uint32_t> l1_data(l1_data_size_words);
+    for (uint32_t i = 0; i < l1_data_size_words; i++) {
+        l1_data[i] = i;
+    }
+    const CoreCoord phys_worker_core = device_->worker_core_from_logical_core(first_worker);
+    MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, l1_data, l1_base);
+    MetalContext::instance().get_cluster().l1_barrier(device_->id());
+
+    // Initialize DRAM bank 0 with sentinel to detect unwritten regions
+    constexpr uint32_t dest_bank_id = 0;
+    constexpr uint32_t sentinel_pattern = 0x99999999;
+    const uint32_t dram_size_words = DEVICE_DATA_SIZE_LARGE / sizeof(uint32_t);
+    std::vector<uint32_t> sentinel_data(dram_size_words, sentinel_pattern);
+    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dest_bank_id, dram_base_, sentinel_data);
+    MetalContext::instance().get_cluster().dram_barrier(device_->id());
+
+    Common::DeviceData device_data(device_, worker_range, l1_base, dram_base_, nullptr, false, 0, cfg_);
+
+    auto commands_per_iteration = generate_linear_packed_read_commands(first_worker, l1_alignment, device_data);
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchLinearPackedReadTestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
+    });
+
+class SDPrefetchRingbufferReadTestFixture : public SDPrefetchTestBase<PrefetcherRingbufferReadTestFixture> {};
+
+TEST_P(SDPrefetchRingbufferReadTestFixture, RingbufferReadTest) {
+    log_info(tt::LogTest, "SDPrefetchRingbufferReadTestFixture - RingbufferReadTest - Test Start");
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+
+    const CoreCoord first_worker = default_worker_start;
+    const CoreRange worker_range = {first_worker, {first_worker.x + 1, first_worker.y + 1}};
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+
+    auto commands_per_iteration = generate_ringbuffer_relay_commands(first_worker, dram_alignment, device_data);
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchRingbufferReadTestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
+    });
+
+// SD end-to-end paged write+read: dispatcher writes to DRAM banks, prefetcher relays back to L1
+class SDPrefetchPagedReadWriteTestFixture : public SDPrefetchTestBase<BasePrefetcherTestFixture> {};
+
+TEST_P(SDPrefetchPagedReadWriteTestFixture, PagedReadWriteTest) {
+    log_info(tt::LogTest, "SDPrefetchPagedReadWriteTestFixture - PagedReadWriteTest - Test Start");
+    const uint32_t num_iterations = get_num_iterations();
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+    const uint32_t page_size_bytes = get_page_size();
+    const uint32_t num_pages = get_num_pages();
+
+    const CoreCoord first_worker = default_worker_start;
+    const CoreRange worker_range = {first_worker, first_worker};
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
+
+    auto commands_per_iteration =
+        generate_paged_end_to_end_commands(first_worker, page_size_bytes, num_pages, device_data);
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), num_iterations);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchPagedReadWriteTestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true},
+        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
+    });
+
+// SD paged DRAM write throughput: exercises the WRITE_PAGED dispatcher command path
+class SDPrefetchThroughputTestFixture : public SDPrefetchTestBase<PrefetcherThroughputTestFixture> {};
+
+TEST_P(SDPrefetchThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
+    log_info(tt::LogTest, "SDPrefetchThroughputTestFixture - HostToDRAMPagedWriteThroughput - Test Start");
+
+    const uint32_t dram_data_size_words = get_dram_data_size_words();
+    const uint32_t page_size_bytes = get_page_size();
+    const uint32_t requested_pages_per_cmd = get_num_pages();
+    TT_FATAL(page_size_bytes % sizeof(uint32_t) == 0U, "page_size_bytes must be a multiple of 4");
+
+    constexpr CoreCoord first_worker = default_worker_start;
+    constexpr CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
+    const CoreRange worker_range = {first_worker, last_worker};
+
+    const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
+    const uint32_t page_alignment_bytes = device_->allocator_impl()->get_alignment(BufferType::DRAM);
+
+    Common::DeviceData device_data(
+        device_, worker_range, l1_base, dram_base, nullptr, false, dram_data_size_words, cfg_);
+
+    // Find the maximum pages per command that fits within the configured max prefetch command size.
+    uint32_t pages_per_cmd = 1U;
+    for (uint32_t pages = 1U; pages <= requested_pages_per_cmd; ++pages) {
+        DeviceCommandCalculator calc;
+        calc.add_dispatch_write_paged<hugepage_write_>(page_size_bytes, pages);
+        if (calc.write_offset_bytes() > max_fetch_bytes_) {
+            break;
+        }
+        pages_per_cmd = pages;
+    }
+
+    constexpr uint32_t total_cmds = 32U;
+    const uint32_t page_size_words = page_size_bytes / sizeof(uint32_t);
+    uint32_t absolute_start_page = 0U;
+
+    std::vector<HostMemDeviceCommand> commands_per_iteration;
+    commands_per_iteration.reserve(total_cmds);
+
+    for (uint32_t cmd_idx = 0U; cmd_idx < total_cmds; ++cmd_idx) {
+        std::vector<uint32_t> chunk_payload;
+        chunk_payload.reserve(pages_per_cmd * page_size_words);
+
+        for (uint32_t page = 0U; page < pages_per_cmd; ++page) {
+            const uint32_t page_id = absolute_start_page + page;
+            const uint32_t bank_id = page_id % num_banks_;
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
+            const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
+            std::vector<uint32_t> page_payload =
+                payload_generator_->generate_payload_with_page_id(page_size_words, page_id);
+            Common::DeviceDataUpdater::update_paged_write(
+                page_payload, device_data, bank_core, bank_id, page_alignment_bytes);
+            chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());
+        }
+
+        const uint32_t bank_offset =
+            tt::align(page_size_bytes, page_alignment_bytes) * (absolute_start_page / num_banks_);
+        const uint32_t base_addr = device_data.get_base_result_addr(tt::CoreType::DRAM) + bank_offset;
+        const uint16_t start_page_cmd = absolute_start_page % num_banks_;
+
+        HostMemDeviceCommand cmd = Common::CommandBuilder::build_paged_write_command<hugepage_write_>(
+            chunk_payload, base_addr, page_size_bytes, pages_per_cmd, start_page_cmd, /*is_dram=*/true);
+        commands_per_iteration.push_back(std::move(cmd));
+
+        absolute_start_page += pages_per_cmd;
+    }
+
+    execute_generated_commands(commands_per_iteration, device_data, worker_range.size(), /*num_iterations=*/1U);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SlowDispatch,
+    SDPrefetchThroughputTestFixture,
+    ::testing::Values(
+        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true},
+        PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + (info.param.use_exec_buf ? "exec_buf" : "direct");
     });
 
 }  // namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests

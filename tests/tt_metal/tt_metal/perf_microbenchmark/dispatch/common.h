@@ -935,6 +935,17 @@ static_assert(
 // spoof_prefetch loop uses (cmd_cb_pages-1)/page_batch_size with no remainder handling
 static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 
+// SD (slow dispatch) prefetch constants - consumed by SDPrefetchTestBase.
+static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
+static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
+static constexpr uint32_t SD_PREFETCH_SCRATCH_DB_SIZE = 128 * 1024;
+static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = 8 * 1024 * 1024;
+static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = 4 * 1024 * 1024;
+static constexpr uint32_t SD_PREFETCH_Q_ENTRIES = 1024;
+inline constexpr CoreCoord sd_prefetch_core = {0, 0};    // combined prefetch_hd
+inline constexpr CoreCoord sd_prefetch_d_core = {3, 0};  // kept for spoof_prefetch (FD tests)
+
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
 class BaseTestFixture : public tt_metal::GenericMeshDeviceFixture {
@@ -1211,7 +1222,9 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     const CoreCoord& phys_spoof,
     const CoreCoord& phys_disp,
     const tt_metal::DispatchMemMap& memmap,
-    uint32_t dispatch_cb_base) {
+    uint32_t dispatch_cb_base,
+    uint32_t completion_queue_base = 0,
+    uint32_t completion_queue_size = 0) {
     const uint32_t num_compute_cores =
         device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
     const auto my_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_disp);
@@ -1232,8 +1245,8 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
         {"DISPATCH_D_SHUTDOWN_SEM_ID", "0"},  // no dispatch_s in SD; disables dispatch_s_enabled path
         {"COMMAND_QUEUE_BASE_ADDR", "0"},
-        {"COMPLETION_QUEUE_BASE_ADDR", "0"},
-        {"COMPLETION_QUEUE_SIZE", "0"},
+        {"COMPLETION_QUEUE_BASE_ADDR", std::to_string(completion_queue_base)},
+        {"COMPLETION_QUEUE_SIZE", std::to_string(completion_queue_size)},
         {"DOWNSTREAM_CB_BASE", "0"},
         {"DOWNSTREAM_CB_SIZE", "0"},
         {"MY_DOWNSTREAM_CB_SEM_ID", "0"},
@@ -1301,6 +1314,100 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"FD_CORE_TYPE", "0"},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
+    };
+}
+
+// Builds compile-time defines for cq_prefetch.cpp in SD combined IS_H_VARIANT+IS_D_VARIANT mode.
+// The kernel runs as a full prefetch_hd on one core: the H side reads commands from the PCIe
+// hugepage via the FetchQ, the D side processes them and relays to dispatch.
+// FABRIC_RELAY is intentionally omitted - leaving it undefined disables the fabric code path.
+//
+// KEEP IN SYNC WITH: tt_metal/impl/dispatch/kernel_config/prefetch.cpp (CreateKernel defines block).
+inline std::map<std::string, std::string> make_sd_prefetch_defines(
+    tt_metal::IDevice* device,
+    uint32_t pcie_base,
+    uint32_t pcie_size,
+    uint32_t prefetch_q_base,
+    uint32_t prefetch_q_size,
+    uint32_t prefetch_q_rd_ptr_addr,
+    uint32_t cmddat_q_base,
+    uint32_t cmddat_q_pages,
+    uint32_t scratch_db_base,
+    uint32_t dispatch_cb_base,
+    uint32_t dispatch_cb_pages,
+    uint32_t dispatch_cb_sem_id,
+    uint32_t downstream_sync_sem_id,
+    const CoreCoord& phys_prefetch,
+    const CoreCoord& phys_dispatch) {
+    const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
+    const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
+    return {
+        {"MY_NOC_X", std::to_string(my_virtual.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual.y)},
+        {"UPSTREAM_NOC_INDEX", std::to_string(static_cast<uint32_t>(tt_metal::NOC::NOC_0))},
+        {"UPSTREAM_NOC_X", std::to_string(my_virtual.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(my_virtual.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_cb_base)},
+        {"DOWNSTREAM_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
+        {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_cb_pages)},
+        {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
+        {"DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
+        {"IS_CQ_DRAM_BACKED", "0"},
+        {"PCIE_BASE", std::to_string(pcie_base)},
+        {"PCIE_SIZE", std::to_string(pcie_size)},
+        {"PREFETCH_Q_BASE", std::to_string(prefetch_q_base)},
+        {"PREFETCH_Q_SIZE", std::to_string(prefetch_q_size)},
+        {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr)},
+        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr + sizeof(uint32_t))},
+        {"CMDDAT_Q_BASE", std::to_string(cmddat_q_base)},
+        {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE)},
+        {"SCRATCH_DB_BASE", std::to_string(scratch_db_base)},
+        {"SCRATCH_DB_SIZE", std::to_string(SD_PREFETCH_SCRATCH_DB_SIZE)},
+        {"DOWNSTREAM_SYNC_SEM_ID", std::to_string(downstream_sync_sem_id)},
+        {"CMDDAT_Q_PAGES", std::to_string(cmddat_q_pages)},
+        {"MY_UPSTREAM_CB_SEM_ID", "0"},  // not used when IS_H_VARIANT=1
+        {"UPSTREAM_CB_SEM_ID", "0"},
+        {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE)},
+        {"CMDDAT_Q_BLOCKS", std::to_string(SD_PREFETCH_CMDDAT_BLOCKS)},
+        {"DISPATCH_S_BUFFER_BASE", "0"},
+        {"MY_DISPATCH_S_CB_SEM_ID", "0"},
+        {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", "0"},
+        {"DISPATCH_S_BUFFER_SIZE", "0"},
+        {"DISPATCH_S_CB_LOG_PAGE_SIZE", "0"},
+        {"RINGBUFFER_SIZE", std::to_string(SD_PREFETCH_SCRATCH_DB_SIZE)},
+        {"FABRIC_HEADER_RB_BASE", "0"},
+        {"FABRIC_HEADER_RB_ENTRIES", "0"},
+        {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
+        {"FABRIC_MUX_X", "0"},
+        {"FABRIC_MUX_Y", "0"},
+        {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", "0"},
+        {"FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES", "0"},
+        {"FABRIC_MUX_CHANNEL_BASE_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_INFO_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS", "0"},
+        {"FABRIC_MUX_FLOW_CONTROL_ADDRESS", "0"},
+        {"FABRIC_MUX_BUFFER_INDEX_ADDRESS", "0"},
+        {"FABRIC_MUX_STATUS_ADDRESS", "0"},
+        {"FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS", "0"},
+        {"WORKER_CREDITS_STREAM_ID", "0"},
+        {"FABRIC_WORKER_FLOW_CONTROL_SEM", "0"},
+        {"FABRIC_WORKER_TEARDOWN_SEM", "0"},
+        {"FABRIC_WORKER_BUFFER_INDEX_SEM", "0"},
+        {"NUM_HOPS", "0"},
+        {"EW_DIM", "0"},
+        {"TO_MESH_ID", "0"},
+        {"FABRIC_2D", "0"},
+        {"IS_D_VARIANT", "1"},
+        {"IS_H_VARIANT", "1"},
+        {"OFFSETOF_MY_DEV_ID", "0"},
+        {"OFFSETOF_TO_DEV_ID", "1"},
+        {"OFFSETOF_ROUTER_DIRECTION", "2"},
+        {"FD_CORE_TYPE", "0"},
+        // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };
 }
 
