@@ -391,51 +391,68 @@ class TtMolmo2Model(LightweightModule):
     # Prefill trace helpers
     # ------------------------------------------------------------------ #
 
-    def _allocate_prefill_trace_tensors(self, bucket_size: int) -> dict:
-        """Pre-allocate the stable hidden-state input buffer for a prefill trace."""
+    def _allocate_prefill_trace_tensors(self, bucket_size: int, video: bool = False) -> dict:
+        """Pre-allocate stable input buffers for a prefill trace.
+
+        text (video=False): hidden only — causal SDPA (is_causal=True, no mask).
+        video (video=True): hidden + mask — bidirectional SDPA with stable mask buffer.
+        """
         cfg = self.configuration
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
         hidden = ttnn.from_torch(
             torch.zeros(1, 1, bucket_size, cfg.dim, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=mapper,
         )
-        return {"hidden": hidden, "bucket_size": bucket_size}
+        result = {"hidden": hidden, "bucket_size": bucket_size, "video": video}
+        if video:
+            # Initialise mask with causal-only bias; updated via staging copy before replay
+            dummy_tti = torch.zeros(1, bucket_size, dtype=torch.long)
+            result["mask"] = build_molmo2_prefill_mask(
+                bucket_size,
+                dummy_tti,
+                self.mesh_device,
+                dtype=ttnn.bfloat16,
+                causal_cache=self._causal_masks.get(bucket_size),
+            )
+        return result
 
     def _capture_prefill_trace(self, tt: dict) -> tuple:
-        """Warm-up + trace capture for a fixed-bucket-size prefill.
+        """Warm-up + trace capture for a prefill trace.
 
-        Uses causal-only attention (is_causal=True, no explicit mask tensor).
-        Explicit mask SDPA materialises [n_heads, S, S] attention scores per layer;
-        with deallocations suppressed during capture that exceeds device DRAM for
-        S≥4096. Text-only inputs use this trace; video/image inputs use eager path.
+        text (tt["video"]=False): is_causal=True (no mask tensor).
+        video (tt["video"]=True): uses stable tt["mask"] as explicit attn_mask.
+          The stable hidden buffer is never passed directly as x — it is cloned
+          first so layer.forward's deallocate(x) frees the clone, not tt["hidden"].
+          This eliminates the need for deallocation suppression in the warmup pass.
 
-        trace_capture_run_begin() suppresses ttnn.deallocate() so the stable hidden
-        buffer is not freed inside the decoder forward during warmup/capture.
+        trace_capture_run_begin() is still required during begin/end_trace_capture
+        because any ttnn.deallocate inside a trace capture causes TT_FATAL.
         """
         from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
 
         bucket_size = tt["bucket_size"]
+        video = tt.get("video", False)
         rot_mats = self._get_rot_mats_prefill(bucket_size)
+        mask_arg = tt.get("mask") if video else None
 
         def _decoder_fwd(hidden):
-            x = hidden
+            # Clone hidden so tt["hidden"] is never deallocated by layer.forward.
+            # Without clone, suppression would be needed even for warmup.
+            x = ttnn.clone(hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             for layer in self.layers:
-                x = layer.forward(x, rot_mats=rot_mats, mode="prefill", attn_mask=None)
+                x = layer.forward(x, rot_mats=rot_mats, mode="prefill", attn_mask=mask_arg)
             return self.ln_f(x, mode=Mode.PREFILL)  # [1, 1, S, 4096]
 
-        # ---- Warm-up (compile) pass ----
-        tok = trace_capture_run_begin()
-        try:
-            logits_warmup = _decoder_fwd(tt["hidden"])
-            ttnn.synchronize_device(self.mesh_device)
-            ttnn.deallocate(logits_warmup)
-        finally:
-            trace_capture_run_end(tok)
+        # ---- Warm-up: clone protects hidden, no suppression needed ----
+        logits_warmup = _decoder_fwd(tt["hidden"])
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.deallocate(logits_warmup)
 
-        # ---- Trace capture ----
+        # ---- Trace capture: suppression required (TT_FATAL on any deallocate) ----
         tok = trace_capture_run_begin()
         try:
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -470,13 +487,19 @@ class TtMolmo2Model(LightweightModule):
         print(f"[prefill warmup] buckets={valid} use_trace={use_trace}", flush=True)
 
         if use_trace:
-            # Phase 1: allocate ALL trace tensors first (before any trace capture)
-            all_tt = {b: self._allocate_prefill_trace_tensors(b) for b in valid}
-            # Phase 2: capture traces for each bucket
+            # Phase 1: allocate ALL trace tensors first (before any trace capture).
+            # Two traces per bucket: text (causal, no mask) and video (bidirectional mask).
+            all_tt = {}
             for b in valid:
-                print(f"  bucket {b} ...", flush=True)
-                trace_id, trace_logits = self._capture_prefill_trace(all_tt[b])
-                self._prefill_traces[b] = (trace_id, all_tt[b], trace_logits)
+                all_tt[f"{b}_text"] = self._allocate_prefill_trace_tensors(b, video=False)
+                all_tt[f"{b}_video"] = self._allocate_prefill_trace_tensors(b, video=True)
+            # Phase 2: capture traces for each bucket and variant
+            for b in valid:
+                for suffix in ("_text", "_video"):
+                    key = f"{b}{suffix}"
+                    print(f"  bucket {b}{suffix} ...", flush=True)
+                    trace_id, trace_logits = self._capture_prefill_trace(all_tt[key])
+                    self._prefill_traces[key] = (trace_id, all_tt[key], trace_logits)
         else:
             # Run a text-only forward_prefill with dummy ids at each bucket size to
             # trigger JIT kernel compilation and populate the on-disk cache.
@@ -489,7 +512,10 @@ class TtMolmo2Model(LightweightModule):
                 print(f"  bucket {b} done", flush=True)
 
         n = len(self._prefill_traces)
-        print(f"[prefill warmup] done — {n} traces, {len(valid) - n} JIT-compiled", flush=True)
+        print(
+            f"[prefill warmup] done — {n} traces ({n//2 if use_trace else 0} text + {n//2 if use_trace else 0} video), {len(valid) - n//2 if use_trace else len(valid) - n} JIT-compiled",
+            flush=True,
+        )
 
     def warmup_vision_compile(self) -> None:
         """Pre-compile all vision (ViT + pooling + projector) JIT kernels.
@@ -932,13 +958,43 @@ class TtMolmo2Model(LightweightModule):
         # ---- Route to trace or eager ----
         padded_S = get_padded_prefill_len(S)
 
-        # ---- Prefill trace (text-only / causal-only) ----
-        # The trace uses is_causal=True (no explicit mask tensor). Using an explicit
-        # bidirectional mask inside the trace would materialise [n_heads, S, S]
-        # attention scores per layer; with deallocations suppressed during capture
-        # this exceeds device DRAM for S≥4096. Video/image inputs use eager path.
-        if padded_S in self._prefill_traces and token_type_ids is None:
-            trace_id, trace_tt, trace_x_norm = self._prefill_traces[padded_S]
+        # ---- Prefill trace: text_key (causal) or video_key (bidirectional) ----
+        # Two traces per bucket: "{S}_text" (is_causal=True) and "{S}_video" (mask).
+        # The video trace uses a clone of hidden inside _decoder_fwd so the stable
+        # buffer is never passed directly to layer.forward (avoids needing suppression
+        # in the warmup pass). Mask is updated via staging copy matching decode trace.
+        trace_suffix = "_video" if token_type_ids is not None else "_text"
+        trace_key = f"{padded_S}{trace_suffix}"
+        if trace_key in self._prefill_traces:
+            trace_id, trace_tt, trace_x_norm = self._prefill_traces[trace_key]
+
+            # ---- Update stable mask for video (staging copy = same as decode trace) ----
+            if token_type_ids is not None:
+                pad_len_m = padded_S - S
+                tti_padded = (
+                    torch.cat([token_type_ids.long(), torch.zeros(B, pad_len_m, dtype=torch.long)], dim=1)
+                    if pad_len_m > 0
+                    else token_type_ids.long()
+                )
+                actual_mask = build_molmo2_prefill_mask(
+                    padded_S,
+                    tti_padded,
+                    self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    causal_cache=self._causal_masks.get(padded_S),
+                )
+                mask_cpu = ttnn.to_torch(ttnn.get_device_tensors(actual_mask)[0])
+                ttnn.deallocate(actual_mask)
+                mask_staging = ttnn.from_torch(
+                    mask_cpu.to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                ttnn.copy(mask_staging, trace_tt["mask"])
+                ttnn.deallocate(mask_staging)
 
             # ---- Update stable hidden and execute ----
             if padded_S > S:
