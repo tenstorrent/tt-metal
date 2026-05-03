@@ -88,7 +88,7 @@ while IFS= read -r FILE; do
         # tests/tt_metal/**/*.{h,hpp,c,cpp,py} catch-all so the narrower flag is set; we
         # also raise the broader TTMETALIUM_TESTS_CHANGED here so existing test gates
         # (e.g. metalium-smoke-tests) keep firing for these changes.
-        tests/tt_metal/tt_metal/llk/*.@(h|hpp|c|cpp|py)|tests/tt_metal/tt_metal/llk/**/*.@(h|hpp|c|cpp|py))
+        tests/tt_metal/tt_metal/llk/**)
             LLK_UNIT_TESTS_CHANGED=true
             TTMETALIUM_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
