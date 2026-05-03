@@ -888,6 +888,11 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 
             for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
                 const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
+                // FIX TH (#42429): get_chip_ids() includes excluded chips (degraded topology); skip them
+                // to avoid TT_FATAL in get_physical_chip_id_from_fabric_node_id.
+                if (!this->topology_mapper_->try_get_asic_id_from_fabric_node_id(src_fabric_node_id).has_value()) {
+                    continue;
+                }
                 auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
                 num_ports_per_chip =
                     this->cluster_.get().get_soc_desc(physical_chip_id).get_cores(CoreType::ETH).size();
