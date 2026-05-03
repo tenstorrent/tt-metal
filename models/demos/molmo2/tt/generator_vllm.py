@@ -155,14 +155,9 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         logger.info(f"Pre-compiling prefill JIT kernels for buckets {PREFILL_BUCKETS}...")
         model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
         # After warmup_all_buckets, KV cache is filled by the last bucket's forward_prefill.
-        # Capture decode trace NOW — the KV state matches the last bucket (largest S),
-        # so the SDPA kernel is compiled for the full KV range, working for all S ≤ max_S.
-        logger.info(f"Capturing decode trace at pos={PREFILL_BUCKETS[-1]}...")
-        model._decode_trace_tensors = model._allocate_decode_trace_tensors()
-        model._decode_trace_id, model._decode_trace_output = model._capture_decode_trace(
-            model._decode_trace_tensors, PREFILL_BUCKETS[-1]
-        )
-        logger.info("Decode trace captured")
+        # Run one decode step to JIT-compile the decode kernel — avoids first-inference stall.
+        logger.info("Pre-compiling decode JIT kernel...")
+        _ = model.forward_decode_step(0, PREFILL_BUCKETS[-1])
         logger.info("Pre-compiling vision JIT kernels...")
         model.warmup_vision_compile()
         logger.info("JIT warmup complete — server ready to serve")
@@ -275,12 +270,8 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         token_id = int(tokens[0, 0].item())
         position = int(start_pos[0].item()) if hasattr(start_pos[0], "item") else int(start_pos[0])
 
-        # Use decode trace if available (captured during prefill_forward on first request).
-        # The demo (model.generate) reuses the same trace for all S values — the trace
-        # kernel updates cur_pos/cos/sin before each execution so it works regardless of S.
-        if self.model._decode_trace_id is not None:
-            logits = self.model._execute_decode_trace(token_id, position)
-        else:
-            logits = self.model.forward_decode_step(token_id, position).squeeze(0)
+        # Use forward_decode_step (eager, no trace) — decode JIT is pre-compiled during
+        # initialize_vllm_model warmup so no first-inference stall happens.
+        logits = self.model.forward_decode_step(token_id, position).squeeze(0)
 
         return logits.unsqueeze(0)  # [1, vocab_size]
