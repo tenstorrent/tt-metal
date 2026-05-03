@@ -234,7 +234,15 @@ def run(
     start_time = start_measuring_time()
     # Master is inconsistent: 6/8 configs trace weight positionally ("arg1"),
     # 2/8 use the "weight" kwarg.  Pass positional to match the majority.
-    output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
+    # Reproduce master's call form: 2 cfgs used `weight=` named (vector
+    # has weight_shape), 6 used positional (vector has input_b_shape).
+    # Master used `weight=` named for 2 cfgs (vector has weight_shape, input_b_shape
+    # is __ABSENT__) and positional for 6.  Detect from __absent_keys__.
+    _absent = kwargs.get("__absent_keys__", set()) or set()
+    if "input_b_shape" in _absent and "weight_shape" not in _absent:
+        output_tensor = ttnn.embedding(input_tensor, weight=weight_tensor, **embedding_kwargs)
+    else:
+        output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)

@@ -250,13 +250,25 @@ def run(
         op_kwargs["mesh_coords"] = mesh_coords_set
 
     start_time = start_measuring_time()
+    # Master used `page_table=` named for 128 cfgs and positional `arg2` for 1.
+    # __absent_keys__ tells us which form the vector preserved.
+    _absent = kwargs.get("__absent_keys__", set()) or set()
+    _used_named_pt = kwargs.get("page_table_shape") not in (None, "__ABSENT__")
     try:
-        output_tensor = ttnn.experimental.paged_fill_cache(
-            input_tensor_a,  # cache_tensor
-            input_tensor_b,  # input_tensor
-            page_table=input_tensor_c,
-            **op_kwargs,
-        )
+        if _used_named_pt:
+            output_tensor = ttnn.experimental.paged_fill_cache(
+                input_tensor_a,
+                input_tensor_b,
+                page_table=input_tensor_c,
+                **op_kwargs,
+            )
+        else:
+            output_tensor = ttnn.experimental.paged_fill_cache(
+                input_tensor_a,
+                input_tensor_b,
+                input_tensor_c,
+                **op_kwargs,
+            )
     except TypeError:
         # Fallback for builds without the page_table keyword binding.
         output_tensor = ttnn.experimental.paged_fill_cache(
