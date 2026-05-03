@@ -35,8 +35,20 @@ class _OpenMeshTimeout(Exception):
     """Raised by SIGALRM when open_mesh_device() in ensure_cluster_healthy hangs."""
 
 
+class _OpenMeshBusError(Exception):
+    """Raised by SIGBUS handler when open_mesh_device() hits a hardware bus fault."""
+
+
 def _sigalrm_handler(signum, frame):  # noqa: ARG001
     raise _OpenMeshTimeout()
+
+
+def _sigbus_handler(signum, frame):  # noqa: ARG001
+    # FIX GS-3c (#42429): SIGBUS during warm-up open_mesh_device after tt-smi -r.
+    # Hardware PCIe BAR mapping is invalid (device still in reset / re-enumerating).
+    # Safe to raise Python exception here because SIGBUS came from UMD's MMIO access
+    # (not from Python's own memory), so the Python interpreter itself is intact.
+    raise _OpenMeshBusError()
 
 
 def _run_smi_reset():
@@ -143,6 +155,11 @@ def ensure_cluster_healthy():
         "to clear base-UMD state from tt-smi before FABRIC_2D tests run…"
     )
     warmup_handler = signal.signal(signal.SIGALRM, _sigalrm_handler)
+    # FIX GS-3c (#42429): also catch SIGBUS — after tt-smi -r the PCIe BAR mapping may
+    # be transiently invalid; UMD MMIO access during open_mesh_device triggers SIGBUS.
+    # Python's signal handler delivers it as a Python exception at the next bytecode
+    # boundary, allowing us to exit cleanly instead of crashing the process.
+    prev_sigbus_handler = signal.signal(signal.SIGBUS, _sigbus_handler)
     signal.alarm(_HEALTH_CHECK_OPEN_TIMEOUT_S)
     try:
         warmup = ttnn.open_mesh_device(ttnn.MeshShape(*_HEALTH_CHECK_MESH_SHAPE))
@@ -162,6 +179,24 @@ def ensure_cluster_healthy():
             "[conftest] FIX GS-2b: WARNING: warm-up timed out — "
             "FABRIC_2D tests may still hit Bus error."
         )
+    except _OpenMeshBusError:
+        signal.alarm(0)
+        # FIX GS-3c (#42429): SIGBUS during warm-up means PCIe MMIO access to a device
+        # in post-reset transition failed at hardware level.  tt-smi -r did not fully
+        # restore the bus by the time we tried to open.  Abort the session cleanly so
+        # CI reports a hardware failure rather than a core-dump timeout (exit 124).
+        print(
+            "\n[conftest] FIX GS-3c (#42429): warm-up crashed with SIGBUS — "
+            "PCIe BAR access failed after tt-smi -r (hardware not yet re-enumerated).\n"
+            "[conftest] Aborting session — board needs physical reset or longer re-enum wait."
+        )
+        signal.signal(signal.SIGBUS, prev_sigbus_handler)
+        signal.signal(signal.SIGALRM, warmup_handler)
+        pytest.exit(
+            "FIX GS-3c: SIGBUS during warm-up after tt-smi -r — board needs physical reset",
+            returncode=1,
+        )
+        return
     except Exception as exc:
         signal.alarm(0)
         exc_msg = str(exc)
@@ -177,6 +212,7 @@ def ensure_cluster_healthy():
                 f"Error: {exc_msg[:300]}\n"
                 "[conftest] Aborting session to avoid outer bash timeout (exit code 124)."
             )
+            signal.signal(signal.SIGBUS, prev_sigbus_handler)
             signal.signal(signal.SIGALRM, warmup_handler)
             pytest.exit(
                 "FIX GS-3b: hardware FW init failed after tt-smi -r — board needs physical reset",
@@ -189,6 +225,7 @@ def ensure_cluster_healthy():
         )
     finally:
         signal.alarm(0)
+        signal.signal(signal.SIGBUS, prev_sigbus_handler)
         signal.signal(signal.SIGALRM, warmup_handler)
 
     yield
