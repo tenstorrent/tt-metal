@@ -182,11 +182,17 @@ def tt_model(mesh_device):
     logger.info("[warmup] Capturing prefill traces (buckets ≤ 4096)...")
     model.warmup_all_buckets(use_trace=True)
 
-    # Step 3: JIT-compile vision ops (ViT + pooling + projector)
-    logger.info("[warmup] vision (ViT + pooling + projector)...")
+    # Step 3: JIT-compile vision ops first (ViT + pooling + projector, NO trace yet)
+    logger.info("[warmup] vision JIT compile (ViT + pooling + projector)...")
     model.warmup_vision_compile()
 
-    logger.info("Model fully warmed up (JIT + traces + vision)")
+    # Step 4: Capture ViT trace after JIT kernels are compiled
+    # Warmup must precede trace capture so the suppressed trace runs are fast.
+    logger.info("[warmup] capturing ViT trace (1 crop/device, DP)...")
+    model._vit_trace_tensors = model._allocate_vit_trace_tensors()
+    model._vit_trace_id, model._vit_trace_output = model._capture_vit_trace(model._vit_trace_tensors)
+
+    logger.info("Model fully warmed up (JIT + prefill traces + vision + ViT trace)")
     return model, cfg
 
 

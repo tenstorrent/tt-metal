@@ -573,7 +573,14 @@ class TtMolmo2Model(LightweightModule):
         def _vit_fwd(pv):
             return self.vit_encoder.forward(pv, patch_num=(27, 27), n_crops_per_device=1)
 
-        # ---- Warmup: suppress deallocations (required to prevent TT_FATAL) ----
+        # ---- Pre-compile: JIT kernels without suppression ----
+        # Kernels must be compiled before trace capture so the suppressed warmup
+        # (which accumulates freed tensors) runs fast and doesn't OOM.
+        out_precompile = _vit_fwd(tt["pv"])
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.deallocate(out_precompile)
+
+        # ---- Warmup with suppression (protects stable buffer from TT_FATAL) ----
         tok = trace_capture_run_begin()
         try:
             out_warmup = _vit_fwd(tt["pv"])
