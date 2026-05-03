@@ -2162,10 +2162,18 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
                 tt::LogMetal,
                 "verify_all_fabric_channels_healthy: Device {} ring barrier timed out during "
                 "base-UMD channel quiesce (channels stuck at REMOTE_HANDSHAKE_COMPLETE). "
-                "Marking fabric_channels_not_ready_for_traffic_ so callers can skip AllGather. "
-                "Skipping health check. (#42429 FIX TI)",
+                "Marking fabric_channels_not_ready_for_traffic_ and fabric_ring_sync_timed_out_ "
+                "so callers can skip AllGather and FIX BA skips relay_broken_non_mmio. "
+                "(#42429 FIX TI + FIX TK)",
                 dev->id());
             dev->set_fabric_channels_not_ready_for_traffic();
+            // FIX TK (#42429): also set ring_sync_timed_out so RiscFirmwareInitializer::teardown()
+            // FIX BA does NOT add this device to relay_broken_non_mmio.  The ring sync timeout does
+            // NOT mean the relay is broken — the ETH channels are mid-transition from base-UMD
+            // firmware via launch_msg (FIX M).  Triggering FIX AC (PCIe reset of MMIO ETH) in this
+            // state causes ALL MMIO ETH heartbeats to time out (5s × 24 cores), leaving the
+            // machine with only 4/8 chips visible after the job exits.
+            dev->set_fabric_ring_sync_timed_out();
             continue;
         }
         const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());

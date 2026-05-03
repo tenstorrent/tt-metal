@@ -211,6 +211,16 @@ public:
     // tests (e.g. AllGather fixtures) detect the broken state and issue GTEST_SKIP() instead of
     // hanging.
     virtual void set_fabric_channels_not_ready_for_traffic() {}
+    // FIX TK (#42429): Set by FabricFirmwareInitializer::verify_all_fabric_channels_healthy()
+    // when a device's ring sync timed out during base-UMD channel quiesce (FIX TI path).
+    // Distinguishes FIX TI (ring barrier timeout — relay still alive) from FIX AM (ERISC in
+    // STARTED state — relay broken).  RiscFirmwareInitializer::teardown() checks this flag in
+    // FIX BA to avoid incorrectly adding the device to relay_broken_non_mmio, which would
+    // trigger FIX AC (PCIe reset of MMIO ETH channels that are mid-transition from base-UMD
+    // firmware).  PCIe reset fails in this scenario (channels stuck at REMOTE_HANDSHAKE_COMPLETE),
+    // leaving the machine with only 4/8 chips visible.
+    virtual bool is_fabric_ring_sync_timed_out() const { return false; }
+    virtual void set_fabric_ring_sync_timed_out() {}
 
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.

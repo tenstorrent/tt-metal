@@ -316,8 +316,17 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                 // and FIX AY (deferred non-MMIO ETH reset via restored relay), cleaning up the
                 // STARTED-state ERISCs before the process exits.  FIX AV and FIX AW handle the
                 // case where relay re-sync fails within the current process.
+                //
+                // FIX TK (#42429): do NOT trigger relay_broken_non_mmio when channels_not_ready was
+                // set due to ring sync timeout (FIX TI path, detected by is_fabric_ring_sync_timed_out()).
+                // In the FIX TI case the ETH channels are mid-transition from base-UMD firmware via
+                // launch_msg (FIX M) — they are stuck at REMOTE_HANDSHAKE_COMPLETE.  Triggering FIX AC
+                // (PCIe reset of MMIO ETH channels) in this state causes ALL MMIO ETH heartbeats to
+                // time out (5s × 24 cores), resulting in the machine having only 4/8 chips visible
+                // when the topology check runs.  Skip this path; the runner's per-job tt-smi reset
+                // will recover the hardware before the next run.
                 if (!mmio_ids_set.count(device_id) && dev->is_fabric_channels_not_ready_for_traffic() &&
-                    !relay_broken_non_mmio.count(device_id)) {
+                    !relay_broken_non_mmio.count(device_id) && !dev->is_fabric_ring_sync_timed_out()) {
                     log_warning(
                         tt::LogAlways,
                         "teardown: FIX BA — non-MMIO device {} has fabric_channels_not_ready_for_traffic "

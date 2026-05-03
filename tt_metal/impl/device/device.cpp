@@ -425,6 +425,9 @@ void Device::configure_fabric(
     // fabric firmware on all channels, so after this call all channels will go through the
     // full handshake again in the next quiesce cycle.
     fabric_channels_not_ready_for_traffic_ = false;
+    // FIX TK (#42429): Clear ring-sync-timed-out flag — a fresh configure_fabric() means we are
+    // starting a new init cycle and any previous ring sync result no longer applies.
+    fabric_ring_sync_timed_out_ = false;
     // FIX RZ (#42429): Clear stale-base-UMD flag unconditionally at configure_fabric() start;
     // re-set below if skip_soft_reset_channels is non-empty on a non-MMIO device.
     fabric_stale_base_umd_channels_ = false;
