@@ -29,8 +29,8 @@ namespace ckernel::sfpu {
 //   true:            both NaN     ⇒ result = 1; one NaN ⇒ result = 0
 //
 // Inputs are expected to be float32 or bfloat16. INT32 tensors must be
-// promoted to FLOAT32 via LHS/RHS typecast activations before reaching
-// this kernel.
+// promoted to FLOAT32 before reaching this kernel; invoke_binary_ng_isclose
+// handles this via explicit ttnn::typecast calls before dispatch.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool EQUAL_NAN>
 inline void calculate_sfpu_isclose(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
@@ -45,9 +45,10 @@ inline void calculate_sfpu_isclose(const uint dst_index_in0, const uint dst_inde
         sfpi::vInt diff_bits = sfpi::reinterpret<sfpi::vInt>(diff);
         sfpi::vFloat abs_diff = sfpi::reinterpret<sfpi::vFloat>(diff_bits & 0x7FFFFFFF);
 
-        // abs(b)
+        // abs(b) — cache int bits to reuse in the NaN check below
         sfpi::vInt b_bits = sfpi::reinterpret<sfpi::vInt>(b);
-        sfpi::vFloat abs_b = sfpi::reinterpret<sfpi::vFloat>(b_bits & 0x7FFFFFFF);
+        sfpi::vInt b_abs_bits = b_bits & 0x7FFFFFFF;
+        sfpi::vFloat abs_b = sfpi::reinterpret<sfpi::vFloat>(b_abs_bits);
 
         // tolerance = atol + rtol * |b|
         sfpi::vFloat tol = ISCLOSE_ATOL_VAL + ISCLOSE_RTOL_VAL * abs_b;
@@ -57,20 +58,32 @@ inline void calculate_sfpu_isclose(const uint dst_index_in0, const uint dst_inde
         v_if(abs_diff <= tol) { result = sfpi::vConst1; }
         v_endif;
 
+        // Inf fix-up: torch.isclose considers two infinities close only when
+        // they are the same infinity (+inf==+inf or -inf==-inf).  The tolerance
+        // formula yields inf <= inf = true for mismatched infinities, so we
+        // override: if either operand is infinite, result = (a bits == b bits).
+        sfpi::vInt a_abs_bits = sfpi::reinterpret<sfpi::vInt>(a) & 0x7FFFFFFF;
+        v_if(is_inf(a_abs_bits) || is_inf(b_abs_bits)) {
+            result = sfpi::vConst0;
+            v_if(sfpi::reinterpret<sfpi::vInt>(a) == b_bits) { result = sfpi::vConst1; }
+            v_endif;
+        }
+        v_endif;
+
         // NaN fix-up: hardware comparisons may not reliably produce 0 for NaN
         // inputs, so we apply an explicit correction.
-        sfpi::vInt a_abs_bits = sfpi::reinterpret<sfpi::vInt>(a) & 0x7FFFFFFF;
-
         if constexpr (EQUAL_NAN) {
-            // Step 1: any NaN input ⇒ result = 0
-            v_if(is_nan(a_abs_bits) || is_nan(b_bits & 0x7FFFFFFF)) { result = sfpi::vConst0; }
-            v_endif;
-            // Step 2: both NaN ⇒ result = 1
-            v_if(is_nan(a_abs_bits) && is_nan(b_bits & 0x7FFFFFFF)) { result = sfpi::vConst1; }
+            // Nest "both NaN → 1" inside "any NaN → 0" to avoid evaluating the
+            // inner predicate on clean (non-NaN) lanes.
+            v_if(is_nan(a_abs_bits) || is_nan(b_abs_bits)) {
+                result = sfpi::vConst0;
+                v_if(is_nan(a_abs_bits) && is_nan(b_abs_bits)) { result = sfpi::vConst1; }
+                v_endif;
+            }
             v_endif;
         } else {
             // Any NaN input ⇒ result = 0
-            v_if(is_nan(a_abs_bits) || is_nan(b_bits & 0x7FFFFFFF)) { result = sfpi::vConst0; }
+            v_if(is_nan(a_abs_bits) || is_nan(b_abs_bits)) { result = sfpi::vConst0; }
             v_endif;
         }
 
