@@ -6,8 +6,11 @@ from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig
-from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
+from helpers.golden_generators import (
+    UnarySFPUGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
@@ -86,14 +89,20 @@ def generate_sfpu_fill_combinations(
     return combinations
 
 
-# Fill float path: SFPU DEFAULT store mode supports all float formats.
-SFPU_FILL_FLOAT_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float32,
-    ]
-)
+_FILL_FLOAT_INPUTS = [
+    DataFormat.Float16_b,
+    DataFormat.Float16,
+    DataFormat.Float32,
+]
+_FILL_FLOAT_OUTPUTS = _FILL_FLOAT_INPUTS + [
+    DataFormat.MxFp8R,
+    DataFormat.MxFp8P,
+]
+SFPU_FILL_FLOAT_FORMATS = [
+    InputOutputFormat(in_fmt, out_fmt)
+    for in_fmt in _FILL_FLOAT_INPUTS
+    for out_fmt in _FILL_FLOAT_OUTPUTS
+]
 
 # Fill int path: _calculate_fill_int_ with p_sfpu::sfpmem::INT32/UINT16/UINT8.
 # Quasar integer formats and their SFPMEM store modes:

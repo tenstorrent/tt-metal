@@ -46,20 +46,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     const bool is_int_fill = is_int_fill_format(static_cast<DataFormat>(formats.unpack_A_src));
-    if constexpr (is_fp32_dest_acc_en)
+    if (is_int_fill)
     {
-        if (is_int_fill)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-        }
-        else
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-        }
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
     }
     else
     {
-        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
     }
 
     buffer_descriptor_u bd_val = {0};
@@ -109,20 +102,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat math_format = static_cast<DataFormat>(formats.math);
     const bool is_int_fill = is_int_fill_format(static_cast<DataFormat>(formats.unpack_A_src));
 
-    if constexpr (is_fp32_dest_acc_en)
+    if (is_int_fill)
     {
-        if (is_int_fill)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
     }
     else
     {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
     }
 
     constexpr int num_sfpu_iterations = static_cast<int>(FACE_R_DIM / SFP_ROWS);
