@@ -381,6 +381,38 @@ def test_isclose_bfloat16_equal_nan(device, input_shapes, equal_nan):
     assert torch.equal(z_torch, tt_out.bool())
 
 
+@pytest.mark.parametrize("shape", [torch.Size([1, 1, 32, 32])])
+def test_isclose_zero_tolerance(device, shape):
+    """With rtol=atol=0 only bit-identical values should compare as close."""
+    torch.manual_seed(0)
+    a = torch.randn(shape, dtype=torch.bfloat16)
+    b = a.clone()
+    b[0, 0, 0, 0] = b[0, 0, 0, 0] + torch.tensor(0.001, dtype=torch.bfloat16)
+
+    z_torch = torch.isclose(a.float(), b.float(), rtol=0.0, atol=0.0)
+
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.isclose(a_tt, b_tt, rtol=0.0, atol=0.0)
+
+    assert torch.equal(z_torch, ttnn.to_torch(z_tt).bool())
+
+
+def test_isclose_inf_divergence(device):
+    # Hardware correctly returns False for unequal infinities, matching torch.isclose semantics.
+    a = torch.tensor([[[[float("inf"), float("-inf")]]]]).to(torch.bfloat16)
+    b = torch.tensor([[[[float("-inf"), float("inf")]]]]).to(torch.bfloat16)
+
+    z_torch = torch.isclose(a.float(), b.float(), rtol=1e-5, atol=1e-8)
+
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.isclose(a_tt, b_tt, rtol=1e-5, atol=1e-8)
+    out = ttnn.to_torch(result)
+
+    assert torch.equal(z_torch, out.bool())
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
