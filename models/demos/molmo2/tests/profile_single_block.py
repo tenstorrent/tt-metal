@@ -34,9 +34,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--block", required=True, choices=BLOCKS)
 parser.add_argument("--seq-len", type=int, default=128)
 parser.add_argument("--n-crops", type=int, default=1)
-parser.add_argument(
-    "--n-warmup", type=int, default=0
-)  # device kernel duration is compile-time-cached, no warmup needed
+parser.add_argument("--n-warmup", type=int, default=1)  # 1 warmup ensures JIT kernels are compiled before Tracy capture
 args = parser.parse_args()
 
 SEQ = args.seq_len
@@ -167,19 +165,31 @@ elif args.block == "vit_encoder":
         return blk.forward(pv, patch_num=(27, 27))
 
 elif args.block == "image_pooling":
-    from models.demos.molmo2.tt.image_pooling import TtMolmo2ImagePooling2D
+    # Profile the full _run_chunked_ttnn_pooling path with realistic video shapes.
+    # Uses n_crops=30, N_pooled=2430, k_pool=9 (default 30-frame video).
+    # Chunk size = _POOL_CHUNK_WINDOWS=4096 → single chunk padded to 4096 windows.
+    from models.demos.molmo2.tt.model import TtMolmo2Model
+    from models.tt_transformers.tt.ccl import TT_CCL
 
-    blk = TtMolmo2ImagePooling2D(
+    ccl = TT_CCL(mesh)
+    model = TtMolmo2Model(
         mesh_device=mesh,
+        tt_ccl=ccl,
         state_dict=sd,
-        cfg=cfg,
         weight_cache_path=WEIGHT_CACHE,
+        dtype=ttnn.bfloat16,
+        configuration=cfg,
     )
-    img_feats = torch.randn(1, args.n_crops, 729, cfg.vit_hidden * 2).bfloat16()
-    pool_idx = torch.zeros(1, 81, 9, dtype=torch.long)
+    n_crops = args.n_crops if args.n_crops > 1 else 30
+    k_pool = 9
+    n_out_per_frame = 81
+    N_pooled = n_crops * n_out_per_frame
+    # Dummy ViT features and pooling indices (zeros are clamped/masked correctly)
+    vit_cpu = torch.randn(1, n_crops, 729, cfg.vit_hidden * 2)
+    pool_idx = torch.zeros(1, N_pooled, k_pool, dtype=torch.long)
 
     def fwd():
-        return blk.forward(img_feats, pool_idx)
+        return model._run_chunked_ttnn_pooling(vit_cpu, pool_idx)
 
 elif args.block == "image_projector":
     from models.demos.molmo2.tt.image_projector import TtMolmo2ImageProjector
