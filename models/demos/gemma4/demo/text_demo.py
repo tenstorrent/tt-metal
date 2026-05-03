@@ -80,7 +80,9 @@ def _encode_prompt(tokenizer, prompt, instruct=True):
         )
         return chat_result["input_ids"].squeeze(0)
     if instruct:
-        logger.warning("Instruct mode requested, but tokenizer has no chat_template; falling back to raw tokenization")
+        bos_token = tokenizer.bos_token or ""
+        prompt = f"{bos_token}<|turn>user\n{prompt.strip()}<turn|>\n<|turn>model\n<|channel>thought\n<channel|>"
+        return tokenizer.encode(prompt, add_special_tokens=False, return_tensors="pt").squeeze(0)
     return tokenizer.encode(prompt, return_tensors="pt").squeeze(0)
 
 
@@ -542,30 +544,31 @@ def run_generation(
         )
         logger.info(f"\n==PROMPT {prompt_idx}\n{short_prompt}\n==OUTPUT {prompt_idx}\n{generated_text.strip()}\n")
 
-    num_tokens_generated_decode = iteration  # from last prompt
+    num_decode_iterations = iteration  # from last prompt, excluding the prefill-sampled token
+    num_tokens_generated = len(generated_tokens)
 
     profiler.end("run")
 
     # ── Performance metrics ──────────────────────────────────────────────
     compile_prefill_time = profiler.get_duration("compile_prefill")
-    compile_decode_time = profiler.get_duration("compile_decode")
+    compile_decode_time = profiler.get_duration("compile_decode") if num_decode_iterations > 0 else 0
 
     # inference_prefill is a zero-duration marker (prefill compile+run are not separated yet)
     total_inference_prefill_time = compile_prefill_time
 
     total_inference_decode_time = 0
-    for i in range(1, num_tokens_generated_decode):  # Iteration 0 is the compile time
+    for i in range(1, num_decode_iterations):  # Iteration 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     avg_time_to_first_token = total_inference_prefill_time / batch_size
     avg_decode_iteration_time = (
-        total_inference_decode_time / (num_tokens_generated_decode - 1) if num_tokens_generated_decode > 1 else 0
+        total_inference_decode_time / (num_decode_iterations - 1) if num_decode_iterations > 1 else 0
     )
 
     prefill_tok_s = prompt_len / total_inference_prefill_time * batch_size if total_inference_prefill_time > 0 else 0
     decode_tok_s_user = (
-        (num_tokens_generated_decode - 1) / total_inference_decode_time
-        if num_tokens_generated_decode > 1 and total_inference_decode_time > 0
+        (num_decode_iterations - 1) / total_inference_decode_time
+        if num_decode_iterations > 1 and total_inference_decode_time > 0
         else 0
     )
     decode_tok_s = decode_tok_s_user * batch_size
@@ -586,8 +589,8 @@ def run_generation(
     }
 
     # Decode performance at specific token milestones
-    tok_1_perf = profiler.get_duration("inference_decode_time_1") if 1 < num_tokens_generated_decode else 0
-    tok_128_perf = profiler.get_duration("inference_decode_time_127") if 127 < num_tokens_generated_decode else 0
+    tok_1_perf = profiler.get_duration("inference_decode_time_1") if 1 < num_decode_iterations else 0
+    tok_128_perf = profiler.get_duration("inference_decode_time_127") if 127 < num_decode_iterations else 0
 
     logger.info("")
     logger.info("=== Performance metrics ===")
@@ -610,7 +613,7 @@ def run_generation(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ "
         f"{round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
-    logger.info(f"Generated {num_tokens_generated_decode} tokens")
+    logger.info(f"Generated {num_tokens_generated} tokens")
     logger.info(f"Full demo runtime: {round(profiler.get_duration('run'), 2)}s")
 
     # Save benchmark data for CI dashboard
@@ -620,7 +623,7 @@ def run_generation(
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
 
         # Save the decode performance of every iteration for plotting
-        for i in range(1, num_tokens_generated_decode):
+        for i in range(1, num_decode_iterations):
             benchmark_data.add_measurement(
                 profiler,
                 0,
@@ -632,7 +635,7 @@ def run_generation(
             )
 
         # Average decode performance for first 128 iterations (excluding compile)
-        num_iterations_for_avg = min(128, num_tokens_generated_decode)
+        num_iterations_for_avg = min(128, num_decode_iterations)
         inference_decode_time_first_128 = sum(
             profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
         )
@@ -656,7 +659,7 @@ def run_generation(
             batch_size=batch_size,
             config_params={},
             input_sequence_length=prompt_len,
-            output_sequence_length=num_tokens_generated_decode,
+            output_sequence_length=num_tokens_generated,
         )
 
     return generated_texts

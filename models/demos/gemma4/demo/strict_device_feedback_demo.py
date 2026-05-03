@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from models.demos.gemma4.demo.text_demo import _load_tokenizer
+from models.demos.gemma4.demo.text_demo import _encode_prompt, _load_tokenizer
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.model_config import DEFAULT_GEMMA4_MODEL
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -115,16 +115,7 @@ def run(args):
         if getattr(model_args, "hidden_size_per_layer_input", 0):
             raise RuntimeError("Strict feedback harness does not yet handle per-layer input embeddings")
 
-        if not args.base_completion and getattr(tokenizer, "chat_template", None):
-            input_ids = tokenizer.apply_chat_template(
-                [{"role": "user", "content": args.prompt}],
-                tokenize=True,
-                add_generation_prompt=True,
-                return_dict=True,
-                return_tensors="pt",
-            )["input_ids"].squeeze(0)
-        else:
-            input_ids = tokenizer.encode(args.prompt, return_tensors="pt").squeeze(0)
+        input_ids = _encode_prompt(tokenizer, args.prompt, instruct=not args.base_completion)
         prompt_len = input_ids.shape[0]
         if prompt_len <= 128:
             padded_len = 128
