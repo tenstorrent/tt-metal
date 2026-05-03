@@ -630,11 +630,13 @@ class TtMolmo2Model(LightweightModule):
     # ------------------------------------------------------------------ #
 
     # Number of pooling windows to process per TTNN chunk.
-    # Peak per chunk: to_pool [1, C, 32tile, 2304] + query same size ≈ 2×C×32×2304×2 bytes.
-    # chunk=4096: peak ≈ 1152 MB per device — comfortable on T3K (12 GB, ~5 GB weights).
-    # 30-frame video (2430 windows): 1 chunk → no chunking overhead.
-    # 384-frame video (31104 windows): 8 chunks.
-    _POOL_CHUNK_WINDOWS = 4096
+    # Peak per chunk (worst case 384-frame video, feat_tt=1.23 GB stays throughout):
+    #   feat_tt + 3 × C × 32tile × 2304 × 2 bytes  (to_pool + query_sum + query)
+    # C=8192 (≈100 frames × 81 windows): peak ≈ 9.5 GB → ✓ on T3K (12 GB, ~5 GB weights).
+    # C=10368 (128 frames): peak ≈ 10.5 GB → too tight.
+    # 30-frame video (2430 windows): 1 chunk.
+    # 384-frame video (31104 windows): 4 chunks.
+    _POOL_CHUNK_WINDOWS = 8192
 
     def _run_chunked_ttnn_pooling(
         self,
