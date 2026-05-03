@@ -1,0 +1,8 @@
+﻿ttnn.all\_to\_all\_dispatch
+===========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.all_to_all_dispatch:
+
+.. autooperation:: ttnn.all_to_all_dispatch
