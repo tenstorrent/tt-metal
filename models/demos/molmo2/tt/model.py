@@ -913,11 +913,14 @@ class TtMolmo2Model(LightweightModule):
             # since we write into zeros not read the embedding), H2D, then add on device.
             H = self.configuration.dim
             is_patch_flat = input_ids.view(-1) == self.configuration.image_patch_id
-            delta = torch.zeros(1, 1, S, H, dtype=torch.bfloat16)
-            delta.view(-1, H)[is_patch_flat] = image_features.to(torch.bfloat16)
+            # Keep delta in float32 to match original precision: old code did
+            # float32 add (embedding promoted to f32, features in f32) then
+            # truncated to bf16. ttnn.add(bf16, f32) performs in f32 → bf16.
+            delta = torch.zeros(1, 1, S, H, dtype=torch.float32)
+            delta.view(-1, H)[is_patch_flat] = image_features  # float32, no conversion
             delta_ttnn = ttnn.from_torch(
                 delta,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
