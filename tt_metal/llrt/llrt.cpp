@@ -287,6 +287,37 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
             bool is_known = std::find(kKnownRunMsgValues.begin(), kKnownRunMsgValues.end(), run) !=
                             kKnownRunMsgValues.end();
             if (!is_known) {
+                if (dispatch_core_type == tt_metal::HalProgrammableCoreType::TENSIX) {
+                    // FIX SC (GAP-76): For Tensix cores with stale go_msg (e.g. 0x55 left by
+                    // rescued dispatch cores), assert BRISC reset to halt stale firmware then
+                    // write RUN_MSG_DONE inline.  This catches the cores that were not yet at
+                    // 0x55 when FIX SC's pre-scan ran but transitioned before this poll.
+                    log_warning(
+                        tt::LogAlways,
+                        "FIX SC (GAP-76): Tensix core {} run_mailbox=0x{:02x} — "
+                        "asserting BRISC reset + writing RUN_MSG_DONE inline; board reset required",
+                        core.str(),
+                        run);
+                    try {
+                        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+                        cluster.assert_risc_reset_at_core(
+                            tt_cxy_pair(chip_id, core), tt::umd::RiscType::ALL);
+                        auto done_msg = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
+                        done_msg.view().signal() = tt_metal::dev_msgs::RUN_MSG_DONE;
+                        cluster.write_core(
+                            done_msg.data(),
+                            done_msg.size(),
+                            {static_cast<size_t>(chip_id), core},
+                            go_msg_addr & ~0x3ULL);
+                        return true;
+                    } catch (const std::exception& e) {
+                        log_warning(
+                            tt::LogAlways,
+                            "FIX SC (GAP-76): inline rescue failed for core {}: {}",
+                            core.str(),
+                            e.what());
+                    }
+                }
                 log_warning(
                     tt::LogLLRuntime,
                     "FIX SA (GAP-76): core {} run_mailbox=0x{:02x} is not a known RUN_MSG_* value "

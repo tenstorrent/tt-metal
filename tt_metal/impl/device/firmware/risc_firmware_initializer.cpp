@@ -2446,11 +2446,26 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             if (!is_known) {
                 log_warning(
                     tt::LogAlways,
-                    "FIX SB (GAP-76): Device {} core {} has stale go_msg=0x{:02x} after firmware multicast "
-                    "write — writing RUN_MSG_DONE to prevent 10 s hang; board reset will be required",
+                    "FIX SC (GAP-76): Device {} core {} has stale go_msg=0x{:02x} after firmware multicast "
+                    "write — asserting BRISC reset to halt stale firmware then writing RUN_MSG_DONE; "
+                    "board reset will be required",
                     device_id,
                     worker_core.str(),
                     signal);
+                // FIX SC: Assert BRISC reset BEFORE writing RUN_MSG_DONE.  Without this the stale
+                // firmware is still running and immediately overwrites our write back to 0x55,
+                // causing wait_until_cores_done to spin for 10 s.
+                try {
+                    cluster_.assert_risc_reset_at_core(
+                        tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogAlways,
+                        "FIX SC (GAP-76): assert_risc_reset failed for Device {} core {}: {}",
+                        device_id,
+                        worker_core.str(),
+                        e.what());
+                }
                 cluster_.write_core(
                     done_go_msg.data(),
                     done_go_msg.size(),
