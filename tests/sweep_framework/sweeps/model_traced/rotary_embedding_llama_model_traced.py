@@ -562,14 +562,6 @@ def run(
         # Interleave back to original format
         torch_output_tensor = torch.stack([cos_part, sin_part], dim=-1).flatten(-2).to(torch.bfloat16)
 
-        # Decode shrinks shape_a to per-chip on the input shard axis, so the
-        # per-chip golden above is per-chip. mesh_tensor_to_torch later
-        # reassembles outputs by concatenating along that same shard axis.
-        # Tile to match the reassembled global shape.
-        if _rel_a_factor > 1 and _rel_a_axis is not None:
-            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_output_tensor.ndim
-            if 0 <= _ax_g < torch_output_tensor.ndim:
-                torch_output_tensor = torch.cat([torch_output_tensor] * _rel_a_factor, dim=_ax_g)
     else:
         # For prefill mode. torch_input_tensor is GLOBAL (shape_a is unshrunk),
         # while torch_cos_cache / torch_sin_cache were generated at the per-chip
@@ -582,13 +574,6 @@ def run(
             torch_cos_cache.float(),
             torch_sin_cache.float(),
         ).to(torch.bfloat16)
-        # All chips have the same per-chip data; Shard(-1) topology causes
-        # mesh_tensor_to_torch to concatenate chip outputs along the shard
-        # axis, so tile the golden the same way.
-        if _rel_a_factor > 1 and _rel_a_axis is not None:
-            _ax_g = _rel_a_axis if _rel_a_axis >= 0 else _rel_a_axis + torch_output_tensor.ndim
-            if 0 <= _ax_g < torch_output_tensor.ndim:
-                torch_output_tensor = torch.cat([torch_output_tensor] * _rel_a_factor, dim=_ax_g)
 
     # --- Create TTNN Tensors ---
     if is_decode_mode:
