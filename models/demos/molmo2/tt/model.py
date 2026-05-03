@@ -948,17 +948,12 @@ class TtMolmo2Model(LightweightModule):
             ttnn.copy(x_padded, trace_tt["hidden"])
             ttnn.deallocate(x_padded)
             ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
-            # trace_x_norm is [1, 1, padded_S, 4096] — slice to last REAL token, apply lm_head
-            x_norm_cpu = ttnn.to_torch(ttnn.get_device_tensors(trace_x_norm)[0]).float()
-            # x_norm_cpu: [1, 1, padded_S, 4096] → slice last real token → [1, 1, 1, 4096]
-            x_last = x_norm_cpu[:, :, S - 1 : S, :].to(torch.bfloat16)
-            x_last_ttnn = ttnn.from_torch(
-                x_last,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
+            # Slice last real token on device — avoids D2H of the full [1,1,padded_S,4096] tensor
+            x_last_ttnn = ttnn.slice(
+                trace_x_norm,
+                (0, 0, S - 1, 0),
+                (1, 1, S, self.configuration.dim),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             logits = ttnn.linear(
                 x_last_ttnn,
@@ -1024,20 +1019,15 @@ class TtMolmo2Model(LightweightModule):
 
         x_ttnn = self.ln_f(x_ttnn, mode=Mode.PREFILL)
 
-        # Slice to the last REAL token (position S-1) on CPU before lm_head.
-        # Applying lm_head to all S_pad tokens would allocate S_pad×vocab×2 bytes DRAM
-        # (e.g. 8192×152064×2 = 2.5 GB) causing OOM.
-        x_norm_cpu = ttnn.to_torch(ttnn.get_device_tensors(x_ttnn)[0]).float()
-        ttnn.deallocate(x_ttnn)
-        x_last = x_norm_cpu[:, :, S - 1 : S, :].to(torch.bfloat16)  # [1, 1, 1, 4096]
-        x_last_ttnn = ttnn.from_torch(
-            x_last,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
+        # Slice last real token on device — avoids D2H of the full [1,1,S_pad,4096] tensor.
+        # lm_head on all S_pad tokens would OOM (e.g. 8192×152064×2 = 2.5 GB per device).
+        x_last_ttnn = ttnn.slice(
+            x_ttnn,
+            (0, 0, S - 1, 0),
+            (1, 1, S, self.configuration.dim),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        ttnn.deallocate(x_ttnn)
         logits = ttnn.linear(
             x_last_ttnn,
             self.lm_head,
