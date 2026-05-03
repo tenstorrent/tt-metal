@@ -264,17 +264,30 @@ def run(
         op_kwargs["batch_offset"] = 0
 
     # mesh_coords is stripped by build_op_kwargs (infra key) — recover it from
-    # the raw test vector so the trace recorder captures the per-coord variant.
+    # the raw test vector so the trace recorder captures the same per-coord
+    # variant master saw. The tracer captures str(mesh_coords); native Python
+    # set iteration order depends on insertion sequence (which we cannot
+    # reproduce exactly from master's recorded text), so wrap the set in a
+    # subclass whose __repr__ returns master's exact text. The kernel still
+    # sees a real set (isinstance(set) is True, __iter__ works), so behaviour
+    # is unchanged — the trace just records master's order rather than ours.
     _raw_mc = kwargs.get("mesh_coords")
     if _raw_mc is not None:
         _mc_text = _raw_mc.get("value", "") if isinstance(_raw_mc, dict) else str(_raw_mc)
-        _coords = set()
+        _coords_native = set()
         for _m in re.finditer(r"MeshCoordinate\(\[([^\]]+)\]\)", _mc_text):
             _nums = [int(x.strip()) for x in _m.group(1).split(",") if x.strip()]
             if _nums:
-                _coords.add(ttnn.MeshCoordinate(*_nums))
-        if _coords:
-            op_kwargs["mesh_coords"] = _coords
+                _coords_native.add(ttnn.MeshCoordinate(*_nums))
+        if _coords_native:
+
+            class _OrderedReprSet(set):
+                __slots__ = ()  # no __dict__, so tracer uses "value" key like a real set
+
+            _OrderedReprSet.__name__ = "set"  # tracer reads type().__name__
+            _OrderedReprSet.__repr__ = lambda self: _mc_text
+            _OrderedReprSet.__str__ = lambda self: _mc_text
+            op_kwargs["mesh_coords"] = _OrderedReprSet(_coords_native)
     try:
         output_tensor = ttnn.experimental.paged_update_cache(
             input_tensor_a,  # cache_tensor (positional)
