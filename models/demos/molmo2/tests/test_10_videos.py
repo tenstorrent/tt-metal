@@ -174,14 +174,19 @@ def tt_model(mesh_device):
     del state_dict
     from models.demos.molmo2.tt.model import PREFILL_BUCKETS
 
-    # Pre-compile all JIT kernels before the test loop so no cold compilation
-    # happens mid-test (which can stall for 20-40 min per new shape).
-    # After first run these are cached to disk; subsequent runs load instantly.
-    logger.info(f"[warmup] text decoder buckets {PREFILL_BUCKETS}...")
+    # Step 1: JIT-compile all text decoder buckets (128..32768) without trace
+    logger.info(f"[warmup] JIT compile text decoder buckets {PREFILL_BUCKETS}...")
     model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
+
+    # Step 2: Capture prefill traces for buckets ≤ 4096 (larger buckets OOM trace DRAM)
+    logger.info("[warmup] Capturing prefill traces (buckets ≤ 4096)...")
+    model.warmup_all_buckets(use_trace=True)
+
+    # Step 3: JIT-compile vision ops (ViT + pooling + projector)
     logger.info("[warmup] vision (ViT + pooling + projector)...")
     model.warmup_vision_compile()
-    logger.info("Model fully warmed up — test loop starting")
+
+    logger.info("Model fully warmed up (JIT + traces + vision)")
     return model, cfg
 
 

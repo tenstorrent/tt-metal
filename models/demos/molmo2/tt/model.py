@@ -407,32 +407,26 @@ class TtMolmo2Model(LightweightModule):
     def _capture_prefill_trace(self, tt: dict) -> tuple:
         """Warm-up + trace capture for a fixed-bucket-size prefill.
 
-        Uses causal-only attention (is_causal=True, no custom mask) so the same
-        trace works for text-only, image, and video inputs.  The embedding and
-        optional vision injection happen outside this trace.
+        Uses causal-only attention (is_causal=True, no explicit mask tensor).
+        Explicit mask SDPA materialises [n_heads, S, S] attention scores per layer;
+        with deallocations suppressed during capture that exceeds device DRAM for
+        S≥4096. Text-only inputs use this trace; video/image inputs use eager path.
 
-        Pattern (matching reference demo):
-          - Both warm-up and capture use trace_capture_run_begin() to suppress
-            ttnn.deallocate() so the stable hidden buffer is never freed.
-          - rot_mats are the full [1,1,max_seq,head_dim] matrix — rotary_embedding
-            applies the first bucket_size positions automatically.
+        trace_capture_run_begin() suppresses ttnn.deallocate() so the stable hidden
+        buffer is not freed inside the decoder forward during warmup/capture.
         """
         from models.demos.molmo2.tt.trace_capture_utils import trace_capture_run_begin, trace_capture_run_end
 
-        cfg = self.configuration
         bucket_size = tt["bucket_size"]
         rot_mats = self._get_rot_mats_prefill(bucket_size)
 
         def _decoder_fwd(hidden):
-            # Trace outputs [1, 1, S, 4096] hidden states (after ln_f but before lm_head).
-            # Excluding lm_head from the trace keeps the output tensor at ~8-32 MB
-            # instead of ~300 MB-1.2 GB for [S, vocab_size], allowing larger buckets.
             x = hidden
             for layer in self.layers:
                 x = layer.forward(x, rot_mats=rot_mats, mode="prefill", attn_mask=None)
             return self.ln_f(x, mode=Mode.PREFILL)  # [1, 1, S, 4096]
 
-        # ---- Warm-up (compile) pass — suppress deallocations to preserve tt["hidden"] ----
+        # ---- Warm-up (compile) pass ----
         tok = trace_capture_run_begin()
         try:
             logits_warmup = _decoder_fwd(tt["hidden"])
@@ -938,13 +932,15 @@ class TtMolmo2Model(LightweightModule):
         # ---- Route to trace or eager ----
         padded_S = get_padded_prefill_len(S)
 
-        # ---- Prefill trace (causal-only, no image mask) ----
-        # Padding is only applied when the trace exists for padded_S.
-        # Eager path uses the actual sequence length S to avoid concat issues
-        # with non-tile-aligned tensors.
-        if padded_S in self._prefill_traces:
+        # ---- Prefill trace (text-only / causal-only) ----
+        # The trace uses is_causal=True (no explicit mask tensor). Using an explicit
+        # bidirectional mask inside the trace would materialise [n_heads, S, S]
+        # attention scores per layer; with deallocations suppressed during capture
+        # this exceeds device DRAM for S≥4096. Video/image inputs use eager path.
+        if padded_S in self._prefill_traces and token_type_ids is None:
             trace_id, trace_tt, trace_x_norm = self._prefill_traces[padded_S]
-            # Pad x_ttnn to padded_S before copying into the stable trace buffer
+
+            # ---- Update stable hidden and execute ----
             if padded_S > S:
                 pad_t = ttnn.from_torch(
                     torch.zeros(1, 1, padded_S - S, self.configuration.dim, dtype=torch.bfloat16),
