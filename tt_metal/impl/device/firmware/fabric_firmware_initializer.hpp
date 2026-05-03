@@ -159,6 +159,15 @@ private:
     // is insufficient. get_fabric_router_sync_timeout_ms() triples the timeout when set.
     bool has_base_umd_channels_ = false;
 
+    // FIX TI (#42429): Set of devices whose ring barrier timed out in wait_for_fabric_router_sync
+    // when base-UMD channels were present. Even with the extended 30s timeout (FIX TH2), the
+    // inter-rank ring signal may not propagate if base-UMD ERISCs on a partner rank are still
+    // quiescing. Channels on these devices will never reach READY_FOR_TRAFFIC, so
+    // verify_all_fabric_channels_healthy() must skip them (otherwise the 150ms retry window
+    // causes a false health-check failure).
+    // Declared mutable so wait_for_fabric_router_sync() (const) can populate it.
+    mutable std::unordered_set<ChipId> timeout_on_base_umd_devices_;
+
     // GAP 5: Track channels that were force-reset during teardown.
     // On the next verify_all_fabric_channels_healthy() call, channels that were force-reset
     // in a previous session are expected to fail — log them as "degraded" rather than

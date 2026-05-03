@@ -1998,6 +1998,19 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                     router_sync_address,
                     expected_status,
                     master_router_status[0]);
+                // FIX TI (#42429): when base-UMD channels are present the ring barrier signal
+                // may never propagate (inter-rank quiesce can exceed even the 30s FIX TH2
+                // window).  Track this device so verify_all_fabric_channels_healthy() skips
+                // its channels instead of failing the 150ms health-check retry loop.
+                if (has_base_umd_channels_) {
+                    timeout_on_base_umd_devices_.insert(dev->id());
+                    log_warning(
+                        tt::LogMetal,
+                        "wait_for_fabric_router_sync: Device {} recorded in "
+                        "timeout_on_base_umd_devices_ — health check will skip its channels "
+                        "(FIX TI #42429).",
+                        dev->id());
+                }
                 return;
             }
         }
@@ -2118,6 +2131,23 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
             // FIX QD (#42429): Set the not-ready flag so test fixtures (e.g. MeshDevice1x4Fixture)
             // can detect this state and issue GTEST_SKIP() instead of running an AllGather that
             // will hang because no fabric firmware was loaded on the master router channel.
+            dev->set_fabric_channels_not_ready_for_traffic();
+            continue;
+        }
+        // FIX TI (#42429): skip devices where wait_for_fabric_router_sync timed out while
+        // base-UMD channels were present.  The ring barrier signal never propagated to
+        // LOCAL_HANDSHAKE_COMPLETE, so the master ERISC never broadcast READY_FOR_TRAFFIC to
+        // subordinate channels.  All channels on this device will be stuck at 0xa1b1c1d1
+        // (REMOTE_HANDSHAKE_COMPLETE) indefinitely; the 150ms kMaxRetries window is too short
+        // to wait for them.  Mark fabric not-ready so AllGather test fixtures skip cleanly.
+        if (timeout_on_base_umd_devices_.count(dev->id()) > 0) {
+            log_warning(
+                tt::LogMetal,
+                "verify_all_fabric_channels_healthy: Device {} ring barrier timed out during "
+                "base-UMD channel quiesce (channels stuck at REMOTE_HANDSHAKE_COMPLETE). "
+                "Marking fabric_channels_not_ready_for_traffic_ so callers can skip AllGather. "
+                "Skipping health check. (#42429 FIX TI)",
+                dev->id());
             dev->set_fabric_channels_not_ready_for_traffic();
             continue;
         }
