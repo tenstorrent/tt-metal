@@ -210,6 +210,7 @@ def run(
                 if _t_mc2 is not _t_mc:
                     tensor_a = ttnn.to_memory_config(tensor_a, _t_mc2)
         except Exception:
+            # Best-effort: tolerate this failure so the sweep can continue.
             pass
         out = ttnn.transpose(tensor_a, dim0, dim1, **kw)
         return mesh_tensor_to_torch(out, device if is_mesh_device else None)

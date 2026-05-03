@@ -9,7 +9,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_memory_config
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_model_traced_mesh_shape,
@@ -97,7 +97,6 @@ def run(
     # rms_norm_post_all_gather typically expects BFLOAT16/BFLOAT8_B, but some
     # master configs are traced with FLOAT32 input. Try the master dtype first;
     # if the kernel rejects it later we'll fall back to BFLOAT16 below.
-    _orig_input_a_dtype = input_a_dtype
     _kernel_compat_dtypes = (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32)
     if input_a_dtype not in _kernel_compat_dtypes:
         input_a_dtype = ttnn.bfloat16
@@ -154,10 +153,18 @@ def run(
     # The kernel expects that exact layout when a sharded program_config is
     # in use; if conversion fails we leave the tensor in DRAM-interleaved
     # rather than crashing the run.
+    # Parse dict form first — validation-vector runs deliver memory_config as
+    # a serialized dict that ttnn.to_memory_config can't consume directly.
+    if isinstance(input_a_memory_config, dict):
+        input_a_memory_config = dict_to_memory_config(input_a_memory_config)
     if input_a_memory_config is not None and input_a_memory_config != ttnn.DRAM_MEMORY_CONFIG:
         try:
             input_tensor = ttnn.to_memory_config(input_tensor, input_a_memory_config)
         except Exception:
+            # Best-effort: leave tensor in DRAM-interleaved if the kernel
+            # rejects the master shard layout (e.g. shard_spec incompatible
+            # with current dispatch grid). PCC may degrade for that cid but
+            # we'd rather log it than crash the whole sweep.
             pass
 
     # Determine n_devices from the traced stats shape
@@ -206,10 +213,16 @@ def run(
     # Land stats_tensor on master's input_b_memory_config when present. The
     # sharded program_config rejects DRAM-interleaved stats; master often
     # records stats as L1-WIDTH-SHARDED. Best-effort, fall back silently.
+    if isinstance(input_b_memory_config, dict):
+        input_b_memory_config = dict_to_memory_config(input_b_memory_config)
     if input_b_memory_config is not None and input_b_memory_config != ttnn.DRAM_MEMORY_CONFIG:
         try:
             stats_tensor = ttnn.to_memory_config(stats_tensor, input_b_memory_config)
         except Exception:
+            # Best-effort: a sharded stats layout rejected by the kernel
+            # leaves the stats in DRAM-interleaved; the kernel's program_config
+            # may then assert is_sharded() but that diff surfaces as a clear
+            # failure rather than silent corruption.
             pass
 
     start_time = start_measuring_time()

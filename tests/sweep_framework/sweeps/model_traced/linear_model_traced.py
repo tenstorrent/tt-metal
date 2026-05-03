@@ -308,10 +308,14 @@ def run(
                 if _shape is not None and hasattr(_shape, "__iter__"):
                     _ms = tuple(_shape)
             except Exception:
+                # Fall back to the Galaxy default 4x8 shape; we just need a
+                # sane mesh size to reopen the device with the right axis.
                 pass
             try:
                 ttnn.close_mesh_device(device)
             except Exception:
+                # Device may already be closed (e.g. mid-swap retry); the
+                # subsequent open_mesh_device call drives the real recovery.
                 pass
             try:
                 _new_axis = ttnn.DispatchCoreAxis.COL if _new_axis_col else ttnn.DispatchCoreAxis.ROW
@@ -565,6 +569,9 @@ def run(
                 actual_mesh = device.shape
                 _apply_topo(ttnn_a, input_a_tensor_placement, (actual_mesh[0], actual_mesh[1]))
             except Exception:
+                # Best-effort: if the C++ topology setter rejects the mesh
+                # shape (e.g. fewer chips than master traced), the trace will
+                # show the fallback topology rather than crash the sweep.
                 pass
     else:
         ttnn_a = ttnn.from_torch(torch_a, dtype=input_a_dtype, layout=input_a_layout)
@@ -586,6 +593,10 @@ def run(
                 try:
                     ttnn_b = ttnn.to_memory_config(ttnn_b, weight_memory_config)
                 except Exception:
+                    # Leave weight in DRAM-interleaved if the kernel rejects
+                    # the master shard layout (e.g. shard_spec incompatible
+                    # with current dispatch grid). The trace will show DRAM
+                    # rather than crash the sweep.
                     pass
         else:
             # Regular single-device tensor

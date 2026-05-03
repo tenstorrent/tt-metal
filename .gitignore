@@ -159,4 +159,3 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
-tests/sweep_framework/validation_vectors/lead_models/
