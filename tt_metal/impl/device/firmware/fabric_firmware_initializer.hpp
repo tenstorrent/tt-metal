@@ -168,6 +168,14 @@ private:
     // Declared mutable so wait_for_fabric_router_sync() (const) can populate it.
     mutable std::unordered_set<ChipId> timeout_on_base_umd_devices_;
 
+    // FIX TJ (#42429): Set to true after the first device times out in wait_for_fabric_router_sync
+    // due to base-UMD ring-barrier failure.  When the ring barrier fails on one device it will
+    // fail on ALL devices (barrier requires every ring member to complete before any can advance).
+    // Subsequent devices in the polling loop are immediately added to timeout_on_base_umd_devices_
+    // instead of waiting the full 30s timeout, reducing total wait from N×30s to 1×30s.
+    // Declared mutable so wait_for_fabric_router_sync() (const) can set it.
+    mutable bool ring_sync_already_timed_out_ = false;
+
     // GAP 5: Track channels that were force-reset during teardown.
     // On the next verify_all_fabric_channels_healthy() call, channels that were force-reset
     // in a previous session are expected to fail — log them as "degraded" rather than

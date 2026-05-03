@@ -1899,6 +1899,19 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
             return;
         }
+        // FIX TJ (#42429): if a prior device already timed out on the base-UMD ring barrier,
+        // all remaining devices will also time out (ring barrier requires every member).
+        // Skip the full 30s wait and immediately mark this device as timed-out to avoid
+        // N×30s sequential overhead (e.g. 8 devices × 30s = 4 min on a broken cluster).
+        if (ring_sync_already_timed_out_ && has_base_umd_channels_) {
+            timeout_on_base_umd_devices_.insert(dev->id());
+            log_warning(
+                tt::LogMetal,
+                "wait_for_fabric_router_sync: Device {} skipped — ring sync already timed out "
+                "on an earlier device; ring barrier cannot complete (FIX TJ #42429).",
+                dev->id());
+            return;
+        }
         // FIX G (#42429): skip dead-relay devices — their ETH relay path is broken, so any
         // read through it (ReadFromDeviceL1 → l1_barrier → wait_for_non_mmio_flush) will
         // block until UMD's relay timeout fires and then throw.  These devices had fabric
@@ -2004,11 +2017,15 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
                 // its channels instead of failing the 150ms health-check retry loop.
                 if (has_base_umd_channels_) {
                     timeout_on_base_umd_devices_.insert(dev->id());
+                    // FIX TJ (#42429): signal that the ring barrier has failed — all subsequent
+                    // devices in the polling loop will be fast-skipped instead of waiting 30s each.
+                    ring_sync_already_timed_out_ = true;
                     log_warning(
                         tt::LogMetal,
                         "wait_for_fabric_router_sync: Device {} recorded in "
-                        "timeout_on_base_umd_devices_ — health check will skip its channels "
-                        "(FIX TI #42429).",
+                        "timeout_on_base_umd_devices_ — health check will skip its channels; "
+                        "ring_sync_already_timed_out_ set to fast-skip remaining devices "
+                        "(FIX TI + FIX TJ #42429).",
                         dev->id());
                 }
                 return;
