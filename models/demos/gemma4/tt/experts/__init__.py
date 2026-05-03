@@ -9,7 +9,7 @@ Prefill (seq_len>1): on-device via sparse_matmul with all-ones sparsity (gpt_oss
 """
 
 import ttnn
-from models.demos.gemma4.tt.optimization import env_weight_dtype
+from models.demos.gemma4.tt.optimization import profile_weight_dtype
 
 from .decode import decode_forward
 from .prefill import create_prefill_sparsity, prefill_forward
@@ -43,16 +43,34 @@ class Gemma4Experts:
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
 
-        weight_dtype, cache_suffix = env_weight_dtype("GEMMA4_EXPERT_WEIGHT_DTYPE", weight_dtype)
+        gate_choice = profile_weight_dtype(
+            "expert_gate",
+            env_name="GEMMA4_EXPERT_GATE_WEIGHT_DTYPE",
+            legacy_env_name="GEMMA4_EXPERT_WEIGHT_DTYPE",
+        )
+        up_choice = profile_weight_dtype(
+            "expert_up",
+            env_name="GEMMA4_EXPERT_UP_WEIGHT_DTYPE",
+            legacy_env_name="GEMMA4_EXPERT_WEIGHT_DTYPE",
+        )
+        down_choice = profile_weight_dtype(
+            "expert_down",
+            env_name="GEMMA4_EXPERT_DOWN_WEIGHT_DTYPE",
+            legacy_env_name="GEMMA4_EXPERT_WEIGHT_DTYPE",
+        )
         # Load weights to device for sparse_matmul
         self.weights = load_expert_weights(
             mesh_device=mesh_device,
             config=config,
             state_dict=state_dict,
             mesh_config=mesh_config,
-            weight_dtype=weight_dtype,
+            gate_weight_dtype=gate_choice.dtype,
+            up_weight_dtype=up_choice.dtype,
+            down_weight_dtype=down_choice.dtype,
             tensor_cache_path=tensor_cache_path,
-            cache_suffix=cache_suffix,
+            gate_cache_suffix=gate_choice.cache_suffix,
+            up_cache_suffix=up_choice.cache_suffix,
+            down_cache_suffix=down_choice.cache_suffix,
         )
         # Cache all-ones prefill sparsity (reused for every prefill call)
         self.prefill_sparsity = create_prefill_sparsity(mesh_device, config.num_experts)

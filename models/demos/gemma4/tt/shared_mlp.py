@@ -16,7 +16,7 @@ HF weight shapes:
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.optimization import env_weight_dtype
+from models.demos.gemma4.tt.optimization import profile_weight_dtype
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 
@@ -36,7 +36,21 @@ class SharedMLP:
         self.ccl_manager = ccl_manager
         self.hidden_size = hf_config.hidden_size
         self.intermediate_size = hf_config.intermediate_size
-        dtype, cache_suffix = env_weight_dtype("GEMMA4_SHARED_MLP_WEIGHT_DTYPE", dtype)
+        gate_choice = profile_weight_dtype(
+            "shared_mlp_gate",
+            env_name="GEMMA4_SHARED_MLP_GATE_WEIGHT_DTYPE",
+            legacy_env_name="GEMMA4_SHARED_MLP_WEIGHT_DTYPE",
+        )
+        up_choice = profile_weight_dtype(
+            "shared_mlp_up",
+            env_name="GEMMA4_SHARED_MLP_UP_WEIGHT_DTYPE",
+            legacy_env_name="GEMMA4_SHARED_MLP_WEIGHT_DTYPE",
+        )
+        down_choice = profile_weight_dtype(
+            "shared_mlp_down",
+            env_name="GEMMA4_SHARED_MLP_DOWN_WEIGHT_DTYPE",
+            legacy_env_name="GEMMA4_SHARED_MLP_WEIGHT_DTYPE",
+        )
 
         tp = mesh_config.tp if mesh_config else 1
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
@@ -61,29 +75,35 @@ class SharedMLP:
         self.gate_proj = ttnn.as_tensor(
             gate_proj_weight,
             device=mesh_device,
-            dtype=dtype,
+            dtype=gate_choice.dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj.weight{cache_suffix}{tp_suffix}"),
+            cache_file_name=get_cache_file_name(
+                tensor_cache_path, f"gate_proj.weight{gate_choice.cache_suffix}{tp_suffix}"
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.up_proj = ttnn.as_tensor(
             up_proj_weight,
             device=mesh_device,
-            dtype=dtype,
+            dtype=up_choice.dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj.weight{cache_suffix}{tp_suffix}"),
+            cache_file_name=get_cache_file_name(
+                tensor_cache_path, f"up_proj.weight{up_choice.cache_suffix}{tp_suffix}"
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # down: row-parallel (shard input dim, allreduce after)
         self.down_proj = ttnn.as_tensor(
             down_proj_weight,
             device=mesh_device,
-            dtype=dtype,
+            dtype=down_choice.dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=row_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{cache_suffix}{tp_suffix}"),
+            cache_file_name=get_cache_file_name(
+                tensor_cache_path, f"down_proj.weight{down_choice.cache_suffix}{tp_suffix}"
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

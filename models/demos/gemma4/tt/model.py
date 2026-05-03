@@ -22,7 +22,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
-from models.demos.gemma4.tt.optimization import env_weight_dtype
+from models.demos.gemma4.tt.optimization import profile_weight_dtype
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -231,15 +231,15 @@ class Gemma4Model:
             # Default bfloat16 for LM head — bfloat8_b is too lossy for
             # 262k-vocab argmax in the known-good path.  Profiling runs may
             # override this with GEMMA4_LM_HEAD_WEIGHT_DTYPE.
-            lm_head_dtype, lm_head_cache_suffix = env_weight_dtype("GEMMA4_LM_HEAD_WEIGHT_DTYPE", ttnn.bfloat16)
+            lm_head_choice = profile_weight_dtype("lm_head", env_name="GEMMA4_LM_HEAD_WEIGHT_DTYPE")
             self.lm_head_weight = ttnn.as_tensor(
                 lm_head_weight,
                 device=mesh_device,
-                dtype=lm_head_dtype,
+                dtype=lm_head_choice.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=lm_mapper,
                 cache_file_name=get_cache_file_name(
-                    tensor_cache_path, f"lm_head.weight{lm_head_cache_suffix}{tp_suffix}"
+                    tensor_cache_path, f"lm_head.weight{lm_head_choice.cache_suffix}{tp_suffix}"
                 ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )

@@ -14,7 +14,7 @@ Supports two layer types:
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, Mode
-from models.demos.gemma4.tt.optimization import env_weight_dtype
+from models.demos.gemma4.tt.optimization import profile_weight_dtype
 
 from .weights import AttentionWeights, load_attention_weights
 from .kv_cache import init_kv_cache
@@ -75,15 +75,26 @@ class Gemma4Attention:
         self.mesh_config = mesh_config
         self.layer_idx = layer_idx
 
-        weight_dtype, cache_suffix = env_weight_dtype("GEMMA4_ATTENTION_WEIGHT_DTYPE", ttnn.bfloat16)
+        qkv_choice = profile_weight_dtype(
+            "attention_qkv",
+            env_name="GEMMA4_ATTENTION_QKV_WEIGHT_DTYPE",
+            legacy_env_name="GEMMA4_ATTENTION_WEIGHT_DTYPE",
+        )
+        o_proj_choice = profile_weight_dtype(
+            "attention_o_proj",
+            env_name="GEMMA4_ATTENTION_O_PROJ_WEIGHT_DTYPE",
+            legacy_env_name="GEMMA4_ATTENTION_WEIGHT_DTYPE",
+        )
         self.weights = load_attention_weights(
             mesh_device=mesh_device,
             config=config,
             state_dict=state_dict,
             mesh_config=mesh_config,
-            weight_dtype=weight_dtype,
+            qkv_weight_dtype=qkv_choice.dtype,
+            o_proj_weight_dtype=o_proj_choice.dtype,
             tensor_cache_path=tensor_cache_path,
-            cache_suffix=cache_suffix,
+            qkv_cache_suffix=qkv_choice.cache_suffix,
+            o_proj_cache_suffix=o_proj_choice.cache_suffix,
         )
 
         if create_kv_cache:
