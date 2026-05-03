@@ -246,6 +246,40 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+
+    # Vocab-sharded embedding recovery: when the weight is sharded along the
+    # vocab dim across mesh-rows, each chip computes a partial lookup over
+    # only its slice of vocab. The model normally all-reduces across the
+    # vocab-shard axis to combine partial outputs into the full embedding.
+    # The mesh gather here just concatenates, so the actual ends up shaped
+    # (1, S × mesh_cols, D × mesh_rows). Reshape to expose the chip dims,
+    # sum across mesh_rows (vocab partitions), then take the first chip-col
+    # (input replicated along mesh_cols → all cols identical) and re-add the
+    # leading 1 dim to match the per-device golden shape.
+    if (
+        is_mesh_device
+        and weight_tensor_placement
+        and "PlacementShard" in str(weight_tensor_placement.get("placement", ""))
+        and output_tensor.ndim == 3
+        and torch_output_tensor.ndim == 4
+    ):
+        try:
+            import ast as _ast_e
+
+            _ms_raw = weight_tensor_placement.get("mesh_device_shape", "[1, 1]")
+            if isinstance(_ms_raw, str):
+                _ms_raw = _ast_e.literal_eval(_ms_raw)
+            _mr, _mc = int(_ms_raw[0]), int(_ms_raw[1])
+            _S = torch_output_tensor.shape[2]
+            _D = torch_output_tensor.shape[3]
+            if output_tensor.shape[1] == _S * _mc and output_tensor.shape[2] == _D * _mr:
+                _ot = output_tensor.reshape(1, _mc, _S, _mr, _D)
+                _ot = _ot.sum(dim=3)  # (1, mc, S, D), partials combined
+                _ot = _ot[:, 0:1, :, :]  # (1, 1, S, D), de-replicate cols
+                output_tensor = _ot.reshape(*torch_output_tensor.shape)
+        except Exception:
+            pass
+
     if is_mesh_device:
         torch_output_tensor = reconcile_golden_to_actual(
             torch_output_tensor, output_tensor, input_a_tensor_placement, weight_tensor_placement
