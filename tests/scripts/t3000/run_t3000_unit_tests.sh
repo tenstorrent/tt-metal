@@ -183,7 +183,12 @@ except Exception as e:
     # call immediately after the reset races against firmware boot and returns only MMIO chips (4).
     # Re-run the full FIX GS-3 warm-up first: it opens/closes the mesh (which triggers relay
     # establish + base-UMD quiesce) so that the subsequent topology check sees all 8 chips.
-    python3 -u -c "
+    # FIX TM2 (#42429): capture FIX TM warm-up output and check for ring-sync timeout
+    # markers, same as FIX UP does for the initial warm-up.  Without this, ring-sync
+    # timeout inside FIX TM goes undetected: topology check sees 8 chips (relay works)
+    # but ring never converged — first GTest hits stale_base_umd → SKIP loop.
+    local TM_WARM_OUTPUT TM_RING_TIMEOUT
+    TM_WARM_OUTPUT=$(python3 -u -c "
 import sys
 try:
     import ttnn
@@ -192,7 +197,13 @@ try:
     print('[FIX TM] post-TL warm-up complete — relay re-established after recovery reset')
 except Exception as e:
     print(f'[FIX TM] WARNING: post-TL warm-up failed ({e}) — topology check may still see degraded state', file=sys.stderr)
-" 2>&1 || true
+" 2>&1 || true)
+    echo "$TM_WARM_OUTPUT"
+    TM_RING_TIMEOUT=0
+    if echo "$TM_WARM_OUTPUT" | grep -qE "(FIX TK|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out)"; then
+      echo "LOG_METAL: [FIX TM2] ring-sync timeout detected in post-TL warm-up — hardware may not be ready for traffic." >&2
+      TM_RING_TIMEOUT=1
+    fi
     raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null) || true
     n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)
     if [[ -z "$n_chips" ]]; then n_chips="ERROR"; fi
@@ -204,6 +215,38 @@ except Exception as e:
     echo "LOG_METAL: [FIX TL/TM] topology recovered: ${n_chips}/8 chips visible after reset+warm-up."
   fi
   echo "LOG_METAL: T3K topology OK — ${n_chips}/8 chips visible."
+
+  # FIX UP2 (#42429): Pre-test-loop ring-sync health gate.
+  # If EITHER the initial warm-up (FIX UP) OR the FIX TM recovery warm-up detected
+  # ring-sync timeout, the hardware is not ready for traffic even though topology shows
+  # 8 chips.  Run one more remedial tt-smi -r + warm-up and check again.  If ring sync
+  # STILL fails after this second attempt, abort with INFRA_ERROR — the cluster is too
+  # degraded for meaningful test execution and needs a reboot.
+  if [[ ${WARM_RING_TIMEOUT:-0} -eq 1 || ${TM_RING_TIMEOUT:-0} -eq 1 ]]; then
+    echo "LOG_METAL: [FIX UP2] ring-sync timeout detected in pre-test warm-up — attempting one more reset+warm-up before test loop." >&2
+    timeout 30 tt-smi -r || true
+    local UP2_WARM_OUTPUT UP2_RING_TIMEOUT
+    UP2_WARM_OUTPUT=$(python3 -u -c "
+import sys
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX UP2] pre-test-loop warm-up complete')
+except Exception as e:
+    print(f'[FIX UP2] WARNING: warm-up failed ({e})', file=sys.stderr)
+" 2>&1 || true)
+    echo "$UP2_WARM_OUTPUT"
+    UP2_RING_TIMEOUT=0
+    if echo "$UP2_WARM_OUTPUT" | grep -qE "(FIX TK|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out)"; then
+      UP2_RING_TIMEOUT=1
+    fi
+    if [[ $UP2_RING_TIMEOUT -eq 1 ]]; then
+      echo "LOG_METAL: [FIX UP2] INFRA_ERROR — ring-sync timeout persists after 2 reset+warm-up cycles. Hardware requires reboot." >&2
+      exit 1
+    fi
+    echo "LOG_METAL: [FIX UP2] ring-sync healthy after retry — proceeding to test loop."
+  fi
 
   # Per-test-failure hardware reset hook.
   # Call immediately after each test line: `cmd; record_test`

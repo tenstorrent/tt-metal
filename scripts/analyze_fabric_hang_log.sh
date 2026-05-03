@@ -953,6 +953,8 @@ FIX_TM_FIRES=$(grep -cE 'FIX TM.*cluster too degraded' "$CLEAN" 2>/dev/null; :)
 # Log: "FIX TH2 (#42429): base-UMD channels detected — extending fabric_router_sync_timeout"
 # Regression evidence: "Fabric health check failed ... 12 still-initializing" in run 25278856721.
 FIX_TH2_FIRES=$(grep -cE 'FIX TH2.*extending fabric_router_sync_timeout' "$CLEAN" 2>/dev/null; :)
+# FIX TH3 (#42429): extends ring-sync timeout from 30s (3x) to 120s (12x) for base-UMD channels.
+FIX_TH3_FIRES=$(grep -cE 'FIX TH3.*extending fabric_router_sync_timeout' "$CLEAN" 2>/dev/null; :)
 # FIX TG L1-clear (#42429): fabric_init.cpp configure_fabric_cores() — skip L1 clear for
 # base-UMD relay channels to preserve the 0x49706550 sentinel.  Without this, L1 clear zeroes
 # edm_status_address, and the next session's terminate_stale_erisc_routers() reads 0 → classifies
@@ -1002,8 +1004,17 @@ FIX_TM_BASH_FAILED=$(grep -cE '\[FIX TM\] WARNING.*post-TL warm-up failed' "$CLE
 # abort the script when Python crashes (GetNumAvailableDevices throws on dead relay).
 # No direct log — detect via "T3K topology check failed to query device count" error message.
 FIX_TN_BASH_MISSING=$(grep -cE 'T3K topology check failed to query device count' "$CLEAN" 2>/dev/null; :)
-# FIX TO (#42429): remedial tt-smi -r after warm-up >= 30s (ring-sync-timeout path detected by wall-clock).
+# FIX TO (#42429): remedial tt-smi -r after warm-up >= 120s or ring-sync timeout detected (FIX TH3 threshold).
 FIX_TO_BASH_FIRES=$(grep -cE '\[FIX TO\] warm-up ran' "$CLEAN" 2>/dev/null; :)
+# FIX UP (#42429): ring-sync timeout marker detected in warm-up output (Python exits 0 but ring never converged).
+FIX_UP_FIRES=$(grep -cE '\[FIX UP\] ring-sync timeout marker detected|post-reset warm-up ring-sync timeout' "$CLEAN" 2>/dev/null; :)
+# FIX UP INFRA_ERROR (#42429): 3 consecutive ring-sync timeout warm-ups → abort.
+FIX_UP_INFRA_ERROR=$(grep -cE '\[FIX UP\] INFRA_ERROR' "$CLEAN" 2>/dev/null; :)
+# FIX UP2 (#42429): pre-test-loop ring-sync health gate — retry after ring-sync timeout in initial/TM warm-up.
+FIX_UP2_FIRES=$(grep -cE '\[FIX UP2\]' "$CLEAN" 2>/dev/null; :)
+FIX_UP2_INFRA_ERROR=$(grep -cE '\[FIX UP2\] INFRA_ERROR' "$CLEAN" 2>/dev/null; :)
+# FIX TM2 (#42429): ring-sync timeout detected in post-TL (FIX TM) warm-up.
+FIX_TM2_FIRES=$(grep -cE '\[FIX TM2\] ring-sync timeout' "$CLEAN" 2>/dev/null; :)
 # Aggregate counters: ring-sync timeouts, base-UMD channel occurrences, channels_not_ready events
 RING_SYNC_TIMEOUT_COUNT=$(grep -ciE 'ring.*timeout|timeout.*ring|Timeout after.*ms on Device.*master chan' "$CLEAN" 2>/dev/null; :)
 BASE_UMD_CHAN_COUNT=$(grep -c '0x49706550' "$CLEAN" 2>/dev/null; :)
@@ -1588,21 +1599,48 @@ if [ "${FIX_TN_BASH_MISSING:-0}" -gt 0 ]; then
     echo "     without || true, set -eo pipefail aborts the shell silently before recovery."
 fi
 if [ "${FIX_TO_BASH_FIRES:-0}" -gt 0 ]; then
-    echo "  => [FIX TO-bash] Remedial tt-smi -r after warm-up >= 30s (${FIX_TO_BASH_FIRES} occurrence(s))."
-    echo "     Wall-clock >= 30s means the ring-sync-timeout path (FIX TH2) was hit during warm-up."
+    echo "  => [FIX TO-bash] Remedial tt-smi -r after warm-up (${FIX_TO_BASH_FIRES} occurrence(s))."
+    echo "     Triggered when warm-up >= 120s (FIX TH3 threshold) or ring-sync timeout markers detected."
     echo "     dispatch-ERISC hard resets leave ETH cores in corrupted go_msg=0x02 state."
     echo "     Remedial reset clears this before the topology check / GTest execution."
+fi
+if [ "${FIX_UP_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX UP] Ring-sync timeout detected in warm-up output (${FIX_UP_FIRES} occurrence(s))."
+    echo "     Python exits 0 but Metal logs show ring never converged (FIX TK / ring_sync_already_timed_out)."
+    echo "     Hardware is NOT ready for traffic despite successful open/close cycle."
+fi
+if [ "${FIX_UP_INFRA_ERROR:-0}" -gt 0 ]; then
+    echo "  => [FIX UP INFRA_ERROR] Ring-sync timeout on 3+ consecutive warm-ups — test run aborted."
+    echo "     Hardware requires reboot. This prevents infinite SKIP→reset→warm-up loops."
+fi
+if [ "${FIX_TM2_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TM2] Ring-sync timeout detected in post-TL warm-up (${FIX_TM2_FIRES} occurrence(s))."
+    echo "     FIX TM recovery warm-up completed but ring-sync never converged."
+fi
+if [ "${FIX_UP2_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX UP2] Pre-test-loop ring-sync health gate fired (${FIX_UP2_FIRES} occurrence(s))."
+    echo "     Ran extra reset+warm-up cycle because initial/TM warm-up had ring-sync timeout."
+    if [ "${FIX_UP2_INFRA_ERROR:-0}" -gt 0 ]; then
+        echo "     => INFRA_ERROR: ring-sync timeout persisted after 2 reset+warm-up cycles — run aborted."
+    fi
 fi
 echo ""
 echo "=== AGGREGATE COUNTERS ==="
 echo "  RING_SYNC_TIMEOUT_COUNT:   ${RING_SYNC_TIMEOUT_COUNT:-0}"
 echo "  BASE_UMD_CHAN_COUNT:        ${BASE_UMD_CHAN_COUNT:-0}  (0x49706550 occurrences)"
 echo "  CHANNELS_NOT_READY_COUNT:   ${CHANNELS_NOT_READY_COUNT:-0}"
+echo "  FIX_UP_FIRES:              ${FIX_UP_FIRES:-0}  (ring-sync timeout in warm-up output)"
+echo "  FIX_UP2_FIRES:             ${FIX_UP2_FIRES:-0}  (pre-test-loop ring-sync health gate)"
+echo "  FIX_TM2_FIRES:             ${FIX_TM2_FIRES:-0}  (ring-sync timeout in post-TL warm-up)"
+echo "  FIX_TH3_FIRES:             ${FIX_TH3_FIRES:-0}  (120s/12x ring-sync timeout extension)"
 echo ""
-if [ "${FIX_TH2_FIRES:-0}" -gt 0 ]; then
+if [ "${FIX_TH3_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TH3] fabric_router_sync_timeout extended from 10s to 120s (12x) (${FIX_TH3_FIRES} occurrence(s))."
+    echo "     Base-UMD channels need much longer: T3K worst-case 16 channels × 7.5s each."
+    echo "     FIX TH2 (30s/3x) was insufficient — channels stuck at REMOTE_HANDSHAKE_COMPLETE throughout."
+elif [ "${FIX_TH2_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TH2] fabric_router_sync_timeout extended from 10s to 30s (${FIX_TH2_FIRES} occurrence(s))."
-    echo "     Base-UMD channels need longer: relay quiesce + new firmware launch + ring handshake."
-    echo "     Before FIX TH2: 12 base-UMD channels timed out at REMOTE_HANDSHAKE_COMPLETE → health check failed."
+    echo "     Superseded by FIX TH3 (120s/12x). If TH2 fires but not TH3, FIX TH3 code may be missing."
 elif [ "${HEALTH_CHECK_FAILED:-0}" -gt 0 ] && [ "${STILL_INITIALIZING_COUNT:-0}" -gt 0 ]; then
     echo "  => [FIX TH2 MISSING?] Fabric health check failed with ${STILL_INITIALIZING_COUNT} still-initializing."
     echo "     Channels stuck at REMOTE_HANDSHAKE_COMPLETE (ring barrier incomplete within timeout)."
