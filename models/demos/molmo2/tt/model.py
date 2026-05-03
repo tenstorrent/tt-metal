@@ -454,7 +454,13 @@ class TtMolmo2Model(LightweightModule):
         if bucket_sizes is None:
             bucket_sizes = DEFAULT_WARMUP_BUCKETS
 
-        valid = [b for b in bucket_sizes if b <= self.configuration.max_seq_len and b <= MAX_TRACE_BUCKET]
+        if use_trace:
+            # Trace capture only supports buckets up to MAX_TRACE_BUCKET (larger traces
+            # permanently reserve DRAM that OOMs alongside vision backbone weights).
+            valid = [b for b in bucket_sizes if b <= self.configuration.max_seq_len and b <= MAX_TRACE_BUCKET]
+        else:
+            # JIT compilation: no trace-memory constraint — warm all requested buckets.
+            valid = [b for b in bucket_sizes if b <= self.configuration.max_seq_len]
         print(f"[prefill warmup] buckets={valid} use_trace={use_trace}", flush=True)
 
         if use_trace:
@@ -466,12 +472,15 @@ class TtMolmo2Model(LightweightModule):
                 trace_id, trace_logits = self._capture_prefill_trace(all_tt[b])
                 self._prefill_traces[b] = (trace_id, all_tt[b], trace_logits)
         else:
-            # JIT kernels compile lazily on first use — no explicit warmup needed.
-            # The first forward_prefill call for each bucket size will compile and
-            # cache the TTNN kernels automatically.  Attempting to drive warmup via
-            # forward_prefill(dummy_ids) can fail with storage.cpp:169 (typecast
-            # bfloat8_b constraint) when the device is freshly initialised.
-            print(f"[prefill warmup] use_trace=False — kernels compile on first real use", flush=True)
+            # Run a text-only forward_prefill with dummy ids at each bucket size to
+            # trigger JIT kernel compilation and populate the on-disk cache.
+            # Subsequent calls at the same S_pad hit the cache and are instant.
+            cfg = self.configuration
+            for b in valid:
+                print(f"  JIT warmup bucket {b} ...", flush=True)
+                dummy_ids = torch.zeros(1, b, dtype=torch.long)
+                _ = self.forward_prefill(input_ids=dummy_ids, pixel_values=None, user_id=0)
+                print(f"  bucket {b} done", flush=True)
 
         n = len(self._prefill_traces)
         print(f"[prefill warmup] done — {n} traces, {len(valid) - n} JIT-compiled", flush=True)

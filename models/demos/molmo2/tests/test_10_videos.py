@@ -172,6 +172,10 @@ def tt_model(mesh_device):
         configuration=cfg,
     )
     del state_dict
+    from models.demos.molmo2.tt.model import PREFILL_BUCKETS
+
+    logger.info(f"Warming up JIT kernels for buckets {PREFILL_BUCKETS} (cached to disk after first run)...")
+    model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
     logger.info("TTNN model ready")
     return model, cfg
 
