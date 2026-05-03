@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import re
+
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -46,6 +48,27 @@ parameters = {
 
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def _parse_mesh_coords(raw):
+    """Parse traced mesh_coords payload back to a set[ttnn.MeshCoordinate].
+
+    The master trace stores mesh_coords as ``{'type': 'set', 'value': '{MeshCoordinate([0, 1])}'}``
+    or as the raw repr-string.  Returning ``None`` lets the op fall back to
+    "all chips", matching prior sweep behavior when no mesh_coords were traced.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        text = raw.get("value", "")
+    else:
+        text = str(raw)
+    coords = set()
+    for m in re.finditer(r"MeshCoordinate\(\[([^\]]+)\]\)", text):
+        nums = [int(x.strip()) for x in m.group(1).split(",") if x.strip()]
+        if nums:
+            coords.add(ttnn.MeshCoordinate(*nums))
+    return coords or None
 
 
 def mesh_device_fixture():
@@ -218,19 +241,28 @@ def run(
     if "batch_idx" not in op_kwargs or op_kwargs["batch_idx"] is None:
         op_kwargs["batch_idx"] = 0
 
+    # mesh_coords is stripped by build_op_kwargs (infra key) — recover it from
+    # the raw test vector so the trace recorder names the per-coord variant
+    # distinctly. Without this, all configs that differ only in mesh_coords
+    # collapse to a single trace entry and validation reports them missing.
+    mesh_coords_set = _parse_mesh_coords(kwargs.get("mesh_coords"))
+    if mesh_coords_set is not None:
+        op_kwargs["mesh_coords"] = mesh_coords_set
+
     start_time = start_measuring_time()
     try:
         output_tensor = ttnn.experimental.paged_fill_cache(
             input_tensor_a,  # cache_tensor
             input_tensor_b,  # input_tensor
-            input_tensor_c,  # page_table
+            page_table=input_tensor_c,
             **op_kwargs,
         )
     except TypeError:
+        # Fallback for builds without the page_table keyword binding.
         output_tensor = ttnn.experimental.paged_fill_cache(
-            input_tensor_a,  # cache_tensor
-            input_tensor_b,  # input_tensor
-            input_tensor_c,  # page_table
+            input_tensor_a,
+            input_tensor_b,
+            input_tensor_c,
             **op_kwargs,
         )
     # paged_fill_cache modifies cache_tensor in place, so output is the same as input_tensor_a
