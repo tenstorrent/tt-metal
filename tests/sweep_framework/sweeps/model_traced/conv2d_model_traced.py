@@ -161,8 +161,10 @@ def _parse_conv_config(traced_conv_config):
 _SLICE_TYPE_MAP = {
     "L1_FULL": "L1Full",
     "L1Full": "L1Full",
+    "DRAM_HEIGHT": "DRAMSliceHeight",
     "DRAMSliceHeight": "DRAMSliceHeight",
     "DRAM_SLICE_HEIGHT": "DRAMSliceHeight",
+    "DRAM_WIDTH": "DRAMSliceWidth",
     "DRAMSliceWidth": "DRAMSliceWidth",
     "DRAM_SLICE_WIDTH": "DRAMSliceWidth",
 }

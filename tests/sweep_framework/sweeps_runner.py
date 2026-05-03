@@ -7,14 +7,31 @@ import argparse
 import builtins
 import datetime as dt
 import importlib
+import multiprocessing as _mp
 import os
 import subprocess
 import sys
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from multiprocessing import Process
 from pathlib import Path
 from queue import Empty
+
+# Allow overriding the multiprocessing start method for sweep child processes.
+# On Galaxy, the parent runner can initialize TTNN/UMD (for machine info, etc.)
+# before forking child workers; with the default ``fork`` method the child then
+# inherits parent UMD state and CCL-heavy ops can deadlock.  Setting
+# ``SWEEPS_RUNNER_MP_START=spawn`` (or ``forkserver``) gives each child a clean
+# interpreter and avoids that class of hang.
+_REQUESTED_MP_START_METHOD = os.environ.get("SWEEPS_RUNNER_MP_START", "").strip().lower() or None
+if _REQUESTED_MP_START_METHOD:
+    try:
+        _mp.set_start_method(_REQUESTED_MP_START_METHOD, force=True)
+    except (RuntimeError, ValueError) as _err:
+        sys.stderr.write(
+            f"Warning: SWEEPS_RUNNER_MP_START='{_REQUESTED_MP_START_METHOD}' could not be applied: {_err}\n"
+        )
 
 # third party
 import enlighten
@@ -151,6 +168,7 @@ def get_all_modules():
 
 DEFAULT_TIMEOUT = 30
 TIMEOUT_KEY = "TIMEOUT"
+MAIN_PROC_ONLY_KEY = "MAIN_PROC_ONLY"
 SWEEPS_SUBDIR_NAME = "sweeps"
 PY_SUFFIX = ".py"
 
@@ -174,6 +192,34 @@ def get_timeout(test_module_name):
                 except (ValueError, IndexError):
                     break
     return timeout
+
+
+def get_main_proc_only(test_module_name):
+    """Detect ``MAIN_PROC_ONLY = True`` in a sweep module without importing it.
+
+    Some sweeps (notably CCL ops on Galaxy) hang under the multiprocess child
+    runner due to a subprocess-mode interaction with the fabric setup. Sweeps
+    that hit this can opt into running in the main process by adding a
+    top-level ``MAIN_PROC_ONLY = True`` constant. We read the file textually so
+    the runner does not import (and thus initialize TTNN/UMD) in the parent.
+    """
+    sweep_root_path = Path(__file__).resolve().parent
+    test_source_name = test_module_name.replace(".", "/") + PY_SUFFIX
+    test_path = sweep_root_path / SWEEPS_SUBDIR_NAME / test_source_name
+    if not (test_path.exists() and test_path.is_file()):
+        return False
+    try:
+        with test_path.open("rt") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if stripped.startswith(MAIN_PROC_ONLY_KEY):
+                    parts = stripped.split("=", 1)
+                    if len(parts) == 2:
+                        value = parts[1].split("#", 1)[0].strip()
+                        return value.lower() in ("true", "1", "yes")
+    except OSError:
+        pass
+    return False
 
 
 def sanitize_inputs(test_vectors):
@@ -270,8 +316,11 @@ def get_github_pipeline_id() -> int | None:
 def device_context(test_module, output_queue):
     try:
         yield from get_devices(test_module)
-    except AssertionError as e:
-        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
+    except Exception as e:
+        message = "DEVICE EXCEPTION: " + "".join(traceback.format_exception_only(type(e), e)).strip()
+        logger.exception("Device fixture failed before yielding a device")
+        output_queue.put([False, message, None, None, None])
+        yield (None, None)
     finally:
         return
 
@@ -288,6 +337,8 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
 
     test_module = importlib.import_module("sweeps." + test_module_name)
     with device_context(test_module, output_queue) as (device, device_name):
+        if device is None:
+            return
         while True:
             try:
                 test_vector = input_queue.get(block=True, timeout=5)
@@ -611,10 +662,15 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     output_queue = Queue()
     p = None
     timeout = get_timeout(module_name)
+    main_proc_only_module = get_main_proc_only(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    # child_mode is False if any of dry_run, vector_id, or main_proc_verbose are truthy
-    child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
+    # child_mode is False if any of dry_run, vector_id, main_proc_verbose, or
+    # the sweep module declares itself MAIN_PROC_ONLY (e.g. CCL ops that hang
+    # under the multiprocess child runner on Galaxy).
+    child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose or main_proc_only_module)
+    if main_proc_only_module:
+        logger.info(f"Module {module_name} declares MAIN_PROC_ONLY — running in main process mode.")
     timeout_before_rejoin = 5
 
     # For main process mode, create a persistent runner that keeps device open
@@ -658,10 +714,13 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             test_vector.pop("status")
             test_vector.pop("validity")
 
-            import ttnn.operation_tracer
+            operation_tracer = None
+            if config.trace_params:
+                import ttnn.operation_tracer as operation_tracer
 
             try:
-                ttnn.operation_tracer.set_sweep_source_hash(input_hash)
+                if operation_tracer is not None:
+                    operation_tracer.set_sweep_source_hash(input_hash)
                 result = _execute_vector_with_retry(
                     test_vector,
                     module_name,
@@ -708,7 +767,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 result["exception"] = str(e)
                 result["e2e_perf"] = None
             finally:
-                ttnn.operation_tracer.set_sweep_source_hash(None)
+                if operation_tracer is not None:
+                    operation_tracer.set_sweep_source_hash(None)
 
         # Add the original test vector data to the result
         result["original_vector_data"] = original_vector_data
@@ -723,6 +783,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         # Abort the suite if a fatal device error was encountered
         if "DEVICE EXCEPTION" in str(result.get("exception", "")):
             logger.error("Aborting test suite due to fatal device error.")
+            reset_util.reset()
             if p and p.is_alive():
                 p.terminate()
                 p.join()
@@ -800,6 +861,7 @@ def run_sweeps(
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
         for module_name in module_names:
+            abort_run = False
             if config.suite_name:
                 # Filter to only the specified suite
                 all_suites = vector_source.get_available_suites(module_name)
@@ -853,6 +915,17 @@ def run_sweeps(
                                     key = str(val) if val is not None else str(st)
                                 status_counts[key] = status_counts.get(key, 0) + 1
 
+                    failure_statuses = {
+                        TestStatus.FAIL_ASSERT_EXCEPTION,
+                        TestStatus.FAIL_CRASH_HANG,
+                        TestStatus.FAIL_L1_OUT_OF_MEM,
+                        TestStatus.FAIL_WATCHER,
+                        TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF,
+                        TestStatus.XPASS,
+                    }
+                    if any(res.get("status") in failure_statuses for res in results):
+                        final_status = "failure"
+
                     run_context = {
                         "run_id": run_id,
                         "test_start_time": suite_start_time,
@@ -868,7 +941,15 @@ def run_sweeps(
                         final_status = "failure"
                         # continue with other suites
 
+                    if any("DEVICE EXCEPTION" in str(res.get("exception", "")) for res in results):
+                        logger.error("Aborting sweep run due to fatal device error.")
+                        final_status = "failure"
+                        abort_run = True
+                        break
+
             module_pbar.update()
+            if abort_run:
+                break
     except Exception as e:
         logger.error(f"Error during sweep execution: {e}")
         final_status = "failure"
@@ -914,6 +995,8 @@ def run_sweeps(
                 logger.info(
                     f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})"
                 )
+
+    return final_status
 
 
 def get_module_names(config: SweepsConfig):
@@ -1159,7 +1242,7 @@ if __name__ == "__main__":
     # Parse modules for running specific tests
     module_names = get_module_names(config)
 
-    run_sweeps(
+    final_status = run_sweeps(
         module_names,
         config=config,
     )
@@ -1169,3 +1252,16 @@ if __name__ == "__main__":
 
     if config.measure_device_perf:
         disable_profiler()
+
+    exit_code = 0 if final_status == "success" else 1
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    # CI-style sweep runs can leave tt-metal/UMD global objects alive in the
+    # Python parent process even after all results are finalized.  On Galaxy,
+    # interpreter shutdown may then abort while unpinning DMA pages.  Use a hard
+    # exit only after all runner-owned cleanup and result export is complete.
+    if os.getenv("GITHUB_ACTIONS", "").lower() == "true" or os.getenv("SWEEPS_RUNNER_HARD_EXIT") == "1":
+        os._exit(exit_code)
+
+    sys.exit(exit_code)

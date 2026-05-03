@@ -43,9 +43,6 @@ sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val)
     // apply mask
     TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
 
-    sfpi::l_reg[sfpi::LRegs::LReg2].in_use();
-    sfpi::l_reg[sfpi::LRegs::LReg3].in_use();
-
     return sfpi::l_reg[sfpi::LRegs::LReg1];
 }
 

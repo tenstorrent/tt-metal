@@ -50,7 +50,8 @@ targets:
     - model:
         - efficientnetb0
         - llama-3.2-1b
-      trace: [7, 8]
+        - tt_dit_2
+      trace: [7, 8, 16]
 
 registry:
   - trace_id: 1
@@ -185,7 +186,7 @@ registry:
     notes: ''
 
   - trace_id: 16
-    status: draft
+    status: active
     models: [tt_dit_2]
     hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
     trace_uid: 445bfb0d-eb24-454d-9d74-46a257703f13

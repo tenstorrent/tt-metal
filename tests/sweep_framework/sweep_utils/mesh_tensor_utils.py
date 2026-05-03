@@ -962,6 +962,79 @@ def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[
     return out
 
 
+def tile_torch_to_target_shape(
+    torch_tensor: torch.Tensor,
+    tensor_placement: Optional[Dict],
+    target_shape: torch.Size,
+) -> torch.Tensor:
+    """Expand a per-chip tensor toward ``target_shape`` without over-tiling.
+
+    Mixed-placement elementwise ops can have inputs sharded on different mesh
+    axes. Applying every input placement blindly may multiply a dim that the
+    actual output topology did not preserve. This helper only repeats a sharded
+    dim when that dim is still smaller than the actual gathered output.
+    """
+    if not isinstance(tensor_placement, dict):
+        return torch_tensor
+
+    plac_val = tensor_placement.get("placement")
+    dist_val = tensor_placement.get("distribution_shape")
+    if plac_val is None or dist_val is None:
+        return torch_tensor
+
+    if isinstance(plac_val, (list, tuple)):
+        plac_parts = [str(x).strip().strip("'") for x in plac_val]
+    else:
+        s = str(plac_val).strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        plac_parts = [x.strip().strip("'") for x in s.split(",")]
+
+    plac_entries = []
+    for x in plac_parts:
+        if not x:
+            continue
+        if x.startswith("PlacementShard("):
+            plac_entries.append(("S", int(x[len("PlacementShard(") : -1])))
+        elif x.startswith("PlacementReplicate"):
+            plac_entries.append(("R", None))
+        else:
+            plac_entries.append(("?", None))
+
+    if isinstance(dist_val, (list, tuple)):
+        dist_factors = [int(x) for x in dist_val]
+    else:
+        s = str(dist_val).strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        dist_factors = [int(x.strip()) for x in s.split(",") if x.strip()]
+
+    out = torch_tensor
+    for (kind, dim), n in zip(plac_entries, dist_factors):
+        if kind != "S" or dim is None or n <= 1:
+            continue
+        d = dim if dim >= 0 else dim + out.ndim
+        if d >= out.ndim:
+            d = out.ndim - 1
+        if d < 0 or d >= len(target_shape):
+            continue
+
+        current = out.shape[d]
+        target = target_shape[d]
+        if current >= target or target % current != 0:
+            continue
+
+        repeat_factor = min(n, target // current)
+        if repeat_factor <= 1:
+            continue
+        repeats = [1] * out.ndim
+        repeats[d] = repeat_factor
+        candidate = out.repeat(*repeats)
+        if all(candidate.shape[i] <= target_shape[i] for i in range(out.ndim)):
+            out = candidate
+    return out
+
+
 def reconcile_golden_to_actual(
     torch_golden: torch.Tensor,
     actual_global: torch.Tensor,
@@ -980,5 +1053,5 @@ def reconcile_golden_to_actual(
     for plac in placements:
         if out.shape == actual_global.shape:
             break
-        out = tile_torch_to_global(out, plac)
+        out = tile_torch_to_target_shape(out, plac, actual_global.shape)
     return out

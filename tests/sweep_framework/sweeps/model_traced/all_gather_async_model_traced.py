@@ -30,6 +30,12 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
+# Run in the main process. Subprocess (fork) workers consistently hang on this
+# sweep on Galaxy 4x8 — fabric bring-up and CCL setup don't survive worker
+# spawn cleanly. The runner respects this by reading the file textually
+# (see sweeps_runner.get_main_proc_only); the same vectors pass in main proc.
+MAIN_PROC_ONLY = True
+
 try:
     NUM_DEVICES = ttnn.get_num_devices()
 except Exception:
@@ -414,8 +420,15 @@ def run(
     if not persistent_output_buffer_was_provided:
         persistent_output_buffer = None
 
-    # Check if this is a model_traced run (V2 format has input_a_shape)
-    is_model_traced = input_a_shape is not None
+    input_tensor_shape = kwargs.get("input_tensor_shape")
+    input_tensor_dtype = kwargs.get("input_tensor_dtype")
+    input_tensor_layout = kwargs.get("input_tensor_layout")
+    input_tensor_memory_config = kwargs.get("input_tensor_memory_config")
+    input_tensor_tensor_placement = kwargs.get("input_tensor_tensor_placement")
+
+    # Check if this is a model_traced run. V2 traces can name the first tensor
+    # either arg0/input_a or the original keyword name input_tensor.
+    is_model_traced = input_a_shape is not None or input_tensor_shape is not None
 
     if is_model_traced:
         if NUM_DEVICES < 2:
@@ -426,10 +439,20 @@ def run(
         if dim is None:
             dim = kwargs.get("arg2")
 
-        input_shape = input_a_shape
-        input_dtype = input_a_dtype
-        layout = input_a_layout
-        input_memory_config = input_a_memory_config
+        input_shape = input_a_shape if input_a_shape is not None else input_tensor_shape
+        input_dtype = input_a_dtype if input_a_dtype is not None else input_tensor_dtype
+        layout = input_a_layout if input_a_layout is not None else input_tensor_layout
+        input_memory_config = input_a_memory_config if input_a_memory_config is not None else input_tensor_memory_config
+        input_a_tensor_placement = (
+            input_a_tensor_placement if input_a_tensor_placement is not None else input_tensor_tensor_placement
+        )
+        if isinstance(input_shape, str):
+            input_shape = _parse_shape_str(input_shape)
+        if isinstance(input_dtype, str):
+            input_dtype = _ttnn_dtype_from_string(input_dtype)
+        if isinstance(layout, str):
+            layout = _ttnn_layout_from_string(layout)
+        input_memory_config = _v2_memory_config_to_ttnn(input_memory_config) or ttnn.DRAM_MEMORY_CONFIG
 
         # Sharded inputs: create in DRAM first, then move to target layout.
         target_sharded_config = None

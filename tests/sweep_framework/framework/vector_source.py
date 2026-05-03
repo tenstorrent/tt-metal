@@ -390,23 +390,57 @@ class VectorExportSource(VectorSource):
         return allowed_meshes
 
     def _get_machine_info(self):
-        """Get machine info using get_machine_info from generic_ops_tracer."""
+        """Get machine info using get_machine_info from generic_ops_tracer.
+
+        Runs in a subprocess so any pyluwen / tt-smi handles that briefly hold
+        per-chip PCIe locks are released before sweep workers spawn. With the
+        in-process call, the parent runner held chip locks (e.g.
+        ``CHIP_IN_USE_16_PCIe``), causing spawn workers to deadlock when
+        opening the mesh.
+        """
         try:
-            import sys
+            import json as _json
+            import subprocess as _subprocess
+            import sys as _sys
 
-            # Add model_tracer to path if not already there
-            # Go up 4 levels from this file (tests/sweep_framework/framework/vector_source.py)
-            # to get to repo root, then into model_tracer
             model_tracer_path = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "model_tracer"
-            model_tracer_path_str = str(model_tracer_path)
+            cmd = [
+                _sys.executable,
+                "-c",
+                (
+                    "import sys, json\n"
+                    f"sys.path.insert(0, {str(model_tracer_path)!r})\n"
+                    "from generic_ops_tracer import get_machine_info\n"
+                    "info = get_machine_info()\n"
+                    "print('__MI__' + json.dumps(info))\n"
+                ),
+            ]
+            try:
+                proc = _subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except _subprocess.TimeoutExpired:
+                logger.warning("get_machine_info subprocess timed out — skipping machine filter.")
+                return None
 
-            if model_tracer_path_str not in sys.path:
-                sys.path.insert(0, model_tracer_path_str)
-
-            # Import the module
-            from generic_ops_tracer import get_machine_info
-
-            machine_info = get_machine_info()
+            machine_info = None
+            if proc.returncode == 0:
+                for line in proc.stdout.splitlines():
+                    if line.startswith("__MI__"):
+                        try:
+                            machine_info = _json.loads(line[len("__MI__") :])
+                        except _json.JSONDecodeError:
+                            pass
+                        break
+            else:
+                logger.debug(
+                    "get_machine_info subprocess failed (rc=%s): %s",
+                    proc.returncode,
+                    (proc.stderr or "")[:500],
+                )
 
             # get_machine_info() might return None if tt-smi fails
             if machine_info is None:
@@ -482,7 +516,7 @@ class VectorExportSource(VectorSource):
 
         test_group_name = self._resolve_runtime_test_group_name(run_type, current_machine_info)
         explicit_test_group_name = os.environ.get("TEST_GROUP_NAME", "").strip()
-        capability_profile = None
+        capability_profile = {}
         if test_group_name:
             capability_profile = get_test_group_capability_profile(run_type, test_group_name)
 
