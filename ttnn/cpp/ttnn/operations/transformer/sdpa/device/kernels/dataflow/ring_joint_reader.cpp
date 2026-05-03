@@ -61,15 +61,19 @@ void kernel_main() {
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)
     const ChainConfig head_cfg = ChainConfig::read_from_args(argidx);
 
     // Batch chain runtime args (only present when k_uses_batch_chain / NHK == 1)
-    // K mcast loop count is now CT (q_chunks_per_core), no RT padding arg.
     ChainConfig batch_cfg;  // default zero-initialized
+    uint32_t max_q_per_core = 0;
     if constexpr (k_uses_batch_chain) {
         batch_cfg = ChainConfig::read_from_args(argidx);
+        // Per-chain padding count: bot half can be smaller than top half so the bot
+        // chain stops handshaking earlier and frees the NoC for top's last iter.
+        max_q_per_core = get_arg_val<uint32_t>(argidx++);
     }
 
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
@@ -273,19 +277,23 @@ void kernel_main() {
             }
         }
 
-        // Uniform CT loop count for all cores. Every core iterates q_chunks_per_core times.
-        // Cores get contiguous flat-q-chunk ranges; iters whose flat index is past
-        // total_q_chunks are phantom — same K/V chain handshake and CB pushes as real iters,
-        // only Q DRAM reads (here) and output DRAM writes (writer) skip.
-        constexpr uint32_t loop_q_count = q_chunks_per_core;
-        constexpr uint32_t total_q_chunks = B * NH * num_q_chunks;
+        // When K mcast is enabled, loop max_q_per_core times to stay synchronized with the
+        // chain injector. max_q_per_core is per-chain (top vs bot half), so cores in the
+        // smaller half stop after their chain's max iter count — they don't pad to the
+        // global maximum. Cores with less real work do padded iterations (K mcast sync only).
+        const uint32_t loop_q_count = (k_uses_batch_chain && batch_mcast_enabled) ? max_q_per_core : q_per_core;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
-            // Wrap-around indexing keeps (nb, nq, q_chunk) valid on phantom iters; K and V
-            // DRAM fetches at the wrapped indices return data for "some other Q" — harmless
-            // because phantom outputs are never written to DRAM.
-            uint32_t global_q_chunk =
-                remap_q_index((global_q_start + q_iter) % total_q_chunks, num_q_chunks, use_zigzag_balancing);
+            // Padded iterations service the K mcast handshake on behalf of cores in the same
+            // chain that still have real work. They skip Q/V reads and the CB push so compute
+            // (which loops only over real chunks) doesn't see them.
+            const bool is_padded_iter = (q_iter >= q_per_core);
+
+            // Calculate global_q_chunk for all iterations (including padded). For padded iters
+            // the global index lands in another core's range; we still decode (nb, nq, q_chunk)
+            // because the chain handshake reads K from DRAM at that index and forwards it. The
+            // mcast'd bytes are dropped by receivers (no cb_push_back on padded iter).
+            uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
 
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
@@ -321,12 +329,9 @@ void kernel_main() {
             // Iteration counter for chain forwarding decisions
             const uint32_t q_iter_local = q_iter;
 
-            // When q_chunks_per_core == 1, every core has at most one real Q chunk and Q is
-            // identical across ring iterations: compute keeps it fronted in the CB (no per-iter
-            // pop), so we only need to read it once on the first active ring iteration.
-            // Compute's pop policy is keyed on the uniform CT value q_chunks_per_core; the reader
-            // must match it to avoid push/pop drift.
-            const bool need_q_read = (q_chunks_per_core > 1) || !q_pushed;
+            // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
+            // fronted in the CB, so we only need to read it once on the first active ring iteration.
+            const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
@@ -374,15 +379,23 @@ void kernel_main() {
                     }
                 }
 
-                // K: either read locally (injector or not participant) or receive from chain.
-                // Uniform single reservation — phantom iters take the same path (DRAM at wrapped
-                // index, or chain receive) and push back exactly k_chunk_tiles like real iters.
-                cb_reserve_back(cb_k_in, k_chunk_tiles);
+                // K: either read locally (injector or not participant) or receive from chain
+                if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
+                    // Padded iters reserve 2x: write_ptr stays put because we skip cb_push_back
+                    // below, so the same buffer slot is reused for the next padded handshake.
+                    // 2x reservation also blocks until compute has consumed the prior real K,
+                    // ensuring we don't overwrite K still being used downstream.
+                    const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+                    cb_reserve_back(cb_k_in, reserve_tiles);
+                } else {
+                    cb_reserve_back(cb_k_in, k_chunk_tiles);
+                }
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
                 if (k_chain.should_receive(nb, nq, q_iter_local)) {
                     k_chain.receive();
                 } else {
-                    // Injector or non-participant: read K from DRAM at (possibly wrapped) indices.
+                    // Injector or non-participant: read K from DRAM
+                    // For padded iterations, injector still reads K to broadcast to receivers
                     fetch_block(
                         kv_chunk_is_joint ? joint_k_generator
                                           : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
@@ -399,50 +412,48 @@ void kernel_main() {
                     k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
                 }
 
+                // Skip Q, V reads and V forward for padded iterations (K mcast sync only).
+                // cb_push_back is intentionally skipped — the reader's K mcast handshake stays
+                // in lockstep with the chain, but compute (which loops only over real chunks)
+                // does not see this padded K.
+                if (is_padded_iter) {
+                    continue;
+                }
+
                 // Make K available to compute
                 cb_push_back(cb_k_in, k_chunk_tiles);
                 KV_chunks_processed_in_iter++;
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
-                // Phantom iters (flat q-index past total_q_chunks) skip the DRAM read but
-                // still reserve+push the same number of tiles to keep the CB pipeline aligned
-                // with compute, which iterates uniformly over q_chunks_per_core.
+                // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (k_chunk == 0) {
-                    const bool is_phantom_q = (global_q_start + q_iter) >= total_q_chunks;
-                    if (is_phantom_q) {
-                        // Phantom: keep CB in lockstep with compute, skip DRAM fill.
-                        constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
-                        cb_reserve_back(cb_q_in, q_chunk_tiles);
-                        cb_push_back(cb_q_in, q_chunk_tiles);
-                    } else if (need_q_read) {
-                        if constexpr (use_q_subblock_push) {
-                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
-                                read_block(
-                                    is_joint_q ? joint_q_generator : q_generator,
-                                    q_sub_slice,
-                                    q_end_seq_tile,
-                                    cb_q_in,
-                                    q_tile_bytes,
-                                    false /*transpose*/,
-                                    q_barrier_threshold);
-                            }
-                        } else {
+                if (k_chunk == 0 && need_q_read) {
+                    if constexpr (use_q_subblock_push) {
+                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
                             read_block(
                                 is_joint_q ? joint_q_generator : q_generator,
-                                q_slice,
+                                q_sub_slice,
                                 q_end_seq_tile,
                                 cb_q_in,
                                 q_tile_bytes,
                                 false /*transpose*/,
                                 q_barrier_threshold);
                         }
-                        q_pushed = true;
+                    } else {
+                        read_block(
+                            is_joint_q ? joint_q_generator : q_generator,
+                            q_slice,
+                            q_end_seq_tile,
+                            cb_q_in,
+                            q_tile_bytes,
+                            false /*transpose*/,
+                            q_barrier_threshold);
                     }
+                    q_pushed = true;
                 }
 
                 // V: either read locally (injector or not participant) or receive from chain

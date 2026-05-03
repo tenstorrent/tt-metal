@@ -871,13 +871,30 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t total_heads = B * NH;
     std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
 
-    // Uniform distribution: every core iterates q_chunks_per_core Q chunks (CT loop count).
-    // Real chunk count per core is capped to remaining; trailing iters past total_q_chunks
-    // are phantom and handled by the K-mcast padded-iter mechanism in the reader.
+    // Distribute flat global q chunks across cores. Extras land on the first cores
+    // (= top half in row-major order) so the bottom mcast half can pad to a smaller
+    // chain_max_q than the top half — keeping the 2-injector chains' iteration counts
+    // asymmetric (bot < top) instead of forcing both to the global maximum, which was
+    // the regression observed when the uniform-Q distribution was naively combined
+    // with the 2-injector K mcast split.
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
+
+    uint32_t base_chunks_per_core = 0;
+    uint32_t extra_chunks_per_core = 0;
+    uint32_t cores_doing_extra_work = 0;
     if (enable_zigzag_balancing) {
         log_debug(tt::LogOp, "Enabling zigzag balancing with even num_q_chunks: {}", num_q_chunks);
+        const uint32_t total_pairs = total_q_chunks / 2;
+        cores_doing_extra_work = (num_cores == 0) ? 0 : total_pairs % num_cores;
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_pairs / num_cores) * 2;
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 2;
+    } else {
+        cores_doing_extra_work = (num_cores == 0) ? 0 : total_q_chunks % num_cores;
+        base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
+        extra_chunks_per_core = (num_cores == 0) ? 0 : 1;
     }
+
+    uint32_t next_global_chunk = 0;
 
     auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
         const uint32_t head_span = num_q_chunks;
@@ -890,22 +907,21 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-        const uint32_t global_q_start_i = i * q_chunks_per_core;
-        // Real chunk count: min(loop count, remaining). Cores past total are all-phantom (real=0).
-        uint32_t chunk_count = 0;
-        if (global_q_start_i < total_q_chunks) {
-            chunk_count = std::min(q_chunks_per_core, total_q_chunks - global_q_start_i);
+        uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
+        if (next_global_chunk >= total_q_chunks) {
+            chunk_count = 0;
+        } else if (chunk_count > total_q_chunks - next_global_chunk) {
+            chunk_count = total_q_chunks - next_global_chunk;
         }
 
         auto& work = core_work.at(i);
         work.logical_core = core;
         work.physical_core = device->worker_core_from_logical_core(core);
-        work.global_q_start = global_q_start_i;
-        work.global_q_count = chunk_count;  // Real chunks only (drives chain construction)
+        work.global_q_start = next_global_chunk;
+        work.global_q_count = chunk_count;
 
         uint32_t remaining = chunk_count;
-        uint32_t flat_chunk = global_q_start_i;
+        uint32_t flat_chunk = next_global_chunk;
         while (remaining > 0) {
             auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
             uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
@@ -929,6 +945,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             remaining -= chunk_take;
             flat_chunk += chunk_take;
         }
+
+        next_global_chunk += chunk_count;
     }
 
     // Helper: build a linear chain from sorted (core_idx, q_chunk_count) pairs.
@@ -1222,6 +1240,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Per-core loop padding lets each chain pad to its own injector's iteration count.
     bool k_mcast_enabled = false;
     std::string k_mcast_fallback_reason;
+    std::vector<uint32_t> k_chain_max_q(num_cores, 0);  // per-core loop-padding count
 
     if (NHK != 1) {
         // Not MLA mode - no K sharing needed
@@ -1229,8 +1248,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         k_mcast_fallback_reason = "B > 1 (multi-batch not supported)";
     } else if (num_cores < 2) {
         k_mcast_fallback_reason = "num_cores < 2";
-    } else if (q_chunks_per_core == 0) {
-        k_mcast_fallback_reason = "no work (q_chunks_per_core == 0)";
     } else if (grid_size.y < 2) {
         k_mcast_fallback_reason = "grid_size.y < 2 (cannot split into two row chains)";
     } else {
@@ -1280,6 +1297,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
                 auto configure_chain = [&](const std::vector<uint32_t>& chain_cores,
                                            uint32_t injector_idx,
+                                           uint32_t chain_max_q,
                                            CoreCoord phys_start,
                                            CoreCoord phys_end) {
                     const uint32_t num_receivers = static_cast<uint32_t>(chain_cores.size()) - 1;
@@ -1293,14 +1311,18 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                         kc.batch = 0;
                         kc.is_injector = (ci == injector_idx);
                         kc.is_sink = !kc.is_injector;
-                        // Uniform per-core loop count: every core fires receive on every iter
-                        // of the CT loop (real + phantom).
-                        kc.this_core_q_chunks = q_chunks_per_core;
+                        // Per-chain loop count: top and bot pad to their own chain_max_q.
+                        // q_iter_local in should_receive/forward gates by these values, so
+                        // a chain that finishes early (smaller chain_max_q) doesn't keep
+                        // handshaking past its own real work and contending on the NoC with
+                        // the other half's chain.
+                        kc.this_core_q_chunks = chain_max_q;
                         if (kc.is_injector) {
                             kc.mcast_num_dests = num_receivers;
                             kc.mcast_sender_wait = num_receivers;
-                            kc.next_core_q_chunks = q_chunks_per_core;
+                            kc.next_core_q_chunks = chain_max_q;
                         }
+                        k_chain_max_q[ci] = chain_max_q;
                     }
                 };
 
@@ -1311,8 +1333,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 CoreCoord bot_phys_end =
                     device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, grid_size.y - 1});
 
-                configure_chain(top_cores, top_injector_idx, top_phys_start, top_phys_end);
-                configure_chain(bottom_cores, bot_injector_idx, bot_phys_start, bot_phys_end);
+                configure_chain(top_cores, top_injector_idx, top_max_q, top_phys_start, top_phys_end);
+                configure_chain(bottom_cores, bot_injector_idx, bot_max_q, bot_phys_start, bot_phys_end);
 
                 log_debug(
                     tt::LogOp,
@@ -1390,11 +1412,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         // Prefer the computed even distribution above for chain construction
         const auto& work = core_work.at(i);
         uint32_t global_q_start = work.global_q_start;
-        // Uniform per-core loop count: every core iterates q_chunks_per_core times.
-        // Phantom iters (flat index past total_q_chunks = B*NH*num_q_chunks, derivable in the
-        // kernel from global_q_start) reuse the K/V chain code path uniformly, skipping only
-        // Q DRAM reads (reader) and DRAM writes (writer).
-        uint32_t global_q_end = work.global_q_start + q_chunks_per_core;
+        // Compute & writer iterate over real Q chunks only. K-mcast padded iters live
+        // entirely inside the reader, gated separately by max_q_per_core (per-chain).
+        uint32_t global_q_end = work.global_q_start + work.global_q_count;
 
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
@@ -1438,10 +1458,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         // Head chain (V chain, optionally K in non-MLA): 18 args via unified layout
         head_chain.append_to_args(reader_args);
 
-        // Batch chain (K chain in MLA mode): 18 args (only when NHK == 1)
-        // K mcast loop count is now CT (q_chunks_per_core), no RT padding arg needed.
+        // Batch chain (K chain in MLA mode): 18 args + 1 for loop padding (only when NHK == 1)
         if (k_uses_batch_chain) {
             batch_chain.append_to_args(reader_args);
+            // Per-core loop padding: each core uses its own chain's max_q (0 when not in mcast).
+            // When mcast is enabled, this drives the reader's outer Q loop count so each chain
+            // pads to its own max — bot can finish handshaking earlier than top.
+            reader_args.push_back(k_chain_max_q[i]);
         }
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args

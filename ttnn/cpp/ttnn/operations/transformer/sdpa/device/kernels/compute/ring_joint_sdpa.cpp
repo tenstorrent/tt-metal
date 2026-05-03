@@ -55,8 +55,8 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
     constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
-    constexpr uint32_t q_chunks_per_core = get_compile_time_arg_val(40);  // uniform per-core loop count
-    (void)q_chunks_per_core;  // currently informational; compute loops over real chunks via cb sync
+    constexpr uint32_t q_chunks_per_core = get_compile_time_arg_val(40);  // informational, unused
+    (void)q_chunks_per_core;
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]

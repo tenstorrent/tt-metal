@@ -420,14 +420,11 @@ void kernel_main() {
 
     // Deferred save: stash params for save_accumulators_with_trid and call it
     // during the next Q chunk's K-loop window to avoid DRAM bank contention.
-    // Phantom iters reuse this path: end_seq_tile=0 plus an empty stats range turn the
-    // DRAM writes into no-ops while still draining cb_out / cb_max_out / cb_sum_out.
     struct DeferredWriteContext {
         bool pending = false;
         uint32_t trid = 0;
         uint32_t nb = 0;
         uint32_t nq = 0;
-        uint32_t end_seq_tile = 0xFFFFFFFFu;  // 0 ⇒ skip all out-tile writes (phantom).
         QChunkInfo qi = {};
     } deferred = {};
 
@@ -502,7 +499,6 @@ void kernel_main() {
             const uint32_t q_per_core = global_q_end - global_q_start;
             const uint32_t last_q_index = q_per_core - 1;
             const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
-            constexpr uint32_t total_q_chunks = B * NH * num_q_chunks;
 
             // TRID assignment by Q position: Q[0] -> TRID_FIRST, Q[N-1] -> TRID_LAST,
             // Q[1..N-2] -> TRID_INNER. Used both for tagging the current Q's save and for
@@ -514,14 +510,11 @@ void kernel_main() {
             // Issue NOC reads to fill staging for Q[pf_q_index] of the current ring_iter (or
             // ring_iter+1 for cross-ring at q==last_q_index, when the caller passes 0). Optionally
             // barriers on pf_trid first to ensure the prior save with that TRID has landed.
-            // Wraps the linear index by total_q_chunks so phantom prefetches still hit a valid
-            // DRAM region (the data is for "some other Q" but compute discards phantom output).
             auto prefetch_for = [&](uint32_t pf_q_index, uint32_t pf_trid, bool barrier_first) {
                 if (barrier_first) {
                     noc_async_write_barrier_with_trid(pf_trid);
                 }
-                const uint32_t gq =
-                    remap_q_index((global_q_start + pf_q_index) % total_q_chunks, num_q_chunks, use_zigzag_balancing);
+                const uint32_t gq = remap_q_index(global_q_start + pf_q_index, num_q_chunks, use_zigzag_balancing);
                 const uint32_t nb_pf = gq / (NH * num_q_chunks);
                 const uint32_t nq_pf = (gq % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t qc_pf = gq % num_q_chunks;
@@ -560,10 +553,9 @@ void kernel_main() {
 
             // Drain pending deferred save (raw accumulators -> DRAM) for the prior Q. Called at
             // the early-flush site (before prefetch when total_valid_kv<=1 or q_per_core==2) and
-            // the late-flush site (after prefetch in the K-loop window). On a phantom prior Q,
-            // deferred.end_seq_tile==0 + empty stats range collapse the DRAM writes to no-ops
-            // while still draining the staging CBs (cb_out via row-grouped pop, max/sum bulk).
+            // the late-flush site (after prefetch in the K-loop window).
             auto flush_deferred_save = [&]() {
+                constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
                 save_accumulators_with_trid(
                     deferred.qi.is_joint_q ? joint_out_generator : out_generator,
                     stats_writer,
@@ -572,7 +564,7 @@ void kernel_main() {
                     deferred.nq,
                     Sq_chunk_t,
                     deferred.qi.out_slice,
-                    deferred.end_seq_tile,
+                    all_tiles_valid,
                     deferred.qi.stats_seq_start_tile,
                     deferred.qi.stats_seq_end_tile,
                     sum_offset,
@@ -587,28 +579,17 @@ void kernel_main() {
             };
 
             for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
-                // Wrap-around indexing keeps (nb, nq, q_chunk) valid on phantom iters.
-                uint32_t global_q_chunk =
-                    remap_q_index((global_q_start + q_index) % total_q_chunks, num_q_chunks, use_zigzag_balancing);
+                uint32_t global_q_chunk = remap_q_index(global_q_start + q_index, num_q_chunks, use_zigzag_balancing);
 
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-                // Phantom: flat (global_q_start + q_index) past total_q_chunks. Cores get
-                // contiguous flat-q ranges, so this single condition replaces a per-core
-                // q_per_core_real RT arg.
-                const bool is_phantom = (global_q_start + q_index) >= total_q_chunks;
                 const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
-                auto qi = get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
-                if (is_phantom) {
-                    // Empty stats range -> save/eager-write loops over [start,end) become no-ops.
-                    qi.stats_seq_start_tile = 0;
-                    qi.stats_seq_end_tile = 0;
-                }
-                // end_seq_tile = 0 on phantom -> maybe_write_tile skips every output tile.
-                const uint32_t end_seq_tile = is_phantom ? 0 : get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
+                const auto qi =
+                    get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
+                const uint32_t end_seq_tile = get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
 
                 // 1. Complete restore for all Q chunks to keep the prefetch pipeline in sync.
                 // For balanced-skip non-last-ring-iter Q chunks, barrier without pushing —
@@ -673,8 +654,6 @@ void kernel_main() {
                 }
 
                 if (is_last_ring_iter) {
-                    // Phantom passes end_seq_tile=0 -> maybe_write_tile no-ops every tile, but
-                    // drain_cb_row_grouped still pops cb_out. Real iter writes normally.
                     // Last-iter writes carry default trid (caller never set a non-zero trid here);
                     // pass 0 so the per-group flush waits exactly for these writes.
                     write_out_row_by_row(
@@ -687,15 +666,11 @@ void kernel_main() {
                         /*flush_trid=*/0);
                     noc_async_write_barrier();
                 } else if (!single_q_chunk) {
-                    // Phantom-aware deferred save: flush_deferred_save uses deferred.end_seq_tile
-                    // (=0 here) and the empty stats range to skip DRAM writes while still
-                    // popping cb_out / cb_max_out / cb_sum_out.
                     deferred.pending = true;
                     deferred.trid = trid_for_q(q_index);
                     deferred.nb = nb;
                     deferred.nq = nq;
                     deferred.qi = qi;
-                    deferred.end_seq_tile = is_phantom ? 0 : 0xFFFFFFFFu;
                 }
 
                 // Delayed intra-ring prefetch for normalize-only Qs: skipped earlier to avoid
@@ -713,28 +688,17 @@ void kernel_main() {
                 noc_async_write_barrier();
             }
         } else {
-            constexpr uint32_t total_q_chunks_eager = B * NH * num_q_chunks;
             for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
-                // Wrap-around indexing keeps (nb, nq, q_chunk) valid on phantom iters.
-                uint32_t global_q_chunk =
-                    remap_q_index((global_q_start + q_iter) % total_q_chunks_eager, num_q_chunks, use_zigzag_balancing);
+                uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
 
                 // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-                // Phantom: flat index past total_q_chunks. Cores get contiguous flat ranges.
-                const bool is_phantom = (global_q_start + q_iter) >= total_q_chunks_eager;
-
-                auto qi = get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
-                if (is_phantom) {
-                    // Empty stats range -> LSE write loop becomes a no-op while cb_lse_out drains.
-                    qi.stats_seq_start_tile = 0;
-                    qi.stats_seq_end_tile = 0;
-                }
-                // end_seq_tile=0 on phantom -> maybe_write_tile no-ops every output tile.
-                const uint32_t end_seq_tile = is_phantom ? 0 : get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
+                const auto qi =
+                    get_q_chunk_info(q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, local_padded_Nt);
+                const uint32_t end_seq_tile = get_end_seq_tile(qi, ring_id, Lt, local_padded_Nt);
 
                 // Only truly causal case appear in the iteration with local KV
                 // Other iterations will just skip the computation with subsequent KV chunks
@@ -746,8 +710,6 @@ void kernel_main() {
 
                 // If not on the first iteration, read LSE and previous output chunk.
                 // No race condition because writer kernel writes previous output before reading it again.
-                // For phantom iters we still issue the read at wrapped indices to keep the CB
-                // pipeline aligned with compute (compute consumes cb_prev_out / cb_lse_in uniformly).
                 if (ring_iter > 0) {
                     read_prev_output_and_lse(
                         qi.is_joint_q ? joint_out_generator : out_generator,
@@ -766,8 +728,6 @@ void kernel_main() {
                         stats_tile_bytes);
                 }
 
-                // Phantom collapses to a no-op DRAM-write-wise (end_seq_tile=0 + empty stats),
-                // but write_output_and_lse still drains cb_out / cb_lse_out.
                 write_output_and_lse(
                     qi.is_joint_q ? joint_out_generator : out_generator,
                     stats_writer,
