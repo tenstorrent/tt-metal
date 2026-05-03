@@ -2330,16 +2330,18 @@ uint32_t FabricFirmwareInitializer::get_fabric_router_sync_timeout_ms() const {
         return 15000;
     }
     auto timeout = rtoptions_.get_fabric_router_sync_timeout_ms();
-    // FIX TH2 (#42429): Base-UMD channels transition via launch_msg instead of soft reset.
+    // FIX TH3 (#42429): Base-UMD channels transition via launch_msg instead of soft reset.
     // After base-UMD quiesce + new firmware launch + ring handshake, they need more time.
-    // 12 channels * ~sequential polling means each times out if < 30s. Triple the default.
+    // T3K has up to 16 base-UMD channels after a tt-smi -r warm-up cycle; each is polled
+    // sequentially. 30s (3x) was insufficient — observed stuck at 0xa1b1c1d1 throughout.
+    // 120s (12x) gives each channel a full 7.5s window even in worst-case 16-channel scenario.
     const uint32_t base_timeout = timeout.value_or(10000);
     if (has_base_umd_channels_ && !timeout.has_value()) {
-        const uint32_t extended = base_timeout * 3;
+        const uint32_t extended = base_timeout * 12;
         log_info(
             tt::LogMetal,
-            "FIX TH2 (#42429): base-UMD channels detected — extending fabric_router_sync_timeout "
-            "from {} ms to {} ms to allow relay quiesce + ring handshake.",
+            "FIX TH3 (#42429): base-UMD channels detected — extending fabric_router_sync_timeout "
+            "from {} ms to {} ms (12x) to allow relay quiesce + ring handshake (up to 16 channels).",
             base_timeout,
             extended);
         return extended;

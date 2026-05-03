@@ -115,9 +115,9 @@ run_t3000_ttnn_tests() {
   # all 8 devices, leaving them in go_msg=0x02 stale state and corrupting the
   # subsequent topology check / FIX TL/TM recovery window.  A remedial tt-smi -r
   # immediately after the warm-up clears that stale state before the topology check.
-  local WARM_START WARM_END WARM_DURATION
+  local WARM_START WARM_END WARM_DURATION WARM_OUTPUT WARM_RING_TIMEOUT
   WARM_START=$(date +%s)
-  python3 -u -c "
+  WARM_OUTPUT=$(python3 -u -c "
 import sys, time
 try:
     import ttnn
@@ -126,11 +126,24 @@ try:
     print('[FIX GS-3] initial warm-up complete — base-UMD channels cleared for GTest')
 except Exception as e:
     print(f'[FIX GS-3] WARNING: initial warm-up failed ({e}) — GTests may skip due to stale base-UMD', file=sys.stderr)
-" 2>&1 || true
+" 2>&1 || true)
+  echo "$WARM_OUTPUT"
   WARM_END=$(date +%s)
   WARM_DURATION=$((WARM_END - WARM_START))
-  if [[ $WARM_DURATION -ge 30 ]]; then
-    echo "LOG_METAL: [FIX TO] warm-up ran ${WARM_DURATION}s (>=30s = ring-sync timeout path). Running remedial tt-smi -r to clear dispatch-ERISC stale state. (#42429)"
+  # FIX UP (#42429): detect ring-sync timeout in warm-up output.
+  # FIX TH3 extends timeout to 120s, so duration threshold moves to 120.
+  # Additionally grep for Metal log markers that fire even when Python exits 0:
+  #   "FIX TK"                    — teardown warning set when ring-sync timed out
+  #   "ring_sync_already_timed_out" — guard variable logged in quiesce path
+  #   "Timeout after.*ms.*master chan" — the actual timeout log from ring-sync poller
+  # When detected, flag that the hardware is NOT ready for traffic.
+  WARM_RING_TIMEOUT=0
+  if echo "$WARM_OUTPUT" | grep -qE "(FIX TK|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out)"; then
+    echo "LOG_METAL: [FIX UP] ring-sync timeout marker detected in warm-up output — hardware not ready for traffic despite open/close exit 0." >&2
+    WARM_RING_TIMEOUT=1
+  fi
+  if [[ $WARM_DURATION -ge 120 || $WARM_RING_TIMEOUT -eq 1 ]]; then
+    echo "LOG_METAL: [FIX TO] warm-up ran ${WARM_DURATION}s (ring-sync timeout path, WARM_RING_TIMEOUT=${WARM_RING_TIMEOUT}). Running remedial tt-smi -r to clear dispatch-ERISC stale state. (#42429)"
     timeout 30 tt-smi -r || true
   fi
 
@@ -226,7 +239,8 @@ except Exception as e:
       # GTest opens with FABRIC_2D without this warm-up, FIX M transitions the channels
       # but sets fabric_stale_base_umd_channels_=true, causing GTEST_SKIP() → another
       # tt-smi -r → loop until hardware cannot initialize FW at all.
-      python3 -u -c "
+      local post_warm_output post_ring_timeout
+      post_warm_output=$(python3 -u -c "
 import sys
 try:
     import ttnn
@@ -235,12 +249,33 @@ try:
     print('[FIX GS-3] post-reset warm-up complete — base-UMD channels cleared')
 except Exception as e:
     print(f'[FIX GS-3] WARNING: post-reset warm-up failed ({e}) — next test may still skip', file=sys.stderr)
-" 2>&1 || true
+" 2>&1 || true)
+      echo "$post_warm_output"
+      # FIX UP (#42429): detect ring-sync timeout in post-reset warm-up output.
+      # If Metal logs "FIX TK" or the ring-sync poller timeout message, the ring never
+      # completed — hardware is NOT ready for traffic even though Python exited 0.
+      # Increment consecutive_ring_timeout; after 3 in a row abort with INFRA_ERROR
+      # so CI marks the job failed rather than looping indefinitely.
+      post_ring_timeout=0
+      if echo "$post_warm_output" | grep -qE "(FIX TK|ring_sync_already_timed_out|Timeout after [0-9]+ ms.*master chan|fabric_ring_sync_timed_out)"; then
+        post_ring_timeout=1
+      fi
+      if [[ $post_ring_timeout -eq 1 ]]; then
+        consecutive_ring_timeout=$((consecutive_ring_timeout + 1))
+        echo "LOG_METAL: [FIX UP] post-reset warm-up ring-sync timeout #${consecutive_ring_timeout}/3 — hardware not ready for traffic." >&2
+        if [[ $consecutive_ring_timeout -ge 3 ]]; then
+          echo "LOG_METAL: [FIX UP] INFRA_ERROR — ring-sync timeout on ${consecutive_ring_timeout} consecutive warm-ups. Hardware requires reboot. Aborting test run." >&2
+          exit 1
+        fi
+      else
+        consecutive_ring_timeout=0
+      fi
     fi
   }
 
   # Record the start time
   fail=0
+  consecutive_ring_timeout=0
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
