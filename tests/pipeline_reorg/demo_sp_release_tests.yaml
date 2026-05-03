@@ -92,7 +92,8 @@
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_DecoderIntegration
   cmd: |
-    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --bucket decoder_integration
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket decoder_integration
   model: deepseek_decode
   skus:
     bh_galaxy:
@@ -102,7 +103,8 @@
 
 - name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalSingleDevice
   cmd: |
-    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --bucket pure_local_single_device
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket pure_local_single_device
   model: deepseek_decode
   skus:
     bh_galaxy:
@@ -110,30 +112,28 @@
   owner_id: U03HY7MK4BT
   team: models
 
-- name: bh_galaxy_DeepSeek_B1_Unit_Tests_FastDispatch
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_SpecialModes
   cmd: |
-    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py --bucket fast_dispatch --bucket lm_head_sampling_perf
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket fast_dispatch \
+      --bucket lm_head_sampling_perf \
+      --bucket lm_head_sampling_persistent_mode
   model: deepseek_decode
   skus:
     bh_galaxy:
-      timeout: 20
+      timeout: 40
   owner_id: U03HY7MK4BT
   team: models
 
-- name: bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostPersistent
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_Fabric2DHostIO
   cmd: |
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
       --bucket fabric_2d \
-      --bucket host_io_risk \
-      --bucket lm_head_sampling_persistent_mode
-      --bucket fabric_1d \
-      --bucket fabric_2d_torus_x \
-      --bucket fabric_2d_torus_y \
-      --bucket fabric_2d_torus_y_xy_skip_only
+      --bucket host_io_risk
   model: deepseek_decode
   skus:
     bh_galaxy:
-      timeout: 70
+      timeout: 60
   owner_id: U03HY7MK4BT
   team: models
 
@@ -143,7 +143,7 @@
       --bucket fabric_2d_torus_x \
       --bucket fabric_2d_torus_y \
       --bucket fabric_2d_torus_y_xy_skip_only \
-      --bucket fabric_1d \
+      --bucket fabric_1d
   model: deepseek_decode
   skus:
     bh_galaxy:
