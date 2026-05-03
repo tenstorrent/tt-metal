@@ -174,7 +174,7 @@ FabricCoresHealth configure_fabric_cores(
             // assert_risc_reset halts the BRISC → deassert_risc_reset (relay read) times out
             // → all subsequent reads from MMIO→non-MMIO fail → cascade hang.
             // write_launch_msg_to_core transitions this firmware to fabric firmware without a reset.
-            // NOTE: the L1 clear loop below is NOT skipped — it still runs for these channels.
+            // NOTE: the L1 clear loop below is ALSO skipped for these channels — see FIX TG.
             if (skip_soft_reset_channels.count(router_chan)) {
                 log_info(
                     tt::LogMetal,
@@ -256,6 +256,31 @@ FabricCoresHealth configure_fabric_cores(
             // edm_status=0 ("clean") and does not add the channel to pre_known_dead_channels,
             // so this L1 clear loop will process it normally — breaking the infinite cascade
             // where corrupt status persisted across container restarts on bare metal.
+            continue;
+        }
+        // FIX TG (#42429): Skip L1 clear for base-UMD relay channels.
+        //
+        // If the device is closed quickly (e.g., conftest warm-up, < 200 ms), ERISC may not
+        // have had time to process the write_launch_msg_to_core and transition out of base-UMD
+        // firmware before teardown.  In that case:
+        //   - Without FIX TG: edm_status_address was zeroed by L1 clear → next session's
+        //     terminate_stale_erisc_routers() reads 0 (not 0x49706550) → classifies channel
+        //     as corrupted/dead → skips FIX M's launch_msg path → ERISC stays in base-UMD,
+        //     fabric operations hang.
+        //   - With FIX TG: edm_status_address retains 0x49706550 (written by base-UMD FW)
+        //     → next session correctly identifies base-UMD relay state → FIX M fires →
+        //     launch_msg transitions ERISC → fabric operations proceed normally.
+        //
+        // Safety: write_launch_msg_to_core is still called for these channels in configure_fabric()
+        // — the new fabric firmware initializes its own state (edm_status, etc.) on startup, so
+        // leaving the old 0x49706550 value in L1 is harmless; the firmware overwrites it.
+        if (skip_soft_reset_channels.count(router_chan)) {
+            log_debug(
+                tt::LogMetal,
+                "configure_fabric_cores: device {} channel {} base-UMD relay — skipping L1 clear "
+                "to preserve 0x49706550 sentinel [FIX TG #42429]",
+                device->id(),
+                router_chan);
             continue;
         }
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
