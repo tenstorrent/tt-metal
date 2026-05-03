@@ -43,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -112,8 +112,8 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear' "$CLEAN" | \
-grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|FIX TN|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed|Fabric health check failed|still-initializing|extending fabric_router_sync_timeout|skipping L1 clear|all_gather.*barrier|ENTERING.*barrier|EXITED.*barrier|topology damaged|topology recovered|topology still degraded' "$CLEAN" | \
+grep -iE '(info|warning|error).*(Metal|Test|Always|Fabric)' | \
 python3 -c "
 import sys, re, signal
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
@@ -988,6 +988,20 @@ STILL_INITIALIZING_COUNT=$(grep -oE '[0-9]+ still-initializing' "$CLEAN" 2>/dev/
 # 'Fabric2DFixture.TestUnicast*' to prevent matching T3kCustomMeshGraphFabric2DFixture by accident.
 # Regression evidence: T3kCustomMeshGraph fixture crashes with 'Fabric node id not found in mapping'.
 FIX_TN_WILDCARD_CRASH=$(grep -cE 'T3kCustomMeshGraph.*Fabric node id not found in mapping' "$CLEAN" 2>/dev/null; :)
+# FIX TL-bash (#42429): run_t3000_unit_tests.sh topology recovery reset — warm-up atexit left
+# non-MMIO chips unreachable.  Fires tt-smi -r + FIX TM warm-up to restore topology.
+# Log: "[FIX TL] T3K topology damaged after warm-up (N/8 chips)"
+FIX_TL_BASH_FIRES=$(grep -cE '\[FIX TL\] T3K topology damaged' "$CLEAN" 2>/dev/null; :)
+FIX_TL_BASH_RECOVERED=$(grep -cE '\[FIX TL/TM\] topology recovered' "$CLEAN" 2>/dev/null; :)
+FIX_TL_BASH_STILL_DEGRADED=$(grep -cE 'T3K topology still degraded after recovery' "$CLEAN" 2>/dev/null; :)
+# FIX TM-bash (#42429): post-TL warm-up after tt-smi -r — opens/closes mesh to re-establish relay.
+# Log: "[FIX TM] post-TL warm-up complete" / "[FIX TM] WARNING: post-TL warm-up failed"
+FIX_TM_BASH_COMPLETE=$(grep -cE '\[FIX TM\] post-TL warm-up complete' "$CLEAN" 2>/dev/null; :)
+FIX_TM_BASH_FAILED=$(grep -cE '\[FIX TM\] WARNING.*post-TL warm-up failed' "$CLEAN" 2>/dev/null; :)
+# FIX TN-bash (#42429): || true on topology-check cmd-substitutions so set -eo pipefail doesn't
+# abort the script when Python crashes (GetNumAvailableDevices throws on dead relay).
+# No direct log — detect via "T3K topology check failed to query device count" error message.
+FIX_TN_BASH_MISSING=$(grep -cE 'T3K topology check failed to query device count' "$CLEAN" 2>/dev/null; :)
 # FIX M2 (#42429): Secondary check in compile_and_configure_fabric() — channel showed 0x49706550 (base-UMD relay)
 # but peer non-MMIO device is confirmed dead-relay → remove from base_umd_channels so configure_fabric_cores()
 # performs a hard soft-reset (no relay reads in flight, safe to reset).
@@ -1542,6 +1556,30 @@ if [ "${FIX_TN_WILDCARD_CRASH:-0}" -gt 0 ]; then
     echo "     Possible regression: leading '*' in gtest_filter '*Fabric2DFixture.TestUnicast*' matches"
     echo "     T3kCustomMeshGraphFabric2DFixture (class ends with Fabric2DFixture) on degraded cluster."
     echo "     Fix (FIX TN): remove leading '*' → 'Fabric2DFixture.TestUnicast*' in run_t3000_unit_tests.sh."
+fi
+if [ "${FIX_TL_BASH_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TL-bash] T3K topology damaged after warm-up (${FIX_TL_BASH_FIRES} occurrence(s))."
+    echo "     Warm-up subprocess atexit left non-MMIO chips unreachable — triggered recovery tt-smi -r."
+    if [ "${FIX_TL_BASH_RECOVERED:-0}" -gt 0 ]; then
+        echo "     Recovery succeeded — topology restored after reset+warm-up."
+    fi
+    if [ "${FIX_TL_BASH_STILL_DEGRADED:-0}" -gt 0 ]; then
+        echo "     [FAIL] Recovery FAILED — topology still degraded after tt-smi -r + warm-up."
+        echo "     Hardware needs host reboot or engineer attention."
+    fi
+fi
+if [ "${FIX_TM_BASH_FAILED:-0}" -gt 0 ]; then
+    echo "  => [FIX TM-bash] post-TL warm-up FAILED (${FIX_TM_BASH_FAILED} occurrence(s))."
+    echo "     open_mesh_device() threw after tt-smi -r — relay not re-established."
+    echo "     Topology check will likely still see degraded state → exit 1."
+elif [ "${FIX_TM_BASH_COMPLETE:-0}" -gt 0 ]; then
+    echo "  => [FIX TM-bash] post-TL warm-up completed (${FIX_TM_BASH_COMPLETE} occurrence(s))."
+    echo "     Relay re-established after recovery reset; topology check should see 8 chips."
+fi
+if [ "${FIX_TN_BASH_MISSING:-0}" -gt 0 ]; then
+    echo "  => [FIX TN-bash?] Topology check Python query failed (${FIX_TN_BASH_MISSING} occurrence(s))."
+    echo "     GetNumAvailableDevices() threw on dead relay. With || true the script handles it;"
+    echo "     without || true, set -eo pipefail aborts the shell silently before recovery."
 fi
 if [ "${FIX_TH2_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TH2] fabric_router_sync_timeout extended from 10s to 30s (${FIX_TH2_FIRES} occurrence(s))."

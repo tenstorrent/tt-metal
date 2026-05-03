@@ -283,7 +283,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             auto cols_min = *std::min_element(col_min_planes.begin(), col_min_planes.end());
             std::vector<size_t> rows_min_buf(*distributed_context.size());
             std::vector<size_t> cols_min_buf(*distributed_context.size());
-            log_trace(
+            log_info(
                 tt::LogFabric,
                 "initialize_dynamic_routing_plane_counts: ENTERING all_gather+barrier "
                 "(rank {}/{}, rows_min={}, cols_min={})",
@@ -298,7 +298,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
                 tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
             distributed_context.barrier();
-            log_trace(
+            log_info(
                 tt::LogFabric,
                 "initialize_dynamic_routing_plane_counts: EXITED all_gather+barrier (rank {})",
                 *distributed_context.rank());
