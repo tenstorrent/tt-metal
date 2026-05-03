@@ -435,16 +435,17 @@ def test_image_projector_pcc(mesh_device, state_dict, molmo2_cfg):
 
 
 def test_vision_adapter_pcc(mesh_device, state_dict, molmo2_cfg):
-    """TtMolmo2ImagePooling2D + TtMolmo2ImageProjector PCC > 0.99.
+    """TtMolmo2ImagePooling2D (TTNN chunked) + TtMolmo2ImageProjector PCC > 0.99.
 
     Uses image_features_4d from vision_adapter golden and image_token_pooling
-    from full_prefill golden. Compares against ref_proj_out.
+    from full_prefill golden. Exercises the full TTNN pooling path:
+      ttnn.embedding gather → device masked mean → device attn mask → cross-attn.
     """
     sys.path.insert(0, str(Path(__file__).parent.parent / "reference"))
     va = torch.load(GOLDEN_DIR / "vision_adapter.pt", weights_only=False)
     fp = torch.load(GOLDEN_DIR / "full_prefill.pt", weights_only=False)
 
-    image_features_4d = va["image_features_4d"]  # [1, 9, 729, 2304]
+    image_features_4d = va["image_features_4d"].float()  # [1, 9, 729, 2304]
     ref_proj_out = va["ref_proj_out"]  # [1316, 4096]
     pool_idx = fp["inputs"]["image_token_pooling"].unsqueeze(0)  # [1, 1316, 4]
 
@@ -458,23 +459,102 @@ def test_vision_adapter_pcc(mesh_device, state_dict, molmo2_cfg):
         mesh_device=mesh_device, state_dict=state_dict, cfg=molmo2_cfg, weight_cache_path=None
     )
 
-    # Pooling returns CPU tensor [B, N_pooled, 1152]
-    pooled_cpu = pooling.forward(image_features_4d, pool_idx)  # [1, 1316, 1152]
+    # ---- TTNN pooling path ----
+    # Build the 2D feature table and run _run_chunked_ttnn_pooling directly.
+    # We reuse the same logic as TtMolmo2Model._run_chunked_ttnn_pooling but inline
+    # it here so this test has no dependency on the full model being instantiated.
+    B, n_crops, n_patches, feat_dim = image_features_4d.shape
+    N_pooled = pool_idx.shape[1]
+    k_pool = pool_idx.shape[2]
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
-    # Apply valid-token filter (indices >= 0)
-    valid = (pool_idx[0] >= 0).any(dim=-1)  # [N_pooled]
-    pooled_valid = pooled_cpu[0][valid]  # [N_valid, 1152]
+    feat_tt = ttnn.from_torch(
+        image_features_4d.reshape(-1, feat_dim).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+
+    idx_flat = pool_idx[0].reshape(-1).clamp(min=0).to(torch.int32)
+    valid_flat = (pool_idx[0].reshape(-1) >= 0).float()
+
+    idx_tt = ttnn.from_torch(
+        idx_flat.reshape(1, -1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+    valid_tt = ttnn.from_torch(
+        valid_flat.reshape(1, 1, -1, 1).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+
+    gathered = ttnn.embedding(idx_tt, feat_tt, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(feat_tt)
+    ttnn.deallocate(idx_tt)
+    gathered = ttnn.reshape(gathered, [1, 1, N_pooled * k_pool, feat_dim])
+    gathered = ttnn.mul(gathered, valid_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    to_pool = ttnn.reshape(gathered, [1, N_pooled, k_pool, feat_dim])
+    ttnn.deallocate(gathered)
+
+    query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)
+    vm = ttnn.reshape(valid_tt, [1, N_pooled, k_pool, 1])
+    denom = ttnn.clamp(ttnn.sum(vm, dim=2, keepdim=True), min=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(vm)
+    query = ttnn.div(query_sum, denom, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(query_sum)
+    ttnn.deallocate(denom)
+
+    valid_rm = ttnn.to_layout(valid_tt, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(valid_tt)
+    valid_4d = ttnn.to_layout(ttnn.reshape(valid_rm, [N_pooled, 1, 1, k_pool]), ttnn.TILE_LAYOUT)
+    ttnn.deallocate(valid_rm)
+    zeros_buf = ttnn.zeros_like(valid_4d)
+    neg_inf_buf = ttnn.from_torch(
+        torch.full((1, 1, 1, 1), float("-inf"), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+    threshold = ttnn.full_like(valid_4d, 0.5)
+    cond = ttnn.gt(valid_4d, threshold, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    attn_mask = ttnn.where(cond, zeros_buf, neg_inf_buf, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for t in (valid_4d, zeros_buf, neg_inf_buf, threshold, cond):
+        ttnn.deallocate(t)
+
+    pooled_tt = pooling.forward(query, to_pool, attn_mask)
+    ttnn.deallocate(query)
+    ttnn.deallocate(to_pool)
+    ttnn.deallocate(attn_mask)
+
+    pooled_cpu = ttnn.to_torch(ttnn.get_device_tensors(pooled_tt)[0]).float()
+    ttnn.deallocate(pooled_tt)
+    pooled_cpu = pooled_cpu.squeeze(0).squeeze(1)  # [N_pooled, 1152]
+
+    # Apply valid-token filter
+    valid = (pool_idx[0] >= 0).any(dim=-1)
+    pooled_valid = pooled_cpu[valid]  # [N_valid, 1152]
 
     # Project on device
-    pooled_tt = ttnn.from_torch(
+    pooled_ttnn = ttnn.from_torch(
         pooled_valid.to(torch.bfloat16).unsqueeze(0).unsqueeze(0),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mapper,
     )
-    proj_out = projector.forward(pooled_tt)
+    proj_out = projector.forward(pooled_ttnn)
     proj_cpu = ttnn.to_torch(ttnn.get_device_tensors(proj_out)[0]).float().squeeze(0).squeeze(0)
     ttnn.deallocate(proj_out)
 

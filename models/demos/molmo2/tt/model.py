@@ -275,20 +275,6 @@ class TtMolmo2Model(LightweightModule):
             cfg=configuration,
             weight_cache_path=weight_cache_path,
         )
-
-        # Keep pooling weights as CPU float32 for the reference CPU pooling path.
-        # The TTNN cross-attn path OOMs for video (N_windows~2430 × tile-padded 32 = 720 MB).
-        pfx = "model.vision_backbone.image_pooling_2d"
-        self._pool_cpu = {
-            "wq": state_dict[f"{pfx}.wq.weight"].float(),
-            "wq_b": state_dict[f"{pfx}.wq.bias"].float(),
-            "wk": state_dict[f"{pfx}.wk.weight"].float(),
-            "wk_b": state_dict[f"{pfx}.wk.bias"].float(),
-            "wv": state_dict[f"{pfx}.wv.weight"].float(),
-            "wv_b": state_dict[f"{pfx}.wv.bias"].float(),
-            "wo": state_dict[f"{pfx}.wo.weight"].float(),
-            "wo_b": state_dict[f"{pfx}.wo.bias"].float(),
-        }
         self.image_projector = TtMolmo2ImageProjector(
             mesh_device=mesh_device,
             state_dict=state_dict,
@@ -643,6 +629,123 @@ class TtMolmo2Model(LightweightModule):
     # Vision backbone
     # ------------------------------------------------------------------ #
 
+    # Number of pooling windows to process per TTNN chunk.
+    # Peak per chunk: to_pool [1, C, 32tile, 2304] + query same size ≈ 2×C×32×2304×2 bytes.
+    # chunk=4096: peak ≈ 1152 MB per device — comfortable on T3K (12 GB, ~5 GB weights).
+    # 30-frame video (2430 windows): 1 chunk → no chunking overhead.
+    # 384-frame video (31104 windows): 8 chunks.
+    _POOL_CHUNK_WINDOWS = 4096
+
+    def _run_chunked_ttnn_pooling(
+        self,
+        vit_cpu: torch.Tensor,  # [B, n_crops, n_patches, 2304] float32 CPU
+        pooled_patches_idx: torch.Tensor,  # [B, N_pooled, k_pool] int64 CPU
+    ) -> torch.Tensor:
+        """TTNN chunked image pooling. Returns [B, N_pooled, 1152] float32 CPU.
+
+        Uploads the full ViT feature table as a 2D device embedding table once,
+        then processes pooling windows in chunks of _POOL_CHUNK_WINDOWS to keep
+        DRAM peak manageable at any video length.
+
+        Key correctness properties:
+          - uint32 indices: max index for 384 frames = 280k >> bfloat16 safe limit ~256
+          - ROW_MAJOR reshape before attn-mask build: avoids tile-padding artefacts
+            when k_pool (e.g. 9 or 4) is not a multiple of tile size 32
+        """
+        B, n_crops, n_patches, feat_dim = vit_cpu.shape
+        N_pooled = pooled_patches_idx.shape[1]
+        k_pool = pooled_patches_idx.shape[2]
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+
+        # H2D: full feature table as 2D ROW_MAJOR embedding lookup table
+        feat_2d = vit_cpu.reshape(-1, feat_dim).to(torch.bfloat16)
+        feat_tt = ttnn.from_torch(
+            feat_2d,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+        all_chunks = []
+        for start in range(0, N_pooled, self._POOL_CHUNK_WINDOWS):
+            end = min(start + self._POOL_CHUNK_WINDOWS, N_pooled)
+            chunk_n_out = end - start
+            chunk_idx = pooled_patches_idx[0, start:end]  # [chunk_n_out, k_pool]
+
+            # Upload indices as uint32 — bfloat16 only represents integers up to ~256
+            idx_flat = chunk_idx.reshape(-1).clamp(min=0).to(torch.int32)
+            idx_tt = ttnn.from_torch(
+                idx_flat.reshape(1, -1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            valid_flat = (chunk_idx.reshape(-1) >= 0).float()
+            valid_tt = ttnn.from_torch(
+                valid_flat.reshape(1, 1, -1, 1).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+
+            # Gather via ttnn.embedding with global uint32 indices
+            gathered = ttnn.embedding(idx_tt, feat_tt, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(idx_tt)
+            gathered = ttnn.reshape(gathered, [1, 1, chunk_n_out * k_pool, feat_dim])
+            gathered = ttnn.mul(gathered, valid_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            to_pool = ttnn.reshape(gathered, [1, chunk_n_out, k_pool, feat_dim])
+            ttnn.deallocate(gathered)
+
+            # Masked mean query — fully on device (no D2H)
+            query_sum = ttnn.sum(to_pool, dim=2, keepdim=True)
+            vm = ttnn.reshape(valid_tt, [1, chunk_n_out, k_pool, 1])
+            denom = ttnn.clamp(ttnn.sum(vm, dim=2, keepdim=True), min=1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(vm)
+            query = ttnn.div(query_sum, denom, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(query_sum)
+            ttnn.deallocate(denom)
+
+            # Attn mask: ROW_MAJOR reshape before [N_out,1,1,k_pool] to avoid tile-padding
+            # artefacts when k_pool is not tile-aligned (e.g. k_pool=9 or k_pool=4)
+            valid_rm = ttnn.to_layout(valid_tt, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(valid_tt)
+            valid_4d = ttnn.to_layout(ttnn.reshape(valid_rm, [chunk_n_out, 1, 1, k_pool]), ttnn.TILE_LAYOUT)
+            ttnn.deallocate(valid_rm)
+            zeros_buf = ttnn.zeros_like(valid_4d)
+            neg_inf_buf = ttnn.from_torch(
+                torch.full((1, 1, 1, 1), float("-inf"), dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            threshold = ttnn.full_like(valid_4d, 0.5)
+            cond = ttnn.gt(valid_4d, threshold, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_mask = ttnn.where(cond, zeros_buf, neg_inf_buf, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for t in (valid_4d, zeros_buf, neg_inf_buf, threshold, cond):
+                ttnn.deallocate(t)
+
+            # Cross-attention pooling (TP column-parallel QKV, row-parallel wo)
+            pooled_tt = self.image_pooling.forward(query, to_pool, attn_mask)
+            ttnn.deallocate(query)
+            ttnn.deallocate(to_pool)
+            ttnn.deallocate(attn_mask)
+
+            chunk_cpu = ttnn.to_torch(ttnn.get_device_tensors(pooled_tt)[0]).float()
+            ttnn.deallocate(pooled_tt)
+            all_chunks.append(chunk_cpu.squeeze(0).squeeze(1))  # [chunk_n_out, 1152]
+
+        ttnn.deallocate(feat_tt)
+        pooled_all = torch.cat(all_chunks, dim=0).unsqueeze(0)  # [1, N_pooled, 1152]
+        return pooled_all
+
     def run_vision_backbone(
         self,
         pixel_values: torch.Tensor,  # [B, n_crops, 729, 588] CPU
@@ -658,10 +761,10 @@ class TtMolmo2Model(LightweightModule):
         n_crops_flat = B * n_crops
         pv_4d = pixel_values.reshape(n_crops_flat, 1, n_patches, px_dim).to(torch.bfloat16)
 
-        _MAX_VIT_BATCH = 8  # keeps each ViT forward ≤ ~50 MB peak; safe even when DRAM is fragmented
+        _MAX_VIT_BATCH = 8  # keeps each ViT forward ≤ ~50 MB peak
         vit_chunks = []
         for start in range(0, n_crops_flat, _MAX_VIT_BATCH):
-            chunk_cpu = pv_4d[start : start + _MAX_VIT_BATCH]  # [chunk, 1, 729, 588]
+            chunk_cpu = pv_4d[start : start + _MAX_VIT_BATCH]
             chunk_ttnn = ttnn.from_torch(
                 chunk_cpu,
                 dtype=ttnn.bfloat16,
@@ -670,37 +773,19 @@ class TtMolmo2Model(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            # ViT encode → [1, chunk, 729, 2304]
             feat_ttnn = self.vit_encoder.forward(chunk_ttnn)
             ttnn.deallocate(chunk_ttnn)
-            # Pull to CPU immediately so TTNN DRAM is freed before next chunk
             feat_cpu = ttnn.to_torch(ttnn.get_device_tensors(feat_ttnn)[0]).float()
             ttnn.deallocate(feat_ttnn)
             vit_chunks.append(feat_cpu.squeeze(0))  # [chunk, 729, 2304]
 
-        vit_cpu = torch.cat(vit_chunks, dim=0)  # [n_crops_flat, 729, 2304]
-        vit_cpu = vit_cpu.reshape(B, n_crops, n_patches, 2304)
+        vit_cpu = torch.cat(vit_chunks, dim=0).reshape(B, n_crops, n_patches, 2304)
 
-        # Image pooling on CPU via reference PyTorch (avoids TTNN DRAM OOM for video).
-        # The TTNN cross-attn path allocates [N_windows=2430, pool_window=9→32tile, 4608]
-        # ≈720 MB, OOMing alongside 10 GB of model weights.
-        from models.demos.molmo2.reference.functional import image_pooling_2d as _pool_ref
-
-        p = self._pool_cpu
-        pooled_cpu = _pool_ref(
-            vit_cpu,
-            pooled_patches_idx,
-            p["wq"],
-            p["wq_b"],
-            p["wk"],
-            p["wk_b"],
-            p["wv"],
-            p["wv_b"],
-            p["wo"],
-            p["wo_b"],
-            num_heads=self.configuration.pool_n_heads,
-            head_dim=self.configuration.pool_head_dim,
-        )  # [B, N_pooled, 1152]
+        # TTNN chunked image pooling — avoids OOM by:
+        #   (a) column-parallel TP=8 reduces per-device QKV output 8×
+        #   (b) window-based chunking caps peak DRAM per chunk at ~191 MB
+        pooled_cpu = self._run_chunked_ttnn_pooling(vit_cpu, pooled_patches_idx)
+        # [1, N_pooled, 1152]
 
         # Apply valid-token filter
         valid_token = (pooled_patches_idx[0] >= 0).any(dim=-1)  # [N_pooled]
@@ -718,7 +803,6 @@ class TtMolmo2Model(LightweightModule):
         proj_out = self.image_projector.forward(pooled_ttnn)
         ttnn.deallocate(pooled_ttnn)
 
-        # Move result to CPU for embedding injection
         proj_cpu = ttnn.to_torch(ttnn.get_device_tensors(proj_out)[0]).float().squeeze(0).squeeze(0)
         ttnn.deallocate(proj_out)
         return proj_cpu  # [N_valid, 4096]
