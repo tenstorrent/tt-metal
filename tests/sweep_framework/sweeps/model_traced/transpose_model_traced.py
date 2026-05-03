@@ -63,6 +63,38 @@ def mesh_device_fixture():
         del device
 
 
+def _reorder_l1_mc_for_dram_sharded(mc, device):
+    """Reorder an L1-sharded MemoryConfig's core_ranges to match the device's
+    optimal DRAM bank → worker assignment so the recorded grid matches what
+    master traced (master records cores in the optimal order)."""
+    try:
+        if mc is None or mc.buffer_type != ttnn.BufferType.L1:
+            return mc
+        if mc.shard_spec is None:
+            return mc
+        old_grid = mc.shard_spec.grid
+        master_cores = set()
+        for cr in old_grid.ranges():
+            for x in range(cr.start.x, cr.end.x + 1):
+                for y in range(cr.start.y, cr.end.y + 1):
+                    master_cores.add((x, y))
+        if not master_cores:
+            return mc
+        try:
+            optimal = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        except Exception:
+            return mc
+        ordered = [(c.x, c.y) for c in optimal if (c.x, c.y) in master_cores]
+        if len(ordered) != len(master_cores):
+            return mc
+        new_ranges = [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for (x, y) in ordered]
+        new_grid = ttnn.CoreRangeSet(new_ranges)
+        new_shard_spec = ttnn.ShardSpec(new_grid, mc.shard_spec.shape, mc.shard_spec.orientation)
+        return ttnn.MemoryConfig(mc.memory_layout, mc.buffer_type, new_shard_spec)
+    except Exception:
+        return mc
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -167,6 +199,18 @@ def run(
             )
             for _k, _v in kw.items():
                 print(f"[T_PRE] {_ch_p} kw[{_k}]={repr(_v)[:300]}", file=_sys_p.stderr, flush=True)
+        # Reorder L1-sharded mcs to the device's optimal DRAM-bank order so
+        # the trace records the same grid order master saw.
+        try:
+            if "memory_config" in kw and kw["memory_config"] is not None:
+                kw["memory_config"] = _reorder_l1_mc_for_dram_sharded(kw["memory_config"], device)
+            if hasattr(tensor_a, "memory_config"):
+                _t_mc = tensor_a.memory_config()
+                _t_mc2 = _reorder_l1_mc_for_dram_sharded(_t_mc, device)
+                if _t_mc2 is not _t_mc:
+                    tensor_a = ttnn.to_memory_config(tensor_a, _t_mc2)
+        except Exception:
+            pass
         out = ttnn.transpose(tensor_a, dim0, dim1, **kw)
         return mesh_tensor_to_torch(out, device if is_mesh_device else None)
 

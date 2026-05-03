@@ -265,15 +265,27 @@ def run(
             arg2_to_pass = ttnn.Shape(list(arg2))
         except Exception:
             arg2_to_pass = arg2
+    # Reproduce master's call form: 20/92 configs used the `shape=` kwarg
+    # (vector has `shape` populated), 72/92 used positional `arg1`.  Detect
+    # per-vector and reproduce.
+    _absent = kwargs.get("__absent_keys__", set()) or set()
+    _used_named_shape = "arg1" in _absent and "shape" not in _absent
     if arg2 is not None:
         try:
-            output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2_to_pass, **op_kwargs)
+            if _used_named_shape:
+                output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, pad_value=arg2_to_pass, **op_kwargs)
+            else:
+                output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2_to_pass, **op_kwargs)
         except (TypeError, RuntimeError):
-            output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
+            if _used_named_shape:
+                output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
+            else:
+                output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     else:
-        # Master is inconsistent: 68/92 configs were traced positional ("arg1"),
-        # 20/92 with the "shape" kwarg.  Pass positional to match the majority.
-        output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
+        if _used_named_shape:
+            output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
+        else:
+            output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

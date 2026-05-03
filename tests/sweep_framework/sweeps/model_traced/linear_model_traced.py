@@ -694,27 +694,42 @@ def run(
             linear_kwargs["output_tile"] = _output_tile
 
         linear_kwargs.update(parsed_op_kwargs)
+
+        # Master traced ttnn.linear with two call forms: 26 cfgs used the kwarg
+        # `input_tensor_b=` (vectors carry input_tensor_b_shape), 3 cfgs used
+        # the positional arg (vectors carry input_b_shape).  Match each form
+        # so the tracer captures the same arg key the master saw.
+        # Master used `input_tensor_b=` named for 26 cfgs and positional `arg1` for 3.
+        # __absent_keys__ tells us which form the vector preserves.
+        _absent = kwargs.get("__absent_keys__", set()) or set()
+        _used_named_b = "input_b_shape" in _absent and "input_tensor_b_shape" not in _absent
+
+        def _do_linear(_a, _b, **_kw):
+            if _used_named_b:
+                return ttnn.linear(_a, input_tensor_b=_b, **_kw)
+            return ttnn.linear(_a, _b, **_kw)
+
         try:
-            output_tensor = ttnn.linear(ttnn_a, input_tensor_b=ttnn_b, **linear_kwargs)
+            output_tensor = _do_linear(ttnn_a, ttnn_b, **linear_kwargs)
         except Exception:
             ttnn_a, ttnn_b = _make_dram_tensors()
             # First try keeping program_config so the trace records it (drop only
             # memory_config + core_grid, which depend on shard layout).
             fallback_kwargs = {k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "core_grid")}
             try:
-                output_tensor = ttnn.linear(ttnn_a, input_tensor_b=ttnn_b, **fallback_kwargs)
+                output_tensor = _do_linear(ttnn_a, ttnn_b, **fallback_kwargs)
             except Exception:
                 # Drop program_config too if it's also incompatible.
                 fallback_kwargs2 = {
                     k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "program_config", "core_grid")
                 }
                 try:
-                    output_tensor = ttnn.linear(ttnn_a, input_tensor_b=ttnn_b, **fallback_kwargs2)
+                    output_tensor = _do_linear(ttnn_a, ttnn_b, **fallback_kwargs2)
                 except Exception:
                     minimal_kwargs = {"bias": ttnn_bias}
                     if dtype is not None:
                         minimal_kwargs["dtype"] = dtype
-                    output_tensor = ttnn.linear(ttnn_a, input_tensor_b=ttnn_b, **minimal_kwargs)
+                    output_tensor = _do_linear(ttnn_a, ttnn_b, **minimal_kwargs)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
 

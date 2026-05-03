@@ -261,7 +261,15 @@ def run(
     start_time = start_measuring_time()
     # Master is split 2/2 between "input" kwarg and "arg0" positional.  Use
     # positional to match the existing exact-match case (and its tensor_placement).
-    output_tensor = ttnn.scatter(input_tensor, dim=dim, index=index_tensor, src=src_tensor, **op_kwargs)
+    # Reproduce master's call form: 2 cfgs used `input=` named (vector has
+    # input_shape), 2 positional (vector has input_a_shape only).
+    # Master used `input=` named for 2 cfgs (vector has input_shape, input_a_shape
+    # is __ABSENT__) and positional for 2.  Detect from __absent_keys__.
+    _absent = kwargs.get("__absent_keys__", set()) or set()
+    if "input_a_shape" in _absent and "input_shape" not in _absent:
+        output_tensor = ttnn.scatter(input=input_tensor, dim=dim, index=index_tensor, src=src_tensor, **op_kwargs)
+    else:
+        output_tensor = ttnn.scatter(input_tensor, dim=dim, index=index_tensor, src=src_tensor, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
