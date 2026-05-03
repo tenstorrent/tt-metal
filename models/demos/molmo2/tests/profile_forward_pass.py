@@ -413,7 +413,7 @@ _STAGE_META = [
     ("3_image_pooling_cpu", "Image pooling (cross-attn)", "TTNN"),
     ("4_image_projector", "Image projector (SwiGLU)", "TTNN"),
     ("5_scatter_injection", "Scatter inject (D2H+add+H2D)", "CPU"),
-    ("6_prefill_mask", "Prefill mask build (D2H incl.)", "CPU"),
+    ("6_prefill_mask", "Prefill mask (img_mm+max+where)", "TTNN"),
     ("7_rope_setup", "RoPE setup (cached=near-zero)", "CPU"),
     ("8_decoder_blocks", "36 decoder blocks", "TTNN"),
     ("9_ln_f", "ln_f", "TTNN"),
