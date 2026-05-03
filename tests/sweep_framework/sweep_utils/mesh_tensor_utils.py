@@ -112,24 +112,90 @@ def create_mesh_device(
     Returns:
         ttnn.MeshDevice instance
     """
-    # Create mesh device with just the mesh shape
-    # The API automatically selects available devices based on the mesh shape.
-    # Use COL dispatch axis to match the master trace's compute grid (7x10);
-    # the default (ROW) gives (8x9), invalidating master shard_specs that
-    # use y=9 cores.
+    # Pick dispatch axis based on what the op's master configs need.
+    # ROW dispatch gives compute_with_storage_grid_size = (8, 9): valid y in [0, 8].
+    # COL dispatch gives (7, 10): valid y in [0, 9], valid x in [0, 6].
+    # Master traces from deepseek_v3 use either layout depending on which dispatch
+    # was active when traced. Default to ROW; switch to COL only if any of the
+    # op's master shard_specs requires y=9 cores. Both cases: cores with x=7 fall
+    # outside COL but inside ROW — those configs need ROW.
+    needs_col = False
+    needs_row_only = False
+    try:
+        # Try to derive the op name from the runner's --module-name arg, e.g.
+        # "model_traced.linear_model_traced" -> "ttnn.linear"
+        op_name = os.environ.get("TTNN_SWEEP_OP_NAME", "")
+        if not op_name:
+            import sys as _sys_d
+
+            for _i, _a in enumerate(_sys_d.argv):
+                if _a == "--module-name" and _i + 1 < len(_sys_d.argv):
+                    _m = _sys_d.argv[_i + 1]
+                    if _m.startswith("model_traced."):
+                        _stem = _m.split(".", 1)[1].replace("_model_traced", "")
+                        # Check experimental + transformer prefixes by probing master json
+                        op_name = _stem  # bare; we'll match flexibly below
+                    break
+        master_json = os.environ.get("TTNN_MASTER_JSON_PATH", "")
+        if op_name and master_json and os.path.isfile(master_json):
+            import json as _json_d
+
+            with open(master_json) as _f:
+                _m = _json_d.load(_f)
+            # Try multiple forms: "ttnn.X", "ttnn.experimental.X", "ttnn.transformer.X"
+            _candidates = [
+                op_name,
+                f"ttnn.{op_name}",
+                f"ttnn.experimental.{op_name}",
+                f"ttnn.transformer.{op_name}",
+            ]
+            _matching_op = None
+            _ops_dict = _m.get("operations", {})
+            for _c in _candidates:
+                if _c in _ops_dict:
+                    _matching_op = _c
+                    break
+            if _matching_op is None:
+                _matching_op = op_name
+            for _cfg in _ops_dict.get(_matching_op, {}).get("configurations", []):
+                for _arg in _cfg.get("arguments", {}).values():
+                    if not isinstance(_arg, dict):
+                        continue
+                    _ss = (_arg.get("memory_config") or {}).get("shard_spec")
+                    if not isinstance(_ss, dict):
+                        continue
+                    for _g in _ss.get("grid", []):
+                        for _key in ("start", "end"):
+                            _p = _g.get(_key, {})
+                            if _p.get("y") == 9:
+                                needs_col = True
+                            if _p.get("x") == 7:
+                                needs_row_only = True
+    except Exception:
+        needs_col = False
+        needs_row_only = False
+
+    # Default: COL (gives compute grid 7x10) since most lead_models traces use
+    # cores in the 7-wide pattern with y up to 9. Switch to ROW only if any of
+    # the op's master shard_specs uses x=7 (which COL excludes).
+    use_axis = ttnn.DispatchCoreAxis.COL
+    if needs_row_only and not needs_col:
+        use_axis = ttnn.DispatchCoreAxis.ROW
+
     try:
         return ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),
             l1_small_size=l1_small_size,
-            dispatch_core_config=ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.COL),
+            dispatch_core_config=ttnn.DispatchCoreConfig(axis=use_axis),
         )
     except Exception:
-        # Older ttnn versions / non-Galaxy hardware may not support COL axis.
-        return ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(*mesh_shape),
-            l1_small_size=l1_small_size,
-            dispatch_core_config=ttnn.DispatchCoreConfig(),
-        )
+        pass
+
+    return ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*mesh_shape),
+        l1_small_size=l1_small_size,
+        dispatch_core_config=ttnn.DispatchCoreConfig(),
+    )
 
 
 def _parse_shard_dim(placement_str: str) -> int:
