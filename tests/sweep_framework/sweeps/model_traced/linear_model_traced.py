@@ -142,6 +142,46 @@ def _align_linear_for_torch(torch_a, placement_a, torch_w, placement_w):
     return torch_a, torch_w
 
 
+def _reorder_l1_mc_for_dram_sharded(mc, device):
+    """Reorder an L1-sharded MemoryConfig's core_ranges to match the device's
+    optimal DRAM bank → worker assignment. Required by the BatchedDRAMSharded
+    matmul kernel: it asserts storage_core[i] == worker_core[i] (NOC_0 list).
+
+    Master configs record cores in insertion order, which often differs from
+    the device's optimal order. Same set of cores, just shuffled.
+    """
+    try:
+        if mc is None or mc.buffer_type != ttnn.BufferType.L1:
+            return mc
+        if mc.shard_spec is None:
+            return mc
+        old_grid = mc.shard_spec.grid
+        # Collect the set of (x,y) cores in master's mc
+        master_cores = set()
+        for cr in old_grid.ranges():
+            for x in range(cr.start.x, cr.end.x + 1):
+                for y in range(cr.start.y, cr.end.y + 1):
+                    master_cores.add((x, y))
+        if not master_cores:
+            return mc
+        # Get the device's optimal assignment for NOC_0
+        try:
+            optimal = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        except Exception:
+            return mc
+        # Build a new core_ranges list: take optimal cores in order, only those
+        # that appear in master's set. If sizes mismatch, leave mc unchanged.
+        ordered = [(c.x, c.y) for c in optimal if (c.x, c.y) in master_cores]
+        if len(ordered) != len(master_cores):
+            return mc
+        new_ranges = [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for (x, y) in ordered]
+        new_grid = ttnn.CoreRangeSet(new_ranges)
+        new_shard_spec = ttnn.ShardSpec(new_grid, mc.shard_spec.shape, mc.shard_spec.orientation)
+        return ttnn.MemoryConfig(mc.memory_layout, mc.buffer_type, new_shard_spec)
+    except Exception:
+        return mc
+
+
 def run(
     input_a_shape,  # Input shape (m, k)
     input_a_dtype,
@@ -354,6 +394,16 @@ def run(
         input_a_memory_config = dict_to_memory_config(input_a_memory_config)
     if isinstance(input_b_memory_config, dict):
         input_b_memory_config = dict_to_memory_config(input_b_memory_config)
+
+    # BatchedDRAMSharded matmul kernel asserts that the L1 input_a shard
+    # grid uses the same core ordering as the device's optimal DRAM bank
+    # → worker assignment. Master records cores in insertion order; reorder
+    # to match the kernel's expected worker order.
+    _pc_cls = type(program_config).__name__ if program_config is not None else ""
+    if "BatchedDRAMSharded" in _pc_cls:
+        input_a_memory_config = _reorder_l1_mc_for_dram_sharded(input_a_memory_config, device)
+        if isinstance(memory_config, ttnn.MemoryConfig):
+            memory_config = _reorder_l1_mc_for_dram_sharded(memory_config, device)
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement")
@@ -366,6 +416,21 @@ def run(
     # Exclude program_config (handled above), activation (used for golden too),
     # and output_tile (a Tile object that can't be auto-parsed from dict).
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
+
+    # Parse master's output_tile (a Tile object that build_op_kwargs can't auto-
+    # parse). Format: {"type": "Tile", "value": "Tile with shape: [32, 32]"}.
+    _ot_raw = kwargs.get("output_tile")
+    _output_tile = None
+    if isinstance(_ot_raw, dict) and _ot_raw.get("type") == "Tile":
+        import re as _re_ot
+
+        _v = str(_ot_raw.get("value", ""))
+        _m = _re_ot.search(r"shape:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]", _v)
+        if _m:
+            try:
+                _output_tile = ttnn.Tile([int(_m.group(1)), int(_m.group(2))])
+            except Exception:
+                _output_tile = None
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -624,6 +689,9 @@ def run(
 
         if activation is not None:
             linear_kwargs["activation"] = activation
+
+        if _output_tile is not None:
+            linear_kwargs["output_tile"] = _output_tile
 
         linear_kwargs.update(parsed_op_kwargs)
         try:
