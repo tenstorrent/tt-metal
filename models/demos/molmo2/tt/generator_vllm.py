@@ -156,7 +156,17 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
         logger.info("Pre-compiling vision JIT kernels...")
         model.warmup_vision_compile()
-        logger.info("JIT warmup complete — server ready to serve")
+
+        # Capture decode trace at server bringup so decode never JIT-compiles during serving.
+        # Matches model.generate() in the demo: capture once, reuse for all S values.
+        logger.info("Capturing decode trace...")
+        model._decode_trace_tensors = model._allocate_decode_trace_tensors()
+        # Use the first PREFILL_BUCKET as the capture position — trace works for all S.
+        _trace_S = PREFILL_BUCKETS[0]
+        model._decode_trace_id, model._decode_trace_output = model._capture_decode_trace(
+            model._decode_trace_tensors, _trace_S
+        )
+        logger.info("Decode trace captured — server ready to serve")
 
         return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)
 
@@ -238,9 +248,8 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
             user_id=0,
         )
 
-        if not self._decode_trace_captured:
-            logger.info(f"Capturing decode trace at pos={seq_len}...")
-            self._capture_decode_trace(seq_len)
+        # Decode trace is pre-captured at server bringup (initialize_vllm_model).
+        # No lazy capture here — nothing should JIT or trace during inference.
 
         return logits, None  # (logits, rope_deltas=None)
 
