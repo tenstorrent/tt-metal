@@ -154,19 +154,18 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
 
         logger.info(f"Pre-compiling prefill JIT kernels for buckets {PREFILL_BUCKETS}...")
         model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
+        # After warmup_all_buckets, KV cache is filled by the last bucket's forward_prefill.
+        # Capture decode trace NOW — the KV state matches the last bucket (largest S),
+        # so the SDPA kernel is compiled for the full KV range, working for all S ≤ max_S.
+        logger.info(f"Capturing decode trace at pos={PREFILL_BUCKETS[-1]}...")
+        model._decode_trace_tensors = model._allocate_decode_trace_tensors()
+        model._decode_trace_id, model._decode_trace_output = model._capture_decode_trace(
+            model._decode_trace_tensors, PREFILL_BUCKETS[-1]
+        )
+        logger.info("Decode trace captured")
         logger.info("Pre-compiling vision JIT kernels...")
         model.warmup_vision_compile()
-
-        # Capture decode trace at server bringup so decode never JIT-compiles during serving.
-        # Matches model.generate() in the demo: capture once, reuse for all S values.
-        logger.info("Capturing decode trace...")
-        model._decode_trace_tensors = model._allocate_decode_trace_tensors()
-        # Use the first PREFILL_BUCKET as the capture position — trace works for all S.
-        _trace_S = PREFILL_BUCKETS[0]
-        model._decode_trace_id, model._decode_trace_output = model._capture_decode_trace(
-            model._decode_trace_tensors, _trace_S
-        )
-        logger.info("Decode trace captured — server ready to serve")
+        logger.info("JIT warmup complete — server ready to serve")
 
         return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)
 
