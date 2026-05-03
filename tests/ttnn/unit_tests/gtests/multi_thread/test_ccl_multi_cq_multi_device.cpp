@@ -82,8 +82,15 @@ protected:
         // FIX QV (#42429): SetFabricConfig called here (moved from ctor) so degraded-ETH
         // cluster-init exceptions become GTEST_SKIP() not FAILED.
         // Order preserved: this runs before MeshDeviceFixtureBase::SetUp().
+        // FIX QW2 (#42429): Track whether SetFabricConfig(FABRIC_1D) succeeded so TearDown
+        // can skip SetFabricConfig(DISABLED) when fabric init threw.  If SetFabricConfig
+        // throws, the MetalContext is only partially initialised; calling SetFabricConfig(DISABLED)
+        // in TearDown attempts ETH-channel cleanup that times out and throws, which GTest
+        // catches and reports as FAILED — overriding the SKIP recorded by GTEST_SKIP() here.
+        fabric_1d_initialized_ = false;
         try {
             tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+            fabric_1d_initialized_ = true;
         } catch (const std::exception& e) {
             GTEST_SKIP() << "FIX QV (#42429): SetFabricConfig(FABRIC_1D) threw during cluster "
                             "init — degraded ETH relay (non-MMIO device unreachable): "
@@ -169,7 +176,14 @@ protected:
         } else {
             MeshDeviceFixtureBase::TearDown();
         }
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        // FIX QW2 (#42429): Only call SetFabricConfig(DISABLED) if SetFabricConfig(FABRIC_1D)
+        // succeeded in SetUp.  If it threw (degraded ETH cluster), the MetalContext is only
+        // partially initialised; calling SetFabricConfig(DISABLED) here attempts ETH-channel
+        // cleanup that times out and throws — GTest catches the exception and reports the test
+        // as FAILED, overriding the SKIP that GTEST_SKIP() already recorded in SetUp().
+        if (fabric_1d_initialized_) {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        }
     }
 
     // Diagnostic: for every device in the mesh, read and log fabric ETH router status on every
@@ -274,6 +288,11 @@ protected:
             }
         }
     }
+
+    // FIX QW2 (#42429): Set to true only when SetFabricConfig(FABRIC_1D) succeeds in SetUp().
+    // TearDown() checks this to avoid calling SetFabricConfig(DISABLED) on a partially-init'd
+    // MetalContext, which would throw and turn the SKIP into a FAILED.
+    bool fabric_1d_initialized_ = false;
 };
 
 // TODO(#30692): Re-enable after migrating to aggregated tensor + semaphore-free all-gather APIs.
