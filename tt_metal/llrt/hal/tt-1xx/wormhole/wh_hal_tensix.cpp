@@ -34,7 +34,18 @@ HalCoreInfoType create_tensix_mem_map() {
     constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     std::vector<DeviceAddr> mem_map_bases;
-    const uint32_t default_l1_kernel_config_size = 69 * 1024;
+    // 69 KiB kernel-config region + 2560 bytes of compatibility slack so
+    // DEFAULT_UNRESERVED (user-allocatable L1 base) lands at the same address it
+    // had before #43082 shrank MEM_BRISC_FIRMWARE_SIZE by 2560 bytes. Without
+    // this slack Llama 3.3 70B Galaxy text_demo regresses ~3 t/s/u (#43360)
+    // because sharded-tensor placement is sensitive to the user-L1 base offset.
+    // Adjusting only this host-side constant (rather than MEM_MAP_END or
+    // MEM_BRISC_FIRMWARE_SIZE) keeps every L1 reserved-region address — including
+    // MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH that BRISC firmware references —
+    // exactly where they are now, so the BRISC firmware ELF (which fits the
+    // stock 6 KB region with only 40 bytes to spare under PROFILE_PERF_COUNTERS)
+    // is unaffected.
+    const uint32_t default_l1_kernel_config_size = 69 * 1024 + 2560;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_BASE;

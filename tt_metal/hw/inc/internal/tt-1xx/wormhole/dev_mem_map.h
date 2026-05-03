@@ -156,23 +156,10 @@
 #error "Packet header pool base and size must be 16-byte aligned"
 #endif
 
-// Compatibility padding so MEM_MAP_END (and downstream user-allocatable L1 base
-// computed from it in wh_hal_tensix.cpp) keeps the position it had before #43082,
-// when MEM_BRISC_FIRMWARE_SIZE was 6*1024 + 2560. Issue #43360: shrinking BRISC
-// firmware to fit in 6KB shifted the user L1 base down by 2560 bytes and cost
-// ~3 t/s/u on Llama 3.3 70B Galaxy text_demo via worse L1-bank distribution for
-// sharded tensors. Padding here (rather than restoring MEM_BRISC_FIRMWARE_SIZE)
-// leaves MEM_TENSIX_FABRIC_CONNECTIONS_BASE / MEM_PACKET_HEADER_POOL_BASE
-// untouched, avoiding the fabric-CCL deadlock from PR #41021's layout.
-#define MEM_L1_LAYOUT_COMPAT_PAD_SIZE 2560
-#if (MEM_L1_LAYOUT_COMPAT_PAD_SIZE % 16 != 0)
-#error "MEM_L1_LAYOUT_COMPAT_PAD_SIZE must be 16-byte aligned"
-#endif
-
 // Read-only reserved memory boundary for watcher checks
 #define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
 // Read-write reserved memory boundary for watcher checks
-#define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE + MEM_L1_LAYOUT_COMPAT_PAD_SIZE)
+#define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"
