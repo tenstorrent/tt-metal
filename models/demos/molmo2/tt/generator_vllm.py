@@ -149,8 +149,10 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
 
         # Pre-compile JIT kernels for all prefill bucket sizes and vision ops
         # before the server starts serving — avoids stall on first inference.
-        logger.info("Pre-compiling prefill JIT kernels for all bucket sizes...")
-        model.warmup_all_buckets(use_trace=False)
+        # Include 8192 to cover videos with S up to 8192 tokens (long/high-fps videos).
+        _warmup_buckets = [128, 256, 512, 1024, 2048, 4096, 8192]
+        logger.info(f"Pre-compiling prefill JIT kernels for buckets {_warmup_buckets}...")
+        model.warmup_all_buckets(bucket_sizes=_warmup_buckets, use_trace=False)
         logger.info("Pre-compiling vision JIT kernels...")
         model.warmup_vision_compile()
         logger.info("JIT warmup complete — server ready to serve")
