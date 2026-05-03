@@ -21,6 +21,68 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
 TIMEOUT = 300
 
+_ABSENT = "__ABSENT__"
+
+
+def _was_traced(value):
+    """Return True if the loader marker indicates the kwarg WAS originally traced.
+
+    The loader emits ``"__ABSENT__"`` for keys that were not present in the
+    master config. Anything else (including explicit ``None``) was actually
+    passed by the model and must round-trip through to the op call so the
+    sweep trace matches the master.
+    """
+    return value != _ABSENT
+
+
+def _shard_dims_from_placement(tensor_placement):
+    """Extract (dim0, dim1) for ShardTensor2dMesh from a traced placement dict.
+
+    Returns ``None`` for axes the placement marks PlacementReplicate, integer
+    shard dim otherwise. Returns ``None`` overall if the placement cannot be
+    parsed as a 2-D mesh placement.
+    """
+    if not tensor_placement:
+        return None
+    placement = tensor_placement.get("placement", "")
+    if isinstance(placement, list):
+        placement = " ".join(str(p) for p in placement)
+    dims = []
+    for m in re.finditer(r"PlacementShard\((?:dim=)?(-?\d+)\)|PlacementReplicate", str(placement)):
+        dims.append(int(m.group(1)) if m.group(1) is not None else None)
+    return tuple(dims) if len(dims) == 2 else None
+
+
+def _from_torch_host_with_placement(torch_tensor, dtype, tensor_placement, mesh_device, is_mesh_device):
+    """Create a HOST-side ttnn.Tensor stamped with the master's mesh placement.
+
+    Master traces capture conv2d weight/bias before they are moved to device,
+    so the tensors must be HOST tensors that nevertheless carry the
+    ShardTensor2dMesh / ReplicateTensorToMesh placement metadata. Pass
+    ``mesh_mapper`` to ``from_torch`` *without* ``device=`` to avoid an
+    immediate transfer onto the mesh.
+    """
+    if not (is_mesh_device and tensor_placement):
+        return ttnn.from_torch(torch_tensor, dtype)
+    placement_str = str(tensor_placement.get("placement", ""))
+    mesh_shape = tensor_placement.get("mesh_device_shape") or tensor_placement.get("distribution_shape")
+    if isinstance(mesh_shape, str):
+        mesh_shape_nums = re.findall(r"\d+", mesh_shape)
+        mesh_shape = tuple(int(x) for x in mesh_shape_nums) if mesh_shape_nums else None
+    elif isinstance(mesh_shape, (list, tuple)):
+        mesh_shape = tuple(int(x) for x in mesh_shape)
+
+    has_shard = "PlacementShard" in placement_str
+    if has_shard and mesh_shape and len(mesh_shape) == 2:
+        dims = _shard_dims_from_placement(tensor_placement)
+        if dims is not None:
+            mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=mesh_shape)
+            return ttnn.from_torch(torch_tensor, dtype, mesh_mapper=mapper)
+    # Pure-replicate placement (no Shard) or unparseable shape: replicate.
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    return ttnn.from_torch(torch_tensor, dtype, mesh_mapper=mapper)
+
+
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("conv2d")
 
@@ -283,11 +345,20 @@ def run(
     in_channels = int(kwargs.get("in_channels", 1))
     input_height = int(kwargs.get("input_height") or kwargs.get("input_h") or 4)
     input_width = int(kwargs.get("input_width") or kwargs.get("input_w") or 4)
-    groups = int(kwargs.get("groups") or 1)
+
+    # Track which optional kwargs the master actually traced so we can pass
+    # them through to ttnn.conv2d only when they were originally present
+    # (anything else inflates the sweep config_hash with extra defaults).
+    raw_dilation = kwargs.get("dilation", _ABSENT)
+    raw_groups = kwargs.get("groups", _ABSENT)
+    raw_dtype = kwargs.get("dtype", _ABSENT)
+    raw_return_wb = kwargs.get("return_weights_and_bias", _ABSENT)
+
+    groups = int(raw_groups) if _was_traced(raw_groups) and raw_groups is not None else 1
 
     kernel_h, kernel_w = _parse_list_param(kwargs.get("kernel_size"), (1, 1))
     stride_h, stride_w = _parse_list_param(kwargs.get("stride"), (1, 1))
-    dilation_h, dilation_w = _parse_list_param(kwargs.get("dilation"), (1, 1))
+    dilation_h, dilation_w = _parse_list_param(raw_dilation if _was_traced(raw_dilation) else None, (1, 1))
     (pad_h, pad_w), full_padding = _parse_padding(kwargs.get("padding"))
 
     has_bias = bool(kwargs.get("bias_tensor_shape") and kwargs.get("bias_tensor_shape") not in (None, "None", ""))
@@ -296,7 +367,7 @@ def run(
     input_dtype = _DTYPE_MAP.get(kwargs.get("input_tensor_dtype"), ttnn.bfloat16)
     weight_dtype = _DTYPE_MAP.get(kwargs.get("weight_tensor_dtype"), ttnn.bfloat16)
     bias_dtype = _DTYPE_MAP.get(kwargs.get("bias_tensor_dtype"), ttnn.bfloat16)
-    output_dtype = _DTYPE_MAP.get(kwargs.get("dtype"), ttnn.bfloat16)
+    output_dtype = _DTYPE_MAP.get(raw_dtype if _was_traced(raw_dtype) else None, ttnn.bfloat16)
 
     # Parse layout
     input_layout = _LAYOUT_MAP.get(kwargs.get("input_tensor_layout"), ttnn.ROW_MAJOR_LAYOUT)
@@ -393,6 +464,8 @@ def run(
     # --- Create ttnn tensors ---
     is_mesh_device = hasattr(device, "get_num_devices")
     input_a_tensor_placement = kwargs.get("input_tensor_tensor_placement", None)
+    weight_tensor_placement = kwargs.get("weight_tensor_tensor_placement", None)
+    bias_tensor_placement = kwargs.get("bias_tensor_tensor_placement", None)
 
     # BFLOAT8_B/BFLOAT4_B require TILE_LAYOUT for from_torch
     effective_input_layout = input_layout
@@ -424,6 +497,12 @@ def run(
     effective_weight_dtype = weight_dtype
     if effective_weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
         effective_weight_dtype = ttnn.float32
+
+    # weight/bias stay as plain HOST tensors. The master trace records mesh
+    # placement metadata (e.g. PlacementShard(0)) but the underlying conv2d
+    # implementation expects per-device shapes equal to out_channels — making
+    # this match exactly would require rewriting the golden too. Leave the
+    # tensor_placement diff as an accepted coverage gap.
     tt_weight = ttnn.from_torch(torch_weight, effective_weight_dtype)
 
     tt_bias = None
@@ -436,9 +515,12 @@ def run(
     # --- Call ttnn.conv2d ---
     raw_rod = kwargs.get("return_output_dim", False)
     return_output_dim = str(raw_rod).strip().lower() in ("true", "1") if isinstance(raw_rod, str) else bool(raw_rod)
-    raw_rwb = kwargs.get("return_weights_and_bias", False)
     return_weights_and_bias = (
-        str(raw_rwb).strip().lower() in ("true", "1") if isinstance(raw_rwb, str) else bool(raw_rwb)
+        str(raw_return_wb).strip().lower() in ("true", "1")
+        if isinstance(raw_return_wb, str)
+        else bool(raw_return_wb)
+        if _was_traced(raw_return_wb)
+        else False
     )
 
     start_time = start_measuring_time()
@@ -457,15 +539,22 @@ def run(
         kernel_size=(kernel_h, kernel_w),
         stride=(stride_h, stride_w),
         padding=padding_arg,
-        dilation=(dilation_h, dilation_w),
-        groups=groups,
         bias_tensor=tt_bias,
         conv_config=conv_config,
         compute_config=compute_config,
-        dtype=output_dtype,
         return_output_dim=return_output_dim,
-        return_weights_and_bias=return_weights_and_bias,
     )
+
+    # Optional kwargs: only forward when the master config recorded them, so
+    # the sweep config_hash matches without inflating it with default values.
+    if _was_traced(raw_dilation):
+        conv2d_kwargs["dilation"] = (dilation_h, dilation_w)
+    if _was_traced(raw_groups):
+        conv2d_kwargs["groups"] = groups
+    if _was_traced(raw_dtype):
+        conv2d_kwargs["dtype"] = output_dtype
+    if _was_traced(raw_return_wb):
+        conv2d_kwargs["return_weights_and_bias"] = return_weights_and_bias
 
     traced_slice_config = kwargs.get("slice_config")
     if traced_slice_config is not None and isinstance(traced_slice_config, dict):
