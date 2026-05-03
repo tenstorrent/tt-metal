@@ -46,6 +46,7 @@ try:
 except ImportError:
     _registry_decorator = lambda cls: cls  # no-op for reference vllm
 
+WEIGHT_CACHE_PATH = Path("/tmp/molmo2_weight_cache")
 _PATCH_SIZE = 14
 _PATCH_FEATURES = _PATCH_SIZE * _PATCH_SIZE * 3  # 588
 
@@ -89,13 +90,12 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         "supports_async_decode": False,
     }
 
-    def __init__(self, model, cfg, mesh_device, processor, weight_cache_path=None):
+    def __init__(self, model, cfg, mesh_device, processor):
         self.model = model
         self.cfg = cfg
         self.mesh_device = mesh_device
         self.processor = processor
         self._decode_trace_captured = False
-        self._weight_cache_path = weight_cache_path or Path("/tmp/molmo2_weight_cache")
 
     @classmethod
     def initialize_vllm_model(
@@ -109,64 +109,54 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
     ):
         """Called by TTModelLoader after vLLM resolves TTMolmo2ForConditionalGeneration."""
         import os
-        import shutil
 
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         from models.demos.molmo2.tt.model import TtMolmo2Model
 
         hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
-        # Use HF_MODEL env var (set by run_vllm_api_server.py to local symlink) if available,
-        # otherwise fall back to the HF model ID (will use ~/.cache/huggingface).
+        # Use HF_MODEL env var (set by run_vllm_api_server.py to local weights symlink)
+        # to avoid downloading from HF. local_files_only prevents downloading updated code files.
         hf_path = os.environ.get("HF_MODEL", hf_model_id)
+        local_only = hf_path != hf_model_id
         logger.info(f"Initializing Molmo2 TT model from {hf_path}")
-
-        # Weight cache: prefer TT_CACHE_PATH (Docker volume, persists across restarts),
-        # fall back to /tmp (local dev, rebuilt each time).
-        weight_cache_path = Path(os.environ.get("TT_CACHE_PATH", "/tmp/molmo2_weight_cache"))
-        weight_cache_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Using weight cache at {weight_cache_path}")
-
-        # Clear any stale transformers module cache for this model to prevent
-        # a mismatched modeling_molmo2.py from a previous partial HF download.
-        _modules_cache = Path.home() / ".cache" / "huggingface" / "modules" / "transformers_modules"
-        for _stale in _modules_cache.glob("*Molmo2*"):
-            logger.info(f"Removing stale module cache: {_stale}")
-            shutil.rmtree(_stale, ignore_errors=True)
 
         logger.info("Loading HF state dict (bfloat16)...")
         hf = AutoModelForImageTextToText.from_pretrained(
-            hf_path, trust_remote_code=True, torch_dtype=torch.bfloat16, device_map="cpu"
+            hf_path,
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
+            device_map="cpu",
+            local_files_only=local_only,
         )
         state_dict = hf.state_dict()
         del hf
 
-        processor = AutoProcessor.from_pretrained(hf_path, trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(hf_path, trust_remote_code=True, local_files_only=local_only)
 
         cfg = Molmo2Config(mesh_device=mesh_device)
         cfg.max_batch_size = max_batch_size
         cfg.max_seq_len = max_seq_len
 
         ccl = TT_CCL(mesh_device)
+        WEIGHT_CACHE_PATH.mkdir(parents=True, exist_ok=True)
 
         model = TtMolmo2Model(
             mesh_device=mesh_device,
             tt_ccl=ccl,
             state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
+            weight_cache_path=WEIGHT_CACHE_PATH,
             dtype=ttnn.bfloat16,
             configuration=cfg,
         )
         del state_dict
         logger.info("TtMolmo2Model ready")
 
-        return cls(
-            model=model, cfg=cfg, mesh_device=mesh_device, processor=processor, weight_cache_path=weight_cache_path
-        )
+        return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)
 
     @property
     def cache_path(self):
-        return self._weight_cache_path
+        return WEIGHT_CACHE_PATH
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_molmo2_kv_cache(*args, **kwargs, model=self.model, cfg=self.cfg)
