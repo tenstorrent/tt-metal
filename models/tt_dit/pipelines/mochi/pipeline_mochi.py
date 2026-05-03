@@ -314,6 +314,15 @@ class MochiPipeline(DiffusionPipeline):
                     "vae_tp_axis": 1,
                     "reload_dit_model": True,
                 },
+                (1, 4): {
+                    "sp_axis": 1,                                                                                                                                                                                                              
+                    "tp_axis": 0,
+                    "num_links": 2,                                                                                                                                                                                                            
+                    "vae_mesh_shape": (1, 4),                                                                                                                                                                                                  
+                    "vae_sp_axis": 0,
+                    "vae_tp_axis": 1,                                                                                                                                                                                                          
+                    "reload_dit_model": True,          
+                },  
                 (2, 4): {  # Hangs on BH
                     "sp_axis": 0,
                     "tp_axis": 1,
