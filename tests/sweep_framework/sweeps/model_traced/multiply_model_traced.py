@@ -118,6 +118,26 @@ def run(
             torch_input_tensor_b,
             input_b_tensor_placement,
         )
+        # Apply input_tensor_a_activations to ref_a so the golden matches the
+        # kernel's fused activation. Master traces this as e.g.
+        # [{"type": "UnaryOpType", "repr": "UnaryOpType.SILU"}].
+        _act_a = kwargs.get("input_tensor_a_activations") or []
+        if isinstance(_act_a, list):
+            for _a in _act_a:
+                _act_str = ""
+                if isinstance(_a, dict):
+                    _act_str = str(_a.get("repr", "")).upper()
+                else:
+                    _act_str = str(_a).upper()
+                if "SILU" in _act_str or "SWISH" in _act_str:
+                    ref_a = torch.nn.functional.silu(ref_a)
+                elif "GELU" in _act_str:
+                    _approx = "tanh" if "APPROX" in _act_str else "none"
+                    ref_a = torch.nn.functional.gelu(ref_a, approximate=_approx)
+                elif "RELU" in _act_str:
+                    ref_a = torch.nn.functional.relu(ref_a)
+                elif "TANH" in _act_str:
+                    ref_a = torch.tanh(ref_a)
         torch_output_tensor = torch.mul(ref_a, ref_b)
         is_scalar_multiply = False
 
