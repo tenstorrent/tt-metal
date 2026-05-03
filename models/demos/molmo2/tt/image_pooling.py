@@ -121,34 +121,51 @@ class TtMolmo2ImagePooling2D(LightweightModule):
         key_value: ttnn.Tensor,  # [1, N_windows, k_pool, POOL_DIM]
         attn_mask: ttnn.Tensor = None,  # [N_windows, 1, 1, k_pool] or None
     ) -> ttnn.Tensor:
-        """Cross-attention pooling. Returns [1, N_windows, 1, HIDDEN_DIM]."""
+        """Cross-attention pooling. Returns [1, N_windows, 1, HIDDEN_DIM].
+
+        QKV projections use flat [1, 1, N, POOL_DIM] inputs so the seq dim is
+        large and tile-aligned, replacing many small per-window matmuls with one
+        large efficient kernel:
+          Q: [1, N_windows, 1, POOL_DIM] → reshape [1, 1, N_windows,   POOL_DIM]
+          K/V: [1, N_windows, k_pool, POOL_DIM] → reshape [1, 1, N_windows*k_pool, POOL_DIM]
+        Both N_windows (4096) and N_windows*k_pool (36864 for k_pool=9) are
+        multiples of tile size 32 — no tile-padding waste.
+        """
         n_windows = query.shape[1]
         k_pool = key_value.shape[2]
+        local_hidden = self.n_local_heads * self.padded_head_dim
 
-        # Column-parallel QKV — each device computes n_local_heads
-        q = ttnn.add(
+        # ---- Q projection: flat [1, 1, N_windows, POOL_DIM] ----
+        # Avoids seq=1 being tile-padded to 32 (3.5× wasted compute per window)
+        q_flat = ttnn.reshape(query, [1, 1, n_windows, query.shape[-1]])
+        q_proj = ttnn.add(
             ttnn.linear(
-                query,
+                q_flat,
                 self.wq,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
             self.bq,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        k = ttnn.add(
+        )  # [1, 1, N_windows, local_hidden]
+        ttnn.deallocate(q_flat)
+
+        # ---- K/V projection: flat [1, 1, N_windows*k_pool, POOL_DIM] ----
+        # N_windows*k_pool = 4096*9 = 36864 = 32*1152 — perfectly tile-aligned
+        kv_flat = ttnn.reshape(key_value, [1, 1, n_windows * k_pool, key_value.shape[-1]])
+        k_proj = ttnn.add(
             ttnn.linear(
-                key_value,
+                kv_flat,
                 self.wk,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
             self.bk,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        v = ttnn.add(
+        )  # [1, 1, N_windows*k_pool, local_hidden]
+        v_proj = ttnn.add(
             ttnn.linear(
-                key_value,
+                kv_flat,
                 self.wv,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -156,13 +173,28 @@ class TtMolmo2ImagePooling2D(LightweightModule):
             self.bv,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(kv_flat)
 
-        # Reshape to [N_windows, n_local_heads, seq, padded_head_dim]
-        q = ttnn.permute(ttnn.reshape(q, [n_windows, 1, self.n_local_heads, self.padded_head_dim]), (0, 2, 1, 3))
-        k = ttnn.permute(ttnn.reshape(k, [n_windows, k_pool, self.n_local_heads, self.padded_head_dim]), (0, 2, 1, 3))
-        v = ttnn.permute(ttnn.reshape(v, [n_windows, k_pool, self.n_local_heads, self.padded_head_dim]), (0, 2, 1, 3))
+        # ---- Reshape for per-window attention ----
+        # Q: [1, 1, N_windows, local_hidden] → [N_windows, n_local_heads, 1, padded_head_dim]
+        q = ttnn.permute(
+            ttnn.reshape(q_proj, [n_windows, 1, self.n_local_heads, self.padded_head_dim]),
+            (0, 2, 1, 3),
+        )
+        ttnn.deallocate(q_proj)
+        # K/V: [1, 1, N_windows*k_pool, local_hidden] → [N_windows, n_local_heads, k_pool, padded_head_dim]
+        k = ttnn.permute(
+            ttnn.reshape(k_proj, [n_windows, k_pool, self.n_local_heads, self.padded_head_dim]),
+            (0, 2, 1, 3),
+        )
+        ttnn.deallocate(k_proj)
+        v = ttnn.permute(
+            ttnn.reshape(v_proj, [n_windows, k_pool, self.n_local_heads, self.padded_head_dim]),
+            (0, 2, 1, 3),
+        )
+        ttnn.deallocate(v_proj)
 
-        # Manual matmul attention
+        # ---- Attention scores ----
         k_t = ttnn.permute(k, (0, 1, 3, 2))
         attn_w = ttnn.mul(
             ttnn.matmul(
@@ -173,7 +205,6 @@ class TtMolmo2ImagePooling2D(LightweightModule):
         )
         ttnn.deallocate(k_t)
         if attn_mask is not None:
-            # [N_windows, 1, 1, k_pool] broadcasts to [N_windows, n_local_heads, 1, k_pool]
             attn_w = ttnn.add(attn_w, attn_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn_p = ttnn.softmax(attn_w, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_w)
@@ -183,19 +214,22 @@ class TtMolmo2ImagePooling2D(LightweightModule):
         for t in (attn_p, q, k, v):
             ttnn.deallocate(t)
 
-        # [N_windows, n_local_heads, 1, padded] → [1, N_windows, 1, n_local_heads*padded]
-        attn_out = ttnn.reshape(
-            ttnn.permute(attn_out, (0, 2, 1, 3)), [1, n_windows, 1, self.n_local_heads * self.padded_head_dim]
+        # ---- wo projection: flat [1, 1, N_windows, local_hidden] ----
+        # seq=N_windows (4096) is tile-aligned — one efficient matmul
+        attn_flat = ttnn.reshape(
+            ttnn.permute(attn_out, (0, 2, 1, 3)),
+            [1, 1, n_windows, local_hidden],
         )
-
-        # Row-parallel wo + all_reduce + bias
+        ttnn.deallocate(attn_out)
         out = ttnn.linear(
-            attn_out,
+            attn_flat,
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(attn_out)
+        ttnn.deallocate(attn_flat)
         if self.num_devices > 1:
             out = ttnn.all_reduce(out, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.add(out, self.bo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.add(out, self.bo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Reshape back to [1, N_windows, 1, HIDDEN_DIM] for caller compatibility
+        return ttnn.reshape(out, [1, n_windows, 1, out.shape[-1]])
