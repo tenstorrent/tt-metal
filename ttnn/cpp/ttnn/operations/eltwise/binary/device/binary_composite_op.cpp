@@ -47,6 +47,9 @@ Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::option
 }
 
 // ∣input−other∣≤ atol+rtol×∣other∣
+//
+// Implemented as a single LLK SFPU kernel (BinaryOpType::ISCLOSE).
+// INT32 inputs are promoted to FLOAT32 inside invoke_binary_ng_isclose.
 Tensor isclose(
     const Tensor& input_a,
     const Tensor& input_b,
@@ -54,19 +57,8 @@ Tensor isclose(
     float atol,
     bool equal_nan,
     const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor value1 = input_a;
-    Tensor value2 = input_b;
-    if (!equal_nan) {
-        value1 = ttnn::where(ttnn::isnan(value1, output_mem_config), 1.0f, value1);
-        value2 = ttnn::where(ttnn::isnan(value2, output_mem_config), 0.0f, value2);
-    }
-    Tensor is_close_lhs = ttnn::abs(ttnn::subtract(value1, value2, std::nullopt, output_mem_config), output_mem_config);
-    Tensor is_close_rhs = input_b;
-    Tensor mul_result = ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config);
-    is_close_rhs = ttnn::add(mul_result, atol, std::nullopt, output_mem_config);
-    mul_result.deallocate();
-    Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.f, 0.f);
-    return result;
+    return ttnn::detail::invoke_binary_ng_isclose(
+        input_a, input_b, rtol, atol, equal_nan, output_mem_config, std::nullopt);
 }
 
 Tensor minimum(

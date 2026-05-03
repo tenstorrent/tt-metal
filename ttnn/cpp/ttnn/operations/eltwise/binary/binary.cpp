@@ -582,6 +582,31 @@ Tensor invoke_binary_ng(
         sub_device_id);
 }
 
+Tensor invoke_binary_ng_isclose(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const auto input_a = operations::binary::detail::to_layout(lhs, Layout::TILE);
+    const auto input_b = operations::binary::detail::to_layout(rhs, Layout::TILE);
+
+    // When either input is INT32, explicitly promote it to FLOAT32 before
+    // entering binary_ng.  An in-kernel activation approach cannot work here:
+    // the SFPU compute format is fixed from a_dtype (INT32 = 32-bit), so a
+    // 16-bit BF16 tile for B would be read as 32-bit during the activation
+    // pass — merging two BF16 elements per register and corrupting the data
+    // before the typecast even runs.  Explicit pre-promotion guarantees both
+    // tiles arrive at the SFPU with a consistent 32-bit FLOAT32 format.
+    const auto fa = input_a.dtype() == DataType::INT32 ? ttnn::typecast(input_a, DataType::FLOAT32) : input_a;
+    const auto fb = input_b.dtype() == DataType::INT32 ? ttnn::typecast(input_b, DataType::FLOAT32) : input_b;
+    return ttnn::prim::binary_ng_isclose(
+        fa, fb, rtol, atol, equal_nan, std::nullopt, memory_config, output, {}, {}, sub_core_grids);
+}
+
 }  // namespace ttnn::detail
 
 namespace ttnn::operations::binary {

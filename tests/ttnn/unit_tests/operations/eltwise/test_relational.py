@@ -281,6 +281,107 @@ def test_isclose(device, h, w, atol, rtol):
 
 
 @pytest.mark.parametrize(
+    "rtol, atol",
+    [(1e-05, 1e-08), (0.01, 5), (0.05, 10), (1e-04, 0)],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+    ],
+)
+def test_isclose_int32(device, input_shapes, rtol, atol):
+    torch.manual_seed(0)
+
+    x_torch = torch.randint(-2_000_000, 2_000_000, input_shapes, dtype=torch.int32)
+    delta = torch.randint(-200, 200, input_shapes, dtype=torch.int32)
+    y_torch = x_torch + delta
+
+    z_torch = torch.isclose(x_torch.float(), y_torch.float(), rtol=rtol, atol=atol)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.isclose(x_tt, y_tt, rtol=rtol, atol=atol)
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.equal(z_torch, tt_out.bool())
+
+
+@pytest.mark.parametrize(
+    "rtol, atol",
+    [
+        (1e-05, 1e-08),
+        (0.01, 5),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize("a_dtype, b_dtype", [(ttnn.int32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.int32)])
+def test_isclose_int32_mixed_dtype(device, input_shapes, rtol, atol, a_dtype, b_dtype):
+    """Mixed-dtype case: when either input is INT32, the device op promotes both
+    inputs to FLOAT32 internally and produces matching results to torch.isclose."""
+    torch.manual_seed(0)
+
+    x_int = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+    delta = torch.randint(-3, 3, input_shapes, dtype=torch.int32)
+    y_int = x_int + delta
+
+    if a_dtype == ttnn.int32:
+        a_torch, b_torch = x_int, y_int.to(torch.bfloat16).to(torch.bfloat16)
+    else:
+        a_torch, b_torch = x_int.to(torch.bfloat16).to(torch.bfloat16), y_int
+
+    a_ref = a_torch.float()
+    b_ref = b_torch.float()
+    z_torch = torch.isclose(a_ref, b_ref, rtol=rtol, atol=atol)
+
+    a_tt = ttnn.from_torch(a_torch, dtype=a_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b_torch, dtype=b_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.isclose(a_tt, b_tt, rtol=rtol, atol=atol)
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.equal(z_torch, tt_out.bool())
+
+
+@pytest.mark.parametrize("equal_nan", [True, False])
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 64, 128]),
+    ],
+)
+def test_isclose_bfloat16_equal_nan(device, input_shapes, equal_nan):
+    """Validate equal_nan semantics on bfloat16 inputs against torch.isclose."""
+    torch.manual_seed(0)
+
+    a = torch.randn(input_shapes, dtype=torch.bfloat16)
+    b = a.clone()
+
+    nan = float("nan")
+    a[0, 0, 0, 0] = nan
+    b[0, 0, 0, 0] = nan
+    a[0, 0, 0, 1] = nan
+    a[0, 0, 0, 2] = 1.0
+    b[0, 0, 0, 2] = nan
+
+    z_torch = torch.isclose(a.float(), b.float(), rtol=1e-5, atol=1e-8, equal_nan=equal_nan)
+
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.isclose(a_tt, b_tt, rtol=1e-5, atol=1e-8, equal_nan=equal_nan)
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.equal(z_torch, tt_out.bool())
+
+
+@pytest.mark.parametrize(
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),

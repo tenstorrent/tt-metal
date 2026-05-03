@@ -182,6 +182,20 @@ Tensor invoke_binary_ng(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
+// Dedicated helper for isclose: carries rtol, atol and equal_nan as first-class
+// parameters so the LLK kernel can bake them in as compile-time constants.
+// INT32 inputs are promoted to FLOAT32 internally — callers do not need to
+// pre-cast inputs.
+Tensor invoke_binary_ng_isclose(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
 }  // namespace detail
 
 TTNN_BINARY_OP_TENSOR_TENSOR(add, ADD)

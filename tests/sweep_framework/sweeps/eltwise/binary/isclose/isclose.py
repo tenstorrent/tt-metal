@@ -24,8 +24,8 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 32)
         + gen_shapes([1, 1], [256, 256], [1, 1], 32),
         "equal_nan": [True, False],
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_b_dtype": [ttnn.bfloat16],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.int32],
+        "input_b_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.int32],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -40,6 +40,11 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_b_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Row Major layout is not supported"
+    # equal_nan has no effect for integer inputs (integers have no NaN representation)
+    if test_vector["equal_nan"] and (
+        test_vector["input_a_dtype"] == ttnn.int32 or test_vector["input_b_dtype"] == ttnn.int32
+    ):
+        return True, "equal_nan=True is a no-op for integer inputs; skip duplicate"
     return False, None
 
 
@@ -61,12 +66,19 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(input_shape)
+    # Generate inputs in appropriate range; INT32 uses integer random values.
+    if input_a_dtype == ttnn.int32:
+        torch_input_tensor_a = torch.randint(-100, 100, input_shape, dtype=torch.int32)
+    else:
+        torch_input_tensor_a = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        )(input_shape)
+    if input_b_dtype == ttnn.int32:
+        torch_input_tensor_b = torch.randint(-100, 100, input_shape, dtype=torch.int32)
+    else:
+        torch_input_tensor_b = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+        )(input_shape)
 
     rtol = random.choice([1e-1, 1e-2, 1e-3, 1e-4, 1e-6])
     atol = random.choice([1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9])
@@ -96,5 +108,4 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
-    # print(pcc)
     return [pcc, e2e_perf]
