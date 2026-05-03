@@ -1,0 +1,8 @@
+﻿ttnn.fill\_implicit\_tile\_padding
+==================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.fill_implicit_tile_padding:
+
+.. autooperation:: ttnn.fill_implicit_tile_padding

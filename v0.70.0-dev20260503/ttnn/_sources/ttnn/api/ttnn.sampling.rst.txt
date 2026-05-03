@@ -1,0 +1,8 @@
+﻿ttnn.sampling
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sampling:
+
+.. autooperation:: ttnn.sampling
