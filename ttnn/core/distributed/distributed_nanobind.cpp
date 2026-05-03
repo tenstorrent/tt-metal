@@ -111,6 +111,14 @@ void py_module_types(nb::module_& mod) {
         .def(nb::self > nb::self)
         .def(nb::self >= nb::self);
 
+    nb::class_<SubcontextId>(mod, "SubcontextId", "Sub-context id in a split MPI job")
+        .def(nb::init<int>())
+        .def("__int__", [](const SubcontextId& s) { return *s; })
+        .def("__repr__", [](const SubcontextId& s) { return nb::str("SubcontextId({})").format(*s); })
+        .def("__str__", [](const SubcontextId& s) { return nb::str("{}").format(*s); })
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
+
     nb::class_<MeshToTensor>(mod, "CppMeshToTensor");
     nb::class_<TensorToMesh>(mod, "CppTensorToMesh");
 
@@ -1103,7 +1111,146 @@ void py_module(nb::module_& mod) {
             Raises:
                 RuntimeError: If the distributed context has not been initialized.
         )doc");
+    // Sub-context API for split MPI worlds. Returns the sub-context identifier
+    // assigned by tt-run when rank bindings compose multiple overlays.
+    mod.def(
+        "subcontext_id",
+        []() -> std::optional<int> {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            auto id = DistributedContext::get_current_world()->subcontext_id();
+            if (!id.has_value()) {
+                return std::nullopt;
+            }
+            return *(*id);
+        },
+        R"doc(
+            Return this process's sub-context id, or None if the job is not split.
 
+            Set by tt-run via TT_RUN_SUBCONTEXT_ID when ``--rank-bindings-mapping``
+            composes multiple overlays.  The returned int matches the sub-context
+            order declared in the rank-bindings-mapping YAML.
+
+            Returns:
+                Optional[int]: sub-context id, or None.
+        )doc");
+
+    mod.def(
+        "subcontext_count",
+        []() -> int {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            return DistributedContext::get_current_world()->subcontext_count();
+        },
+        R"doc(
+            Number of sub-contexts in this MPI world (1 when not split).
+        )doc");
+
+    mod.def(
+        "subcontext_sizes",
+        []() -> std::vector<int> {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            auto span = DistributedContext::get_current_world()->subcontext_sizes();
+            return std::vector<int>(span.begin(), span.end());
+        },
+        R"doc(
+            List of sub-context sizes in ascending sub-context id order.
+        )doc");
+
+    mod.def(
+        "subcontext_size",
+        [](int subcontext_id) -> Size {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+
+            const ContextPtr& world = DistributedContext::get_current_world();
+            const auto subcontext_count = world->subcontext_count();
+            if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
+                throw std::out_of_range(
+                    "subcontext_id out of range: expected 0 <= subcontext_id < " +
+                    std::to_string(subcontext_count) + ", got " + std::to_string(subcontext_id));
+            }
+
+            return world->subcontext_size(SubcontextId{subcontext_id});
+        },
+        nb::arg("subcontext_id"),
+        R"doc(
+            Number of MPI ranks in the given sub-context.
+
+            Args:
+                subcontext_id (int): sub-context id.
+            Returns:
+                Size: number of ranks.
+        )doc");
+
+    mod.def(
+        "local_to_world_rank",
+        [](int subcontext_id, int local_rank) -> Rank {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+
+            const ContextPtr& world = DistributedContext::get_current_world();
+            const auto subcontext_count = world->subcontext_count();
+            if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
+                throw std::out_of_range(
+                    "subcontext_id out of range: expected 0 <= subcontext_id < " +
+                    std::to_string(subcontext_count) + ", got " + std::to_string(subcontext_id));
+            }
+
+            const auto subcontext_sz = world->subcontext_size(SubcontextId{subcontext_id});
+            if (local_rank < 0 || local_rank >= subcontext_sz.get()) {
+                throw std::out_of_range(
+                    "local_rank out of range for subcontext " + std::to_string(subcontext_id) +
+                    ": expected 0 <= local_rank < " + std::to_string(subcontext_sz.get()) + ", got " +
+                    std::to_string(local_rank));
+            }
+
+            return world->local_to_world_rank(SubcontextId{subcontext_id}, Rank{local_rank});
+        },
+        nb::arg("subcontext_id"),
+        nb::arg("local_rank"),
+        R"doc(
+            Translate a (subcontext_id, local_rank) pair to the world Rank.
+
+            Args:
+                subcontext_id (int): sub-context id.
+                local_rank (int): rank within that sub-context (0-based).
+            Returns:
+                Rank: corresponding rank in MPI_COMM_WORLD.
+        )doc");
+
+    mod.def(
+        "world_rank",
+        []() -> Rank {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            return DistributedContext::get_world_context()->rank();
+        },
+        R"doc(
+            Global rank in MPI_COMM_WORLD (the un-split world).
+
+            Differs from get_rank() when the job is split into sub-contexts:
+            get_rank() returns the local rank within this process's sub-context.
+        )doc");
+
+    mod.def(
+        "world_size",
+        []() -> Size {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            return DistributedContext::get_world_context()->size();
+        },
+        R"doc(
+            Total number of ranks in MPI_COMM_WORLD (the un-split world).
+        )doc");
     auto m_experimental = mod.def_submodule("experimental", "experimental distributed operations");
     m_experimental.def(
         "get_worker_noc_hop_distance",

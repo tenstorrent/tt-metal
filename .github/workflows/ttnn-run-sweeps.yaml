@@ -819,7 +819,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install psycopg2-binary pyyaml
+        run: pip install psycopg2-binary pyyaml tqdm
       - name: Generate JSON for lead_models run
         if: needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
         env:

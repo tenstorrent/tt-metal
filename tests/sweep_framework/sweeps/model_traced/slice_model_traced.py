@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -60,6 +61,40 @@ def mesh_device_fixture():
         del device
 
 
+def _slice_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -96,10 +131,16 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Some configs use named params (starts/ends/steps), others use positional (arg1/arg2/arg3)
-    slice_start = kwargs.get("starts", None) or arg1 or [0] * len(shape)
-    slice_end = kwargs.get("ends", None) or arg2
-    slice_step = kwargs.get("steps", None) or arg3 or [1] * len(shape)
+    # Track which call style the master vector used so the trace matches.
+    starts_kw = kwargs.get("starts")
+    ends_kw = kwargs.get("ends")
+    steps_kw = kwargs.get("steps")
+    use_named_kwargs = starts_kw is not None or ends_kw is not None
+    has_explicit_step = (steps_kw is not None) or (arg3 is not None)
+
+    slice_start = starts_kw if starts_kw is not None else (arg1 if arg1 is not None else [0] * len(shape))
+    slice_end = ends_kw if ends_kw is not None else arg2
+    slice_step = steps_kw if steps_kw is not None else (arg3 if arg3 is not None else [1] * len(shape))
 
     if not slice_end:
         slice_end = list(shape)
@@ -111,6 +152,10 @@ def run(
             slices.append(slice(start, end))
         else:
             slices.append(slice(start, end, step))
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology and slices it independently. The gathered output
+    # is the per-chip slice tiled along the shard axis — handled by
+    # reconcile_golden_to_actual after mesh_tensor_to_torch.
     torch_output_tensor = torch_input_tensor_a[tuple(slices)]
 
     is_host = storage_type and "HOST" in str(storage_type)
@@ -137,9 +182,22 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+    if use_named_kwargs:
+        if has_explicit_step:
+            output_tensor = ttnn.slice(
+                input_tensor_a, starts=slice_start, ends=slice_end, steps=slice_step, **op_kwargs
+            )
+        else:
+            output_tensor = ttnn.slice(input_tensor_a, starts=slice_start, ends=slice_end, **op_kwargs)
+    else:
+        if has_explicit_step:
+            output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+        else:
+            output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

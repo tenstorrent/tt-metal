@@ -13,11 +13,16 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    broadcast_torch_inputs_to_global,
 )
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -107,7 +112,13 @@ def run(
         torch_input_tensor_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(shape_b)
-        torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
+        ref_a, ref_b = broadcast_torch_inputs_to_global(
+            torch_input_tensor_a,
+            input_a_tensor_placement,
+            torch_input_tensor_b,
+            input_b_tensor_placement,
+        )
+        torch_output_tensor = torch.mul(ref_a, ref_b)
         is_scalar_multiply = False
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
@@ -149,6 +160,47 @@ def run(
     else:
         # Host storage
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Re-add memory_config and dtype to op_kwargs when present in master config.
+    memory_config = kwargs.get("memory_config")
+    if memory_config is not None:
+        parsed_mc = (
+            parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
+        )
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
+    dtype = kwargs.get("dtype")
+    if dtype is not None:
+        parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
+        if parsed_dt is not None:
+            op_kwargs["dtype"] = parsed_dt
+
+    # Pre-allocate output tensor if the master config recorded one
+    output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+    if output_tensor_info and output_tensor_info.get("shape"):
+        ot_shape = tuple(output_tensor_info["shape"])
+        ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
+        if isinstance(ot_dtype, dict):
+            ot_dtype = parse_dict_value("dtype", ot_dtype) or input_a_dtype
+        ot_layout = output_tensor_info.get("layout") or input_a_layout
+        if isinstance(ot_layout, dict):
+            ot_layout = parse_dict_value("layout", ot_layout) or input_a_layout
+        ot_mem_cfg_raw = output_tensor_info.get("memory_config")
+        ot_mem_cfg = (
+            parse_dict_value("memory_config", ot_mem_cfg_raw)
+            if isinstance(ot_mem_cfg_raw, dict)
+            else (ot_mem_cfg_raw or input_a_memory_config)
+        )
+        ot_placement = output_tensor_info.get("tensor_placement")
+        torch_out_alloc = torch.zeros(ot_shape, dtype=torch.float32)
+        if is_mesh_device and ot_placement:
+            op_kwargs["output_tensor"] = create_tensor_on_mesh(
+                torch_out_alloc, device, ot_dtype, ot_layout, ot_mem_cfg, ot_placement
+            )
+        elif not is_host:
+            op_kwargs["output_tensor"] = ttnn.from_torch(
+                torch_out_alloc, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg
+            )
 
     start_time = start_measuring_time()
 

@@ -16,6 +16,11 @@ on:
         description: "Continue if config hash changes are detected during preflight, including when all hashes change"
         required: false
         default: true
+      upload-results:
+        type: boolean
+        description: "Upload sweep results to SFTP server?"
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -111,6 +116,7 @@ jobs:
           echo "│ Selected Models:      ${{ steps.parse-trace-selection-registry.outputs.selected_models }}"
           echo "│ Selected Trace IDs:   ${{ steps.parse-trace-selection-registry.outputs.selected_trace_ids }}"
           echo "│ Allow Partial Changes:${{ inputs.allow-partial-hash-changes && ' true' || ' false' }}"
+          echo "│ Upload Results:       ${{ inputs.upload-results && 'true' || 'false' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
@@ -134,3 +140,4 @@ jobs:
       caller-id: ${{ needs.inspect-trace-selection-registry.outputs.caller-id }}
       allow-partial-hash-changes: ${{ inputs.allow-partial-hash-changes }}
       models-filter: ${{ inputs.models-filter }}
+      upload-results: ${{ inputs.upload-results }}

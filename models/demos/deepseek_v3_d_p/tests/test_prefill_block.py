@@ -41,10 +41,10 @@ PCC_THRESHOLD_KVPE = 0.999
 
 
 @pytest.mark.parametrize(
-    "input_source, pcc_validation, isl_total",
+    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024),
-        ("abc_1k", True, 1024),
+        ("random", False, 1024, 2),
+        ("abc_1k", True, 1024, 2),
     ],
     ids=["smoke-random", "pcc-abc_1k"],
 )
@@ -90,13 +90,14 @@ def test_prefill_block(
     mesh_device,
     device_params,
     isl_total,
+    dispatch_buffer_capacity_factor,
     layer_type,
     gate_fallback_mode,
     num_links,
     topology,
     pcc_validation,
     input_source,
-    request,
+    tokenizer,
     is_ci_env,
     is_ci_v2_env,
 ):
@@ -138,11 +139,12 @@ def test_prefill_block(
     # --- Create input ---
     if input_source == "abc_1k":
         profiler.start("tokenization")
-        tok = request.getfixturevalue("tokenizer")
         prompts = load_prompts_from_json(str(ABC_1K_PATH))
         prompt_text = prompts[0] if isinstance(prompts, list) else prompts
-        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
-        attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
+        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(
+            tokenizer, max_isl=isl_total, prompt_text=prompt_text
+        )
+        attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
         profiler.end("tokenization")
         logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
         with torch.no_grad():
@@ -184,6 +186,7 @@ def test_prefill_block(
         state_dict=state_dict,
         layer_idx=layer_idx,
         seq_len=isl_total,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
         num_links=num_links,
         topology=topology,
         sp_axis=sp_axis,

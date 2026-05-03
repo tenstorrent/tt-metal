@@ -16,6 +16,7 @@
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
+#include <tt-metalium/experimental/inspector.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1183,6 +1184,8 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
 
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
+
+    tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
 
     // Only enable allocations once all captured traces are released
     if (this->trace_buffers_size_ == 0) {

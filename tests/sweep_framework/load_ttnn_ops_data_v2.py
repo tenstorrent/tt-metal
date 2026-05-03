@@ -2357,13 +2357,36 @@ if __name__ == "__main__":
             list_trace_runs(model_filter, schema=_schema)
         elif cmd == "reconstruct-manifest":
             _args = sys.argv[2:]
-            # Extract --models-filter if present
+            # Extract --models-filter if present.
+            #
+            # Tolerate shell word-splitting of the value: an unquoted shell variable
+            # holding "gpt_oss, tt_dit" (with a space) expands to two argv tokens
+            # ("gpt_oss," and "tt_dit"). Greedily absorb consecutive non-flag tokens
+            # ONLY across comma boundaries (prev ends with "," or next starts with
+            # ","), so a legitimate scope positional that happens to follow without a
+            # comma is left untouched.
             _model_filter = None
             if "--models-filter" in _args:
                 idx = _args.index("--models-filter")
-                if idx + 1 < len(_args):
-                    _model_filter = [m.strip() for m in _args[idx + 1].split(",") if m.strip()]
-                    _args = _args[:idx] + _args[idx + 2 :]
+                consumed = []
+                i = idx + 1
+                while i < len(_args) and not _args[i].startswith("--"):
+                    consumed.append(_args[i])
+                    if i + 1 >= len(_args):
+                        i += 1
+                        break
+                    # Continue absorbing only across an explicit comma boundary.
+                    if _args[i].endswith(",") or _args[i + 1].startswith(","):
+                        i += 1
+                        continue
+                    i += 1
+                    break
+                if consumed:
+                    # "".join glues "gpt_oss," + "tt_dit" -> "gpt_oss,tt_dit",
+                    # and also handles a lone "," token between the names.
+                    joined = "".join(consumed)
+                    _model_filter = [m.strip() for m in joined.split(",") if m.strip()]
+                    _args = _args[:idx] + _args[i:]
                 else:
                     _args = _args[:idx]
             if _args and _args[0].endswith(".json"):

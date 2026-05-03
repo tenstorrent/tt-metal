@@ -29,6 +29,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -550,6 +551,37 @@ def _extract_hardware_and_mesh(machine_info):
     return hardware, mesh_config
 
 
+def _canonicalize_for_storage(obj):
+    """Convert non-finite floats (inf/-inf/nan) to canonical string forms in-place.
+
+    Python's json.dumps writes float('inf') as the literal `Infinity` (not valid JSON),
+    which `fix_infinity_in_json_file` later regex-rewrites on disk to "inf"/"-inf"/"nan".
+    That post-write rewrite mutates stored args after the config_hash is fixed, causing
+    hash <-> stored-data divergence on any config containing a non-finite float.
+
+    Canonicalize once at the point of capture so the hash input, in-memory args,
+    file storage, and DB representation all agree on the same string form.
+    """
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, float):
+                if math.isinf(v):
+                    obj[k] = "inf" if v > 0 else "-inf"
+                elif math.isnan(v):
+                    obj[k] = "nan"
+            else:
+                _canonicalize_for_storage(v)
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            if isinstance(v, float):
+                if math.isinf(v):
+                    obj[i] = "inf" if v > 0 else "-inf"
+                elif math.isnan(v):
+                    obj[i] = "nan"
+            else:
+                _canonicalize_for_storage(v)
+
+
 def _compute_config_hash(op_name, op_args, machine_info):
     """Compute the stable config hash used for fresh traces and recomputation."""
     hardware, mesh_config = _extract_hardware_and_mesh(machine_info)
@@ -594,6 +626,13 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
 
         op_name = operation.get("operation", "unknown")
         op_args = operation.get("arguments", [])
+
+        # Canonicalize non-finite floats (inf/-inf/nan -> string forms) BEFORE the
+        # hash is computed and BEFORE storage. This keeps the in-memory args, the
+        # written file, the DB representation, and the hash input on a single
+        # canonical form — eliminating the order-of-ops bug that
+        # fix_infinity_in_json_file's post-write regex used to mask.
+        _canonicalize_for_storage(op_args)
 
         # Initialize operation entry if not exists
         if op_name not in master_data["operations"]:

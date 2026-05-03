@@ -6,9 +6,10 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
@@ -30,25 +31,11 @@ model_traced_params = loader.get_suite_parameters("transformer::scaled_dot_produ
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 parameters = {
@@ -282,15 +269,19 @@ def run(
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fidelity,
-            math_approx_mode=bool(compute_kernel_config_math_approx_mode)
-            if compute_kernel_config_math_approx_mode is not None
-            else False,
-            fp32_dest_acc_en=bool(compute_kernel_config_fp32_dest_acc_en)
-            if compute_kernel_config_fp32_dest_acc_en is not None
-            else False,
-            packer_l1_acc=bool(compute_kernel_config_packer_l1_acc)
-            if compute_kernel_config_packer_l1_acc is not None
-            else False,
+            math_approx_mode=(
+                bool(compute_kernel_config_math_approx_mode)
+                if compute_kernel_config_math_approx_mode is not None
+                else False
+            ),
+            fp32_dest_acc_en=(
+                bool(compute_kernel_config_fp32_dest_acc_en)
+                if compute_kernel_config_fp32_dest_acc_en is not None
+                else False
+            ),
+            packer_l1_acc=(
+                bool(compute_kernel_config_packer_l1_acc) if compute_kernel_config_packer_l1_acc is not None else False
+            ),
         )
 
     # Start with all parsed V2 kwargs, then override with explicitly built params
@@ -314,7 +305,8 @@ def run(
 
     # Run TTNN operation
     output_tensor = ttnn.transformer.scaled_dot_product_attention_decode(tt_Q, tt_K, tt_V, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, kwargs.get("input_a_tensor_placement")) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
 
     # Slice output to match Q heads (following unit test pattern)
     output_tensor = output_tensor[:, :, :nh_q, :]

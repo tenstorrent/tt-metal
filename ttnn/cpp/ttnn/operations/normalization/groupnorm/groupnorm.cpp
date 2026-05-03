@@ -227,24 +227,45 @@ Tensor group_norm(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
-    if (!core_grid.has_value()) {
+    // Reciprocals must be sharded to L1 via the legacy ShardSpec representation:
+    // the program factory reads shard_spec().value().numel() as the compile-time
+    // reciprocal_size and binds the cb_reciprocals CB to the per-bank addresses
+    // of the buffer. Interleaved, DRAM-sharded, or NdShardSpec reciprocals would
+    // either trip bad_optional_access or violate the per-core-L1-bank assumption
+    // downstream.
+    if (reciprocals.has_value()) {
+        TT_FATAL(
+            reciprocals->is_sharded() && reciprocals->memory_config().buffer_type() == BufferType::L1,
+            "group_norm: reciprocals tensor must be sharded to L1 (got is_sharded={}, buffer_type={}); "
+            "interleaved or DRAM-sharded reciprocals are not supported.",
+            reciprocals->is_sharded(),
+            reciprocals->memory_config().buffer_type());
+        TT_FATAL(
+            reciprocals->shard_spec().has_value(),
+            "group_norm: reciprocals tensor must use the legacy ShardSpec "
+            "representation (NdShardSpec sharding is not currently supported).");
+    }
+
+    const bool core_grid_auto_selected = !core_grid.has_value();
+
+    if (core_grid_auto_selected) {
         if (input_tensor.is_sharded()) {
             const auto& shard_spec_opt = input_tensor.shard_spec();
             TT_FATAL(
                 shard_spec_opt.has_value(),
                 "group_norm: Sharded input must have a shard spec when core_grid is not provided.");
-            const auto mem_layout = input_tensor.memory_config().memory_layout();
-            const bool is_height_sharded = mem_layout == TensorMemoryLayout::HEIGHT_SHARDED;
-            const bool is_row_major = is_height_sharded || (shard_spec_opt->orientation == ShardOrientation::ROW_MAJOR);
-            const auto gn_sharded =
-                ttnn::operations::normalization::determine_expected_group_norm_sharded_config_and_grid_size(
-                    input_tensor.device()->compute_with_storage_grid_size(),
-                    input_padded_shape[3],
-                    num_groups,
-                    nhw,
-                    is_height_sharded,
-                    is_row_major);
-            core_grid = gn_sharded.core_grid;
+            // Derive the grid directly from the tensor's existing shard layout
+            // rather than recomputing from scratch, so that program_config's
+            // grid_size matches the cores where kernels are actually placed.
+            const auto bbox = shard_spec_opt->grid.bounding_box();
+            core_grid = ttnn::CoreGrid(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
+        } else if (reciprocals.has_value() && reciprocals->is_sharded()) {
+            // The reciprocals LUT is sharded on a specific grid; its length
+            // encodes num_virtual_rows which must match the compute grid.
+            // Infer the grid from the reciprocals tensor so the kernel sees a
+            // consistent LUT.
+            const auto bbox = reciprocals->shard_spec()->grid.bounding_box();
+            core_grid = ttnn::CoreGrid(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
         } else {
             const auto dev_grid = input_tensor.device()->compute_with_storage_grid_size();
             auto dram_grid = ttnn::operations::normalization::find_expected_dram_grid(
@@ -258,6 +279,54 @@ Tensor group_norm(
                 nhw);
             core_grid = dram_grid.value();
         }
+    }
+
+    // num_out_blocks only affects the non-sharded (interleaved/DRAM) program factory
+    // (as stated in docstring in nanobind documents), so the assert that "auto-grid implies
+    // no explicit chunking" rule only applies to the non-sharded path.
+    TT_FATAL(
+        (input_tensor.is_sharded() || !(core_grid_auto_selected && num_out_blocks.has_value())),
+        "group_norm: num_out_blocks cannot be specified when core_grid is auto-selected. "
+        "Either provide an explicit core_grid or omit num_out_blocks.");
+
+    if (!input_tensor.is_sharded() && num_out_blocks.has_value()) {
+        // Reject obviously-out-of-range values of num_out_blocks up front, but only for
+        // non-sharded inputs, where num_out_blocks actually has effect.
+        // Accepted user-facing values are -1 (use the program-factory's auto-heuristic)
+        // or an explicit chunk count in [1, block_h]; the upper bound and >= 1 are checked
+        // later against the resolved block_h.
+        // Catching < -1 here prevents the value, which gets reinterpreted as a huge
+        // uint32_t at some point, from producing a confusing downstream error.
+        TT_FATAL(
+            *num_out_blocks >= -1,
+            "group_norm: num_out_blocks ({}) is invalid. Use -1 to request the auto-heuristic, "
+            "or an explicit chunk count in [1, block_h].",
+            *num_out_blocks);
+    }
+
+    // The per-shard numel (consumed by the compute kernel as the compile-time
+    // `reciprocal_size`) and the per-bank addresses bound to the reciprocals CB
+    // are baked for a specific grid. The compute kernel runs on `core_grid`,
+    // so the reciprocals must be sharded on that same grid; otherwise the LUT
+    // is the wrong length and/or lives on the wrong banks. This covers all
+    // three paths to picking core_grid (sharded input, reciprocals inference,
+    // and an explicit user-provided core_grid).
+    if (reciprocals.has_value()) {
+        // Precondition above guarantees is_sharded() and shard_spec().has_value()
+        // whenever reciprocals is provided.
+        const auto recip_bbox = reciprocals->shard_spec()->grid.bounding_box();
+        const uint32_t recip_x = recip_bbox.end_coord.x + 1;
+        const uint32_t recip_y = recip_bbox.end_coord.y + 1;
+        TT_FATAL(
+            recip_x == core_grid->x && recip_y == core_grid->y,
+            "group_norm: reciprocals shard grid (x={}, y={}) must match the compute core_grid "
+            "(x={}, y={}). The reciprocals LUT length and per-bank addresses are baked for a "
+            "specific grid; running the kernel on a different grid will read past the LUT or "
+            "use unallocated banks.",
+            recip_x,
+            recip_y,
+            core_grid->x,
+            core_grid->y);
     }
 
     // For non-sharded DRAM tensors, validate that the requested core grid is not too
@@ -295,13 +364,16 @@ Tensor group_norm(
             negative_mask,
             reciprocals);
     }
+    // When the user did not pin a core grid, defer num_out_blocks to the program
+    // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).
+    // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
         .im_data_format = DataType::BFLOAT16,
         .out_data_format = DataType::BFLOAT16,
         .inplace = inplace.value_or(false),
         .output_layout = output_layout.value_or(input_tensor.layout()),
-        .num_out_blocks = num_out_blocks.value_or(1)};
+        .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};
     return ttnn::prim::group_norm(
         input_tensor,
         epsilon,

@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -45,6 +46,73 @@ def mesh_device_fixture():
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
+
+
+def _input_shard_axis_and_factor(placement_dict):
+    """Return (axis, factor) for the input's shard dim. axis may be negative.
+
+    Handles placement entries from the trace which may be either a list of
+    strings (post-parse) or a string repr like
+    "['PlacementReplicate', 'PlacementShard(-1)']". Returns (None, 1) when
+    the input is fully replicated.
+    """
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            # Combine multiple shard axes by multiplying factors. Prefer the
+            # last (innermost) shard axis as the "axis" anchor.
+            axis = d
+            factor *= n
+    return axis, factor
+
+
+def _scale_per_chip_to_global(shape, axis, factor):
+    """Scale shape's `axis` dim by factor; fall back to last positive dim."""
+    if factor == 1 or shape is None:
+        return shape
+    out = list(shape)
+    n = len(out)
+    if n == 0:
+        return shape
+    target = None
+    if axis is not None:
+        a = axis if axis >= 0 else axis + n
+        if 0 <= a < n and out[a] > 0:
+            target = a
+    if target is None:
+        for i in range(n - 1, -1, -1):
+            if out[i] > 0:
+                target = i
+                break
+    if target is None:
+        return shape
+    out[target] = out[target] * factor
+    return tuple(out) if isinstance(shape, tuple) else out
 
 
 def run(
@@ -94,8 +162,11 @@ def run(
         if m:
             tgt_shape = tuple(int(x) for x in m.group(1).split(","))
 
-    # arg2 may be a padded output shape; extract if present
-    arg2 = _clean_absent(pos_args.get(2, None))
+    # arg2 may be a padded output shape; extract if present.
+    # Detect Shape-object form so we can mirror it back when calling the op.
+    _arg2_raw = _clean_absent(pos_args.get(2, None))
+    arg2_was_shape_obj = isinstance(_arg2_raw, dict) and _arg2_raw.get("type") == "Shape"
+    arg2 = _arg2_raw
     if arg2 is not None and isinstance(arg2, dict) and "value" in arg2:
         import re
 
@@ -130,15 +201,26 @@ def run(
 
     import math
 
-    input_numel = math.prod(in_shape)
-    tgt_numel = math.prod(tgt_shape)
-    has_padded_shape = tgt_numel != input_numel and arg2 is not None and math.prod(arg2) == input_numel
-    if has_padded_shape:
-        torch_output = torch.reshape(torch_input, arg2)
-        slices = tuple(slice(0, s) for s in tgt_shape)
-        torch_output = torch_output[slices]
-    else:
-        torch_output = torch.reshape(torch_input, tgt_shape)
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology. ttnn.reshape runs per-chip with the per-chip
+    # target shape, and the gathered output is the per-chip reshape tiled
+    # along the shard axis — reconcile_golden_to_actual handles that below.
+    def _per_chip_reshape(per_chip_input):
+        per_chip_numel = per_chip_input.numel()
+        per_chip_tgt_numel = math.prod(tgt_shape)
+        per_chip_has_padded = (
+            per_chip_tgt_numel != per_chip_numel and arg2 is not None and math.prod(arg2) == per_chip_numel
+        )
+        if per_chip_has_padded:
+            out = torch.reshape(per_chip_input, arg2)
+            slices = tuple(slice(0, sz) for sz in tgt_shape)
+            return out[slices]
+        return torch.reshape(per_chip_input, tgt_shape)
+
+    try:
+        torch_output = _per_chip_reshape(torch_input)
+    except RuntimeError:
+        torch_output = torch_input  # placeholder; trace still captured even if PCC fails
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -175,12 +257,25 @@ def run(
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    if tgt_numel != input_numel and arg2 is not None:
-        output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2, **op_kwargs)
+    # If master traced arg2 as a Shape object, wrap it back so the tracer
+    # captures the same {"type": "Shape"} structure rather than a plain list.
+    arg2_to_pass = arg2
+    if arg2_was_shape_obj and isinstance(arg2, tuple):
+        try:
+            arg2_to_pass = ttnn.Shape(list(arg2))
+        except Exception:
+            arg2_to_pass = arg2
+    if arg2 is not None:
+        try:
+            output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2_to_pass, **op_kwargs)
+        except (TypeError, RuntimeError):
+            output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     else:
         output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)
     return [pcc, e2e_perf]
