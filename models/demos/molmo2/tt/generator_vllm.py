@@ -267,10 +267,12 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         token_id = int(tokens[0, 0].item())
         position = int(start_pos[0].item()) if hasattr(start_pos[0], "item") else int(start_pos[0])
 
-        # Always use forward_decode_step (no trace) — the trace is captured at the
-        # first request's S, but SDPA's auto-selected program config is baked in at
-        # capture time and doesn't scale to larger S values from subsequent requests.
-        # forward_decode_step returns [1, vocab_size]; squeeze to [vocab_size].
-        logits = self.model.forward_decode_step(token_id, position).squeeze(0)
+        # Use decode trace if available (captured during prefill_forward on first request).
+        # The demo (model.generate) reuses the same trace for all S values — the trace
+        # kernel updates cur_pos/cos/sin before each execution so it works regardless of S.
+        if self.model._decode_trace_id is not None:
+            logits = self.model._execute_decode_trace(token_id, position)
+        else:
+            logits = self.model.forward_decode_step(token_id, position).squeeze(0)
 
         return logits.unsqueeze(0)  # [1, vocab_size]
