@@ -49,7 +49,7 @@ _INFRA_KEYS = frozenset(
 )
 
 # Keys for positional tensor inputs — handled by sweep test tensor creation code
-_TENSOR_SUFFIXES = ("_shape", "_dtype", "_layout", "_memory_config", "_tensor_placement", "_activations")
+_TENSOR_SUFFIXES = ("_shape", "_dtype", "_layout", "_memory_config", "_tensor_placement")
 _TENSOR_PREFIXES = (
     "input_a",
     "input_b",
@@ -156,6 +156,36 @@ def _is_dtype_dict(value: Any) -> bool:
 def _is_layout_dict(value: Any) -> bool:
     """Check if a value looks like a layout dict {type: 'Layout', repr: 'Layout.TILE'}."""
     return isinstance(value, dict) and value.get("type") == "Layout"
+
+
+def _is_unary_op_dict(value: Any) -> bool:
+    """Check if a value looks like a UnaryOpType dict {type: 'UnaryOpType', repr: 'UnaryOpType.SILU'}."""
+    return isinstance(value, dict) and value.get("type") == "UnaryOpType"
+
+
+def _parse_unary_op(value: Any) -> Any:
+    """Parse a UnaryOpType dict to a ttnn.UnaryOpType enum value."""
+    if not _is_unary_op_dict(value):
+        return value
+    repr_str = str(value.get("repr", ""))
+    # Format: "UnaryOpType.SILU" → SILU
+    name = repr_str.split(".", 1)[-1] if "." in repr_str else repr_str
+    try:
+        import ttnn as _ttnn
+
+        return getattr(_ttnn.UnaryOpType, name)
+    except (ImportError, AttributeError):
+        return value
+
+
+def _maybe_parse_unary_list(value: Any) -> Any:
+    """If value is a list of UnaryOpType dicts, convert each element."""
+    if isinstance(value, list) and value and all(_is_unary_op_dict(v) for v in value):
+        parsed = [_parse_unary_op(v) for v in value]
+        # Return parsed list only if every element converted to an enum
+        if all(not isinstance(p, dict) for p in parsed):
+            return parsed
+    return value
 
 
 def parse_dict_value(key: str, value: Any) -> Any:
@@ -293,6 +323,11 @@ def build_op_kwargs(
             op_kwargs[key] = None
             continue
 
+        # Parse list-of-UnaryOpType-dicts (e.g. input_tensor_a_activations)
+        list_parsed = _maybe_parse_unary_list(value)
+        if list_parsed is not value:
+            op_kwargs[key] = list_parsed
+            continue
         # Parse dict values into ttnn objects
         parsed = parse_dict_value(key, value)
         if parsed is not None:

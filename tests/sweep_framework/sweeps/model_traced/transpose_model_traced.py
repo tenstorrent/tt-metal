@@ -80,8 +80,15 @@ def run(
     torch.manual_seed(0)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    if input_a_tensor_placement is None:
+        input_a_tensor_placement = kwargs.get("input_tensor_a_tensor_placement") or kwargs.get(
+            "input_tensor_tensor_placement"
+        )
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
+    # Re-add memory_config kwarg when the master recorded it (build_op_kwargs strips it by default).
+    if memory_config is not None and "memory_config" not in op_kwargs:
+        op_kwargs["memory_config"] = memory_config
 
     pos_args = extract_positional_args(kwargs)
     if dim0 is None:

@@ -67,6 +67,9 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
+    # Re-add memory_config kwarg when the master recorded it.
+    if memory_config is not None and "memory_config" not in op_kwargs:
+        op_kwargs["memory_config"] = memory_config
 
     pos_args = extract_positional_args(kwargs)
     if dim is None:

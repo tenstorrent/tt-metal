@@ -1,0 +1,111 @@
+{
+  "model_traced": {
+    "1a4c565c5521f890a8cb35f222855f469bd05baff2fbd7cc045f0a837c16f808": {
+      "arg1": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "input_a_shape": "(1, 1, 1, 128)",
+      "input_a_dtype": "DataType.BFLOAT16",
+      "input_a_layout": "Layout.ROW_MAJOR",
+      "input_a_memory_config": {
+        "type": "ttnn._ttnn.tensor.MemoryConfig",
+        "data": {
+          "buffer_type": "DRAM",
+          "created_with_nd_shard_spec": false,
+          "memory_layout": "INTERLEAVED"
+        }
+      },
+      "input_a_tensor_placement": {
+        "distribution_shape": "[4, 8]",
+        "mesh_device_shape": "[4, 8]",
+        "placement": "['PlacementReplicate', 'PlacementReplicate']"
+      },
+      "output_memory_config": {
+        "type": "ttnn._ttnn.tensor.MemoryConfig",
+        "data": {
+          "buffer_type": "DRAM",
+          "created_with_nd_shard_spec": false,
+          "memory_layout": "INTERLEAVED"
+        }
+      },
+      "traced_source": [
+        "models/demos/gpt_oss/demo/text_demo.py"
+      ],
+      "traced_machine_info": {
+        "board_type": "Wormhole",
+        "card_count": 32,
+        "device_count": 32,
+        "device_series": "tt-galaxy-wh",
+        "mesh_device_shape": [
+          4,
+          8
+        ]
+      },
+      "config_hash": "1a4c565c5521f890a8cb35f222855f469bd05baff2fbd7cc045f0a837c16f808",
+      "suite_name": "model_traced",
+      "validity": "VALID",
+      "invalid_reason": "",
+      "status": "VectorStatus.CURRENT",
+      "sweep_name": "model_traced.repeat_model_traced",
+      "timestamp": "2026-05-02_04-02-39",
+      "input_hash": "1a4c565c5521f890a8cb35f222855f469bd05baff2fbd7cc045f0a837c16f808",
+      "tag": "ci-validate-lead-models"
+    },
+    "e698c2eda8364b8b920d0f3cc4f85a354b00a2af32c4f2c5d31aeca97fb4095e": {
+      "arg1": [
+        1,
+        1,
+        1
+      ],
+      "input_a_shape": "(8, 512, 4096)",
+      "input_a_dtype": "DataType.BFLOAT16",
+      "input_a_layout": "Layout.TILE",
+      "input_a_memory_config": {
+        "type": "ttnn._ttnn.tensor.MemoryConfig",
+        "data": {
+          "buffer_type": "DRAM",
+          "created_with_nd_shard_spec": false,
+          "memory_layout": "INTERLEAVED"
+        }
+      },
+      "input_a_tensor_placement": {
+        "distribution_shape": "[4, 8]",
+        "mesh_device_shape": "[4, 8]",
+        "placement": "['PlacementShard(1)', 'PlacementShard(0)']"
+      },
+      "output_memory_config": {
+        "type": "ttnn._ttnn.tensor.MemoryConfig",
+        "data": {
+          "buffer_type": "DRAM",
+          "created_with_nd_shard_spec": false,
+          "memory_layout": "INTERLEAVED"
+        }
+      },
+      "traced_source": [
+        "models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
+      ],
+      "traced_machine_info": {
+        "board_type": "Wormhole",
+        "card_count": 32,
+        "device_count": 32,
+        "device_series": "tt-galaxy-wh",
+        "mesh_device_shape": [
+          4,
+          8
+        ]
+      },
+      "config_hash": "e698c2eda8364b8b920d0f3cc4f85a354b00a2af32c4f2c5d31aeca97fb4095e",
+      "suite_name": "model_traced",
+      "validity": "VALID",
+      "invalid_reason": "",
+      "status": "VectorStatus.CURRENT",
+      "sweep_name": "model_traced.repeat_model_traced",
+      "timestamp": "2026-05-02_04-02-39",
+      "input_hash": "e698c2eda8364b8b920d0f3cc4f85a354b00a2af32c4f2c5d31aeca97fb4095e",
+      "tag": "ci-validate-lead-models"
+    }
+  }
+}

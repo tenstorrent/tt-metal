@@ -162,14 +162,14 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     # Re-add memory_config and dtype to op_kwargs when present in master config.
-    memory_config = kwargs.get("memory_config")
+    # NOTE: memory_config and dtype are declared as named params on run(), so
+    # they live in their own bindings — kwargs.get() would never see them.
     if memory_config is not None:
         parsed_mc = (
             parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
         )
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
-    dtype = kwargs.get("dtype")
     if dtype is not None:
         parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
         if parsed_dt is not None:

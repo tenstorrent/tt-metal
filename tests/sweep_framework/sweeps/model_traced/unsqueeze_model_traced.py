@@ -124,7 +124,8 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # unsqueeze with dim as positional argument (no memory_config support)
+    # Master is inconsistent: 8/10 configs trace dim positionally ("arg1"),
+    # 2/10 use the "dim" kwarg.  Pass positional to match the majority.
     output_tensor = ttnn.unsqueeze(input_tensor_a, dim, **op_kwargs)
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)

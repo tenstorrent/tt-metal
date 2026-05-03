@@ -93,9 +93,9 @@ def run(
     torch_output_tensor = torch.zeros(shape, dtype=torch.float32)
 
     start_time = start_measuring_time()
-    # ttnn.zeros creates a zero tensor with the given shape
+    # Pass shape as kwarg so the trace recorder names it `shape` (not `arg0`).
     output_tensor = ttnn.zeros(
-        shape,
+        shape=shape,
         dtype=dtype_val,
         layout=layout_val,
         device=device,

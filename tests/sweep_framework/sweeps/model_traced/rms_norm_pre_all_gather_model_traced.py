@@ -68,6 +68,10 @@ def run(
     torch.manual_seed(0)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    if input_a_tensor_placement is None:
+        input_a_tensor_placement = kwargs.get("input_tensor_a_tensor_placement") or kwargs.get(
+            "input_tensor_tensor_placement"
+        )
     is_mesh_device = hasattr(device, "get_num_devices")
 
     if isinstance(input_a_shape, dict) and "self" in input_a_shape:
@@ -132,7 +136,16 @@ def run(
                 inplace=bool(int(inp_m.group(1))) if inp_m else False,
             )
         elif "Default" in config_type:
-            pass
+            # Master traces ttnn.rms_norm_pre_all_gather with explicit
+            # LayerNormDefaultProgramConfig — parse legacy flags from the value repr.
+            lr_m = re.search(r"legacy_reduction=(\d+)", config_value)
+            lq_m = re.search(r"legacy_rsqrt=(\d+)", config_value)
+            uw_m = re.search(r"use_welford=(\d+)", config_value)
+            ttnn_program_config = ttnn.LayerNormDefaultProgramConfig(
+                legacy_reduction=bool(int(lr_m.group(1))) if lr_m else False,
+                legacy_rsqrt=bool(int(lq_m.group(1))) if lq_m else False,
+                use_welford=bool(int(uw_m.group(1))) if uw_m else False,
+            )
         elif "compute_with_storage_grid_size" in program_config:
             compute_grid = program_config.get("compute_with_storage_grid_size", {})
             ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(

@@ -701,6 +701,8 @@ def run(
                             op_kwargs["num_workers_per_link"] = int(num_workers_per_link)
                         if _was_traced(num_buffers_per_channel) and num_buffers_per_channel is not None:
                             op_kwargs["num_buffers_per_channel"] = int(num_buffers_per_channel)
+                        if _was_traced(use_broadcast) and use_broadcast is not None:
+                            op_kwargs["use_broadcast"] = bool(use_broadcast)
 
                         if pob_tensor_was_traced:
                             pob_tensor = _build_persistent_output_buffer(

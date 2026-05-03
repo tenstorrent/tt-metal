@@ -121,6 +121,10 @@ def run(
         exclude={"starts", "ends", "steps", "slice_dim", "num_devices"},
         output_memory_config=output_memory_config,
     )
+    # Re-add memory_config kwarg when the master config recorded it. build_op_kwargs
+    # strips memory_config by default; sweeps that need it must inject it here.
+    if memory_config is not None and "memory_config" not in op_kwargs:
+        op_kwargs["memory_config"] = memory_config
 
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
