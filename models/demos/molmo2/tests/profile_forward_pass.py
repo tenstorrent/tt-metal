@@ -345,13 +345,12 @@ def run_profiled_forward(model, cfg, input_ids, pv, pool_idx, token_type_ids) ->
     timings["9_ln_f"] = time.perf_counter() - t0
 
     # ------------------------------------------------------------------ #
-    # 10. Last-token slice: D2H full [1,1,S_pad,4096] + CPU slice + H2D [1,1,1,4096]
+    # 10. Last-token slice: ttnn.slice on device — no D2H/H2D
     # ------------------------------------------------------------------ #
+    _sync(mesh)
     t0 = time.perf_counter()
-    x_norm_cpu = ttnn.to_torch(ttnn.get_device_tensors(x_tt)[0]).float()
+    x_last_tt = ttnn.slice(x_tt, (0, 0, S - 1, 0), (1, 1, S, cfg.dim), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(x_tt)
-    x_last = x_norm_cpu[:, :, S - 1 : S, :].to(torch.bfloat16)
-    x_last_tt = _from_torch(x_last, mesh)
     _sync(mesh)
     timings["10_last_token_slice"] = time.perf_counter() - t0
 
@@ -418,7 +417,7 @@ _STAGE_META = [
     ("7_rope_setup", "RoPE setup (cached=near-zero)", "CPU"),
     ("8_decoder_blocks", "36 decoder blocks", "TTNN"),
     ("9_ln_f", "ln_f", "TTNN"),
-    ("10_last_token_slice", "Last-token slice (D2H+H2D)", "CPU"),
+    ("10_last_token_slice", "Last-token slice (ttnn.slice)", "TTNN"),
     ("11_lm_head", "lm_head", "TTNN"),
 ]
 
