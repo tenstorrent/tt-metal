@@ -4,12 +4,10 @@
 
 """Gemma 4 Text MLP implementation for TTNN."""
 
-import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearIColShardedWAllReduced,
-    TTNNLinearIReplicatedWColSharded,
+    TTNNLinearIColShardedWRowSharded,
 )
 
 
@@ -20,11 +18,14 @@ def gelu_pytorch_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
 class TTNNGemma4TextMLP(TTNNModule):
     """TTNN implementation of the Gemma 4 31B-it dense MLP.
 
-    Architecture (fused gate-up):
-        gate_up = fused_gate_up_proj(x)       # [B, S, 5376] -> [B, S, 43008]
-        gate = gate_up[:, :, :21504]           # slice
-        up = gate_up[:, :, 21504:]             # slice
-        output = down_proj(gelu(gate) * up)    # [B, S, 21504] -> [B, S, 5376]
+    Architecture (separate gate and up projections, col-sharded activations):
+        gate = gate_proj(x)                   # [B, S, 672/dev] -> RS -> [B, S, 2688/dev]
+        up = up_proj(x)                       # [B, S, 672/dev] -> RS -> [B, S, 2688/dev]
+        output = down_proj(gelu(gate) * up)   # [B, S, 2688/dev] -> RS -> [B, S, 672/dev]
+
+    Uses TTNNLinearIColShardedWRowSharded (matmul + reduce_scatter) for all three
+    projections. No all_gather is needed because all intermediate ops (gelu, multiply)
+    are element-wise and operate correctly on per-device col-shards.
     """
 
     @classmethod
@@ -33,33 +34,14 @@ class TTNNGemma4TextMLP(TTNNModule):
         tt_module = cls()
         tt_module._fallback_torch_layer = torch_mlp
 
-        # Store intermediate_size for slice boundary in forward()
         tt_module.intermediate_size = torch_mlp.gate_proj.out_features  # 21504
 
-        # Fused gate-up projection: concatenate gate_proj and up_proj weights
-        # into a single [2*intermediate_size, hidden_size] weight matrix.
-        # Single matmul + all_reduce replaces two separate matmul + all_reduce chains.
-        gate_weight = torch_mlp.gate_proj.weight.data.clone()  # [21504, 5376]
-        up_weight = torch_mlp.up_proj.weight.data.clone()  # [21504, 5376]
-        fused_weight = torch.cat([gate_weight, up_weight], dim=0)  # [43008, 5376]
+        tt_module.gate_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_mlp.gate_proj)
+        tt_module.up_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_mlp.up_proj)
 
-        # Use a lightweight shim instead of torch.nn.Linear to avoid
-        # kaiming_uniform_ random-init overhead on the 43008×5376 weight.
-        # TTNNLinear.from_torch only reads in_features, out_features, weight, bias.
-        class _FusedLinearShim:
-            in_features = torch_mlp.gate_proj.in_features
-            out_features = 2 * tt_module.intermediate_size
-            weight = fused_weight
-            bias = None
+        tt_module.fused_gate_up_proj = None
 
-        tt_module.fused_gate_up_proj = TTNNLinearIColShardedWAllReduced.from_torch(_FusedLinearShim())
-
-        # Keep individual proj references as None (fused into fused_gate_up_proj)
-        tt_module.gate_proj = None
-        tt_module.up_proj = None
-
-        # Down projection unchanged
-        tt_module.down_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.down_proj)
+        tt_module.down_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_mlp.down_proj)
 
         return tt_module
 
@@ -73,7 +55,8 @@ class TTNNGemma4TextMLP(TTNNModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.fused_gate_up_proj.compute_kernel_config = linear_compute_config
+        self.gate_proj.compute_kernel_config = linear_compute_config
+        self.up_proj.compute_kernel_config = linear_compute_config
         self.down_proj.compute_kernel_config = linear_compute_config
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
@@ -82,26 +65,15 @@ class TTNNGemma4TextMLP(TTNNModule):
         if hidden_states.dtype != ttnn.bfloat16:
             hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
 
-        batch_size = hidden_states.shape[0]
-        seq_len = hidden_states.shape[1]
+        gate = self.gate_proj(hidden_states)
+        up = self.up_proj(hidden_states)
 
-        # Fused gate + up projection (single matmul + all_reduce)
-        gate_up = self.fused_gate_up_proj(hidden_states)
-
-        # Slice into gate and up halves
-        gate = ttnn.slice(gate_up, [0, 0, 0], [batch_size, seq_len, self.intermediate_size])
-        up = ttnn.slice(gate_up, [0, 0, self.intermediate_size], [batch_size, seq_len, 2 * self.intermediate_size])
-        ttnn.deallocate(gate_up)
-
-        # GeLU activation on gate path (tanh approximation via ttnn.gelu)
         gate = gelu_pytorch_tanh(gate)
 
-        # Element-wise multiply gate and up
         gate_up_mul = ttnn.multiply(gate, up)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        # Down projection
         output = self.down_proj(gate_up_mul)
         ttnn.deallocate(gate_up_mul)
 

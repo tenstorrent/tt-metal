@@ -164,14 +164,14 @@ class TTNNGemma4TextModel(TTNNModule):
             cos_2d = ttnn.from_torch(
                 cos.squeeze(0).to(torch.bfloat16),
                 device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=ttnn.bfloat16,
                 mesh_mapper=replicate,
             )
             sin_2d = ttnn.from_torch(
                 sin.squeeze(0).to(torch.bfloat16),
                 device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=ttnn.bfloat16,
                 mesh_mapper=replicate,
             )
