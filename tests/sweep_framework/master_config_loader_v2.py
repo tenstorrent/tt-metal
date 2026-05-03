@@ -603,12 +603,16 @@ def dict_to_memory_config(mem_cfg):
     if not grid_list or not shard_shape:
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_ttnn)
 
-    core_ranges = set()
+    # Preserve insertion order so the kernel sees the same storage-core
+    # ordering master recorded (DRAM-sharded matmul asserts on it).
+    core_ranges = []
     for range_dict in grid_list:
         start = range_dict.get("start", {})
         end = range_dict.get("end", {})
         if "x" in start and "y" in start and "x" in end and "y" in end:
-            core_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"])))
+            core_ranges.append(
+                ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
+            )
 
     if not core_ranges:
         return ttnn.MemoryConfig(layout, buffer_type_ttnn)

@@ -148,6 +148,25 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     def _run_transpose(tensor_a, kw):
+        # PRE-OP debug
+        import sys as _sys_p
+
+        _ch_p = kwargs.get("config_hash", "")[:8]
+        if _ch_p in ("f17dedb1", "76292c81"):
+            print(f"[T_PRE] {_ch_p} dim0={dim0} dim1={dim1}", file=_sys_p.stderr, flush=True)
+            print(
+                f"[T_PRE] {_ch_p} a.shape={tensor_a.shape} a.padded={tensor_a.padded_shape} a.dtype={tensor_a.dtype} a.layout={tensor_a.layout}",
+                file=_sys_p.stderr,
+                flush=True,
+            )
+            print(f"[T_PRE] {_ch_p} a.mc={tensor_a.memory_config()}", file=_sys_p.stderr, flush=True)
+            print(
+                f"[T_PRE] {_ch_p} a.topo dist={tensor_a.tensor_topology().distribution_shape()} plac={tensor_a.tensor_topology().placements()}",
+                file=_sys_p.stderr,
+                flush=True,
+            )
+            for _k, _v in kw.items():
+                print(f"[T_PRE] {_ch_p} kw[{_k}]={repr(_v)[:300]}", file=_sys_p.stderr, flush=True)
         out = ttnn.transpose(tensor_a, dim0, dim1, **kw)
         return mesh_tensor_to_torch(out, device if is_mesh_device else None)
 
