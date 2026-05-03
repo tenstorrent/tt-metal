@@ -493,48 +493,34 @@ class TtMolmo2Model(LightweightModule):
         Runs dummy forward passes for every possible last-chunk size so that no
         cold compilation happens at inference time regardless of the input video.
 
-        Two sources of shape variation:
-          1. ViT chunks (_MAX_VIT_BATCH=8): last chunk can be 1..8 crops.
-          2. Pooling chunks (_POOL_CHUNK_WINDOWS=4096): with 81 windows/frame,
-             last chunk can be any N_pooled from 1..4096 windows. We compile
-             for multiples of 81 (1..50 frames) to cover any video up to
-             50 frames per chunk (covers full 384-frame videos in 8 chunks
-             of ≤50 frames each).
+        Because _run_chunked_ttnn_pooling now pads every chunk to exactly
+        _POOL_CHUNK_WINDOWS windows, the pooling TTNN ops always see the same
+        tensor shape regardless of video length. One warmup run per k_pool value
+        is sufficient to compile all pooling kernels.
 
-        For image inputs: n_out=169 (13×13), k_pool=4 (2×2). Compile b=1..9
-        crops to cover all single-image and multi-crop cases.
+        ViT encode chunks (_MAX_VIT_BATCH=8) still vary in the last batch
+        (1..8 crops), so we still compile for those.
         """
-
         N_PATCHES = 729
         _MAX_VIT_BATCH = 8
-        _POOL_CHUNK_WINDOWS = self._POOL_CHUNK_WINDOWS
 
-        # ---- Video: k_pool=9 (3×3), n_out=81 per frame ----
-        N_OUT_VIDEO = 81
+        # ---- Video: k_pool=9 (3×3) — one run at full chunk size covers all videos ----
         K_POOL_VIDEO = 9
-        # Compile 1..16 frames per chunk to cover all possible last-chunk sizes
-        # (_POOL_CHUNK_WINDOWS=4096, 4096/81=50 frames max per chunk,
-        #  but last-chunk shape only matters when b < full_chunk_frames)
-        print("[vision warmup] video k_pool=9: b=1..16 frames", flush=True)
-        for b in range(1, 17):
-            n_pooled = b * N_OUT_VIDEO
-            print(f"  b={b} frames (N_pooled={n_pooled}) ...", flush=True)
-            dummy_pv = torch.zeros(1, b, N_PATCHES, 588)
-            dummy_idx = torch.zeros(1, n_pooled, K_POOL_VIDEO, dtype=torch.long)
-            _ = self.run_vision_backbone(dummy_pv, dummy_idx)
-            print(f"  b={b} done", flush=True)
+        n_pooled_video = self._POOL_CHUNK_WINDOWS  # always padded to this
+        print(f"[vision warmup] video k_pool=9, N_pooled={n_pooled_video} ...", flush=True)
+        dummy_pv = torch.zeros(1, _MAX_VIT_BATCH, N_PATCHES, 588)
+        dummy_idx = torch.zeros(1, n_pooled_video, K_POOL_VIDEO, dtype=torch.long)
+        _ = self.run_vision_backbone(dummy_pv, dummy_idx)
+        print("[vision warmup] video done", flush=True)
 
-        # ---- Image: k_pool=4 (2×2), n_out=169 per crop ----
-        N_OUT_IMAGE = 169
+        # ---- Image: k_pool=4 (2×2) — same, one run at full chunk size ----
         K_POOL_IMAGE = 4
-        print("[vision warmup] image k_pool=4: b=1..9 crops", flush=True)
-        for b in range(1, 10):
-            n_pooled = b * N_OUT_IMAGE
-            print(f"  b={b} crops (N_pooled={n_pooled}) ...", flush=True)
-            dummy_pv = torch.zeros(1, b, N_PATCHES, 588)
-            dummy_idx = torch.zeros(1, n_pooled, K_POOL_IMAGE, dtype=torch.long)
-            _ = self.run_vision_backbone(dummy_pv, dummy_idx)
-            print(f"  b={b} done", flush=True)
+        n_pooled_image = self._POOL_CHUNK_WINDOWS
+        print(f"[vision warmup] image k_pool=4, N_pooled={n_pooled_image} ...", flush=True)
+        dummy_pv = torch.zeros(1, _MAX_VIT_BATCH, N_PATCHES, 588)
+        dummy_idx = torch.zeros(1, n_pooled_image, K_POOL_IMAGE, dtype=torch.long)
+        _ = self.run_vision_backbone(dummy_pv, dummy_idx)
+        print("[vision warmup] image done", flush=True)
 
         print("[vision warmup] done", flush=True)
 
@@ -734,8 +720,17 @@ class TtMolmo2Model(LightweightModule):
         all_chunks = []
         for start in range(0, N_pooled, self._POOL_CHUNK_WINDOWS):
             end = min(start + self._POOL_CHUNK_WINDOWS, N_pooled)
-            chunk_n_out = end - start
-            chunk_idx = pooled_patches_idx[0, start:end]  # [chunk_n_out, k_pool]
+            chunk_n_out_real = end - start
+            chunk_idx = pooled_patches_idx[0, start:end]  # [chunk_n_out_real, k_pool]
+
+            # Pad the last (possibly short) chunk to _POOL_CHUNK_WINDOWS with -1 indices.
+            # This keeps TTNN tensor shapes constant across all chunks → one JIT compile
+            # covers every call regardless of video length.  -1 indices are clamped to 0
+            # and masked out by valid_flat, so they contribute nothing to the output.
+            if chunk_n_out_real < self._POOL_CHUNK_WINDOWS:
+                pad = torch.full((self._POOL_CHUNK_WINDOWS - chunk_n_out_real, k_pool), -1, dtype=torch.int64)
+                chunk_idx = torch.cat([chunk_idx, pad], dim=0)
+            chunk_n_out = self._POOL_CHUNK_WINDOWS
 
             # Upload indices as uint32 — bfloat16 only represents integers up to ~256
             idx_flat = chunk_idx.reshape(-1).clamp(min=0).to(torch.int32)
@@ -803,7 +798,8 @@ class TtMolmo2Model(LightweightModule):
 
             chunk_cpu = ttnn.to_torch(ttnn.get_device_tensors(pooled_tt)[0]).float()
             ttnn.deallocate(pooled_tt)
-            all_chunks.append(chunk_cpu.squeeze(0).squeeze(1))  # [chunk_n_out, 1152]
+            # Trim padding: keep only the real windows (first chunk_n_out_real rows)
+            all_chunks.append(chunk_cpu.squeeze(0).squeeze(1)[:chunk_n_out_real])  # [chunk_n_out_real, 1152]
 
         ttnn.deallocate(feat_tt)
         pooled_all = torch.cat(all_chunks, dim=0).unsqueeze(0)  # [1, N_pooled, 1152]
