@@ -42,6 +42,7 @@ def load_attention_weights(
     mesh_config: MeshConfig,
     weight_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
+    cache_suffix="",
 ) -> AttentionWeights:
     """
     Load and fuse attention weights with tensor parallelism.
@@ -142,7 +143,7 @@ def load_attention_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=col_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{cache_suffix}{tp_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     o_proj = ttnn.as_tensor(
@@ -151,7 +152,7 @@ def load_attention_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=row_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{cache_suffix}{o_proj_cache_suffix}{tp_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     q_norm_weight = ttnn.as_tensor(

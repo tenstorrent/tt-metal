@@ -14,6 +14,7 @@ Supports two layer types:
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, Mode
+from models.demos.gemma4.tt.optimization import env_weight_dtype
 
 from .weights import AttentionWeights, load_attention_weights
 from .kv_cache import init_kv_cache
@@ -74,12 +75,15 @@ class Gemma4Attention:
         self.mesh_config = mesh_config
         self.layer_idx = layer_idx
 
+        weight_dtype, cache_suffix = env_weight_dtype("GEMMA4_ATTENTION_WEIGHT_DTYPE", ttnn.bfloat16)
         self.weights = load_attention_weights(
             mesh_device=mesh_device,
             config=config,
             state_dict=state_dict,
             mesh_config=mesh_config,
+            weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
+            cache_suffix=cache_suffix,
         )
 
         if create_kv_cache:

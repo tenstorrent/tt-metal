@@ -9,6 +9,7 @@ Prefill (seq_len>1): on-device via sparse_matmul with all-ones sparsity (gpt_oss
 """
 
 import ttnn
+from models.demos.gemma4.tt.optimization import env_weight_dtype
 
 from .decode import decode_forward
 from .prefill import create_prefill_sparsity, prefill_forward
@@ -42,6 +43,7 @@ class Gemma4Experts:
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
 
+        weight_dtype, cache_suffix = env_weight_dtype("GEMMA4_EXPERT_WEIGHT_DTYPE", weight_dtype)
         # Load weights to device for sparse_matmul
         self.weights = load_expert_weights(
             mesh_device=mesh_device,
@@ -50,6 +52,7 @@ class Gemma4Experts:
             mesh_config=mesh_config,
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
+            cache_suffix=cache_suffix,
         )
         # Cache all-ones prefill sparsity (reused for every prefill call)
         self.prefill_sparsity = create_prefill_sparsity(mesh_device, config.num_experts)

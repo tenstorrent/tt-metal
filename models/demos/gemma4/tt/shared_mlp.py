@@ -16,6 +16,7 @@ HF weight shapes:
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.demos.gemma4.tt.optimization import env_weight_dtype
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 
@@ -35,6 +36,7 @@ class SharedMLP:
         self.ccl_manager = ccl_manager
         self.hidden_size = hf_config.hidden_size
         self.intermediate_size = hf_config.intermediate_size
+        dtype, cache_suffix = env_weight_dtype("GEMMA4_SHARED_MLP_WEIGHT_DTYPE", dtype)
 
         tp = mesh_config.tp if mesh_config else 1
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
@@ -62,7 +64,7 @@ class SharedMLP:
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj.weight{tp_suffix}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj.weight{cache_suffix}{tp_suffix}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.up_proj = ttnn.as_tensor(
@@ -71,7 +73,7 @@ class SharedMLP:
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=col_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj.weight{tp_suffix}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj.weight{cache_suffix}{tp_suffix}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # down: row-parallel (shard input dim, allreduce after)
@@ -81,7 +83,7 @@ class SharedMLP:
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=row_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{tp_suffix}"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj.weight{cache_suffix}{tp_suffix}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

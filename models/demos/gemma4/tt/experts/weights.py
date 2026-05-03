@@ -37,6 +37,7 @@ def load_expert_weights(
     mesh_config=None,
     weight_dtype=ttnn.bfloat8_b,
     tensor_cache_path=None,
+    cache_suffix="",
 ) -> ExpertWeights:
     """
     Load expert weights to device for sparse_matmul.
@@ -108,7 +109,7 @@ def load_expert_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=col_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj{cache_suffix}{tp_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     up_proj_tt = ttnn.as_tensor(
@@ -117,7 +118,7 @@ def load_expert_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=col_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj{cache_suffix}{tp_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     down_proj_tt = ttnn.as_tensor(
@@ -126,7 +127,7 @@ def load_expert_weights(
         dtype=weight_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=row_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj{tp_suffix}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj{cache_suffix}{tp_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
