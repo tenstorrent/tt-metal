@@ -129,7 +129,7 @@
       --bucket fabric_1d \
       --bucket fabric_2d_torus_x \
       --bucket fabric_2d_torus_y \
-      --bucket fabric_2d_torus_y_xy_skip_only \
+      --bucket fabric_2d_torus_y_xy_skip_only
   model: deepseek_decode
   skus:
     bh_galaxy:
