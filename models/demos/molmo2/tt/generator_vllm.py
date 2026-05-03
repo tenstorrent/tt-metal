@@ -147,6 +147,14 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         del state_dict
         logger.info("TtMolmo2Model ready")
 
+        # Pre-compile JIT kernels for all prefill bucket sizes and vision ops
+        # before the server starts serving — avoids stall on first inference.
+        logger.info("Pre-compiling prefill JIT kernels for all bucket sizes...")
+        model.warmup_all_buckets(use_trace=False)
+        logger.info("Pre-compiling vision JIT kernels...")
+        model.warmup_vision_compile()
+        logger.info("JIT warmup complete — server ready to serve")
+
         return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)
 
     @property
