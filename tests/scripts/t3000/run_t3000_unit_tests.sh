@@ -130,10 +130,12 @@ except Exception as e:
   # On some runners, ttnn Python bindings also emit UMD log lines to STDOUT (via
   # loguru Python→C++ bridge). Filter those out with grep to get only the numeric
   # device count printed by the Python script itself.
-  # Python crashes produce non-zero exit → raw_output stays empty → n_chips="ERROR".
+  # Python crashes produce non-zero exit → with set -eo pipefail, the assignment itself
+  # would abort the shell before reaching the n_chips="ERROR" guard below.  The || true
+  # prevents that: a crash leaves raw_output empty → n_chips="ERROR" → handled below.
   # -u: unbuffered stdout so print(8) flushes immediately even if process aborts during teardown.
   # tr -d '\r': UMD loguru on some runners emits CRLF; grep '^[0-9]+$' fails on '8\r'.
-  raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null)
+  raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null) || true
   n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)
   if [[ -z "$n_chips" ]]; then
     n_chips="ERROR"
@@ -163,7 +165,7 @@ try:
 except Exception as e:
     print(f'[FIX TM] WARNING: post-TL warm-up failed ({e}) — topology check may still see degraded state', file=sys.stderr)
 " 2>&1 || true
-    raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null)
+    raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null) || true
     n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)
     if [[ -z "$n_chips" ]]; then n_chips="ERROR"; fi
     if [[ "$n_chips" -lt 8 ]]; then
