@@ -17,6 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 
@@ -156,6 +157,9 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     tt_sum_x2 = tt_stats_torch[..., 0:1]
+
+    if is_mesh_device:
+        torch_expected_stats = reconcile_golden_to_actual(torch_expected_stats, tt_sum_x2, input_a_tensor_placement)
 
     # Use 0.95 PCC threshold: this operation computes intermediate stats (sum(x^2))
     # which can have lower precision in bfloat16 accumulation, especially without fp32_dest_acc_en.

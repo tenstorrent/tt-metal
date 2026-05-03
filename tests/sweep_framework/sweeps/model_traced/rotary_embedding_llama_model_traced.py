@@ -68,6 +68,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -754,6 +755,9 @@ def run(
     # TILE_LAYOUT.  Slice back to the logical shape before the PCC check.
     if is_decode_mode and len(output_tensor.shape) == 4 and output_tensor.shape[2] != torch_output_tensor.shape[2]:
         output_tensor = output_tensor[:, :, : torch_output_tensor.shape[2], :]
+
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
 
     # --- Check Results ---
     # Use high PCC threshold (0.9997) to match reference test expectations
