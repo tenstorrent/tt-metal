@@ -608,6 +608,7 @@ def run(
                 if input_a_memory_config.is_sharded():
                     shard_mem_config = input_a_memory_config
             except Exception:
+                # Best-effort: tolerate this failure so the sweep can continue.
                 pass
 
         if shard_mem_config is None:

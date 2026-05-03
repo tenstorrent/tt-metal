@@ -17,7 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
 TIMEOUT = 300
 
@@ -123,7 +123,11 @@ def run(
     )
     # Re-add memory_config kwarg when the master config recorded it. build_op_kwargs
     # strips memory_config by default; sweeps that need it must inject it here.
+    # Validation-vector runs deliver memory_config as a serialized dict, parse
+    # it back to a ttnn.MemoryConfig before forwarding to the op binding.
     if memory_config is not None and "memory_config" not in op_kwargs:
+        if isinstance(memory_config, dict):
+            memory_config = parse_dict_value("memory_config", memory_config)
         op_kwargs["memory_config"] = memory_config
 
     if output_memory_config is None and memory_config is not None:

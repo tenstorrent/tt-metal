@@ -252,7 +252,6 @@ def run(
     start_time = start_measuring_time()
     # Master used `page_table=` named for 128 cfgs and positional `arg2` for 1.
     # __absent_keys__ tells us which form the vector preserved.
-    _absent = kwargs.get("__absent_keys__", set()) or set()
     _used_named_pt = kwargs.get("page_table_shape") not in (None, "__ABSENT__")
     try:
         if _used_named_pt:
