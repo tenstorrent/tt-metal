@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -93,8 +94,12 @@ def run(
     eps = op_kwargs.get("epsilon", 1e-5)
     hidden_dim = shape[-1]
 
-    # rms_norm_post_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes
-    if input_a_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
+    # rms_norm_post_all_gather typically expects BFLOAT16/BFLOAT8_B, but some
+    # master configs are traced with FLOAT32 input. Try the master dtype first;
+    # if the kernel rejects it later we'll fall back to BFLOAT16 below.
+    _orig_input_a_dtype = input_a_dtype
+    _kernel_compat_dtypes = (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32)
+    if input_a_dtype not in _kernel_compat_dtypes:
         input_a_dtype = ttnn.bfloat16
 
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
@@ -145,8 +150,30 @@ def run(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    # Land input_tensor on master's exact memory_config (often L1-sharded).
+    # The kernel expects that exact layout when a sharded program_config is
+    # in use; if conversion fails we leave the tensor in DRAM-interleaved
+    # rather than crashing the run.
+    if input_a_memory_config is not None and input_a_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+        try:
+            input_tensor = ttnn.to_memory_config(input_tensor, input_a_memory_config)
+        except Exception:
+            pass
+
     # Determine n_devices from the traced stats shape
     # Stats shape is (batch..., 32 * n_devices), each device contributes a tile-width (32) of stats
+    # V2 vectors expose the stats shape via input_b_shape (the second positional
+    # arg of ttnn.rms_norm_post_all_gather is the stats tensor). Prefer that
+    # when present so the trace records master's stats width.
+    _stats_shape_kw = kwargs.get("input_b_shape")
+    if _stats_shape_kw is not None:
+        if isinstance(_stats_shape_kw, str):
+            try:
+                _stats_shape_kw = ast.literal_eval(_stats_shape_kw)
+            except Exception:
+                _stats_shape_kw = None
+        if isinstance(_stats_shape_kw, (list, tuple)) and len(_stats_shape_kw) >= 1:
+            stats_shape_from_trace = tuple(_stats_shape_kw)
     if stats_shape_from_trace and len(stats_shape_from_trace) >= 1:
         n_devices = max(stats_shape_from_trace[-1] // 32, 1)
     else:
@@ -175,6 +202,15 @@ def run(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    # Land stats_tensor on master's input_b_memory_config when present. The
+    # sharded program_config rejects DRAM-interleaved stats; master often
+    # records stats as L1-WIDTH-SHARDED. Best-effort, fall back silently.
+    if input_b_memory_config is not None and input_b_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+        try:
+            stats_tensor = ttnn.to_memory_config(stats_tensor, input_b_memory_config)
+        except Exception:
+            pass
 
     start_time = start_measuring_time()
     output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats_tensor, weight=weight_tensor, **op_kwargs)
