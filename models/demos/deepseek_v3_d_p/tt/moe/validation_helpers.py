@@ -628,6 +628,7 @@ def _get_valid_slots(
 def validate_dispatch_data(
     torch_data: torch.Tensor,
     ttnn_data: torch.Tensor,
+    expert_region_offsets: torch.Tensor,
     expert_token_counts: torch.Tensor,
     expert_dispatch_table: torch.Tensor,
     num_dispatch_groups: int,
@@ -644,9 +645,13 @@ def validate_dispatch_data(
     Skips experts not present in EP rank (dispatch_table == -1).
 
     Args:
-        torch_data: Reference data, shape [num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, ...]
+        torch_data: Reference data, shape [num_dispatch_groups, dispatch_group_size, total_buffer_rows, ...]
         ttnn_data: TTNN data, same shape as torch_data
-        expert_token_counts: Token counts per expert, shape [num_dispatch_groups, dispatch_group_size, experts_per_chip]
+        expert_region_offsets: Expert region offsets (shared across source devices in a
+            dispatch group), shape [num_dispatch_groups, dispatch_group_size, num_routed_experts].
+            Gives the expert region start position for each expert directly; no need to
+            read expert_offsets at chip 0.
+        expert_token_counts: Token counts per expert, shape [num_dispatch_groups, dispatch_group_size, num_routed_experts]
         expert_dispatch_table: Expert to chip mapping, shape [num_dispatch_groups, num_routed_experts]
         num_dispatch_groups: Number of EP ranks
         dispatch_group_size: Number of chips in dispatch group
@@ -688,8 +693,10 @@ def validate_dispatch_data(
                 )
                 count = expert_token_counts[r, 0, global_expert_idx].item()
 
-                torch_slot = torch_data[r, dst_chip_id, expert_id, :count]
-                ttnn_slot = ttnn_data[r, dst_chip_id, expert_id, :count]
+                # expert_region_offsets directly gives the expert region start position
+                start = int(expert_region_offsets[r, dst_chip_id, global_expert_idx].item())
+                torch_slot = torch_data[r, dst_chip_id, start : start + count]
+                ttnn_slot = ttnn_data[r, dst_chip_id, start : start + count]
 
                 match, error_detail = compare_fn(torch_slot, ttnn_slot, r, dst_chip_id, expert_id)
 
@@ -727,6 +734,7 @@ def validate_dispatch_data(
 def validate_dispatch_buffer(
     torch_dispatched: torch.Tensor,
     ttnn_dispatched: torch.Tensor,
+    expert_region_offsets: torch.Tensor,
     expert_token_counts: torch.Tensor,
     expert_dispatch_table: torch.Tensor,
     num_dispatch_groups: int,
@@ -740,6 +748,7 @@ def validate_dispatch_buffer(
     Args:
         torch_dispatched: Reference dispatched buffer
         ttnn_dispatched: TTNN dispatched buffer
+        expert_region_offsets: Expert region offsets for slicing flat buffers
         expert_token_counts: Token counts per expert
         expert_dispatch_table: Expert to chip mapping
         num_dispatch_groups: Number of EP ranks
@@ -767,6 +776,7 @@ def validate_dispatch_buffer(
     return validate_dispatch_data(
         torch_dispatched,
         ttnn_dispatched,
+        expert_region_offsets,
         expert_token_counts,
         expert_dispatch_table,
         num_dispatch_groups,
@@ -781,6 +791,7 @@ def validate_dispatch_buffer(
 def validate_dispatch_buffer_pcc(
     torch_dispatched: torch.Tensor,
     ttnn_dispatched: torch.Tensor,
+    expert_region_offsets: torch.Tensor,
     expert_token_counts: torch.Tensor,
     expert_dispatch_table: torch.Tensor,
     num_dispatch_groups: int,
@@ -798,6 +809,7 @@ def validate_dispatch_buffer_pcc(
     Args:
         torch_dispatched: Reference dispatched buffer
         ttnn_dispatched: TTNN dispatched buffer
+        expert_region_offsets: Expert region offsets for slicing flat buffers
         expert_token_counts: Token counts per expert
         expert_dispatch_table: Expert to chip mapping
         num_dispatch_groups: Number of EP ranks
@@ -827,6 +839,7 @@ def validate_dispatch_buffer_pcc(
     return validate_dispatch_data(
         torch_dispatched,
         ttnn_dispatched,
+        expert_region_offsets,
         expert_token_counts,
         expert_dispatch_table,
         num_dispatch_groups,
@@ -841,6 +854,7 @@ def validate_dispatch_buffer_pcc(
 def validate_dispatch_metadata(
     torch_metadata: torch.Tensor,
     ttnn_metadata: torch.Tensor,
+    expert_region_offsets: torch.Tensor,
     expert_token_counts: torch.Tensor,
     expert_dispatch_table: torch.Tensor,
     num_dispatch_groups: int,
@@ -859,6 +873,7 @@ def validate_dispatch_metadata(
     Args:
         torch_metadata: Reference metadata
         ttnn_metadata: TTNN metadata
+        expert_region_offsets: Expert region offsets for slicing flat buffers
         expert_token_counts: Token counts per expert
         expert_dispatch_table: Expert to chip mapping
         num_dispatch_groups: Number of EP ranks
@@ -899,22 +914,25 @@ def validate_dispatch_metadata(
                 )
                 count = expert_token_counts[r, 0, global_expert_idx].item()
 
+                # expert_region_offsets directly gives the expert region start position
+                start = int(expert_region_offsets[r, dst_chip_id, global_expert_idx].item())
+
                 # Compare fields 1-3 directly
-                out = ttnn_metadata[r, dst_chip_id, expert_id, :count, 1:4]
-                ref = torch_metadata[r, dst_chip_id, expert_id, :count, 1:4]
+                out = ttnn_metadata[r, dst_chip_id, start : start + count, 1:4]
+                ref = torch_metadata[r, dst_chip_id, start : start + count, 1:4]
 
                 # Both Torch and TTNN now embed linearized mesh coord in field 0
-                out_linearized_mesh_coord = ttnn_metadata[r, dst_chip_id, expert_id, :count, 0]
-                ref_linearized_mesh_coord = torch_metadata[r, dst_chip_id, expert_id, :count, 0]
+                out_linearized_mesh_coord = ttnn_metadata[r, dst_chip_id, start : start + count, 0]
+                ref_linearized_mesh_coord = torch_metadata[r, dst_chip_id, start : start + count, 0]
 
                 # Compare weights (metadata[4]):
                 # TTNN stores raw bfloat16 bits as uint16 in int32 - convert to bfloat16
                 out_weight_bf16 = (
-                    ttnn_metadata[r, dst_chip_id, expert_id, :count, 4].to(torch.int16).view(torch.bfloat16)
+                    ttnn_metadata[r, dst_chip_id, start : start + count, 4].to(torch.int16).view(torch.bfloat16)
                 )
                 # Torch stores bfloat16 value directly
                 ref_weight_bf16 = (
-                    torch_metadata[r, dst_chip_id, expert_id, :count, 4].to(torch.int16).view(torch.bfloat16)
+                    torch_metadata[r, dst_chip_id, start : start + count, 4].to(torch.int16).view(torch.bfloat16)
                 )
 
                 metadata_match = torch.allclose(out, ref, atol=1e-6)
@@ -934,8 +952,8 @@ def validate_dispatch_metadata(
 
                     if verbose:
                         for slot in range(count):
-                            torch_data = torch_metadata[r, dst_chip_id, expert_id, slot, :4]
-                            kernel_data = ttnn_metadata[r, dst_chip_id, expert_id, slot, :4]
+                            torch_data = torch_metadata[r, dst_chip_id, start + slot, :4]
+                            kernel_data = ttnn_metadata[r, dst_chip_id, start + slot, :4]
                             slot_data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
                             if not slot_data_match:
                                 logger.error(

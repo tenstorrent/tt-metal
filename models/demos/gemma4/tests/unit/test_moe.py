@@ -24,7 +24,7 @@ from ...tests.test_factory import (
 @skip_if_not_moe
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
-def test_moe(batch_size, seq_len, mesh_device):
+def test_moe(batch_size, seq_len, mesh_device, reset_seeds):
     """Test MoE end-to-end on device against HF reference.
 
     Uses HF routing for the reference, TT router+experts for the test.

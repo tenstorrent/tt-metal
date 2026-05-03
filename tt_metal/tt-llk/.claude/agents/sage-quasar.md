@@ -27,7 +27,7 @@ Quasar uses **semantic naming** — different from WH/BH's letter-based naming:
 - Math: `llk_math_eltwise_binary_broadcast.h`, `llk_math_eltwise_unary_sfpu_common.h`, `llk_math_matmul.h`
 - Pack: `llk_pack.h`, `llk_pack_matmul.h`
 - SFPU: `common/inc/sfpu/ckernel_sfpu_{op}.h`
-- Unique to QSR: `llk_srcs_tdma.h` (no equivalent in WH/BH)
+- Unique to QSR: `llk_srcs.h` (no equivalent in WH/BH)
 
 When searching for a concept (e.g., "binary unpack"), search by the semantic meaning, not by WH/BH file names. `llk_unpack_AB.h` does not exist on Quasar — the equivalent is `llk_unpack_binary_operands.h`.
 

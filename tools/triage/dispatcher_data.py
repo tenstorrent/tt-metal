@@ -425,13 +425,13 @@ class DispatcherData:
         except Exception:
             pass
         try:
-            host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
+            host_assigned_id = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id)
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
             pass
         try:
-            previous_host_assigned_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id
+            previous_host_assigned_id = int(mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id)
         except TimeoutDeviceRegisterError:
             raise
         except:

@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
@@ -173,7 +173,7 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
     "mesh_shape",
     [
@@ -184,7 +184,7 @@ def prepare_gpt_oss_generator_args(
     ],
     ids=["mesh_1x8", "mesh_4x8"],
 )
-@run_for_wormhole_b0()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
     [
@@ -962,9 +962,10 @@ def test_gpt_oss_demo(
         )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=model_name,
+            run_type="demo",
+            ml_model_name=model_args[0].base_model_name,
             ml_model_type="llm",
+            device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
