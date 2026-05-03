@@ -113,12 +113,23 @@ def create_mesh_device(
         ttnn.MeshDevice instance
     """
     # Create mesh device with just the mesh shape
-    # The API automatically selects available devices based on the mesh shape
-    return ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*mesh_shape),
-        l1_small_size=l1_small_size,
-        dispatch_core_config=ttnn.DispatchCoreConfig(),
-    )
+    # The API automatically selects available devices based on the mesh shape.
+    # Use COL dispatch axis to match the master trace's compute grid (7x10);
+    # the default (ROW) gives (8x9), invalidating master shard_specs that
+    # use y=9 cores.
+    try:
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*mesh_shape),
+            l1_small_size=l1_small_size,
+            dispatch_core_config=ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.COL),
+        )
+    except Exception:
+        # Older ttnn versions / non-Galaxy hardware may not support COL axis.
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*mesh_shape),
+            l1_small_size=l1_small_size,
+            dispatch_core_config=ttnn.DispatchCoreConfig(),
+        )
 
 
 def _parse_shard_dim(placement_str: str) -> int:
