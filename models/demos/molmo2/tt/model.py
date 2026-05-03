@@ -30,6 +30,8 @@ import ttnn
 # Extended to 32768 to cover long video prompts (384 frames ≈ S~34k → pads to 65536,
 # but typical 105-test videos hit at most ~16k tokens).
 PREFILL_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+# Stops at 32768: model max_seq_len=36864, so anything above pads to 65536
+# which is unreachable. 32768 covers all realistic video prompt lengths.
 # Trace-capture is capped at 4096: larger traces permanently reserve DRAM that
 # OOMs alongside the vision backbone weights.
 # JIT compilation (use_trace=False) has no such constraint.
