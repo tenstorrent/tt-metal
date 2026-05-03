@@ -387,10 +387,18 @@ def run(
     torch.manual_seed(0)
 
     is_mesh_device = hasattr(device, "get_num_devices")
-    input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
-    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
-    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
-    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
+    input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None) or _kwargs.get(
+        "input_tensor_a_tensor_placement"
+    )
+    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None) or _kwargs.get(
+        "input_tensor_b_tensor_placement"
+    )
+    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None) or _kwargs.get(
+        "input_tensor_c_tensor_placement"
+    )
+    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None) or _kwargs.get(
+        "input_tensor_d_tensor_placement"
+    )
     op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)

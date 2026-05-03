@@ -1,0 +1,60 @@
+{
+  "model_traced": {
+    "26a4fd2f90edd20ca4e479772a56248b5c41124e8f14777200fdd13f81372278": {
+      "memory_config": {
+        "type": "ttnn._ttnn.tensor.MemoryConfig",
+        "data": {
+          "buffer_type": "DRAM",
+          "created_with_nd_shard_spec": false,
+          "memory_layout": "INTERLEAVED"
+        }
+      },
+      "input_a_shape": "(1, 8, 128, 64)",
+      "input_a_dtype": "DataType.BFLOAT16",
+      "input_a_layout": "Layout.TILE",
+      "input_a_memory_config": {
+        "type": "ttnn._ttnn.tensor.MemoryConfig",
+        "data": {
+          "buffer_type": "DRAM",
+          "created_with_nd_shard_spec": false,
+          "memory_layout": "INTERLEAVED"
+        }
+      },
+      "input_a_tensor_placement": {
+        "distribution_shape": "[4, 8]",
+        "mesh_device_shape": "[4, 8]",
+        "placement": "['PlacementReplicate', 'PlacementShard(-1)']"
+      },
+      "output_memory_config": {
+        "type": "ttnn._ttnn.tensor.MemoryConfig",
+        "data": {
+          "buffer_type": "DRAM",
+          "created_with_nd_shard_spec": false,
+          "memory_layout": "INTERLEAVED"
+        }
+      },
+      "traced_source": [
+        "models/demos/gpt_oss/demo/text_demo.py"
+      ],
+      "traced_machine_info": {
+        "board_type": "Wormhole",
+        "card_count": 32,
+        "device_count": 32,
+        "device_series": "tt-galaxy-wh",
+        "mesh_device_shape": [
+          4,
+          8
+        ]
+      },
+      "config_hash": "26a4fd2f90edd20ca4e479772a56248b5c41124e8f14777200fdd13f81372278",
+      "suite_name": "model_traced",
+      "validity": "VALID",
+      "invalid_reason": "",
+      "status": "VectorStatus.CURRENT",
+      "sweep_name": "model_traced.nlp_concat_heads_model_traced",
+      "timestamp": "2026-05-02_04-02-39",
+      "input_hash": "26a4fd2f90edd20ca4e479772a56248b5c41124e8f14777200fdd13f81372278",
+      "tag": "ci-validate-lead-models"
+    }
+  }
+}

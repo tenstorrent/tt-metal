@@ -44,6 +44,131 @@ IGNORED_KEYS = frozenset(
 )
 
 
+# Per-op kwarg → positional-index mapping. The model trace records kwargs
+# under their semantic names (e.g. ``shape`` for ``ttnn.reshape``) while the
+# sweep test calls the op with positional args, which the tracer captures as
+# ``arg1``. Canonicalize both sides to the positional form before comparing.
+KWARG_ALIASES = {
+    "ttnn.reshape": {"shape": 1},
+    "ttnn.embedding": {"weight": 1},
+    "ttnn.repeat": {"repeat_dims": 1},
+    "ttnn.unsqueeze": {"dim": 1},
+    "ttnn.scatter": {"input": 0, "index": 1},
+    "ttnn.linear": {"input_tensor_b": 1},
+    "ttnn.experimental.paged_fill_cache": {"page_table": 2},
+    "ttnn.experimental.paged_update_cache": {"input_tensor": 0, "input_tensor_b": 1},
+}
+
+
+def canonicalize_op_args(op_name: str, args: dict) -> dict:
+    """Rename op-specific semantic kwargs to their positional ``argN`` form."""
+    aliases = KWARG_ALIASES.get(op_name, {})
+    if not aliases or not isinstance(args, dict):
+        return args
+    out = dict(args)
+    for kwarg, idx in aliases.items():
+        argN = f"arg{idx}"
+        if kwarg in out and argN not in out:
+            out[argN] = out.pop(kwarg)
+    return out
+
+
+import ast as _ast
+import re as _re
+
+_SHAPE_VALUE_RE = _re.compile(r"^Shape\(\[(.*)\]\)$")
+
+
+_SET_REPR_RE = _re.compile(r"^\s*\{(.*)\}\s*$", _re.S)
+
+
+def _coerce_set_repr(value):
+    """Parse a python-set repr like '{X, Y, Z}' to a sorted tuple for comparison.
+
+    Master and sweep traces both serialize sets via str(), which preserves
+    insertion order — but the underlying set is unordered. Sorting makes the
+    comparison order-independent.
+    """
+    if not isinstance(value, str):
+        return value
+    m = _SET_REPR_RE.match(value)
+    if not m:
+        return value
+    inner = m.group(1).strip()
+    if not inner:
+        return ()
+    # Split on top-level commas. Items here are all "MeshCoordinate([..])" so
+    # we need to track bracket depth.
+    parts = []
+    depth = 0
+    cur = []
+    for ch in inner:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        parts.append("".join(cur).strip())
+    return tuple(sorted(parts))
+
+
+def _coerce_shape_value(obj):
+    """Convert {'type': 'Shape', 'value': 'Shape([1,2,3])'} → [1, 2, 3]."""
+    if isinstance(obj, dict) and obj.get("type") == "Shape":
+        m = _SHAPE_VALUE_RE.match(str(obj.get("value", "")).strip())
+        if m:
+            try:
+                inner = m.group(1).strip()
+                if not inner:
+                    return []
+                return [int(x.strip()) for x in inner.split(",") if x.strip()]
+            except ValueError:
+                return obj
+    return obj
+
+
+def _normalize_tensor_placement(tp):
+    """Collapse fully-replicated placements across different mesh shapes.
+
+    `[4, 8]` distribution + ['PlacementReplicate', 'PlacementReplicate']
+    is semantically identical to `[32]` distribution + ['PlacementReplicate'].
+    Same for any rectangular full-replication case. Reduce both to the 1-D
+    fully-replicated form for comparison.
+    """
+    if not isinstance(tp, dict):
+        return tp
+    plac_raw = tp.get("placement")
+    dist_raw = tp.get("distribution_shape")
+    mesh_raw = tp.get("mesh_device_shape")
+    try:
+        plac = _ast.literal_eval(plac_raw) if isinstance(plac_raw, str) else plac_raw
+        dist = _ast.literal_eval(dist_raw) if isinstance(dist_raw, str) else dist_raw
+    except Exception:
+        return tp
+    if not isinstance(plac, (list, tuple)) or not isinstance(dist, (list, tuple)):
+        return tp
+    if not plac or any("Replicate" not in str(p) for p in plac):
+        return tp
+    # Fully replicated: collapse to 1-D
+    total = 1
+    for d in dist:
+        try:
+            total *= int(d)
+        except (TypeError, ValueError):
+            return tp
+    out = dict(tp)
+    out["placement"] = "['PlacementReplicate']"
+    out["distribution_shape"] = f"[{total}]"
+    if mesh_raw is not None:
+        out["mesh_device_shape"] = f"[1, {total}]"
+    return out
+
+
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
@@ -52,6 +177,13 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     meaningful configuration difference.
     """
     if isinstance(obj, dict):
+        # Coerce wrapper Shape objects → list before per-key processing
+        shape_form = _coerce_shape_value(obj)
+        if shape_form is not obj:
+            return shape_form
+        # Normalize fully-replicated tensor_placement across mesh shapes
+        if _parent_key == "tensor_placement":
+            obj = _normalize_tensor_placement(obj)
         result = {}
         for k, v in sorted(obj.items()):
             if k in IGNORED_KEYS:
@@ -66,6 +198,15 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
         return result
     if isinstance(obj, list):
         return [normalize(item, _parent_key=_parent_key) for item in obj]
+    # Some traces serialize None as the string 'None' (e.g. shard_spec='None');
+    # canonicalize so the diff doesn't flag it.
+    if obj == "None":
+        return None
+    # Set repr "{a, b, c}" should compare as an unordered set.
+    if isinstance(obj, str) and obj.startswith("{") and obj.endswith("}"):
+        coerced = _coerce_set_repr(obj)
+        if coerced is not obj:
+            return coerced
     return obj
 
 
@@ -250,8 +391,8 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             sweep_args = cfg.get("arguments", {})
             sweep_config_hash = cfg.get("config_hash")
 
-            norm_master = normalize(master_args)
-            norm_sweep = normalize(sweep_args)
+            norm_master = normalize(canonicalize_op_args(op_name, master_args))
+            norm_sweep = normalize(canonicalize_op_args(op_name, sweep_args))
 
             if norm_master == norm_sweep:
                 # Arguments match — check if config_hash computation also agrees

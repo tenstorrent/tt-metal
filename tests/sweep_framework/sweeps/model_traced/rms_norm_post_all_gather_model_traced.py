@@ -67,6 +67,10 @@ def run(
     torch.manual_seed(0)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    if input_a_tensor_placement is None:
+        input_a_tensor_placement = kwargs.get("input_tensor_a_tensor_placement") or kwargs.get(
+            "input_tensor_tensor_placement"
+        )
     is_mesh_device = hasattr(device, "get_num_devices")
 
     if isinstance(input_a_shape, dict) and "self" in input_a_shape:

@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import re
+
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -260,6 +262,19 @@ def run(
     # (adding it when master didn't have it causes extra_key diffs)
     if "batch_offset" in op_kwargs and op_kwargs["batch_offset"] is None:
         op_kwargs["batch_offset"] = 0
+
+    # mesh_coords is stripped by build_op_kwargs (infra key) — recover it from
+    # the raw test vector so the trace recorder captures the per-coord variant.
+    _raw_mc = kwargs.get("mesh_coords")
+    if _raw_mc is not None:
+        _mc_text = _raw_mc.get("value", "") if isinstance(_raw_mc, dict) else str(_raw_mc)
+        _coords = set()
+        for _m in re.finditer(r"MeshCoordinate\(\[([^\]]+)\]\)", _mc_text):
+            _nums = [int(x.strip()) for x in _m.group(1).split(",") if x.strip()]
+            if _nums:
+                _coords.add(ttnn.MeshCoordinate(*_nums))
+        if _coords:
+            op_kwargs["mesh_coords"] = _coords
     try:
         output_tensor = ttnn.experimental.paged_update_cache(
             input_tensor_a,  # cache_tensor (positional)

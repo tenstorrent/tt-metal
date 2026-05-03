@@ -271,6 +271,8 @@ def run(
         except (TypeError, RuntimeError):
             output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     else:
+        # Master is inconsistent: 68/92 configs were traced positional ("arg1"),
+        # 20/92 with the "shape" kwarg.  Pass positional to match the majority.
         output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

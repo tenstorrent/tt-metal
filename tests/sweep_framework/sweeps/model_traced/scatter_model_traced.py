@@ -125,7 +125,13 @@ def run(
     if input_a_memory_config is None:
         input_a_memory_config = kwargs.get("input_memory_config", ttnn.DRAM_MEMORY_CONFIG)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", kwargs.get("input_tensor_placement", None))
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement")
+    if input_a_tensor_placement is None:
+        input_a_tensor_placement = (
+            kwargs.get("input_tensor_placement")
+            or kwargs.get("input_tensor_a_tensor_placement")
+            or kwargs.get("input_tensor_tensor_placement")
+        )
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(
         kwargs,
@@ -253,6 +259,8 @@ def run(
         src_tensor = ttnn.from_torch(torch_src_tensor, dtype=src_dtype, layout=src_layout)
 
     start_time = start_measuring_time()
+    # Master is split 2/2 between "input" kwarg and "arg0" positional.  Use
+    # positional to match the existing exact-match case (and its tensor_placement).
     output_tensor = ttnn.scatter(input_tensor, dim=dim, index=index_tensor, src=src_tensor, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

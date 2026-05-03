@@ -111,7 +111,11 @@ def run(
 
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    if input_a_tensor_placement is None:
+        input_a_tensor_placement = kwargs.get("input_tensor_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    if input_b_tensor_placement is None:
+        input_b_tensor_placement = kwargs.get("input_tensor_b_tensor_placement", None)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
@@ -145,7 +149,9 @@ def run(
     weight_dtype_actual = weight_dtype if weight_dtype is not None else input_b_dtype
     weight_layout_actual = weight_layout if weight_layout is not None else input_b_layout
     weight_memory_config_actual = weight_memory_config if weight_memory_config is not None else input_b_memory_config
-    weight_tensor_placement = kwargs.get("weight_tensor_placement", input_b_tensor_placement)
+    weight_tensor_placement = kwargs.get("weight_tensor_placement")
+    if weight_tensor_placement is None:
+        weight_tensor_placement = input_b_tensor_placement
 
     # Generate weight tensor
     torch_weight_tensor = gen_func_with_cast_tt(
@@ -226,6 +232,8 @@ def run(
             embedding_kwargs["layout"] = parsed_layout
 
     start_time = start_measuring_time()
+    # Master is inconsistent: 6/8 configs trace weight positionally ("arg1"),
+    # 2/8 use the "weight" kwarg.  Pass positional to match the majority.
     output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 

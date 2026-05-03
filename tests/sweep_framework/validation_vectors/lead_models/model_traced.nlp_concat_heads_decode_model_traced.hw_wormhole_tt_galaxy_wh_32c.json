@@ -1,0 +1,91 @@
+{
+  "model_traced": {
+    "38e92deccd041dcf3d80c0c5a4d3493c9b07c577b289f8ec319e74349fe7ba76": {
+      "num_heads": 8,
+      "input_a_shape": "(1, 1, 8, 64)",
+      "input_a_dtype": "DataType.BFLOAT16",
+      "input_a_layout": "Layout.TILE",
+      "input_a_memory_config": {
+        "type": "ttnn._ttnn.tensor.MemoryConfig",
+        "data": {
+          "buffer_type": "L1",
+          "created_with_nd_shard_spec": false,
+          "memory_layout": "HEIGHT_SHARDED",
+          "shard_spec": {
+            "grid": [
+              {
+                "end": {
+                  "x": 0,
+                  "y": 0
+                },
+                "start": {
+                  "x": 0,
+                  "y": 0
+                }
+              }
+            ],
+            "orientation": 0,
+            "shape": [
+              32,
+              64
+            ]
+          }
+        }
+      },
+      "input_a_tensor_placement": {
+        "distribution_shape": "[4, 8]",
+        "mesh_device_shape": "[4, 8]",
+        "placement": "['PlacementReplicate', 'PlacementShard(-1)']"
+      },
+      "output_memory_config": {
+        "type": "ttnn._ttnn.tensor.MemoryConfig",
+        "data": {
+          "buffer_type": "L1",
+          "created_with_nd_shard_spec": false,
+          "memory_layout": "HEIGHT_SHARDED",
+          "shard_spec": {
+            "grid": [
+              {
+                "end": {
+                  "x": 0,
+                  "y": 0
+                },
+                "start": {
+                  "x": 0,
+                  "y": 0
+                }
+              }
+            ],
+            "orientation": 0,
+            "shape": [
+              32,
+              64
+            ]
+          }
+        }
+      },
+      "traced_source": [
+        "models/demos/gpt_oss/demo/text_demo.py"
+      ],
+      "traced_machine_info": {
+        "board_type": "Wormhole",
+        "card_count": 32,
+        "device_count": 32,
+        "device_series": "tt-galaxy-wh",
+        "mesh_device_shape": [
+          4,
+          8
+        ]
+      },
+      "config_hash": "38e92deccd041dcf3d80c0c5a4d3493c9b07c577b289f8ec319e74349fe7ba76",
+      "suite_name": "model_traced",
+      "validity": "VALID",
+      "invalid_reason": "",
+      "status": "VectorStatus.CURRENT",
+      "sweep_name": "model_traced.nlp_concat_heads_decode_model_traced",
+      "timestamp": "2026-05-02_04-02-39",
+      "input_hash": "38e92deccd041dcf3d80c0c5a4d3493c9b07c577b289f8ec319e74349fe7ba76",
+      "tag": "ci-validate-lead-models"
+    }
+  }
+}
