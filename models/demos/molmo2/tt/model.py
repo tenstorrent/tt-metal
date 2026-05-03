@@ -908,28 +908,29 @@ class TtMolmo2Model(LightweightModule):
         if pixel_values is not None:
             image_features = self.run_vision_backbone(pixel_values, pooled_patches_idx)
 
-            # Additive injection at image_patch_id positions.
-            # x_cpu may be [S, H] or [1, S, H] depending on embedding output shape;
-            # use view(-1, H) to handle both (matches the reference pattern).
-            x_cpu = ttnn.to_torch(ttnn.get_device_tensors(x_ttnn)[0]).float()
-            ttnn.deallocate(x_ttnn)
+            # Additive injection via dense delta + ttnn.add — no D2H of embedding.
+            # Build a zero tensor, write image features at patch positions (CPU, cheap
+            # since we write into zeros not read the embedding), H2D, then add on device.
             H = self.configuration.dim
             is_patch_flat = input_ids.view(-1) == self.configuration.image_patch_id
-            x_cpu.view(-1, H)[is_patch_flat] += image_features.to(x_cpu.dtype)
-
-            x_ttnn = ttnn.from_torch(
-                x_cpu.view(1, 1, S, H).to(torch.bfloat16),
+            delta = torch.zeros(1, 1, S, H, dtype=torch.bfloat16)
+            delta.view(-1, H)[is_patch_flat] = image_features.to(torch.bfloat16)
+            delta_ttnn = ttnn.from_torch(
+                delta,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        else:
             x_ttnn = ttnn.to_layout(x_ttnn, ttnn.TILE_LAYOUT)
-
-        # Reshape to [1, 1, S, dim] for decoder
-        x_ttnn = ttnn.reshape(x_ttnn, [1, 1, S, self.configuration.dim])
+            x_ttnn = ttnn.reshape(x_ttnn, [1, 1, S, H])
+            x_ttnn = ttnn.add(x_ttnn, delta_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(delta_ttnn)
+        else:
+            # Text-only: layout + reshape here (vision path already did both above)
+            x_ttnn = ttnn.to_layout(x_ttnn, ttnn.TILE_LAYOUT)
+            x_ttnn = ttnn.reshape(x_ttnn, [1, 1, S, self.configuration.dim])
 
         # ---- Route to trace or eager ----
         padded_S = get_padded_prefill_len(S)
