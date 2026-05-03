@@ -97,20 +97,29 @@ jobs:
       # names so the artifact has predictable filenames (the script writes
       # ttsim_<timestamp>.xml / .html and maintains latest.{xml,html}
       # symlinks, which don't survive artifact upload cleanly).
+      # The ttsim-version pin file is also copied so the weekly Slack
+      # digest job can surface the simulator version without an extra checkout.
       - name: Stage report artifact
         if: always()
         shell: bash
-        working-directory: ${{ env.LLK_PATH }}/tests/python_tests/ttsim_results
         run: |
           set -euo pipefail
-          mkdir -p "${GITHUB_WORKSPACE}/ttsim-report-${{ matrix.architecture }}"
-          if [[ -f latest.xml ]]; then
-            cp -L latest.xml  "${GITHUB_WORKSPACE}/ttsim-report-${{ matrix.architecture }}/ttsim-${{ matrix.architecture }}.xml"
+          RESULTS_DIR="${GITHUB_WORKSPACE}/${{ env.LLK_PATH }}/tests/python_tests/ttsim_results"
+          ARTIFACT_DIR="${GITHUB_WORKSPACE}/ttsim-report-${{ matrix.architecture }}"
+          mkdir -p "${ARTIFACT_DIR}"
+          if [[ -f "${RESULTS_DIR}/latest.xml" ]]; then
+            cp -L "${RESULTS_DIR}/latest.xml"  "${ARTIFACT_DIR}/ttsim-${{ matrix.architecture }}.xml"
           fi
-          if [[ -f latest.html ]]; then
-            cp -L latest.html "${GITHUB_WORKSPACE}/ttsim-report-${{ matrix.architecture }}/ttsim-${{ matrix.architecture }}.html"
+          if [[ -f "${RESULTS_DIR}/latest.html" ]]; then
+            cp -L "${RESULTS_DIR}/latest.html" "${ARTIFACT_DIR}/ttsim-${{ matrix.architecture }}.html"
           fi
-          ls -la "${GITHUB_WORKSPACE}/ttsim-report-${{ matrix.architecture }}/"
+          # Include the version pin so the weekly digest can read the
+          # simulator version from the artifact (no extra checkout needed).
+          VERSION_FILE="${GITHUB_WORKSPACE}/${{ env.LLK_PATH }}/tests/ttsim-version"
+          if [[ -f "${VERSION_FILE}" ]]; then
+            cp "${VERSION_FILE}" "${ARTIFACT_DIR}/ttsim-version"
+          fi
+          ls -la "${ARTIFACT_DIR}/"
 
       # Step 5: Upload the per-architecture report (XML + HTML) as a single
       # artifact. `if: always()` so partial runs still produce a report,
@@ -138,6 +147,15 @@ jobs:
           XML_PATH: ttsim-report-${{ matrix.architecture }}/ttsim-${{ matrix.architecture }}.xml
         run: |
           set -euo pipefail
+
+          # Read ttsim version from the in-tree pin file for the summary.
+          TTSIM_VERSION="unknown"
+          TTSIM_VERSION_FILE="${GITHUB_WORKSPACE}/${{ env.LLK_PATH }}/tests/ttsim-version"
+          if [[ -f "$TTSIM_VERSION_FILE" ]]; then
+            # shellcheck source=/dev/null
+            source "$TTSIM_VERSION_FILE"
+            TTSIM_VERSION="${ttsim_version:-unknown}"
+          fi
 
           if [[ ! -f "$XML_PATH" ]]; then
             echo "No JUnit XML found at $XML_PATH — the regression likely never produced a report." >> "$GITHUB_STEP_SUMMARY"
@@ -185,8 +203,9 @@ jobs:
             echo ""
             echo "Informational run. ttsim is under active development; failures here reflect simulator gaps, not tt-metal regressions."
             echo ""
-            echo "| Metric | Count |"
+            echo "| Metric | Value |"
             echo "|---|---:|"
+            echo "| 🏷️ ttsim version | v${TTSIM_VERSION} |"
             echo "| 🔢 Total | ${total} |"
             echo "| ✅ Passed | ${passed} |"
             echo "| ❌ Failed | ${failed} |"

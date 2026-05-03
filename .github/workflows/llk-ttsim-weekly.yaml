@@ -105,6 +105,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PY' > message.txt
           import os
+          import re
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
@@ -114,6 +115,18 @@ jobs:
           REG_RESULT = os.environ.get("REGRESSION_RESULT", "unknown")
 
           RUN_URL = f"{SERVER}/{REPO}/actions/runs/{RUN_ID}"
+
+          # Read ttsim version from the pin file bundled in either artifact.
+          TTSIM_VERSION = "unknown"
+          for candidate in (Path("reports/blackhole/ttsim-version"),
+                            Path("reports/wormhole/ttsim-version")):
+              if candidate.is_file():
+                  for line in candidate.read_text().splitlines():
+                      m = re.match(r"ttsim_version=['\"]?([\w.]+)['\"]?", line.strip())
+                      if m:
+                          TTSIM_VERSION = m.group(1)
+                          break
+                  break
 
           def summarize(xml_path: Path):
               if not xml_path.is_file():
@@ -149,7 +162,7 @@ jobs:
                       f"⏩ {s['skipped']} skipped"
                   )
 
-          header = "📊 *LLK ttsim weekly digest* 📊"
+          header = f"📊 *LLK ttsim weekly digest (v{TTSIM_VERSION})* 📊"
           if REG_RESULT != "success":
               # Only flag infra-level issues — ttsim test failures are expected
               # and are reflected in the counts below, not in this banner.
