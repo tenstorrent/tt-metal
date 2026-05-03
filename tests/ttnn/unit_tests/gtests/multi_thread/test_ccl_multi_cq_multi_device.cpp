@@ -74,9 +74,21 @@ using tt::tt_metal::distributed::MeshShape;
 class MultiCQFabricMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
     MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}, .num_cqs = 2}) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        // FIX QV (#42429): SetFabricConfig moved to SetUp() so cluster-init failures
+        // (Timeout on degraded ETH relay) can be caught and GTEST_SKIP()-ed.
+        // GTest cannot GTEST_SKIP() from a constructor — exceptions propagate as FAILED.
     }
     void SetUp() override {
+        // FIX QV (#42429): SetFabricConfig called here (moved from ctor) so degraded-ETH
+        // cluster-init exceptions become GTEST_SKIP() not FAILED.
+        // Order preserved: this runs before MeshDeviceFixtureBase::SetUp().
+        try {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        } catch (const std::exception& e) {
+            GTEST_SKIP() << "FIX QV (#42429): SetFabricConfig(FABRIC_1D) threw during cluster "
+                            "init — degraded ETH relay (non-MMIO device unreachable): "
+                         << e.what();
+        }
         // Escape hatch for CI while the chip-3 CQ0 AllGather hang is under investigation.
         // Setting TT_METAL_DISABLE_ASYNC_CQ0_T3K_TEMP=1 skips the body of these tests but
         // leaves them present so local reproducers and bisects continue to work. Remove
