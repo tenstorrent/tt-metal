@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
+    maybe_swap_dispatch_axis,
 )
 
 # Import master config loader for traced model configurations
@@ -222,6 +223,21 @@ def run(
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
+
+    # Per-config dispatch-axis swap so the kernel sees the same compute grid
+    # master traced this config with.
+    device = maybe_swap_dispatch_axis(
+        device,
+        kwargs,
+        named_mcs=[
+            ("input_a_memory_config", input_a_memory_config),
+            ("input_b_memory_config", input_b_memory_config),
+            ("input_c_memory_config", input_c_memory_config),
+            ("input_d_memory_config", input_d_memory_config),
+            ("input_e_memory_config", input_e_memory_config),
+            ("output_memory_config", output_memory_config),
+        ],
+    )
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
