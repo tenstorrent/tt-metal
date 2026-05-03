@@ -27,6 +27,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from models.demos.gemma4.demo.text_demo import _load_tokenizer
 from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.model_config import DEFAULT_GEMMA4_MODEL
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -114,7 +115,16 @@ def run(args):
         if getattr(model_args, "hidden_size_per_layer_input", 0):
             raise RuntimeError("Strict feedback harness does not yet handle per-layer input embeddings")
 
-        input_ids = tokenizer.encode(args.prompt, return_tensors="pt").squeeze(0)
+        if not args.base_completion and getattr(tokenizer, "chat_template", None):
+            input_ids = tokenizer.apply_chat_template(
+                [{"role": "user", "content": args.prompt}],
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=True,
+                return_tensors="pt",
+            )["input_ids"].squeeze(0)
+        else:
+            input_ids = tokenizer.encode(args.prompt, return_tensors="pt").squeeze(0)
         prompt_len = input_ids.shape[0]
         if prompt_len <= 128:
             padded_len = 128
@@ -137,7 +147,9 @@ def run(args):
         embeds = ttnn.reshape(embeds, (1, 1, padded_len, model_args.hidden_size))
         embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
 
-        embed_weight = state_dict.get("model.language_model.embed_tokens.weight", state_dict.get("model.embed_tokens.weight"))
+        embed_weight = state_dict.get(
+            "model.language_model.embed_tokens.weight", state_dict.get("model.embed_tokens.weight")
+        )
         embeds_torch = F.embedding(input_ids_padded.unsqueeze(0).long(), embed_weight) * model.embed_scale
         get_last_token = ((prompt_len - 1) // 32) * 32
         logits = model.ttnn_prefill_forward(
@@ -314,9 +326,10 @@ def run(args):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-path", default="google/gemma-4-26B-A4B")
-    parser.add_argument("--hf-revision", default="64143b04706fadeb2f8ac198f7ecab57b94b1e0b")
-    parser.add_argument("--prompt", default="The capital of France is")
+    parser.add_argument("--model-path", default=DEFAULT_GEMMA4_MODEL)
+    parser.add_argument("--hf-revision", default="unknown")
+    parser.add_argument("--prompt", default="Explain in two sentences why paged attention helps LLM serving.")
+    parser.add_argument("--base-completion", action="store_true", help="Bypass the tokenizer chat template")
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--max-seq-len", type=int, default=512)
     parser.add_argument("--num-layers", type=int, default=None)

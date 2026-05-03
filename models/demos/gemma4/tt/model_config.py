@@ -27,6 +27,10 @@ from transformers import AutoConfig, AutoModelForCausalLM
 import ttnn
 
 
+DEFAULT_GEMMA4_MODEL = "google/gemma-4-26B-A4B-it"
+BASE_GEMMA4_MODEL = "google/gemma-4-26B-A4B"
+
+
 @dataclass
 class Gemma4ModelArgs:
     """Gemma4 model arguments parsed from HuggingFace config.

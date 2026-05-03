@@ -13,17 +13,27 @@ Usage:
     pytest models/demos/gemma4/demo/text_demo.py -v --timeout=600 -k "test_demo"
 """
 
+import argparse
 import gc
 import os
+import sys
 import time
+from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from models.common.sampling import SamplingParams, format_sampling_params
 from models.demos.gemma4.tests.test_factory import parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.model_config import DEFAULT_GEMMA4_MODEL
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -44,15 +54,97 @@ def _load_tokenizer(model_path):
         return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, extra_special_tokens={})
 
 
+def _set_fabric_1d():
+    try:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    except TypeError:
+        ttnn.set_fabric_config(
+            ttnn.FabricConfig.FABRIC_1D,
+            None,
+            None,
+            ttnn.FabricTensixConfig.DISABLED,
+            ttnn.FabricUDMMode.DISABLED,
+            ttnn.FabricManagerMode.DEFAULT,
+        )
+
+
+def _encode_prompt(tokenizer, prompt, instruct=True):
+    if instruct and getattr(tokenizer, "chat_template", None):
+        messages = [{"role": "user", "content": prompt}]
+        chat_result = tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        return chat_result["input_ids"].squeeze(0)
+    if instruct:
+        logger.warning("Instruct mode requested, but tokenizer has no chat_template; falling back to raw tokenization")
+    return tokenizer.encode(prompt, return_tensors="pt").squeeze(0)
+
+
+def _sample_next_token_host(logits, *, temperature=0.0, top_p=1.0, top_k=1, generator=None):
+    logits = logits.float().flatten()
+    if temperature == 0 or top_k == 1:
+        return int(torch.argmax(logits).item())
+
+    logits = logits / temperature
+    if top_k and top_k > 0:
+        top_k = min(int(top_k), logits.numel())
+        values, indices = torch.topk(logits, top_k)
+        filtered = torch.full_like(logits, float("-inf"))
+        filtered.scatter_(0, indices, values)
+        logits = filtered
+
+    probs = torch.softmax(logits, dim=-1)
+    if 0.0 < top_p < 1.0:
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+        remove = cumulative_probs > top_p
+        remove[1:] = remove[:-1].clone()
+        remove[0] = False
+        sorted_probs[remove] = 0
+        probs = torch.zeros_like(probs).scatter(0, sorted_indices, sorted_probs)
+        probs = probs / probs.sum()
+
+    return int(torch.multinomial(probs, num_samples=1, generator=generator).item())
+
+
+def _make_sampling_params(temperature, top_p, top_k, seed, greedy):
+    if greedy:
+        temperature = 0.0
+        top_p = 0.0
+        top_k = 1
+    return SamplingParams(temperature=temperature, top_p=top_p, top_k=top_k, seed=seed)
+
+
+def _configure_on_device_sampling(model, sampling_params):
+    if model.sampling is None:
+        return
+    formatted = format_sampling_params(sampling_params, model.sampling.tt_sampling.max_batch_size)
+    model.sampling.reset_sampling_params(formatted)
+    model.sampling.seed_manager.reset_seed(formatted.seed, [0])
+    model.sampling.seed_manager.get_new_values([0])
+
+
 def run_generation(
     mesh_device,
     model_path,
     prompts,
+    tokenizer_path=None,
     max_new_tokens=32,
     num_layers=None,
     max_seq_len=4096,
     page_params=None,
     enable_decode_trace=True,
+    instruct=True,
+    temperature=0.0,
+    top_p=1.0,
+    top_k=1,
+    seed=None,
+    greedy=True,
+    allow_cpu_sampling_fallback=False,
 ):
     """
     Run text generation with Gemma4.
@@ -77,8 +169,9 @@ def run_generation(
 
     # Load tokenizer
     profiler.start("loading_inputs")
-    tokenizer = _load_tokenizer(model_path)
-    logger.info(f"Tokenizer loaded from {model_path}")
+    tokenizer_source = tokenizer_path or model_path
+    tokenizer = _load_tokenizer(tokenizer_source)
+    logger.info(f"Tokenizer loaded from {tokenizer_source}")
     profiler.end("loading_inputs")
 
     # Paged attention config
@@ -110,6 +203,22 @@ def run_generation(
 
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    sampling_params = _make_sampling_params(temperature, top_p, top_k, seed, greedy)
+    on_device_sampling_available = model.sampling is not None
+    if on_device_sampling_available:
+        _configure_on_device_sampling(model, sampling_params)
+        sample_mode = "device"
+    elif allow_cpu_sampling_fallback:
+        sample_mode = "host-debug"
+        logger.warning("On-device sampling is unavailable; using explicit CPU debug fallback")
+    else:
+        raise RuntimeError(
+            "On-device sampling is unavailable for this mesh/config. "
+            "Pass allow_cpu_sampling_fallback=True or --allow-cpu-sampling-fallback for debug-only host sampling."
+        )
+    host_rng = torch.Generator()
+    if seed is not None:
+        host_rng.manual_seed(int(seed))
 
     # Page table on device
     page_table_tt = ttnn.from_torch(
@@ -126,15 +235,7 @@ def run_generation(
         logger.info(f"\n{'='*60}")
         logger.info(f"Prompt {prompt_idx}: {prompt}")
 
-        # Tokenize using chat template for instruct models
-        if tokenizer.chat_template:
-            messages = [{"role": "user", "content": prompt}]
-            chat_result = tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True, return_dict=True, return_tensors="pt"
-            )
-            input_ids = chat_result["input_ids"].squeeze(0)  # [seq_len]
-        else:
-            input_ids = tokenizer.encode(prompt, return_tensors="pt").squeeze(0)
+        input_ids = _encode_prompt(tokenizer, prompt, instruct=instruct)
 
         prompt_len = input_ids.shape[0]
         # Pad to standard prefill lengths (matches tt_transformers/gpt_oss pattern)
@@ -194,7 +295,9 @@ def run_generation(
             tb.print_exc()
             raise
 
-        # Sample first token (argmax from last position)
+        # Sample first token from prefill logits.  Prefill returns gathered logits
+        # today, so the first token still uses the host sampler.  Decode uses
+        # device-side sampling whenever the mesh supports it.
         if is_mesh:
             logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
         else:
@@ -203,7 +306,13 @@ def run_generation(
 
         # Get logits at the actual last prompt position within the tile
         pos_in_tile = (prompt_len - 1) - get_last_token
-        next_token = logits_cpu[0, 0, pos_in_tile, :].argmax().item()
+        next_token = _sample_next_token_host(
+            logits_cpu[0, 0, pos_in_tile, :],
+            temperature=sampling_params.temperature,
+            top_p=sampling_params.top_p,
+            top_k=sampling_params.top_k,
+            generator=host_rng,
+        )
 
         profiler.end(f"compile_prefill", iteration=prompt_idx)
 
@@ -229,6 +338,12 @@ def run_generation(
         # transferred as ROW_MAJOR to device.  Trace captures decoder layers onward.
         # Sampling: SamplingGenerator for TP >= 2, host torch.argmax for TP = 1.
         on_device_sampling = model.sampling is not None
+        if on_device_sampling:
+            _configure_on_device_sampling(model, sampling_params)
+
+        def _advance_device_seed():
+            if on_device_sampling:
+                model.sampling.seed_manager.get_new_values([0])
 
         def _make_decode_inputs(tok, pos):
             """Create host tensors for one decode iteration."""
@@ -294,9 +409,14 @@ def run_generation(
             if on_device_sampling:
                 return output_cpu.reshape(-1)[0].item()
             else:
-                return output_cpu.squeeze().argmax().item()
+                return _sample_next_token_host(
+                    output_cpu.squeeze(),
+                    temperature=sampling_params.temperature,
+                    top_p=sampling_params.top_p,
+                    top_k=sampling_params.top_k,
+                    generator=host_rng,
+                )
 
-        sample_mode = "device" if on_device_sampling else "host"
         logger.info(
             f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, " f"embedding=host, sampling={sample_mode})..."
         )
@@ -326,6 +446,7 @@ def run_generation(
                 if enable_decode_trace and trace_id is not None:
                     # ── Traced execution: copy inputs and replay ──
                     _copy_inputs_to_trace(inputs_h)
+                    _advance_device_seed()
                     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                     decode_logits = trace_output
                     t_enq_end = time.perf_counter()
@@ -334,6 +455,7 @@ def run_generation(
                     # ── Iteration 0: compile run + trace capture ──
                     # 1. Compile run (un-traced)
                     inputs_d = _inputs_to_device(inputs_h)
+                    _advance_device_seed()
                     decode_logits, _ = _fwd(inputs_d)
                     next_token = _extract_token(decode_logits)
                     generated_tokens.append(next_token)
@@ -352,6 +474,7 @@ def run_generation(
                     trace_device_inputs = _inputs_to_device(inputs_h2)
 
                     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                    _advance_device_seed()
                     trace_output, _ = _fwd(trace_device_inputs)
                     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
                     logger.info("Decode trace captured")
@@ -359,6 +482,7 @@ def run_generation(
                     # 3. Execute trace for current iteration
                     profiler.start(f"inference_decode_time_{iteration}", iteration=prompt_idx)
                     _copy_inputs_to_trace(inputs_h2)
+                    _advance_device_seed()
                     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                     decode_logits = trace_output
                     t_enq_end = time.perf_counter()
@@ -366,6 +490,7 @@ def run_generation(
                 else:
                     # ── No tracing: straightforward forward ──
                     inputs_d = _inputs_to_device(inputs_h)
+                    _advance_device_seed()
                     decode_logits, _ = _fwd(inputs_d)
                     t_enq_end = time.perf_counter()
 
@@ -542,7 +667,7 @@ def run_generation(
 
 @pytest.fixture
 def model_path():
-    return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-26B-A4B")
+    return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", DEFAULT_GEMMA4_MODEL)
 
 
 def test_demo_single_layer(device, model_path):
@@ -554,9 +679,86 @@ def test_demo_single_layer(device, model_path):
         prompts=prompts,
         max_new_tokens=8,
         num_layers=1,
+        allow_cpu_sampling_fallback=True,
     )
     assert len(results) == 1
     assert len(results[0]) > len(prompts[0])
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description="Gemma4 TTNN instruct text generation demo")
+    parser.add_argument(
+        "--model-path", default=os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", DEFAULT_GEMMA4_MODEL)
+    )
+    parser.add_argument("--tokenizer-path", default=os.getenv("GEMMA4_TOKENIZER_PATH"))
+    parser.add_argument("--prompt", action="append", default=None, help="Prompt text; may be passed more than once")
+    parser.add_argument("--prompt-file", type=Path, help="Text file with one prompt per line")
+    parser.add_argument("--max-new-tokens", type=int, default=64)
+    parser.add_argument("--max-seq-len", type=int, default=512)
+    parser.add_argument("--num-layers", type=int, default=None)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--top-k", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--sample", action="store_true", help="Use top-k/top-p/temperature sampling instead of greedy")
+    parser.add_argument("--base-completion", action="store_true", help="Bypass the tokenizer chat template")
+    parser.add_argument("--mesh-rows", type=int, default=1)
+    parser.add_argument("--mesh-cols", type=int, default=8)
+    parser.add_argument("--trace-region-size", type=int, default=50_000_000)
+    parser.add_argument("--page-block-size", type=int, default=64)
+    parser.add_argument("--disable-decode-trace", action="store_true")
+    parser.add_argument(
+        "--allow-cpu-sampling-fallback",
+        action="store_true",
+        help="Debug-only fallback for meshes without device-side sampling",
+    )
+    return parser.parse_args()
+
+
+def _collect_prompts(args):
+    prompts = list(args.prompt or [])
+    if args.prompt_file:
+        prompts.extend(line.strip() for line in args.prompt_file.read_text().splitlines() if line.strip())
+    if not prompts:
+        prompts = ["Explain in two sentences why paged attention helps LLM serving."]
+    return prompts
+
+
+def main():
+    args = _parse_args()
+    _set_fabric_1d()
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(args.mesh_rows, args.mesh_cols),
+        trace_region_size=args.trace_region_size,
+    )
+    try:
+        outputs = run_generation(
+            mesh_device=mesh_device,
+            model_path=args.model_path,
+            tokenizer_path=args.tokenizer_path,
+            prompts=_collect_prompts(args),
+            max_new_tokens=args.max_new_tokens,
+            num_layers=args.num_layers,
+            max_seq_len=args.max_seq_len,
+            page_params={
+                "page_block_size": args.page_block_size,
+                "page_max_num_blocks": args.max_seq_len // args.page_block_size,
+            },
+            enable_decode_trace=not args.disable_decode_trace,
+            instruct=not args.base_completion,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            seed=args.seed,
+            greedy=not args.sample,
+            allow_cpu_sampling_fallback=args.allow_cpu_sampling_fallback,
+        )
+        print("\n=== Gemma4 generated text ===")
+        for idx, output in enumerate(outputs):
+            print(f"\n--- Output {idx} ---")
+            print(output)
+    finally:
+        ttnn.close_mesh_device(mesh_device)
 
 
 @parametrize_mesh_with_fabric()
@@ -575,6 +777,11 @@ def test_demo(mesh_device, model_path):
         max_new_tokens=128,
         max_seq_len=4 * 1024,
         enable_decode_trace=True,
+        allow_cpu_sampling_fallback=mesh_device.get_num_devices() == 1,
     )
     assert len(results) == 1
     logger.info(f"Full model output: {results[0]}")
+
+
+if __name__ == "__main__":
+    main()

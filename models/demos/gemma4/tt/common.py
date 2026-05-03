@@ -16,7 +16,7 @@ import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
-from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from models.demos.gemma4.tt.model_config import DEFAULT_GEMMA4_MODEL, Gemma4ModelArgs
 
 
 def create_tt_model(
@@ -37,11 +37,7 @@ def create_tt_model(
     Returns:
         (model_args, model, tt_kv_cache, state_dict)
     """
-    model_path = (
-        model_path
-        or os.getenv("HF_MODEL")
-        or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-26B-A4B")
-    )
+    model_path = model_path or os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", DEFAULT_GEMMA4_MODEL)
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     model_args = Gemma4ModelArgs.from_hf_config(hf_config)

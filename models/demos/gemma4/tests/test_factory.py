@@ -16,9 +16,9 @@ import torch
 import ttnn
 
 from ..config import MeshConfig, ModeConfig
-from ..tt.model_config import Gemma4ModelArgs
+from ..tt.model_config import DEFAULT_GEMMA4_MODEL, Gemma4ModelArgs
 
-_DEFAULT_MODEL_PATH = "google/gemma-4-26B-A4B"
+_DEFAULT_MODEL_PATH = DEFAULT_GEMMA4_MODEL
 
 
 def _get_model_path():
