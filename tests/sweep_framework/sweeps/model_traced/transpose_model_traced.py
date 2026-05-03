@@ -130,12 +130,18 @@ def run(
         return mesh_tensor_to_torch(out, device if is_mesh_device else None)
 
     start_time = start_measuring_time()
+    _last_exc = None
     try:
         output_tensor = _run_transpose(input_tensor_a, op_kwargs)
-    except Exception:
+    except Exception as e:
         output_tensor = None
+        _last_exc = e
 
-    if output_tensor is not None and list(output_tensor.shape) != list(torch_output_tensor.shape):
+    if (
+        output_tensor is not None
+        and not is_mesh_device
+        and list(output_tensor.shape) != list(torch_output_tensor.shape)
+    ):
         output_tensor = None
 
     if output_tensor is None:
@@ -147,13 +153,15 @@ def run(
         # original input; if it still fails the trace was already captured.
         try:
             output_tensor = _run_transpose(input_tensor_a, fallback_kwargs)
-        except Exception:
+        except Exception as e:
             output_tensor = None
+            _last_exc = e
 
     e2e_perf = stop_measuring_time(start_time)
 
     if output_tensor is None:
-        return [(False, "transpose execution failed (trace captured)"), e2e_perf]
+        msg = f"transpose execution failed (trace captured): {type(_last_exc).__name__}: {str(_last_exc)[:200]}"
+        return [(False, msg), e2e_perf]
     if is_mesh_device:
         torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
