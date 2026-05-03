@@ -5,10 +5,8 @@
 Gemma4 Router: RMSNorm -> scale -> linear -> softmax -> topk -> normalize -> per_expert_scale -> scatter
 
 Fully on-device, trace-compatible. Returns dense routing weights [1,1,S,E] on device for sparse_matmul.
-Gemma4 uses softmax-THEN-topk (opposite of GPT-OSS).
-
-Following gpt_oss topk.py pattern: normalize via softmax on top-k subset,
-scatter into dense tensor on device, per_expert_scale via broadcast mul.
+Gemma4 uses softmax-THEN-topk (opposite of GPT-OSS). After selecting top-k
+probabilities, HF renormalizes by their sum, then applies per_expert_scale.
 """
 
 
@@ -109,8 +107,14 @@ class Gemma4Router:
         # 5. TopK — on device → values [1,1,S,k], indices [1,1,S,k]
         top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
 
-        # 6. Normalize top-k weights via softmax on the subset (gpt_oss pattern)
-        top_k_values = ttnn.softmax(top_k_values, dim=-1)
+        # 6. Normalize top-k probabilities by their sum, matching HF Gemma4TextRouter.
+        top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
+        top_k_inv_sum = ttnn.reciprocal(top_k_sum)
+        top_k_values_norm = ttnn.mul(top_k_values, top_k_inv_sum)
+        top_k_values.deallocate(True)
+        top_k_sum.deallocate(True)
+        top_k_inv_sum.deallocate(True)
+        top_k_values = top_k_values_norm
 
         # 7. Scatter into dense [1,1,S,E] — fully on device
         dense_routing = ttnn.scatter(

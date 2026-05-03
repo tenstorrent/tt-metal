@@ -18,7 +18,7 @@ import ttnn
 from ..config import MeshConfig, ModeConfig
 from ..tt.model_config import Gemma4ModelArgs
 
-_DEFAULT_MODEL_PATH = "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
+_DEFAULT_MODEL_PATH = "google/gemma-4-26B-A4B"
 
 
 def _get_model_path():
@@ -27,9 +27,7 @@ def _get_model_path():
 
 def is_moe_model():
     """Check if the current model has MoE enabled."""
-    from transformers import AutoConfig
-
-    config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    config = Gemma4ModelArgs.load_hf_config(_get_model_path())
     tc = getattr(config, "text_config", config)
     return getattr(tc, "enable_moe_block", False)
 
@@ -48,10 +46,8 @@ class TestFactory:
     @staticmethod
     def create_hf_config():
         """Create Gemma4ModelArgs from the real model checkpoint (HF_MODEL env var)."""
-        from transformers import AutoConfig
-
         model_path = _get_model_path()
-        hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        hf_config = Gemma4ModelArgs.load_hf_config(model_path)
         return Gemma4ModelArgs.from_hf_config(hf_config)
 
     @staticmethod
@@ -70,10 +66,8 @@ class TestFactory:
 
         Optionally override num_experts/top_k for faster testing.
         """
-        from transformers import AutoConfig
-
         model_path = _get_model_path()
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        config = Gemma4ModelArgs.load_hf_config(model_path)
         tc = config.text_config
         if num_experts is not None:
             tc.num_experts = num_experts

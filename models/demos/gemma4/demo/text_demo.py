@@ -30,6 +30,20 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.model_config import determine_device_name
 
 
+def _load_tokenizer(model_path):
+    from transformers import AutoTokenizer
+
+    try:
+        return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    except AttributeError as exc:
+        if "'list' object has no attribute 'keys'" not in str(exc):
+            raise
+        logger.warning(
+            "Installed Transformers cannot parse Gemma4 tokenizer extra_special_tokens list; retrying with empty mapping"
+        )
+        return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, extra_special_tokens={})
+
+
 def run_generation(
     mesh_device,
     model_path,
@@ -55,8 +69,6 @@ def run_generation(
     Returns:
         List of generated text strings
     """
-    from transformers import AutoTokenizer
-
     is_ci_env = os.environ.get("CI") == "true"
     batch_size = 1  # Gemma4 demo is single-user
 
@@ -65,7 +77,7 @@ def run_generation(
 
     # Load tokenizer
     profiler.start("loading_inputs")
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    tokenizer = _load_tokenizer(model_path)
     logger.info(f"Tokenizer loaded from {model_path}")
     profiler.end("loading_inputs")
 
@@ -530,9 +542,7 @@ def run_generation(
 
 @pytest.fixture
 def model_path():
-    return os.getenv("HF_MODEL") or os.getenv(
-        "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
-    )
+    return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-26B-A4B")
 
 
 def test_demo_single_layer(device, model_path):

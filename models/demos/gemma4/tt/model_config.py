@@ -13,9 +13,11 @@ Config is automatically loaded from the model checkpoint's config.json
 via HF AutoConfig. Specify model path via HF_MODEL env var.
 """
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from loguru import logger
@@ -87,9 +89,9 @@ class Gemma4ModelArgs:
         tc = getattr(hf_config, "text_config", hf_config)
         layer_types = tuple(tc.layer_types) if hasattr(tc, "layer_types") and tc.layer_types else None
 
-        rope_params = getattr(tc, "rope_parameters", {}) or {}
-        sliding_rope = rope_params.get("sliding_attention", {})
-        full_rope = rope_params.get("full_attention", {})
+        rope_params = cls._namespace_to_dict(getattr(tc, "rope_parameters", {}) or {})
+        sliding_rope = cls._namespace_to_dict(rope_params.get("sliding_attention", {}))
+        full_rope = cls._namespace_to_dict(rope_params.get("full_attention", {}))
 
         # num_global_key_value_heads: None means use same as sliding
         num_global_kv = getattr(tc, "num_global_key_value_heads", None)
@@ -133,7 +135,7 @@ class Gemma4ModelArgs:
         if dummy_weights:
             return {}
 
-        from pathlib import Path
+        weights_path = Gemma4ModelArgs._resolve_model_path(weights_path, allow_weights=True)
 
         safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
         if safetensor_files:
@@ -168,7 +170,79 @@ class Gemma4ModelArgs:
     @staticmethod
     def load_hf_config(model_path):
         """Load HuggingFace config."""
-        return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        try:
+            return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        except ValueError as exc:
+            if "model type `gemma4`" not in str(exc):
+                raise
+
+            config_path = Gemma4ModelArgs._resolve_config_path(model_path)
+            logger.warning(
+                "Installed transformers does not recognize Gemma4; parsing config.json directly from {}",
+                config_path,
+            )
+            with open(config_path) as f:
+                config = json.load(f)
+            return Gemma4ModelArgs._to_namespace(config, name_or_path=model_path)
+
+    @staticmethod
+    def _to_namespace(value, name_or_path=None):
+        if isinstance(value, dict):
+            namespace = SimpleNamespace(**{k: Gemma4ModelArgs._to_namespace(v) for k, v in value.items()})
+            if name_or_path is not None:
+                namespace._name_or_path = str(name_or_path)
+            return namespace
+        if isinstance(value, list):
+            return [Gemma4ModelArgs._to_namespace(v) for v in value]
+        return value
+
+    @staticmethod
+    def _namespace_to_dict(value):
+        if isinstance(value, SimpleNamespace):
+            return {k: Gemma4ModelArgs._namespace_to_dict(v) for k, v in vars(value).items()}
+        if isinstance(value, dict):
+            return {k: Gemma4ModelArgs._namespace_to_dict(v) for k, v in value.items()}
+        return value
+
+    @staticmethod
+    def _resolve_config_path(model_path):
+        candidate = Path(model_path)
+        if candidate.is_dir():
+            config_path = candidate / "config.json"
+            if not config_path.exists():
+                raise FileNotFoundError(f"Missing config.json under {candidate}")
+            return config_path
+        if candidate.is_file():
+            return candidate
+
+        from huggingface_hub import hf_hub_download
+
+        return Path(
+            hf_hub_download(
+                repo_id=str(model_path),
+                filename="config.json",
+                local_files_only=os.getenv("HF_HUB_OFFLINE") == "1",
+            )
+        )
+
+    @staticmethod
+    def _resolve_model_path(model_path, allow_weights=False):
+        candidate = Path(model_path)
+        if candidate.is_dir():
+            return candidate
+
+        from huggingface_hub import snapshot_download
+
+        allow_patterns = ["config.json", "model.safetensors.index.json"]
+        if allow_weights:
+            allow_patterns.append("*.safetensors")
+        return Path(
+            snapshot_download(
+                repo_id=str(model_path),
+                allow_patterns=allow_patterns,
+                local_files_only=os.getenv("HF_HUB_OFFLINE") == "1",
+            )
+        )
 
     # ── Generator compatibility properties ─────────────────────────────────
     # The tt_transformers Generator expects these attribute names.

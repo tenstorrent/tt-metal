@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for Gemma4 Router — uses HF Gemma4TextRouter as reference.
+"""Unit tests for Gemma4 Router.
 
 Router is replicated (no TP sharding on weights), but runs on mesh for consistency.
 
@@ -27,32 +27,35 @@ from ...tests.test_factory import (
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
 def test_router(batch_size, seq_len, mesh_device, reset_seeds):
-    """Test Router returns dense routing weights that match HF reference."""
-    hf_text_config = TestFactory.create_hf_text_config(num_experts=8, top_k=4)
-    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0)
-    hf_router = hf_layer.router
+    """Test Router returns dense routing weights that match the HF Gemma4 formula."""
+    hf_config = TestFactory.create_hf_config()
+    hf_config.num_experts = 32
+    hf_config.top_k_experts = 4
 
     state_dict = {
-        "scale": hf_router.scale.data.clone(),
-        "proj.weight": hf_router.proj.weight.data.clone(),
-        "per_expert_scale": hf_router.per_expert_scale.data.clone(),
+        "scale": torch.randn(hf_config.hidden_size, dtype=torch.bfloat16),
+        "proj.weight": torch.randn(hf_config.num_experts, hf_config.hidden_size, dtype=torch.bfloat16) * 0.02,
+        "per_expert_scale": torch.randn(hf_config.num_experts, dtype=torch.bfloat16),
     }
-
-    hf_config = TestFactory.create_hf_config()
-    hf_config.num_experts = 8
-    hf_config.top_k_experts = 4
 
     tt_router = Gemma4Router(mesh_device=mesh_device, hf_config=hf_config, state_dict=state_dict)
 
     x_torch = torch.randn(1, 1, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
 
-    # HF reference
+    # HF Gemma4TextRouter formula:
+    # RMSNorm without learned norm weight, learned scale / sqrt(hidden), linear,
+    # softmax over all experts, top-k, selected-probability sum renormalization,
+    # then per-expert scale.
     x_flat = x_torch.reshape(-1, hf_config.hidden_size).float()
     with torch.no_grad():
-        _, ref_weights, ref_indices = hf_router(x_flat)
-
-    ref_dense = torch.zeros(seq_len, 8)
-    ref_dense.scatter_(-1, ref_indices.to(torch.int64), ref_weights.float())
+        normed = x_flat * torch.rsqrt(torch.mean(x_flat * x_flat, dim=-1, keepdim=True) + hf_config.rms_norm_eps)
+        scaled = normed * state_dict["scale"].float() * (hf_config.hidden_size**-0.5)
+        router_probs = torch.softmax(scaled @ state_dict["proj.weight"].float().T, dim=-1)
+        ref_values, ref_indices = torch.topk(router_probs, k=hf_config.top_k_experts, dim=-1)
+        ref_values = ref_values / ref_values.sum(dim=-1, keepdim=True)
+        ref_dense = torch.zeros(seq_len, hf_config.num_experts)
+        ref_dense.scatter_(-1, ref_indices.to(torch.int64), ref_values.float())
+        ref_dense = ref_dense * state_dict["per_expert_scale"].float()
 
     # TT forward
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1

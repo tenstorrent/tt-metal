@@ -44,19 +44,13 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
         caches_4d: dict mapping layer_type -> (cos_tt, sin_tt) [1,1,max_seq_len,head_dim] for prefill
         caches_2d: dict mapping layer_type -> (cos_tt, sin_tt) [max_seq_len,head_dim] for decode embedding lookup
     """
-    from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
-
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
-
-    rope = Gemma4TextRotaryEmbedding(hf_config)
-    x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
-    pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
     caches_4d = {}
     caches_2d = {}
     for layer_type in set(hf_config.layer_types):
-        cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)
+        cos, sin = _create_text_rope_cache(hf_config, max_seq_len, layer_type)
         # cos, sin: [1, max_seq_len, head_dim]
 
         # 4D for prefill: [1, 1, max_seq_len, head_dim]
@@ -94,6 +88,47 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
         caches_2d[layer_type] = (cos_2d, sin_2d)
 
     return caches_4d, caches_2d
+
+
+def _create_text_rope_cache(hf_config, max_seq_len, layer_type):
+    """Generate Gemma4TextRotaryEmbedding cos/sin caches without requiring transformers>=5.5.
+
+    This mirrors HuggingFace Transformers v5.5.0 Gemma4TextRotaryEmbedding:
+    default RoPE for sliding layers and proportional RoPE for full-attention
+    layers, where zero inverse frequencies leave the non-rotary channels as
+    identity rotations.
+    """
+    rope_parameters = getattr(hf_config, "rope_parameters")
+    if not isinstance(rope_parameters, dict):
+        rope_parameters = vars(rope_parameters)
+    params = rope_parameters[layer_type]
+    if not isinstance(params, dict):
+        params = vars(params)
+    rope_type = params["rope_type"]
+    if rope_type == "proportional":
+        head_dim = getattr(hf_config, "global_head_dim")
+        base = params["rope_theta"]
+        factor = params.get("factor", 1.0)
+        rope_proportion = params.get("partial_rotary_factor", 1.0)
+        rope_angles = int(rope_proportion * head_dim // 2)
+        inv_freq_rotated = 1.0 / (base ** (torch.arange(0, 2 * rope_angles, 2, dtype=torch.float32) / head_dim))
+        nope_angles = head_dim // 2 - rope_angles
+        if nope_angles > 0:
+            inv_freq = torch.cat((inv_freq_rotated, torch.zeros(nope_angles, dtype=torch.float32)), dim=0)
+        else:
+            inv_freq = inv_freq_rotated
+        inv_freq = inv_freq / factor
+    elif rope_type == "default":
+        head_dim = getattr(hf_config, "head_dim")
+        base = params["rope_theta"]
+        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+    else:
+        raise ValueError(f"Unsupported Gemma4 RoPE type for TTNN cache creation: {rope_type}")
+
+    position_ids = torch.arange(max_seq_len, dtype=torch.float32).unsqueeze(0)
+    freqs = (inv_freq[None, :, None] @ position_ids[:, None, :]).transpose(1, 2)
+    emb = torch.cat((freqs, freqs), dim=-1)
+    return emb.cos(), emb.sin()
 
 
 class Gemma4Model:

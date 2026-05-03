@@ -122,6 +122,10 @@ def get_supported_trace_region_size(request, mesh_device):
             "T3K": 50000000,
             "TG": 50000000,
         },
+        "gemma-4-26B": {
+            "P150": 1000000,
+            "P150x8": 50000000,
+        },
         "Qwen2.5-72B": {
             "T3K": 70000000,
             "TG": 70000000,

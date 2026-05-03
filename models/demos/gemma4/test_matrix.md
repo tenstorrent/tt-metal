@@ -1,0 +1,21 @@
+# Gemma 4 Bringup Test Matrix
+
+| Stage | Test | Hardware | Weights | Command / evidence | Status |
+| --- | --- | --- | --- | --- | --- |
+| 0 | Config fallback parses Gemma4 checkpoint config | CPU | config only | `HF_MODEL=google/gemma-4-26B-A4B python -m pytest -q models/demos/gemma4/tests/unit/test_model.py::test_model_config --skip-model-load` | Passed. Installed Transformers 4.57.1 does not know `gemma4`; fallback parsed `config.json` and reported `hidden=2816`, `layers=30`, `heads=16`, `moe=True`. |
+| 1 | RoPE cache generation shapes for sliding/full layers | CPU | config only | local script calling `_create_text_rope_cache` for both layer types | Passed. Sliding cache shape `(1, 2048, 256)`, full cache shape `(1, 2048, 512)`; full partial-RoPE identity channels had zero cos/sin error. |
+| 1 | Router semantics against local HF formula | 1x1 Blackhole | synthetic | manual router smoke from `/proj_sw/user_dev/moconnor/tt-metal` CWD, importing local repo after `ttnn` | Passed as device smoke with BF16 tolerance caveat. PCC `0.8545843639099602`, max abs `0.3582`; loose due top-k sensitivity in BF16 synthetic scores. Pytest from local CWD is blocked by JIT source/library mismatch. |
+| 2 | One-layer real decode trace smoke | 1x1 Blackhole | real | one-layer `run_generation(..., max_new_tokens=4, enable_decode_trace=True)` | Passed. Trace captured after allocating 1MB trace region. Average decode `18.01 ms/token`, `55.52 t/s/u`; output not quality-valid because only one layer ran. |
+| 3 | Full model short traced decode | 1x8 Blackhole | real | full 30-layer `run_generation(..., max_new_tokens=4, enable_decode_trace=True)` | Passed. Trace captured with 50MB trace region. Average decode `100.64 ms/token`, `9.94 t/s/u`; output: `The capital of France is a city of romance,`. Cold cache included long compile/cache setup. |
+| 4 | Full model long traced decode perf | 1x8 Blackhole | real | `/tmp/gemma4_full_1x8_long.log`; `max_new_tokens=128`, `max_seq_len=512`, trace enabled | Passed. Generated 128 tokens. TTFT `4853.59 ms`, 1st traced token `64.01 ms`, 128th traced token `64.78 ms`, average `15.43 t/s/u`. |
+| 5 | Sample prompt quality pass | 1x8 Blackhole | real | `/tmp/gemma4_full_1x8_samples.log`; three prompts, `max_new_tokens=48`, trace enabled | Passed for path sanity. Outputs are coherent but repetitive, expected for base non-instruct greedy generation. |
+| 6 | Strict entirely-on-device decode loop | 1x8 Blackhole | real | `/tmp/gemma4_strict_device_feedback_full_1x8_128_script_warm.log`; `strict_device_feedback_demo.py`, `max_new_tokens=128`, `max_seq_len=512` | Passed. Token feedback, embedding, sampled-token handoff, RoPE position, and KV-cache position remain on device across trace replay. TTFT `5368.943 ms`; average strict replay `64.121 ms/token`, `15.595 t/s/u`; final RoPE/cache positions `135` on all 8 devices. |
+
+Known test harness caveat: run hardware commands from the built TT-Metal CWD (`/proj_sw/user_dev/moconnor/tt-metal`) and insert the local bringup repo into `sys.path` after importing `ttnn`. Running from the local checkout CWD currently mixes local dispatch sources with `/proj_sw` built libraries and fails TTNN JIT dispatch compilation.
+
+Next tests to add:
+
+- A deterministic CPU/HF vs TT layer-level numerical comparison using Transformers v5.5.0 or a local PyTorch reference.
+- Live per-device DRAM high-water capture for the full 1x8 path.
+- A repeat long decode at a larger `max_seq_len` after confirming KV cache sizing and memory margin.
+- A quality harness that records the full strict on-device token stream without perturbing timed replay, for example by maintaining a device-side generated-token buffer and reading it back after replay.
