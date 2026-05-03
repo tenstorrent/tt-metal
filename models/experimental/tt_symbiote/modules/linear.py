@@ -78,13 +78,7 @@ class TTNNLinear(TTNNModule):
         """Forward pass through linear layer."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        input_tensor_shape = list(input_tensor.shape)
-        input_shape = list(input_tensor_shape)
-        while len(input_shape) < 4:
-            input_shape.insert(1, 1)  # Add batch dimensions if needed
-        input_tensor = ttnn.reshape(input_tensor, input_shape)
         tt_output = ttnn.linear(input_tensor, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
         return tt_output
 
 
@@ -135,18 +129,13 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
         """Forward pass through linear layer."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        input_tensor_shape = list(input_tensor.shape)
-        input_shape = list(input_tensor_shape)
-        while len(input_shape) < 4:
-            input_shape.insert(1, 1)  # Add batch dimensions if needed
-        input_tensor = ttnn.reshape(input_tensor, input_shape)
         linear_kwargs = dict(memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if self.compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = self.compute_kernel_config
         tt_output = ttnn.linear(input_tensor, self.tt_weight, **linear_kwargs)
         tt_output = ttnn.reduce_scatter(
             tt_output,
-            dim=3,
+            dim=-1,
             num_links=1,
             cluster_axis=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -154,7 +143,6 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
         )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
-        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
 
 
@@ -171,14 +159,6 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        input_tensor_shape = list(input_tensor.shape)
-        input_shape = list(input_tensor_shape)
-        if len(input_shape) == 2:
-            input_shape.insert(0, 1)  # Add batch dimension if missing
-        if len(input_shape) == 3:
-            input_shape.insert(1, 1)  # Add batch dimensions if needed
-        input_tensor = ttnn.reshape(input_tensor, input_shape)
-
         # Matmul: partial sum on each device
         linear_kwargs = dict(memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if self.compute_kernel_config is not None:
@@ -189,7 +169,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         # is incompatible with TTNN trace capture (requires stable buffer addresses).
         tt_output = ttnn.reduce_scatter(
             tt_output,
-            dim=3,
+            dim=-1,
             num_links=1,
             cluster_axis=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -197,7 +177,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         )
         tt_output = ttnn.all_gather(
             tt_output,
-            dim=3,
+            dim=-1,
             num_links=1,
             cluster_axis=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -206,7 +186,6 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
         if self.tt_bias is not None:
             tt_output += self.tt_bias
 
-        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
 
 
@@ -299,18 +278,12 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         """Forward pass through linear layer."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        input_tensor_shape = list(input_tensor.shape)
-        input_shape = list(input_tensor_shape)
-        while len(input_shape) < 4:
-            input_shape.insert(1, 1)  # Add batch dimensions if needed
-        input_tensor = ttnn.reshape(input_tensor, input_shape)
         linear_kwargs = dict(memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if self.compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = self.compute_kernel_config
         tt_output = ttnn.linear(input_tensor, self.tt_weight, **linear_kwargs)
         if self.tt_bias is not None:
             tt_output += self.tt_bias
-        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
 
 

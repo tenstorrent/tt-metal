@@ -350,25 +350,14 @@ class TTNNGemma4Attention(TTNNModule):
         )
 
     def _apply_per_head_norm(self, states, norm_module, batch_size, seq_length, num_heads, head_dim):
-        """Apply per-head RMSNorm by flattening to [batch*seq*heads, head_dim].
+        """Apply per-head RMSNorm directly on 4D [B, S, H, D] input.
 
-        Args:
-            states: Tensor of shape [batch, seq, num_heads, head_dim]
-            norm_module: TTNNLocalRMSNorm instance
-            batch_size: Batch size
-            seq_length: Sequence length
-            num_heads: Number of heads
-            head_dim: Head dimension
-
-        Returns:
-            Normalized tensor of shape [batch, seq, num_heads, head_dim]
+        ttnn.rms_norm normalizes over the last dimension for any input rank.
+        Prerequisite: verified by test_change1_rms_norm_4d.py (PCC >= 0.999 for
+        both 4D prefill and 2D decode inputs with [1, D] weight).
+        Eliminates 6 reshape ops (3 flatten + 3 restore) across Q/K/V norm calls.
         """
-        orig_shape = states.shape
-        # Flatten to 2D for rms_norm: [batch * seq * num_heads, head_dim]
-        states = ttnn.reshape(states, (batch_size * seq_length * num_heads, head_dim))
-        states = norm_module(states)
-        states = ttnn.reshape(states, orig_shape)
-        return states
+        return norm_module(states)
 
     def _project_qkv(self, hidden_states, batch_size, seq_length, apply_rope=False, for_decode=False):
         """Project hidden states to Q, K, V via fused QKV matmul and apply per-head norms.
@@ -423,9 +412,9 @@ class TTNNGemma4Attention(TTNNModule):
             if self.v_norm is not None:
                 value_states = self.v_norm(value_states)
 
-            query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_attention_heads, self.head_dim))
-            key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
-            value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
+            query_states = ttnn.reshape(query_states, (1, batch_size, self.num_attention_heads, self.head_dim))
+            key_states = ttnn.reshape(key_states, (1, batch_size, self.num_key_value_heads, self.head_dim))
+            value_states = ttnn.reshape(value_states, (1, batch_size, self.num_key_value_heads, self.head_dim))
         else:
             # Prefill path: standard reshape chain
             query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_attention_heads, self.head_dim))
@@ -740,12 +729,9 @@ class TTNNGemma4Attention(TTNNModule):
         query_states, key_states, value_states = self._project_qkv(
             hidden_states, batch_size, seq_length, for_decode=True
         )
-
-        # Reshape Q/K/V from [B, S, H, D] to [1, B, H, D] for decode RoPE.
-        # With for_decode=True and S=1: [1,1,H,D] -> [1,1,H,D] (same values, no permute needed).
-        query_states = ttnn.reshape(query_states, (1, batch_size, self.num_attention_heads, self.head_dim))
-        key_states = ttnn.reshape(key_states, (1, batch_size, self.num_key_value_heads, self.head_dim))
-        value_states = ttnn.reshape(value_states, (1, batch_size, self.num_key_value_heads, self.head_dim))
+        assert (
+            query_states.shape[0] == 1 and query_states.shape[1] == batch_size
+        ), f"_project_qkv(for_decode=True) must return [1, {batch_size}, H, D]; got {query_states.shape}"
 
         # Typecast to bfloat16 for rotary_embedding
         if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
@@ -763,8 +749,8 @@ class TTNNGemma4Attention(TTNNModule):
         # Gather position-specific cos/sin via ttnn.embedding
         cos_pos = ttnn.embedding(rope_position_idx, cos_cache, layout=ttnn.TILE_LAYOUT)
         sin_pos = ttnn.embedding(rope_position_idx, sin_cache, layout=ttnn.TILE_LAYOUT)
-        cos_pos = ttnn.unsqueeze_to_4D(cos_pos)  # [1, 1, batch_pad, head_dim]
-        sin_pos = ttnn.unsqueeze_to_4D(sin_pos)
+        cos_pos = ttnn.reshape(cos_pos, (1, 1, cos_pos.shape[-2], cos_pos.shape[-1]))
+        sin_pos = ttnn.reshape(sin_pos, (1, 1, sin_pos.shape[-2], sin_pos.shape[-1]))
 
         # Apply RoPE with token_index=0 (gathered cache already has the right position data)
         query_states, key_states = self._apply_rope(query_states, key_states, cos_pos, sin_pos, token_index=0)
