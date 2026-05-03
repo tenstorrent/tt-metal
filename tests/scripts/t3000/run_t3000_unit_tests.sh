@@ -148,6 +148,21 @@ except Exception as e:
     # Attempt one recovery reset before failing the job entirely.
     echo "LOG_METAL: [FIX TL] T3K topology damaged after warm-up (${n_chips}/8 chips) — attempting recovery via tt-smi -r"
     timeout 30 tt-smi -r || true
+    # FIX TM (#42429): after tt-smi -r, base-UMD firmware on non-MMIO ETH cores needs time to
+    # initialise before topology discovery can reach them via relay.  A bare GetNumAvailableDevices()
+    # call immediately after the reset races against firmware boot and returns only MMIO chips (4).
+    # Re-run the full FIX GS-3 warm-up first: it opens/closes the mesh (which triggers relay
+    # establish + base-UMD quiesce) so that the subsequent topology check sees all 8 chips.
+    python3 -u -c "
+import sys
+try:
+    import ttnn
+    m = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    ttnn.close_mesh_device(m)
+    print('[FIX TM] post-TL warm-up complete — relay re-established after recovery reset')
+except Exception as e:
+    print(f'[FIX TM] WARNING: post-TL warm-up failed ({e}) — topology check may still see degraded state', file=sys.stderr)
+" 2>&1 || true
     raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null)
     n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)
     if [[ -z "$n_chips" ]]; then n_chips="ERROR"; fi
@@ -156,7 +171,7 @@ except Exception as e:
       echo "LOG_METAL: Hardware needs host reboot or engineer attention." >&2
       exit 1
     fi
-    echo "LOG_METAL: [FIX TL] topology recovered: ${n_chips}/8 chips visible after reset."
+    echo "LOG_METAL: [FIX TL/TM] topology recovered: ${n_chips}/8 chips visible after reset+warm-up."
   fi
   echo "LOG_METAL: T3K topology OK — ${n_chips}/8 chips visible."
 
