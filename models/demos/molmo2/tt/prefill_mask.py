@@ -6,9 +6,10 @@
 Image tokens (token_type_ids == 1) attend to ALL other image tokens regardless
 of causal order. Text tokens remain strictly causal.
 
-Built entirely on device using TTNN ops — no CPU mask construction, no full
-[S, S] CPU tensor, no blocking D2H. Only the is_mm boolean vector [B, S] is
-computed on CPU and uploaded as two small [B, 1, S, 1] / [B, 1, 1, S] tensors.
+Built entirely on device using TTNN ops. The causal lower-triangular mask is
+static (depends only on S, never on the input) and can be pre-built once during
+model init via build_causal_mask_cache(). At inference time, passing the cached
+causal tensor skips the 32 MB H2D upload and ttnn.tril call.
 """
 
 import torch
@@ -16,11 +17,32 @@ import torch
 import ttnn
 
 
+def build_causal_mask(seq_len: int, mesh_device) -> ttnn.Tensor:
+    """Build a causal lower-triangular 1s mask [1, 1, S, S] on device.
+
+    Called during model init for each bucket size. Result should be cached
+    and passed to build_molmo2_prefill_mask as causal_cache.
+    """
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    ones = ttnn.from_torch(
+        torch.ones(1, 1, seq_len, seq_len, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mapper,
+    )
+    causal = ttnn.tril(ones)
+    ttnn.deallocate(ones)
+    return causal
+
+
 def build_molmo2_prefill_mask(
     seq_len: int,
     token_type_ids: torch.Tensor,
     mesh_device,
     dtype=ttnn.bfloat16,
+    causal_cache: ttnn.Tensor = None,
 ) -> ttnn.Tensor:
     """Build the combined causal + image-bidirectional 4D attention mask on device.
 
@@ -28,7 +50,10 @@ def build_molmo2_prefill_mask(
         seq_len: sequence length S (must equal token_type_ids.shape[1])
         token_type_ids: [B, S] CPU tensor (non-zero = image/multimodal token)
         mesh_device: TTNN mesh device
-        dtype: output dtype (bfloat16 or bfloat8_b to save memory at large ISL)
+        dtype: output dtype
+        causal_cache: optional pre-built [1, 1, S, S] lower-triangular mask from
+            build_causal_mask(). When provided, skips the 32 MB H2D ones upload
+            and ttnn.tril call. Must match seq_len.
 
     Returns:
         mask [B, 1, S, S] TTNN tensor replicated across devices.
@@ -58,13 +83,20 @@ def build_molmo2_prefill_mask(
     ttnn.deallocate(is_mm_k)
 
     # causal = lower-triangular 1s [1, 1, S, S]
-    ones = _upload(torch.ones(1, 1, S, S))
-    causal = ttnn.tril(ones)
-    ttnn.deallocate(ones)
+    # Use pre-built cache when available — avoids 32 MB H2D + ttnn.tril per call
+    if causal_cache is not None:
+        causal = causal_cache
+        owns_causal = False
+    else:
+        ones = _upload(torch.ones(1, 1, S, S))
+        causal = ttnn.tril(ones)
+        ttnn.deallocate(ones)
+        owns_causal = True
 
     # allowed = causal OR img_mm  (max of 0/1 floats)
     allowed = ttnn.maximum(causal, img_mm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(causal)
+    if owns_causal:
+        ttnn.deallocate(causal)
     ttnn.deallocate(img_mm)
 
     # Convert to additive bias: 0.0 where allowed, -inf where blocked

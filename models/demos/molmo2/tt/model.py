@@ -53,7 +53,7 @@ from models.demos.molmo2.tt.attention import TtMolmo2TextAttention
 from models.demos.molmo2.tt.image_pooling import TtMolmo2ImagePooling2D
 from models.demos.molmo2.tt.image_projector import TtMolmo2ImageProjector
 from models.demos.molmo2.tt.mlp import TtMolmo2TextMLP
-from models.demos.molmo2.tt.prefill_mask import build_molmo2_prefill_mask
+from models.demos.molmo2.tt.prefill_mask import build_causal_mask, build_molmo2_prefill_mask
 from models.demos.molmo2.tt.vision_encoder import TtMolmo2ViTEncoder
 from models.tt_transformers.tt.common import Mode, precompute_freqs
 
@@ -283,6 +283,16 @@ class TtMolmo2Model(LightweightModule):
             cfg=configuration,
             weight_cache_path=weight_cache_path,
         )
+
+        # ------------------------------------------------------------------ #
+        # Causal mask cache — built once at init for each bucket ≤ 8192.
+        # Avoids the 32 MB H2D upload + ttnn.tril per forward_prefill call.
+        # Buckets > 8192 (512 MB+ each) are built dynamically.
+        # ------------------------------------------------------------------ #
+        _MAX_CACHED_MASK_S = 8192
+        self._causal_masks: dict = {}
+        for s in [b for b in PREFILL_BUCKETS if b <= _MAX_CACHED_MASK_S]:
+            self._causal_masks[s] = build_causal_mask(s, mesh_device)
 
         # ------------------------------------------------------------------ #
         # Prefill trace state — populated by warmup_all_buckets()
@@ -1001,7 +1011,13 @@ class TtMolmo2Model(LightweightModule):
                 tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, pad_len, dtype=torch.long)], dim=1)
             else:
                 tti_padded = token_type_ids.long()
-            attn_mask = build_molmo2_prefill_mask(S_pad, tti_padded, self.mesh_device, dtype=ttnn.bfloat16)
+            attn_mask = build_molmo2_prefill_mask(
+                S_pad,
+                tti_padded,
+                self.mesh_device,
+                dtype=ttnn.bfloat16,
+                causal_cache=self._causal_masks.get(S_pad),
+            )
 
         rot_mats = self._get_rot_mats_prefill(S_pad)
 
