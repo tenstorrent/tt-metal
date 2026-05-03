@@ -195,6 +195,20 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
             if k == "sub_core_grids" and v is None:
                 continue
             result[k] = normalize(v, _parent_key=k)
+        # shard_spec.grid is logically a set of CoreRanges — sort the entries so
+        # master/sweep traces with the same grids in different orders compare equal.
+        if "grid" in result and isinstance(result["grid"], list):
+            try:
+                result["grid"] = sorted(
+                    result["grid"],
+                    key=lambda g: (
+                        (g.get("start", {}).get("x", 0), g.get("start", {}).get("y", 0))
+                        if isinstance(g, dict)
+                        else (0, 0)
+                    ),
+                )
+            except (TypeError, AttributeError):
+                pass
         return result
     if isinstance(obj, list):
         return [normalize(item, _parent_key=_parent_key) for item in obj]

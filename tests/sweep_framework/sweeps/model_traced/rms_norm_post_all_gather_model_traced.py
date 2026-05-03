@@ -101,7 +101,11 @@ def run(
         shape
     )
 
-    # Weight shape: [1, 1, hidden_dim//32, 32] in ROW_MAJOR_LAYOUT, matching model usage
+    # Weight shape: [1, 1, hidden_dim//32, 32] in ROW_MAJOR_LAYOUT, matching
+    # the kernel's required gamma format. Master's traced arg1 metadata can
+    # show e.g. [1,1,8,256] TILE (the model's in-flight state), but the
+    # ttnn.rms_norm_post_all_gather kernel rejects that combo (gamma last-dim
+    # must equal input last-dim). Stick with the kernel-compatible default.
     weight_sticks = max(hidden_dim // 32, 1)
     weight_4d_shape = (1, 1, weight_sticks, 32)
     weight_size = weight_sticks * 32
