@@ -262,14 +262,17 @@ def run_profiled_forward(model, cfg, input_ids, pv, pool_idx, token_type_ids) ->
         proj_cpu = ttnn.to_torch(ttnn.get_device_tensors(proj_out)[0]).float().squeeze(0).squeeze(0)
         ttnn.deallocate(proj_out)
 
-        # --- 5. Scatter injection: D2H full embedding + CPU scatter-add + H2D ---
+        # --- 5. Scatter injection: dense zero delta + ttnn.add (no D2H) ---
         t0 = time.perf_counter()
-        x_cpu = ttnn.to_torch(ttnn.get_device_tensors(x_tt)[0]).float()
-        ttnn.deallocate(x_tt)
         H = cfg.dim
         is_patch = input_ids.view(-1) == cfg.image_patch_id
-        x_cpu.view(-1, H)[is_patch] += proj_cpu.to(x_cpu.dtype)
-        x_tt = _from_torch(x_cpu.view(1, 1, S, H).to(torch.bfloat16), mesh)
+        delta = torch.zeros(1, 1, S, H, dtype=torch.bfloat16)
+        delta.view(-1, H)[is_patch] = proj_cpu.to(torch.bfloat16)
+        delta_tt = _from_torch(delta, mesh)
+        x_tt = ttnn.to_layout(x_tt, ttnn.TILE_LAYOUT)
+        x_tt = ttnn.reshape(x_tt, [1, 1, S, H])
+        x_tt = ttnn.add(x_tt, delta_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(delta_tt)
         _sync(mesh)
         timings["5_scatter_injection"] = time.perf_counter() - t0
 
@@ -283,8 +286,7 @@ def run_profiled_forward(model, cfg, input_ids, pv, pool_idx, token_type_ids) ->
         n_crops_out = 0
         N_pooled_out = 0
         N_valid = 0
-
-    x_tt = ttnn.reshape(x_tt, [1, 1, S, cfg.dim])
+        x_tt = ttnn.reshape(x_tt, [1, 1, S, cfg.dim])
 
     # ------------------------------------------------------------------ #
     # 6. Prefill padding + attention mask build (CPU + H2D upload)
@@ -412,7 +414,7 @@ _STAGE_META = [
     ("2_vit_encode", "ViT encode (25 blks, all crops)", "TTNN"),
     ("3_image_pooling_cpu", "Image pooling (cross-attn)", "TTNN"),
     ("4_image_projector", "Image projector (SwiGLU)", "TTNN"),
-    ("5_scatter_injection", "Scatter inject (D2H+add+H2D)", "CPU"),
+    ("5_scatter_injection", "Scatter inject (delta+ttnn.add)", "TTNN"),
     ("6_prefill_mask", "Prefill mask (img_mm+max+where)", "TTNN"),
     ("7_rope_setup", "RoPE setup (cached=near-zero)", "CPU"),
     ("8_decoder_blocks", "36 decoder blocks", "TTNN"),
