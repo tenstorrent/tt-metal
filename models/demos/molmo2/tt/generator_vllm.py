@@ -109,6 +109,7 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
     ):
         """Called by TTModelLoader after vLLM resolves TTMolmo2ForConditionalGeneration."""
         import os
+        import shutil
 
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
@@ -125,6 +126,13 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         weight_cache_path = Path(os.environ.get("TT_CACHE_PATH", "/tmp/molmo2_weight_cache"))
         weight_cache_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Using weight cache at {weight_cache_path}")
+
+        # Clear any stale transformers module cache for this model to prevent
+        # a mismatched modeling_molmo2.py from a previous partial HF download.
+        _modules_cache = Path.home() / ".cache" / "huggingface" / "modules" / "transformers_modules"
+        for _stale in _modules_cache.glob("*Molmo2*"):
+            logger.info(f"Removing stale module cache: {_stale}")
+            shutil.rmtree(_stale, ignore_errors=True)
 
         logger.info("Loading HF state dict (bfloat16)...")
         hf = AutoModelForImageTextToText.from_pretrained(
