@@ -27,12 +27,12 @@ import ttnn
 # ---- Prefill sequence-length bucketing ----
 # Sequences are padded to the nearest bucket so the same JIT-compiled kernel
 # (and optionally the same trace) can be reused across similar-length inputs.
-PREFILL_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192]
-# Default warmup bucket sizes. Capped at 4096 because:
-# - 8192 trace reserves ~720 MB permanently, which with 5 GB weights causes OOM
-#   when the vision backbone (30 frames) runs during inference.
-# - Sequences padded to 8192 compile their kernels lazily on first use and run
-#   in eager mode (no trace), which is still fast after the first compile.
+# Extended to 32768 to cover long video prompts (384 frames ≈ S~34k → pads to 65536,
+# but typical 105-test videos hit at most ~16k tokens).
+PREFILL_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+# Trace-capture is capped at 4096: larger traces permanently reserve DRAM that
+# OOMs alongside the vision backbone weights.
+# JIT compilation (use_trace=False) has no such constraint.
 DEFAULT_WARMUP_BUCKETS = [128, 256, 512, 1024, 2048, 4096]
 MAX_TRACE_BUCKET = 4096
 
@@ -484,6 +484,57 @@ class TtMolmo2Model(LightweightModule):
 
         n = len(self._prefill_traces)
         print(f"[prefill warmup] done — {n} traces, {len(valid) - n} JIT-compiled", flush=True)
+
+    def warmup_vision_compile(self) -> None:
+        """Pre-compile all vision (ViT + pooling + projector) JIT kernels.
+
+        Runs dummy forward passes for every possible last-chunk size so that no
+        cold compilation happens at inference time regardless of the input video.
+
+        Two sources of shape variation:
+          1. ViT chunks (_MAX_VIT_BATCH=8): last chunk can be 1..8 crops.
+          2. Pooling chunks (_POOL_CHUNK_WINDOWS=4096): with 81 windows/frame,
+             last chunk can be any N_pooled from 1..4096 windows. We compile
+             for multiples of 81 (1..50 frames) to cover any video up to
+             50 frames per chunk (covers full 384-frame videos in 8 chunks
+             of ≤50 frames each).
+
+        For image inputs: n_out=169 (13×13), k_pool=4 (2×2). Compile b=1..9
+        crops to cover all single-image and multi-crop cases.
+        """
+
+        N_PATCHES = 729
+        _MAX_VIT_BATCH = 8
+        _POOL_CHUNK_WINDOWS = self._POOL_CHUNK_WINDOWS
+
+        # ---- Video: k_pool=9 (3×3), n_out=81 per frame ----
+        N_OUT_VIDEO = 81
+        K_POOL_VIDEO = 9
+        # Compile 1..16 frames per chunk to cover all possible last-chunk sizes
+        # (_POOL_CHUNK_WINDOWS=4096, 4096/81=50 frames max per chunk,
+        #  but last-chunk shape only matters when b < full_chunk_frames)
+        print("[vision warmup] video k_pool=9: b=1..16 frames", flush=True)
+        for b in range(1, 17):
+            n_pooled = b * N_OUT_VIDEO
+            print(f"  b={b} frames (N_pooled={n_pooled}) ...", flush=True)
+            dummy_pv = torch.zeros(1, b, N_PATCHES, 588)
+            dummy_idx = torch.zeros(1, n_pooled, K_POOL_VIDEO, dtype=torch.long)
+            _ = self.run_vision_backbone(dummy_pv, dummy_idx)
+            print(f"  b={b} done", flush=True)
+
+        # ---- Image: k_pool=4 (2×2), n_out=169 per crop ----
+        N_OUT_IMAGE = 169
+        K_POOL_IMAGE = 4
+        print("[vision warmup] image k_pool=4: b=1..9 crops", flush=True)
+        for b in range(1, 10):
+            n_pooled = b * N_OUT_IMAGE
+            print(f"  b={b} crops (N_pooled={n_pooled}) ...", flush=True)
+            dummy_pv = torch.zeros(1, b, N_PATCHES, 588)
+            dummy_idx = torch.zeros(1, n_pooled, K_POOL_IMAGE, dtype=torch.long)
+            _ = self.run_vision_backbone(dummy_pv, dummy_idx)
+            print(f"  b={b} done", flush=True)
+
+        print("[vision warmup] done", flush=True)
 
     # ------------------------------------------------------------------ #
     # Decode trace helpers
