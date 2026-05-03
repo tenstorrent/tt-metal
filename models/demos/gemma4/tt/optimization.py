@@ -88,7 +88,7 @@ def env_weight_dtype(env_name: str, default):
 def precision_profile_name() -> str:
     """Return the active Gemma4 precision profile name."""
 
-    raw = os.getenv("GEMMA4_PRECISION_PROFILE", "mixed_bfp8")
+    raw = os.getenv("GEMMA4_PRECISION_PROFILE", "bf16")
     key = raw.strip().lower()
     profile = _PRECISION_PROFILE_ALIASES.get(key)
     if profile is None:

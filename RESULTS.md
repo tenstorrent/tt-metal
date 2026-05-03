@@ -78,7 +78,7 @@ Code changes made or preserved toward this milestone:
 - Added `models/demos/gemma4/demo/strict_device_feedback_demo.py`, a reproducible batch=1 strict decode harness that keeps next-token feedback and both position counters on device across TTNN trace replay.
 - Added `models/demos/gemma4/demo/instruct_demo.py`, a user-facing CLI around the text demo.
 - Added `models/demos/gemma4/tt/generator_vllm.py`, a minimum vLLM adapter for batch=1, `tt_data_parallel=1`, paged-attention page tables, and mixed sliding/global KV-cache geometry.
-- Added dtype profiling knobs for attention, shared MLP, routed experts, and lm head through `GEMMA4_*_WEIGHT_DTYPE`.
+- Added dtype profiling knobs for attention, shared MLP, routed experts, and lm head through `GEMMA4_*_WEIGHT_DTYPE`, plus an opt-in `GEMMA4_PRECISION_PROFILE=mixed_bfp8` profile.
 
 ## 2026-05-03 Instruct/VLLM/Optimization Update
 
@@ -151,10 +151,13 @@ vLLM status:
 Weight dtype probes:
 
 - BF16 remains the only default.
+- `GEMMA4_PRECISION_PROFILE=bf16` is the implicit default. `GEMMA4_PRECISION_PROFILE=mixed_bfp8` is opt-in and keeps embeddings, norms, router auxiliaries, KV cache, RoPE, and LM head in BF16 while using BFP8 for attention, shared-MLP, and routed-expert projection weights.
 - BFP8 probe command set `GEMMA4_ATTENTION_WEIGHT_DTYPE=bfp8`, `GEMMA4_SHARED_MLP_WEIGHT_DTYPE=bfp8`, `GEMMA4_EXPERT_WEIGHT_DTYPE=bfp8`, and `GEMMA4_LM_HEAD_WEIGHT_DTYPE=bfp8` for a one-layer 1x8 smoke. Log: `/tmp/gemma4_it_bfp8_1layer_probe.log`.
 - BFP8 generated BFLOAT8_B caches for lm head, attention, shared MLP, and routed experts, then executed prefill and one decode compile. It emitted EOS immediately (`first token: 1 = '<eos>'`), so BFP8 is not quality-usable as a default without numerical work.
 - BFP4 probe command set the same four env vars to `bfp4`. Final warm log: `/tmp/gemma4_it_bfp4_1layer_probe_final.log`.
 - BFP4 generated and loaded BFLOAT4_B caches for lm head, attention, shared MLP, and routed experts, then executed prefill. It also emitted EOS immediately, so BFP4 is not quality-usable as a default.
+- Full mixed-profile probe command set `GEMMA4_PRECISION_PROFILE=mixed_bfp8` for a 30-layer 1x8 instruct smoke. Log: `/tmp/gemma4_precision_ab_mixed_bfp8_full.log`.
+- Mixed profile generated all BFP8 projection caches, created the model in `509.1s`, and prefill still selected the expected first token (`202690 = 'Paged'`). Decode did not advance after entering trace/device-sampling decode for over 18 minutes and was stopped with SIGTERM. This distinguishes the all-BFP8 one-layer immediate-EOS result from the conservative mixed profile: mixed is not obviously broken at prefill, but it is not practical or validated enough to be default.
 
 Focused verification after these changes:
 
@@ -166,6 +169,17 @@ HF_HOME=/proj_sw/user_dev/moconnor/hf-cache HF_HUB_OFFLINE=1 \
 ```
 
 Result: `12 passed, 1 warning in 2.98s`.
+
+Follow-up verification after restoring BF16 as the implicit precision profile:
+
+```bash
+HF_HOME=/proj_sw/user_dev/moconnor/hf-cache HF_HUB_OFFLINE=1 \
+/proj_sw/user_dev/moconnor/tt-metal/python_env/bin/python -m pytest -q \
+  models/demos/gemma4/tests/unit/test_optimization_config.py \
+  models/demos/gemma4/tests/unit/test_vllm_integration.py
+```
+
+Result: `18 passed, 1 warning in 4.57s`.
 
 ## Commands
 

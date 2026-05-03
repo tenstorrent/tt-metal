@@ -41,12 +41,12 @@ def test_env_weight_dtype_rejects_unknown_dtype(monkeypatch):
         env_weight_dtype("GEMMA4_EXPERT_WEIGHT_DTYPE", ttnn.bfloat16)
 
 
-def test_precision_profile_default_is_mixed_bfp8(monkeypatch):
+def test_precision_profile_default_is_bf16(monkeypatch):
     monkeypatch.delenv("GEMMA4_PRECISION_PROFILE", raising=False)
     monkeypatch.delenv("GEMMA4_EXPERT_GATE_WEIGHT_DTYPE", raising=False)
     monkeypatch.delenv("GEMMA4_EXPERT_WEIGHT_DTYPE", raising=False)
 
-    assert precision_profile_name() == "mixed_bfp8"
+    assert precision_profile_name() == "bf16"
 
     expert_choice = profile_weight_dtype(
         "expert_gate",
@@ -55,11 +55,31 @@ def test_precision_profile_default_is_mixed_bfp8(monkeypatch):
     )
     lm_head_choice = profile_weight_dtype("lm_head", env_name="GEMMA4_LM_HEAD_WEIGHT_DTYPE")
 
-    assert expert_choice.dtype == ttnn.bfloat8_b
-    assert expert_choice.cache_suffix == "_bfp8"
-    assert expert_choice.source == "profile:mixed_bfp8"
+    assert expert_choice.dtype == ttnn.bfloat16
+    assert expert_choice.cache_suffix == ""
+    assert expert_choice.source == "profile:bf16"
     assert lm_head_choice.dtype == ttnn.bfloat16
     assert lm_head_choice.cache_suffix == ""
+
+
+def test_precision_profile_mixed_bfp8_is_opt_in(monkeypatch):
+    monkeypatch.setenv("GEMMA4_PRECISION_PROFILE", "mixed_bfp8")
+    monkeypatch.delenv("GEMMA4_ATTENTION_QKV_WEIGHT_DTYPE", raising=False)
+    monkeypatch.delenv("GEMMA4_LM_HEAD_WEIGHT_DTYPE", raising=False)
+
+    qkv_choice = profile_weight_dtype(
+        "attention_qkv",
+        env_name="GEMMA4_ATTENTION_QKV_WEIGHT_DTYPE",
+        legacy_env_name="GEMMA4_ATTENTION_WEIGHT_DTYPE",
+    )
+    lm_head_choice = profile_weight_dtype("lm_head", env_name="GEMMA4_LM_HEAD_WEIGHT_DTYPE")
+
+    assert qkv_choice.dtype == ttnn.bfloat8_b
+    assert qkv_choice.cache_suffix == "_bfp8"
+    assert qkv_choice.source == "profile:mixed_bfp8"
+    assert lm_head_choice.dtype == ttnn.bfloat16
+    assert lm_head_choice.cache_suffix == ""
+    assert lm_head_choice.source == "profile:mixed_bfp8"
 
 
 def test_precision_profile_bf16_preserves_existing_cache_names(monkeypatch):

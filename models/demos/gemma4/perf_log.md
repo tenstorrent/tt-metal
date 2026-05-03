@@ -62,10 +62,11 @@ Dtype probes:
 | --- | --- | --- |
 | BFLOAT8_B major weights | `/tmp/gemma4_it_bfp8_1layer_probe.log`, one layer, 1x8, `GEMMA4_{ATTENTION,SHARED_MLP,EXPERT,LM_HEAD}_WEIGHT_DTYPE=bfp8` | Created BFLOAT8_B caches for lm head, attention, shared MLP, and routed experts; prefill and one decode compile executed. Immediate EOS (`first token: 1 = '<eos>'`), so not a default-quality dtype. Cold probe runtime `392.66 s`. |
 | BFLOAT4_B major weights | `/tmp/gemma4_it_bfp4_1layer_probe_final.log`, one layer, 1x8, same env vars set to `bfp4` | Created/loaded BFLOAT4_B caches for lm head, attention, shared MLP, and routed experts; warm prefill executed. Immediate EOS, so not a default-quality dtype. Warm runtime `7.74 s`, TTFT `2685.98 ms`. |
+| Mixed-BFP8 profile | `/tmp/gemma4_precision_ab_mixed_bfp8_full.log`, full 30 layers, 1x8, `GEMMA4_PRECISION_PROFILE=mixed_bfp8` | Generated full mixed-profile caches under `/localdev/moconnor/gemma4-tt-cache/.../tensor_cache_bf16`, keeping lm head BF16 and using BFP8 for attention/shared-MLP/expert projections. Model creation took `509.1 s`; prefill took `208.52 s` and produced `202690 = 'Paged'`. Decode did not progress after entering trace/device-sampling decode for over 18 minutes and the run was stopped, so this profile is not practical as a default yet. |
 
 Notes:
 
-- Lower-precision caches are intentionally opt-in through env vars; BF16 remains the default.
+- Lower-precision caches are intentionally opt-in through `GEMMA4_PRECISION_PROFILE` or per-tensor env vars; BF16 remains the default.
 - The one-layer dtype probes exercise conversion and matmul execution only. Output quality is not meaningful with one layer and was numerically degraded enough to hit EOS immediately.
 - A direct executable launch of `instruct_demo.py` failed with `Permission denied`; use the Python invocation shown above.
 
