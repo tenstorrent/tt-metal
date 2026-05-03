@@ -916,6 +916,11 @@ FIX_TG_FIRES=$(grep -cE 'FIX TG.*has no host rank in topology mapper' "$CLEAN" 2
 # Log: "FIX TH (#42429): RelayMux::GenerateStaticConfigs — no available dispatch links from FabricNodeId"
 # Regression evidence: without FIX TH, TT_FATAL "No links available from (M0,D2) to (M0,D3)" in SetUp().
 FIX_TH_FIRES=$(grep -cE 'FIX TH.*no available dispatch links' "$CLEAN" 2>/dev/null; :)
+# FIX TH control_plane.cpp (#42429): convert_fabric_routing_table_to_chip_routing_table skips
+# excluded chips in the get_chip_ids() loop.  Without this guard: TT_FATAL "Fabric node id
+# (M0, D0) not found in mapping" → both ranks crash, rank 1 hangs 15 min in MPI barrier.
+# Log: "FIX TH (#42429): convert_fabric_routing_table — skipping excluded chip FabricNodeId"
+FIX_TH_CP_FIRES=$(grep -cE 'FIX TH.*convert_fabric_routing_table.*skipping excluded chip' "$CLEAN" 2>/dev/null; :)
 # FIX TJ (#42429): topology_mapper.cpp prefilter for WH_B0-invalid mesh shapes (e.g. 3x1).
 # Log: "FIX TJ (#42429): TopologyMapper: skipping shape {}x{} — invalid for WORMHOLE_B0"
 FIX_TJ_FIRES=$(grep -cE 'FIX TJ.*invalid for WORMHOLE_B0' "$CLEAN" 2>/dev/null; :)
@@ -1450,6 +1455,15 @@ elif grep -qE 'No links available from' "$CLEAN" 2>/dev/null; then
     echo "     Occurs when MMIO device IS in fabric cluster but all ETH links to downstream device are dead."
     echo "     Fix: add FIX TH preflight check in GenerateStaticConfigs() before get_dispatch_link_index() call."
     echo "     See relay_mux.cpp — call get_forwarding_link_indices(src,dst); if empty, set channels_not_ready."
+fi
+if [ "${FIX_TH_CP_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TH-CP] convert_fabric_routing_table: excluded chip skipped in num_ports_per_chip loop (${FIX_TH_CP_FIRES} occurrence(s))."
+    echo "     get_chip_ids() returned chips excluded by FIX TB (degraded topology). Without FIX TH:"
+    echo "     TT_FATAL 'Fabric node id (M0, D0) not found in mapping' → both ranks crash, rank 1 hangs 15 min."
+elif grep -qE 'Fabric node id.*not found in mapping' "$CLEAN" 2>/dev/null; then
+    echo "  => [FIX TH-CP MISSING] 'Fabric node id not found in mapping' TT_FATAL detected — FIX TH guard absent/reverted."
+    echo "     Source: control_plane.cpp convert_fabric_routing_table_to_chip_routing_table(). Excluded chips in get_chip_ids()"
+    echo "     loop must be skipped with try_get_asic_id_from_fabric_node_id() guard."
 fi
 if [ "${FIX_TJ_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TJ] topology_mapper: WH_B0-invalid mesh shape skipped (${FIX_TJ_FIRES} occurrence(s))."
