@@ -334,6 +334,20 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                         "relay_broken_non_mmio to trigger FIX AC + FIX AY cleanup. (#42429)",
                         device_id);
                     relay_broken_non_mmio.insert(device_id);
+                } else if (
+                    !mmio_ids_set.count(device_id) && dev->is_fabric_channels_not_ready_for_traffic() &&
+                    !relay_broken_non_mmio.count(device_id) && dev->is_fabric_ring_sync_timed_out()) {
+                    // FIX TK guard: log that FIX BA was skipped for this device because the
+                    // channels_not_ready state came from a ring sync timeout (FIX TI path),
+                    // not the FIX AM STARTED-state path.  Without this log, FIX BA being skipped
+                    // is invisible — the device has channels_not_ready but no FIX BA entry.
+                    log_warning(
+                        tt::LogAlways,
+                        "teardown: FIX TK — non-MMIO device {} has fabric_channels_not_ready_for_traffic "
+                        "but fabric_ring_sync_timed_out is set (FIX TI path). Skipping FIX BA "
+                        "relay_broken_non_mmio — channels are mid-transition from base-UMD, not "
+                        "STARTED-state. Runner tt-smi reset will recover. (#42429)",
+                        device_id);
                 }
                 if (dev->is_fabric_teardown_timed_out()) {
                     any_teardown_timed_out = true;

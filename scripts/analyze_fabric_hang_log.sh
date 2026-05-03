@@ -960,6 +960,25 @@ FIX_TH2_FIRES=$(grep -cE 'FIX TH2.*extending fabric_router_sync_timeout' "$CLEAN
 # ERISC stuck in base-UMD → fabric operations hang indefinitely.
 # Log: "configure_fabric_cores: device N channel N base-UMD relay — skipping L1 clear to preserve 0x49706550 sentinel [FIX TG #42429]"
 FIX_TG_L1_FIRES=$(grep -cE 'skipping L1 clear.*preserve 0x49706550.*FIX TG' "$CLEAN" 2>/dev/null; :)
+# FIX TI ring-sync (#42429): fabric_firmware_initializer.cpp verify_all_fabric_channels_healthy() —
+# skip health check for devices whose ring barrier timed out while base-UMD channels were present.
+# Sets fabric_channels_not_ready_for_traffic_ + fabric_ring_sync_timed_out_ so test fixtures SKIP
+# and FIX BA does NOT add the device to relay_broken_non_mmio (FIX TK guard).
+# Log: "verify_all_fabric_channels_healthy: Device N ring barrier timed out ... (#42429 FIX TI + FIX TK)"
+FIX_TI_RING_FIRES=$(grep -cE 'ring barrier timed out during base-UMD.*FIX TI' "$CLEAN" 2>/dev/null; :)
+# FIX TJ ring-sync fast-skip (#42429): fabric_firmware_initializer.cpp wait_for_fabric_router_sync() —
+# once one device times out on the base-UMD ring barrier, all remaining devices are immediately
+# marked as timed-out instead of waiting the full 30s each (ring barrier requires every member).
+# Log: "wait_for_fabric_router_sync: Device N skipped — ring sync already timed out ... (FIX TJ #42429)."
+FIX_TJ_RING_FIRES=$(grep -cE 'ring sync already timed out.*FIX TJ' "$CLEAN" 2>/dev/null; :)
+# FIX TI first-timeout (#42429): fabric_firmware_initializer.cpp wait_for_fabric_router_sync() —
+# the first device that actually waits the full 30s and times out (sets ring_sync_already_timed_out_).
+# Log: "timeout_on_base_umd_devices_ ... ring_sync_already_timed_out_ set to fast-skip ... (FIX TI + FIX TJ #42429)."
+FIX_TI_FIRST_TIMEOUT=$(grep -cE 'ring_sync_already_timed_out_ set to fast-skip.*FIX TI.*FIX TJ' "$CLEAN" 2>/dev/null; :)
+# FIX TK guard log (#42429): risc_firmware_initializer.cpp teardown step 1 — FIX BA was skipped
+# because device has fabric_ring_sync_timed_out (FIX TI path, not FIX AM STARTED-state).
+# Log: "teardown: FIX TK — non-MMIO device N has fabric_channels_not_ready ... Skipping FIX BA"
+FIX_TK_BA_GUARD=$(grep -cE 'FIX TK.*Skipping FIX BA.*relay_broken_non_mmio' "$CLEAN" 2>/dev/null; :)
 # "Fabric health check failed" — the TT_THROW from wait_for_fabric_router_sync() when channels
 # fail to reach READY_FOR_TRAFFIC.  The breakdown (corrupt/still-initializing/degraded) indicates
 # whether FIX TH2 (still-initializing) or tt-smi reset (corrupt) is needed.
@@ -1537,6 +1556,25 @@ if [ "${FIX_TG_L1_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TG L1] configure_fabric_cores: skipped L1 clear for ${FIX_TG_L1_FIRES} base-UMD channel(s)."
     echo "     Preserves 0x49706550 sentinel so next session correctly identifies base-UMD state."
     echo "     Before FIX TG: L1 clear zeroed sentinel → channel classified as dead → FIX M skipped → hang."
+fi
+if [ "${FIX_TI_RING_FIRES:-0}" -gt 0 ] || [ "${FIX_TJ_RING_FIRES:-0}" -gt 0 ] || [ "${FIX_TI_FIRST_TIMEOUT:-0}" -gt 0 ]; then
+    echo "  => [FIX TI/TJ/TK ring-sync] base-UMD ring barrier timeout cascade detected:"
+    if [ "${FIX_TI_FIRST_TIMEOUT:-0}" -gt 0 ]; then
+        echo "     - First timeout: ${FIX_TI_FIRST_TIMEOUT} device(s) waited full 30s (ring barrier failed)"
+    fi
+    if [ "${FIX_TJ_RING_FIRES:-0}" -gt 0 ]; then
+        echo "     - Fast-skipped: ${FIX_TJ_RING_FIRES} device(s) skipped instantly (FIX TJ — ring already failed)"
+    fi
+    if [ "${FIX_TI_RING_FIRES:-0}" -gt 0 ]; then
+        echo "     - Health-check skipped: ${FIX_TI_RING_FIRES} device(s) (FIX TI — channels stuck at REMOTE_HANDSHAKE_COMPLETE)"
+        echo "     - fabric_ring_sync_timed_out_ set on skipped devices (FIX TK — prevents FIX BA relay_broken_non_mmio)"
+    fi
+    echo "     Without FIX TI: verify_all_fabric_channels_healthy() fails in 150ms → false health-check failure."
+    echo "     Without FIX TJ: N×30s sequential timeouts (e.g. 8 devices × 30s = 4 min wasted)."
+    echo "     Without FIX TK: FIX BA adds devices to relay_broken_non_mmio → FIX AC PCIe reset → all MMIO ETH dead."
+    if [ "${FIX_TK_BA_GUARD:-0}" -gt 0 ]; then
+        echo "     - FIX TK guard active: ${FIX_TK_BA_GUARD} device(s) had FIX BA skipped in teardown"
+    fi
 fi
 if [ "${HEALTH_CHECK_FAILED:-0}" -gt 0 ]; then
     echo "  => [HEALTH CHECK] Fabric health check failed — ${HEALTH_CHECK_FAILED} occurrence(s)."

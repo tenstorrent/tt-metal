@@ -399,8 +399,8 @@ private:
     // FIX TK (#42429): Set by FabricFirmwareInitializer::verify_all_fabric_channels_healthy()
     // when fabric_channels_not_ready_for_traffic_ was set due to ring sync timeout (FIX TI path),
     // not the FIX AM STARTED-state path.  RiscFirmwareInitializer::teardown() checks this flag
-    // in FIX BA to skip adding the device to relay_broken_non_mmio.  NOT cleared at top of
-    // configure_fabric() because it needs to persist through teardown of the same init cycle.
+    // in FIX BA to skip adding the device to relay_broken_non_mmio.  Cleared at top of
+    // configure_fabric() (device.cpp:430) so a fresh init cycle starts clean.
     std::atomic<bool> fabric_ring_sync_timed_out_{false};
 
     // FIX RZ (#42429): Set in configure_fabric() when this non-MMIO device had one or more
