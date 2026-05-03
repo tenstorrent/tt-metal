@@ -1002,6 +1002,12 @@ FIX_TM_BASH_FAILED=$(grep -cE '\[FIX TM\] WARNING.*post-TL warm-up failed' "$CLE
 # abort the script when Python crashes (GetNumAvailableDevices throws on dead relay).
 # No direct log — detect via "T3K topology check failed to query device count" error message.
 FIX_TN_BASH_MISSING=$(grep -cE 'T3K topology check failed to query device count' "$CLEAN" 2>/dev/null; :)
+# FIX TO (#42429): remedial tt-smi -r after warm-up >= 30s (ring-sync-timeout path detected by wall-clock).
+FIX_TO_BASH_FIRES=$(grep -cE '\[FIX TO\] warm-up ran' "$CLEAN" 2>/dev/null; :)
+# Aggregate counters: ring-sync timeouts, base-UMD channel occurrences, channels_not_ready events
+RING_SYNC_TIMEOUT_COUNT=$(grep -ciE 'ring.*timeout|timeout.*ring|Timeout after.*ms on Device.*master chan' "$CLEAN" 2>/dev/null; :)
+BASE_UMD_CHAN_COUNT=$(grep -c '0x49706550' "$CLEAN" 2>/dev/null; :)
+CHANNELS_NOT_READY_COUNT=$(grep -cE 'channels_not_ready|channels_not_ready_for_traffic' "$CLEAN" 2>/dev/null; :)
 # FIX M2 (#42429): Secondary check in compile_and_configure_fabric() — channel showed 0x49706550 (base-UMD relay)
 # but peer non-MMIO device is confirmed dead-relay → remove from base_umd_channels so configure_fabric_cores()
 # performs a hard soft-reset (no relay reads in flight, safe to reset).
@@ -1581,6 +1587,18 @@ if [ "${FIX_TN_BASH_MISSING:-0}" -gt 0 ]; then
     echo "     GetNumAvailableDevices() threw on dead relay. With || true the script handles it;"
     echo "     without || true, set -eo pipefail aborts the shell silently before recovery."
 fi
+if [ "${FIX_TO_BASH_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TO-bash] Remedial tt-smi -r after warm-up >= 30s (${FIX_TO_BASH_FIRES} occurrence(s))."
+    echo "     Wall-clock >= 30s means the ring-sync-timeout path (FIX TH2) was hit during warm-up."
+    echo "     dispatch-ERISC hard resets leave ETH cores in corrupted go_msg=0x02 state."
+    echo "     Remedial reset clears this before the topology check / GTest execution."
+fi
+echo ""
+echo "=== AGGREGATE COUNTERS ==="
+echo "  RING_SYNC_TIMEOUT_COUNT:   ${RING_SYNC_TIMEOUT_COUNT:-0}"
+echo "  BASE_UMD_CHAN_COUNT:        ${BASE_UMD_CHAN_COUNT:-0}  (0x49706550 occurrences)"
+echo "  CHANNELS_NOT_READY_COUNT:   ${CHANNELS_NOT_READY_COUNT:-0}"
+echo ""
 if [ "${FIX_TH2_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TH2] fabric_router_sync_timeout extended from 10s to 30s (${FIX_TH2_FIRES} occurrence(s))."
     echo "     Base-UMD channels need longer: relay quiesce + new firmware launch + ring handshake."
