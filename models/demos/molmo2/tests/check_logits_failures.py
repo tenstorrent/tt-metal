@@ -28,8 +28,8 @@ sys.path.insert(0, str(HF_PATH))
 ANSWER_TOKS = {"A": 32, "B": 33, "C": 34, "D": 35}
 
 FAILING = [
+    {"idx": 22, "expected": "B", "ttnn_got": "C"},
     {"idx": 26, "expected": "B", "ttnn_got": "A"},
-    {"idx": 56, "expected": "A", "ttnn_got": "C"},
     {"idx": 71, "expected": "A", "ttnn_got": "B"},
 ]
 
