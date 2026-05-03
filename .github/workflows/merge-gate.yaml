@@ -433,13 +433,13 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3]
-    uses: ./.github/workflows/cpp-post-commit.yaml
+    uses: ./.github/workflows/llk-unit-tests.yaml
     with:
       arch: wormhole_b0
       runner-label: N150
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      test-group-name: llk
+      dispatch-mode: fd
       enable-llk-asserts: true
       gtest-shard-total: 4
       gtest-shard-index: ${{ matrix.shard }}
@@ -459,14 +459,14 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1]
-    uses: ./.github/workflows/cpp-post-commit.yaml
+    uses: ./.github/workflows/llk-unit-tests.yaml
     with:
       arch: blackhole
       # Reuse the p150b pool shared by the other LLK jobs to bound contention.
       runner-label: p150b
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      test-group-name: llk
+      dispatch-mode: fd
       enable-llk-asserts: true
       gtest-shard-total: 2
       gtest-shard-index: ${{ matrix.shard }}
@@ -487,16 +487,15 @@ jobs:
          needs.find-changes.outputs.llk-unit-tests-changed == 'true')
       }}
     secrets: inherit
-    uses: ./.github/workflows/build-and-unit-tests.yaml
+    uses: ./.github/workflows/llk-unit-tests.yaml
     with:
       arch: wormhole_b0
       runner-label: N150
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      test-group-name: llk
-      gtest_filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      dispatch-mode: sd
       enable-llk-asserts: true
+      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
 
   llk-sd-unit-tests-blackhole:
     needs: [ build, find-changes ]
@@ -509,16 +508,15 @@ jobs:
          needs.find-changes.outputs.llk-unit-tests-changed == 'true')
       }}
     secrets: inherit
-    uses: ./.github/workflows/build-and-unit-tests.yaml
+    uses: ./.github/workflows/llk-unit-tests.yaml
     with:
       arch: blackhole
       runner-label: p150b
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      test-group-name: llk
-      gtest_filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      dispatch-mode: sd
       enable-llk-asserts: true
+      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
