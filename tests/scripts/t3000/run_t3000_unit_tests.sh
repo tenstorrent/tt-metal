@@ -108,6 +108,15 @@ run_t3000_ttnn_tests() {
   # record_test treats the skip as failure, issues another tt-smi -r, and the cycle
   # repeats until the hardware degrades into "failed to initialize FW!".
   # The warm-up mirrors FIX GS-2b in tests/nightly/t3000/ccl/conftest.py.
+  # FIX TO (#42429): record wall-clock time before warm-up so we can detect the
+  # ring-sync-timeout path (FIX TH2 extended timeout = 30s).  Normal warm-up
+  # completes in <10s; a ring-sync timeout causes rescue_stuck_dispatch_cores to
+  # hard-BRISC-reset dispatch ERISC cores (23-17, 19-17, 24-17, 20-16, 23-16) on
+  # all 8 devices, leaving them in go_msg=0x02 stale state and corrupting the
+  # subsequent topology check / FIX TL/TM recovery window.  A remedial tt-smi -r
+  # immediately after the warm-up clears that stale state before the topology check.
+  local WARM_START WARM_END WARM_DURATION
+  WARM_START=$(date +%s)
   python3 -u -c "
 import sys, time
 try:
@@ -118,6 +127,12 @@ try:
 except Exception as e:
     print(f'[FIX GS-3] WARNING: initial warm-up failed ({e}) — GTests may skip due to stale base-UMD', file=sys.stderr)
 " 2>&1 || true
+  WARM_END=$(date +%s)
+  WARM_DURATION=$((WARM_END - WARM_START))
+  if [[ $WARM_DURATION -ge 30 ]]; then
+    echo "LOG_METAL: [FIX TO] warm-up ran ${WARM_DURATION}s (>=30s = ring-sync timeout path). Running remedial tt-smi -r to clear dispatch-ERISC stale state. (#42429)"
+    timeout 30 tt-smi -r || true
+  fi
 
   # T3K topology sanity check — fail immediately if fewer than 8 chips are visible.
   # A degraded N300 host (FIX AQ path) shrinks the topology to 4 MMIO-only chips.
