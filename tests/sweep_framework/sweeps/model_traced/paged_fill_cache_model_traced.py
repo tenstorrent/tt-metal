@@ -253,16 +253,18 @@ def run(
     # Master used `page_table=` named for 128 cfgs and positional `arg2` for 1.
     # __absent_keys__ tells us which form the vector preserved.
     _used_named_pt = kwargs.get("page_table_shape") not in (None, "__ABSENT__")
+    # paged_fill_cache mutates input_tensor_a (the cache) in place; we don't
+    # consume the return value, so call it for its side effect only.
     try:
         if _used_named_pt:
-            output_tensor = ttnn.experimental.paged_fill_cache(
+            ttnn.experimental.paged_fill_cache(
                 input_tensor_a,
                 input_tensor_b,
                 page_table=input_tensor_c,
                 **op_kwargs,
             )
         else:
-            output_tensor = ttnn.experimental.paged_fill_cache(
+            ttnn.experimental.paged_fill_cache(
                 input_tensor_a,
                 input_tensor_b,
                 input_tensor_c,
@@ -270,13 +272,12 @@ def run(
             )
     except TypeError:
         # Fallback for builds without the page_table keyword binding.
-        output_tensor = ttnn.experimental.paged_fill_cache(
+        ttnn.experimental.paged_fill_cache(
             input_tensor_a,
             input_tensor_b,
             input_tensor_c,
             **op_kwargs,
         )
-    # paged_fill_cache modifies cache_tensor in place, so output is the same as input_tensor_a
     output_tensor = input_tensor_a
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
