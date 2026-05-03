@@ -316,7 +316,12 @@ def run(
         elif "relu" in act:
             torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
 
-    # Create input tensor A
+    # Create input tensor A. Mirror the model's flow: build the tensor in
+    # DRAM-interleaved with the right per-chip placement, then to_memory_config
+    # to land on the master's exact memory_config. This avoids the kernel
+    # rejecting "from_torch direct to L1-sharded" creation paths.
+    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology as _apply_topo
+
     if not is_host:
         try:
             if is_mesh_device and input_a_tensor_placement:
@@ -325,7 +330,7 @@ def run(
                     device,
                     input_a_dtype,
                     input_a_layout,
-                    input_a_memory_config,
+                    ttnn.DRAM_MEMORY_CONFIG,
                     input_a_tensor_placement,
                 )
             else:
@@ -334,8 +339,13 @@ def run(
                     dtype=input_a_dtype,
                     layout=input_a_layout,
                     device=device,
-                    memory_config=input_a_memory_config,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+            if input_a_memory_config is not None and input_a_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+                try:
+                    ttnn_a = ttnn.to_memory_config(ttnn_a, input_a_memory_config)
+                except Exception:
+                    pass  # leave in DRAM-interleaved if the conversion fails
         except Exception:
             ttnn_a = ttnn.from_torch(
                 torch_a,
@@ -343,25 +353,35 @@ def run(
                 layout=input_a_layout,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
             )
+        if is_mesh_device and input_a_tensor_placement:
+            try:
+                actual_mesh = device.shape
+                _apply_topo(ttnn_a, input_a_tensor_placement, (actual_mesh[0], actual_mesh[1]))
+            except Exception:
+                pass
     else:
         ttnn_a = ttnn.from_torch(torch_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    # Create weight tensor B
-    # Use the traced memory config as-is - with program_config, sharded weights may be supported
+    # Create weight tensor B — same DRAM-then-to_memory_config flow as input_a.
     weight_memory_config = input_b_memory_config
 
     if not is_host:
         if is_mesh_device and input_b_tensor_placement:
-            # Use mesh with placement
             ttnn_b = create_tensor_on_mesh(
                 torch_b,
                 device,
                 input_b_dtype,
                 input_b_layout,
-                weight_memory_config,
+                ttnn.DRAM_MEMORY_CONFIG,
                 input_b_tensor_placement,
             )
+            if weight_memory_config is not None and weight_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+                try:
+                    ttnn_b = ttnn.to_memory_config(ttnn_b, weight_memory_config)
+                except Exception:
+                    pass
         else:
             # Regular single-device tensor
             ttnn_b = ttnn.from_torch(

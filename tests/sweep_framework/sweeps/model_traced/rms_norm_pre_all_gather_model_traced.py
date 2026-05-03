@@ -81,8 +81,10 @@ def run(
     else:
         shape = (1, 1, 32, 32)
 
-    # rms_norm_pre_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes
-    if input_a_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
+    # Preserve master's traced input dtype — the kernel accepts what the
+    # model used (which can include FLOAT32). Only downgrade if the dtype is
+    # genuinely unsupported.
+    if input_a_dtype is None:
         input_a_dtype = ttnn.bfloat16
 
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(
@@ -107,7 +109,8 @@ def run(
 
     # If the traced config specifies a sharded memory config, move the tensor there
     is_sharded = False
-    if not is_mesh_device and hasattr(input_a_memory_config, "memory_layout"):
+    # Apply traced memory_config (incl. L1-sharded) regardless of mesh/single path
+    if hasattr(input_a_memory_config, "memory_layout"):
         mem_layout = str(input_a_memory_config.memory_layout)
         if "SHARDED" in mem_layout:
             is_sharded = True

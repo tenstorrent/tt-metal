@@ -87,8 +87,23 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
     # Re-add memory_config kwarg when the master recorded it (build_op_kwargs strips it by default).
+    # Parse dict form to ttnn.MemoryConfig so the trace records master's exact
+    # shard_spec rather than the kernel's auto-derived one.
     if memory_config is not None and "memory_config" not in op_kwargs:
-        op_kwargs["memory_config"] = memory_config
+        if isinstance(memory_config, dict):
+            from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+            parsed_mc = dict_to_memory_config(memory_config)
+        else:
+            parsed_mc = memory_config
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
+
+    # Parse input_a_memory_config dict → ttnn.MemoryConfig.
+    if isinstance(input_a_memory_config, dict):
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config
+
+        input_a_memory_config = dict_to_memory_config(input_a_memory_config)
 
     pos_args = extract_positional_args(kwargs)
     if dim0 is None:

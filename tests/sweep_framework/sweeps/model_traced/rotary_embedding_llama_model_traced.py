@@ -586,19 +586,38 @@ def run(
     # --- Create TTNN Tensors ---
     if is_decode_mode:
         # --- Decode Mode: Create sharded tensors ---
-        # Get core grid for sharding
+        # Compute device-derived shard config first (used as fallback + for trans_mat).
         core_grid = device.compute_with_storage_grid_size()
         batch_grid = ttnn.num_cores_to_corerangeset(batch, core_grid, row_wise=True)
 
-        # Create sharded memory config for input, cos, sin
-        # Each shard has shape [TILE_HEIGHT=32, head_dim]
-        shard_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, head_dim),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        # Prefer master's traced memory_config when present so the recorded
+        # shard_spec.grid matches exactly (master may avoid dispatch cores in
+        # non-rectangular patterns).
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_memory_config as _d2mc
+
+        shard_mem_config = None
+        if isinstance(input_a_memory_config, dict):
+            try:
+                shard_mem_config = _d2mc(input_a_memory_config)
+                if not getattr(shard_mem_config, "is_sharded", lambda: False)():
+                    shard_mem_config = None
+            except Exception:
+                shard_mem_config = None
+        elif input_a_memory_config is not None and hasattr(input_a_memory_config, "is_sharded"):
+            try:
+                if input_a_memory_config.is_sharded():
+                    shard_mem_config = input_a_memory_config
+            except Exception:
+                pass
+
+        if shard_mem_config is None:
+            shard_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, head_dim),
+                core_grid=batch_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
         # Create sharded memory config for transformation matrix
         # Each shard has shape [TILE_SIZE, TILE_SIZE]
