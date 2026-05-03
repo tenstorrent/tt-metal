@@ -43,7 +43,7 @@ echo ""
 echo "=== TIMELINE (fabric-relevant, deduplicated, relative seconds) ==="
 grep -E '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+' "$CLEAN" | \
 grep -E '(info|warning|error)' | \
-grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed)' | \
+grep -iE '(Phase|edm_status|quiesce|fabric|TERMINATE|wait_for|configure_fabric|write_launch|ENTRY|Pass[- ][0-9]|Pass-0|health|AllGather|READY_FOR_TRAFFIC|summary|pre-init|pre-launch|stale|corrupt|skipping|Timeout|read failed|cancel|launch_msg|newly.dead|newly_dead|initialized|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|FIX AB extension|FIX AC|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX M2|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX PL|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|teardown:.*relay|post_teardown:.*FIX|canary|force.reset|NOT ready after|UMD ready after|marking dead|relay confirmed dead|relay-dead|relay-broken non-MMIO|deferred.*ERISC|restored relay|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|mark_relay_broken.*close_device|Marking relay broken|topology discovery|redundant.*topology|Physical chip id not found|EthCoord.*missing|chip_locations.*incomplete|Captured EthCoord.*MMIO|EthCoord.*FIX NT|EthCoord.*FIX NU|relay already known broken|relay_broken_chips|non-base firmware running|training status will never be written|ETH_TRAIN_STATUS_ADDR|l1_barrier timed out.*dead ERISC|dram_barrier timed out.*non-MMIO|WriteInitMagic.*read_core timed out|T3K topology check FAILED|chips visible|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed)' | \
 grep -viE '(hugepage|bind_area|motherboard|topology_mapper|num_routing_planes|errno|hwloc|cpuset)' | \
 python3 -c "
 import sys, re
@@ -112,7 +112,7 @@ echo ""
 
 # ─── PHASES ───
 echo "=== PHASES ==="
-grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed' "$CLEAN" | \
+grep -iE 'Phase [0-9]|Pass-0|SUMMARY|teardown: FIX AC|FIX AB extension|FIX AE|FIX AJ|FIX AK|FIX AL|FIX AM|FIX AN|FIX AQ|FIX AT|FIX AU|FIX AV|FIX AW|FIX AX|FIX AY|FIX AZ|FIX BA|FIX BB|FIX BC|FIX CD|FIX GS|FIX NS|FIX NT|FIX NU|FIX NW|FIX NX|FIX NY|FIX PF|FIX PG|FIX QW|FIX RM|FIX RX|FIX RZ|FIX SA|FIX SB|FIX SC|FIX TE|FIX TF|FIX TG|FIX TH|FIX TJ|FIX X|post_teardown:.*FIX AB|pre-launch|deferred|degraded|fixture_teardown|fixture_setup|run_mailbox|failed to initialize FW|STARTED early.exit|skipping Phase 5b|Pass-0 timeout.*handshake|master chan.*FIX AS|edm_status_address.*sentinel|ROM postcode|channels_not_ready_for_traffic|STARTED.*adding.*relay_broken|fabric_teardown_timed_out.*set|wait_for_non_mmio_flush.*threw|Marking relay broken|Physical chip id not found|Captured EthCoord.*MMIO|relay already known broken|non-base firmware running|ETH_TRAIN_STATUS_ADDR|No forwarding direction|chip excluded by FIX TB|has no host rank in topology mapper|no available dispatch links|invalid for WORMHOLE_B0|FIX TK|FIX TL|FIX TM|not in fabric cluster|skipping create_unit_meshes|worker tensix info map|cluster too degraded|NOT a valid EDMStatus|zeroed edm_status_address|0xdeaddead|open_devices_internal failed|FabricSwitchManager.*setup failed|warm-up complete|warm-up failed' "$CLEAN" | \
 grep -iE '(info|warning|error).*(Metal|Test|Always)' | \
 python3 -c "
 import sys, re, signal
@@ -884,6 +884,23 @@ FIX_TE_SKIPS=$(grep -cE 'FIX TE.*Skipping order_ethernet_channels|FIX TE.*not fo
 # Regression evidence: without FIX TF, GTest sees "bad optional access" with no chip context;
 #   with FIX TF, TT_FATAL names src/dst chip IDs and fabric node IDs.
 FIX_TF_FIRES=$(grep -cE 'FIX TF: No forwarding direction' "$CLEAN" 2>/dev/null; :)
+# FIX TF control_plane (#42429): FabricNodeId not in router_port_directions map — excluded chip
+# skipped in routing-plane-count and routing-table conversion (control_plane.cpp).
+# Without this guard: std::out_of_range BEFORE MPI all_gather → peer rank hangs indefinitely.
+# Log: "FIX TF (#42429): FabricNodeId (M0, D3) not in router_port_directions map"
+FIX_TF_CP_FIRES=$(grep -cE 'FIX TF \(#42429\).*not in router_port_directions map' "$CLEAN" 2>/dev/null; :)
+# FIX SC (GAP-76): risc_firmware_initializer.cpp pre-scan + llrt.cpp inline rescue for Tensix
+# cores with stale go_msg (0x55) after hard BRISC reset by rescue_stuck_dispatch_cores().
+# FIX SC asserts BRISC reset BEFORE writing RUN_MSG_DONE (fixes the FIX SB race condition where
+# stale firmware overwrote the DONE write).  Also handles cores that transition to 0x55 between
+# the pre-scan and the wait_until_cores_done poll loop.
+# Log (pre-scan): "FIX SC (GAP-76): Device N core X has stale go_msg=0xNN after firmware multicast"
+# Log (inline):   "FIX SC (GAP-76): Tensix core X run_mailbox=0xNN — asserting reset + writing DONE"
+# Log (failure):  "FIX SC (GAP-76): assert_risc_reset failed for Device N core X"
+#                 "FIX SC (GAP-76): inline rescue failed for core X"
+FIX_SC_PRESCAN=$(grep -cE 'FIX SC \(GAP-76\).*stale go_msg' "$CLEAN" 2>/dev/null; :)
+FIX_SC_INLINE=$(grep -cE 'FIX SC \(GAP-76\).*Tensix core.*asserting reset' "$CLEAN" 2>/dev/null; :)
+FIX_SC_FAIL=$(grep -cE 'FIX SC \(GAP-76\).*(assert_risc_reset failed|inline rescue failed)' "$CLEAN" 2>/dev/null; :)
 # FIX TG (#42429): control_plane.cpp configure_routing_tables_for_fabric_ethernet_channels —
 # TT_ASSERT (no-op in Release) guarded host_rank_for_chip.value() for connected chips excluded
 # by FIX TB.  Fixed by guarding with has_value() check and continuing (skip), matching FIX TE.
@@ -1325,6 +1342,23 @@ if [ "${FIX_SA_LLRT_FIRES:-0}" -gt 0 ]; then
     echo "     Stale firmware left non-standard run_mailbox (e.g. 0x55) after tt-smi reset or SIGKILL."
     echo "     Treated as not-done — 10s timeout fires and triggers force-reset recovery."
     echo "     Without FIX SA: TT_FATAL crash (SIGABRT) on unexpected run_mailbox value."
+fi
+FIX_SC_TOTAL=$(( ${FIX_SC_PRESCAN:-0} + ${FIX_SC_INLINE:-0} ))
+if [ "${FIX_SC_TOTAL:-0}" -gt 0 ]; then
+    echo "  => [FIX SC] Tensix stale go_msg rescue: ${FIX_SC_PRESCAN:-0} pre-scan + ${FIX_SC_INLINE:-0} inline (${FIX_SC_TOTAL} total)."
+    echo "     Hard BRISC reset by rescue_stuck_dispatch_cores left stale L1 firmware writing 0x55."
+    echo "     FIX SC asserts BRISC reset → writes RUN_MSG_DONE → core marked done immediately."
+    echo "     Without FIX SC: 10s × N_cores wasted wait → TT_THROW FW init timeout."
+    if [ "${FIX_SC_FAIL:-0}" -gt 0 ]; then
+        echo "     [WARNING] FIX SC rescue FAILED for ${FIX_SC_FAIL} core(s) — assert_risc_reset threw."
+    fi
+fi
+if [ "${FIX_TF_CP_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX TF cp] control_plane: excluded chip skipped in routing-plane/routing-table init (${FIX_TF_CP_FIRES} skip(s))."
+    echo "     FIX TB excluded chip from topology mapper (degraded ERISC L1). FIX TF guards"
+    echo "     initialize_dynamic_routing_plane_counts + convert_fabric_routing_table_to_chip_routing_table"
+    echo "     so they skip absent chips instead of throwing before the MPI all_gather barrier."
+    echo "     Without FIX TF: std::out_of_range BEFORE all_gather → peer rank hangs ~14 min (CI timeout)."
 fi
 if [ "${FIX_CD4B_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX CD-4b] TTSwitch rank 1: FabricSwitchManager::setup() failed (${FIX_CD4B_FIRES} occurrence(s))."

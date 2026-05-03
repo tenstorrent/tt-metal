@@ -283,6 +283,14 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             auto cols_min = *std::min_element(col_min_planes.begin(), col_min_planes.end());
             std::vector<size_t> rows_min_buf(*distributed_context.size());
             std::vector<size_t> cols_min_buf(*distributed_context.size());
+            log_trace(
+                tt::LogFabric,
+                "initialize_dynamic_routing_plane_counts: ENTERING all_gather+barrier "
+                "(rank {}/{}, rows_min={}, cols_min={})",
+                *distributed_context.rank(),
+                *distributed_context.size(),
+                rows_min,
+                cols_min);
             distributed_context.all_gather(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
                 tt::stl::as_writable_bytes(tt::stl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
@@ -290,6 +298,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
                 tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
             distributed_context.barrier();
+            log_trace(
+                tt::LogFabric,
+                "initialize_dynamic_routing_plane_counts: EXITED all_gather+barrier (rank {})",
+                *distributed_context.rank());
             const auto global_rows_min = std::min_element(rows_min_buf.begin(), rows_min_buf.end());
             const auto global_cols_min = std::min_element(cols_min_buf.begin(), cols_min_buf.end());
             // TODO: specialize by topology for better perf
@@ -2693,7 +2705,15 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
         }
         // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
         // root
+        log_trace(
+            tt::LogFabric,
+            "configure_routing_tables: ENTERING per-root barrier (rank {})",
+            *distributed_context.rank());
         distributed_context.barrier();
+        log_trace(
+            tt::LogFabric,
+            "configure_routing_tables: EXITED per-root barrier (rank {})",
+            *distributed_context.rank());
     }
 }
 
