@@ -143,10 +143,20 @@ except Exception as e:
     exit 1
   fi
   if [[ "$n_chips" -lt 8 ]]; then
-    echo "LOG_METAL: ERROR — T3K topology check FAILED: only ${n_chips}/8 chips visible." >&2
-    echo "LOG_METAL: Hardware is degraded (N300 host-side failure or missing chips)." >&2
-    echo "LOG_METAL: T3K tests would silently SKIP rather than run — failing fast." >&2
-    exit 1
+    # FIX TL (#42429): warm-up subprocess atexit can leave non-MMIO chips unreachable
+    # (ARC timeout / relay-dead channels corrupt device visibility).
+    # Attempt one recovery reset before failing the job entirely.
+    echo "LOG_METAL: [FIX TL] T3K topology damaged after warm-up (${n_chips}/8 chips) — attempting recovery via tt-smi -r"
+    timeout 30 tt-smi -r || true
+    raw_output=$(python3 -u -c "import ttnn; print(ttnn.GetNumAvailableDevices())" 2>/dev/null)
+    n_chips=$(echo "$raw_output" | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)
+    if [[ -z "$n_chips" ]]; then n_chips="ERROR"; fi
+    if [[ "$n_chips" -lt 8 ]]; then
+      echo "LOG_METAL: ERROR — T3K topology still degraded after recovery: ${n_chips}/8 chips visible." >&2
+      echo "LOG_METAL: Hardware needs host reboot or engineer attention." >&2
+      exit 1
+    fi
+    echo "LOG_METAL: [FIX TL] topology recovered: ${n_chips}/8 chips visible after reset."
   fi
   echo "LOG_METAL: T3K topology OK — ${n_chips}/8 chips visible."
 
