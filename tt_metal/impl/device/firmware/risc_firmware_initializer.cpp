@@ -2416,6 +2416,50 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
     }
 
+    // FIX SB (GAP-76): Pre-scan for stale go_msg signal values (e.g. 0x55) that survive a
+    // tt-smi reset because Tensix SRAM is not cleared.  After the NOC multicast write +
+    // l1_barrier + deassert_risc_reset, any core that still has an unknown signal value is
+    // running stale firmware that will never write RUN_MSG_DONE.  Writing RUN_MSG_DONE here
+    // via PCIe prevents wait_until_cores_done from spinning for 10 s and crashing with
+    // TT_THROW.  The board is still in a degraded state — conftest will detect the FIX SA
+    // WARNING and trigger tt-smi -r — but at least we fail fast with a clear diagnostic
+    // rather than a 10 s freeze per affected core.
+    {
+        static constexpr std::array<uint8_t, 6> kKnownRunMsgValues = {
+            static_cast<uint8_t>(dev_msgs::RUN_MSG_DONE),
+            static_cast<uint8_t>(dev_msgs::RUN_MSG_INIT),
+            static_cast<uint8_t>(dev_msgs::RUN_MSG_GO),
+            static_cast<uint8_t>(dev_msgs::RUN_MSG_RESET_READ_PTR),
+            static_cast<uint8_t>(dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST),
+            static_cast<uint8_t>(dev_msgs::RUN_MSG_REPLAY_TRACE),
+        };
+        const uint32_t go_msg_addr = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+        auto done_go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
+        done_go_msg.view().signal() = dev_msgs::RUN_MSG_DONE;
+        for (const auto& worker_core : not_done_cores) {
+            auto cur_go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
+            cluster_.read_core(
+                cur_go_msg.data(), cur_go_msg.size(), tt_cxy_pair(device_id, worker_core), go_msg_addr);
+            const uint8_t signal = cur_go_msg.view().signal();
+            const bool is_known =
+                std::find(kKnownRunMsgValues.begin(), kKnownRunMsgValues.end(), signal) != kKnownRunMsgValues.end();
+            if (!is_known) {
+                log_warning(
+                    tt::LogAlways,
+                    "FIX SB (GAP-76): Device {} core {} has stale go_msg=0x{:02x} after firmware multicast "
+                    "write — writing RUN_MSG_DONE to prevent 10 s hang; board reset will be required",
+                    device_id,
+                    worker_core.str(),
+                    signal);
+                cluster_.write_core(
+                    done_go_msg.data(),
+                    done_go_msg.size(),
+                    tt_cxy_pair(device_id, worker_core),
+                    go_msg_addr);
+            }
+        }
+    }
+
     log_debug(LogDevice, "Waiting for firmware init complete");
     const int timeout_ms = 10000;
     try {
