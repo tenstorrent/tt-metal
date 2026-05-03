@@ -863,7 +863,7 @@ class TtMolmo2Model(LightweightModule):
                 tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, pad_len, dtype=torch.long)], dim=1)
             else:
                 tti_padded = token_type_ids.long()
-            attn_mask = build_molmo2_prefill_mask(S_pad, tti_padded, self.mesh_device, dtype=ttnn.bfloat8_b)
+            attn_mask = build_molmo2_prefill_mask(S_pad, tti_padded, self.mesh_device, dtype=ttnn.bfloat16)
 
         rot_mats = self._get_rot_mats_prefill(S_pad)
 
