@@ -1275,7 +1275,7 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 // garbage; zeroing it mid-boot could interfere with the ROM init sequence.
                 // Do NOT send TERMINATE — there is no firmware to receive it during ROM boot.
                 constexpr uint32_t kRomPostcodePollIntervalMs = 5;
-                constexpr uint32_t kRomPostcodePollTotalMs = 500;
+                constexpr uint32_t kRomPostcodePollTotalMs = 5000;  // FIX RP: ROM boot after PCIe hard reset takes >500ms; 5s fallback budget
                 constexpr uint32_t kRomPostcodePollIters =
                     kRomPostcodePollTotalMs / kRomPostcodePollIntervalMs;
                 const bool is_non_mmio =

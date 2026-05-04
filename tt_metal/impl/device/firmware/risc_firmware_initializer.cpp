@@ -642,8 +642,9 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             // no longer 0x49705180 (ROM postcode).  0x49706550 (UMD relay sentinel) and
             // 0x00000000 (clean) are both safe values for the next session.  Any other non-zero
             // value is also fine (e.g. EDMStatus enum values from a prior session).  The
-            // timeout is kept short (1 s) since the heartbeat poll already waited up to 5 s —
-            // this is just waiting for the final few ms of UMD relay startup.
+            // After PCIe hard reset (FIX AC), UMD base firmware raises its heartbeat (FIX AR, 5s
+            // window) but then takes additional time to write 0x49706550 to edm_status_address.
+            // Poll for up to 10s so the next session sees 0x49706550, not the ROM postcode.
             if (get_control_plane_) {
                 try {
                     const auto& fabric_ctx = this->get_control_plane_().get_fabric_context();
@@ -651,7 +652,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     const auto edm_status_addr_aq =
                         builder_ctx.get_fabric_router_sync_address_and_status().first;
                     constexpr uint32_t kRomPostcode = 0x49705180u;
-                    constexpr int kEdmStatusPollMs = 1000;
+                    constexpr int kEdmStatusPollMs = 10000;  // FIX AQ: ROM boot to base-UMD sentinel can take >1s after PCIe hard reset; 10s matches FIX AR heartbeat window
                     constexpr auto kEdmStatusPollInterval = std::chrono::milliseconds(5);
                     struct EdmPollState {
                         tt_cxy_pair target;
@@ -1087,7 +1088,7 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     const auto edm_status_addr_aq5 =
                         builder_ctx5.get_fabric_router_sync_address_and_status().first;
                     constexpr uint32_t kRomPostcode5 = 0x49705180u;
-                    constexpr int kEdmStatusPollMs5 = 1000;
+                    constexpr int kEdmStatusPollMs5 = 10000;  // FIX AQ Step 5: same boot timing as Step 2 — increase to match
                     constexpr auto kEdmStatusPollInterval5 = std::chrono::milliseconds(5);
                     struct EdmPollState5 {
                         tt_cxy_pair target;
