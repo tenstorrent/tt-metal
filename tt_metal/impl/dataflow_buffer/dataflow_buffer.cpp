@@ -49,8 +49,8 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             dfb->config.num_producers >= 1 && dfb->config.num_producers <= 4,
             "Tensix producer count must be between 1 and 4, got {}",
             dfb->config.num_producers);
-        dfb->config.producer_risc_mask = static_cast<uint16_t>(((1u << dfb->config.num_producers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
-        dfb->tensix_trisc_mask |= (1u << 2);  // Tensix producer uses trisc2
+        dfb->config.producer_risc_mask =
+            static_cast<uint16_t>(((1u << dfb->config.num_producers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (auto dm_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(producer_kernel)) {
         TT_FATAL(
             dfb->config.num_producers >= 1 && dfb->config.num_producers <= 8,
@@ -77,8 +77,8 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 4,
             "Tensix consumer count must be between 1 and 4, got {}",
             dfb->config.num_consumers);
-        dfb->config.consumer_risc_mask = static_cast<uint16_t>(((1u << dfb->config.num_consumers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
-        dfb->tensix_trisc_mask |= (1u << 0);  // Default: Tensix consumer uses trisc0; use (1u << 3) for trisc3
+        dfb->config.consumer_risc_mask =
+            static_cast<uint16_t>(((1u << dfb->config.num_consumers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (auto dm_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(consumer_kernel)) {
         TT_FATAL(
             dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 8,
@@ -815,6 +815,16 @@ void ProgramImpl::finalize_single_dfb_config(
 
     TT_FATAL(config.producer_risc_mask != 0, "producer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
     TT_FATAL(config.consumer_risc_mask != 0, "consumer_risc_mask must be set before program launch. Either set it in DataflowBufferConfig or call BindDataflowBufferToProducerConsumerKernels after creating kernels");
+
+    // Quasar-only:
+    // Derive tensix_trisc_mask from the (now-final) risc masks.
+    // has_tensix_risc checks bits 8-11 (zero on Gen1 masks).
+    //  - producer compute -> set trisc2 (bit 2)
+    //  - consumer compute -> set trisc0 (bit 0)
+    // TODO: if/when consumer-compute can target trisc3 instead of trisc0, that
+    // selection would need a dedicated DataflowBufferConfig field.
+    dfb->tensix_trisc_mask = (has_tensix_risc(config.producer_risc_mask) ? (1u << 2) : 0u) |
+                             (has_tensix_risc(config.consumer_risc_mask) ? (1u << 0) : 0u);
 
     const bool is_intra_tensix =
         config.tensix_scope.has_value() && *config.tensix_scope == TensixScope::INTRA;

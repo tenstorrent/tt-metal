@@ -842,12 +842,14 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
             .set_page_size(ex_cb_partial_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
 
-    // ex_external
-    uint32_t ex_cb_external_index = tt::CBIndex::c_10;
-    tt::tt_metal::CircularBufferConfig ex_cb_external_config =
-        tt::tt_metal::CircularBufferConfig(single_tile_size, {{ex_cb_external_index, cb_data_format}})
-            .set_page_size(ex_cb_external_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
+    // ex_external: Not used by Welford.
+    if (!use_welford) {
+        uint32_t ex_cb_external_index = tt::CBIndex::c_10;
+        tt::tt_metal::CircularBufferConfig ex_cb_external_config =
+            tt::tt_metal::CircularBufferConfig(single_tile_size, {{ex_cb_external_index, cb_data_format}})
+                .set_page_size(ex_cb_external_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
+    }
 
     // ex_global
     uint32_t ex_cb_index = tt::CBIndex::c_9;

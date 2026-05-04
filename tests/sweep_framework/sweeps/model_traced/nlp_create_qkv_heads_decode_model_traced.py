@@ -14,11 +14,12 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
 TIMEOUT = 300
 
@@ -64,6 +65,49 @@ def mesh_device_fixture():
         del device
 
 
+def _qkvd_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
+def _qkvd_per_chip_q(per_chip_input, num_heads, num_kv_heads):
+    seq_len = per_chip_input.shape[1]
+    batch = per_chip_input.shape[2]
+    hidden_dim = per_chip_input.shape[3]
+    head_dim = hidden_dim // (num_heads + 2 * num_kv_heads)
+    q = per_chip_input[:, :, :batch, : head_dim * num_heads].view(seq_len, batch, num_heads, head_dim)
+    return q
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -82,6 +126,15 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Re-inject memory_config from kwargs (build_op_kwargs strips it by default)
+    mc_raw = kwargs.get("memory_config")
+    if mc_raw is not None and "memory_config" not in op_kwargs:
+        parsed_mc = parse_dict_value("memory_config", mc_raw) if isinstance(mc_raw, dict) else mc_raw
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
+    elif output_memory_config is not None and "memory_config" not in op_kwargs:
+        op_kwargs["memory_config"] = output_memory_config
 
     if isinstance(input_a_shape, (tuple, list)):
         shape = tuple(input_a_shape)
@@ -111,24 +164,21 @@ def run(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # nlp_create_qkv_heads_decode returns Q, K, V heads
-    # Reference implementation from test_nlp_create_qkv_heads_decode.py (lines 51-57)
+    # Sharded-aware reference: when input is sharded along hidden_dim, the
+    # kernel runs per-chip with per_chip head_dim = global / mesh_factor and
+    # the mesh assembler concats Q outputs along the input shard axis.
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology. The op runs per-chip and the gathered output is
+    # the per-chip Q tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
     if len(shape) == 4:
         seq_len = shape[1]
         batch = shape[2]
         hidden_dim = shape[3]
         head_dim = hidden_dim // (num_heads + 2 * num_kv_heads)
-
         q_heads_torch = torch_input_tensor_a[:, :, :batch, : head_dim * num_heads].view(
             seq_len, batch, num_heads, head_dim
         )
-        _ = torch_input_tensor_a[:, :, :batch, head_dim * num_heads : head_dim * (num_heads + num_kv_heads)].view(
-            seq_len, batch, num_kv_heads, head_dim
-        )
-        _ = torch_input_tensor_a[:, :, :batch, head_dim * (num_heads + num_kv_heads) :].view(
-            seq_len, batch, num_kv_heads, head_dim
-        )
-
         torch_output_tensor = q_heads_torch
     else:
         torch_output_tensor = torch_input_tensor_a.clone()
@@ -169,5 +219,7 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - using proper torch reference from unit test
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     return [pcc, e2e_perf]
