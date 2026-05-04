@@ -113,7 +113,8 @@ MeshGraph::MeshGraph(
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
         mesh_graph_desc_file_path_ = filepath;
         mesh_graph_descriptor_.emplace(filepath, true);
-        this->initialize_from_mgd(mesh_graph_descriptor_.value(), fabric_config, cluster_type);
+        this->initialize_from_mgd(
+            mesh_graph_descriptor_.value(), fabric_config, tt::Cluster::is_ubb_galaxy(cluster_type));
     } else {
         TT_THROW(
             "Mesh graph descriptor file must use the .textproto format. "
@@ -230,7 +231,7 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
 }
 
 void MeshGraph::initialize_from_mgd(
-    const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, tt::tt_metal::ClusterType cluster_type) {
+    const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
@@ -399,7 +400,7 @@ void MeshGraph::initialize_from_mgd(
         FabricType effective_fabric_type;
 
         if (fabric_config.has_value()) {
-            FabricType requested_fabric_type = get_fabric_type(*fabric_config, cluster_type);
+            FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, mesh_shape)) {
                 TT_THROW(
@@ -547,7 +548,7 @@ void MeshGraph::initialize_from_mgd(
         FabricType effective_fabric_type;
 
         if (fabric_config.has_value()) {
-            FabricType requested_fabric_type = get_fabric_type(*fabric_config, cluster_type);
+            FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, switch_shape)) {
                 TT_THROW(
