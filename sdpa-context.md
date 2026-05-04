@@ -905,3 +905,91 @@ Tc > 2*Tk_mcast + Tk_sem + 2*Tk_dram + 2*Tv_dram + 2*Tv_fwd
 2. **Ring iterations > 0**: Reverse-K designed for ring_iter=0 (local causal). How does it interact with KV from other devices?
 3. **Q reuse**: Q loaded once per q_iter, unchanged. But if K chunk size shrinks, more K iterations per Q — does this affect Q CB?
 4. **Mask generation**: Causal mask indices must account for reverse K iteration order
+
+---
+
+## Appendix B.1: Head-grouped core distribution (proposed)
+
+### Motivation
+
+Under the current flat distribution (`program_factory.cpp` 861–929), cores own
+contiguous runs in the flat Q-position list `pos = local_head * num_q_chunks_per_head + pos_in_head`.
+For mla-100k (110 cores, 32 heads, 20 q-chunks/head, 6 chunks/core for cores 0–99),
+each head ends up split across only ~3–4 cores, so each per-head V chain is
+3–4 cores long and **all 32 V chains are concurrently active**, each pulling V
+from DRAM independently. Chain forwarding amortizes weakly.
+
+### The scheme
+
+Group cores into blocks of `cores_per_group = pairs_per_head = num_q_chunks // 2`.
+Each block serves a contiguous range of heads; **within a block, core *i* (0..cps-1)
+owns pair index *i* of every head in the block**. Pair index *p* of a head ↦
+`(light=p, heavy=N-1-p)`.
+
+For mla-100k: `cores_per_group = 10`, `num_groups = 11`, `heads_per_group = 32 // 11 = 2`,
+`extra_head_groups = 32 % 11 = 10` ⇒ first 10 groups get 3 heads, last group gets 2.
+
+| Group | Cores | Heads | Pairs/core | Chunks/core |
+|---|---|---|---|---|
+| 0 | 0–9 | H0, H1, H2 | 3 | 6 |
+| 1 | 10–19 | H3, H4, H5 | 3 | 6 |
+| … | … | … | 3 | 6 |
+| 9 | 90–99 | H27, H28, H29 | 3 | 6 |
+| 10 | 100–109 | H30, H31 | 2 | 4 |
+
+Concrete examples:
+- Core 0  pairs: (H0, l=0, h=19), (H1, l=0, h=19), (H2, l=0, h=19)
+- Core 1  pairs: (H0, l=1, h=18), (H1, l=1, h=18), (H2, l=1, h=18)
+- Core 9  pairs: (H0, l=9, h=10), (H1, l=9, h=10), (H2, l=9, h=10)
+- Core 10 pairs: (H3, l=0, h=19), (H4, l=0, h=19), (H5, l=0, h=19)
+- Core 100 pairs: (H30, l=0, h=19), (H31, l=0, h=19)
+- Core 109 pairs: (H30, l=9, h=10), (H31, l=9, h=10)
+
+Total pairs = 10·10·3 + 10·2 = 320, matching `NH × pairs_per_head = 32 × 10 = 320` ✓.
+
+### Chunk-count invariance
+
+Chunks per core are unchanged: cores 0–99 still own 6 chunks (3 pairs); cores
+100–109 still own 4 chunks (2 pairs). Only the **selection** of `(head, pair)`
+tuples per core changes, not the work volume.
+
+### V-chain consequence
+
+Number of V chains is unchanged (32, one per head), but each chain is now
+exactly 10 cores. Critically, **at any given timestamp only ~11 V chains are
+concurrently active** — one per group, because all 10 cores in a group march
+through their group's heads in lockstep at the same `pair_idx`. Each V DRAM
+read is amortized over 10 cores instead of 3–4, and chain-forwarding does
+real work on every hop.
+
+### K mcast unaffected
+
+All cores still hit the same `k_set` per timestamp: every core at `pair_idx = p`
+has pair shape `(l=p_in_group, h=N-1-p_in_group)`, the same `(l, h)` pair just
+applied to different heads. The K mcast schedule (`k_set_for_pair_local_t`) and
+the reverse-K phase structure (Appendix B) carry over without modification.
+
+### Implementation surface
+
+Two host-side changes in `program_factory.cpp`:
+1. **Position-to-core distribution** (~830–895): replace the flat split that
+   walks the flat `total_q_chunks` list with the group/index assignment above.
+   Each core's `head_work` becomes one entry per head in its group, each with
+   `q_chunk_count = 2` and `q_chunk_start = i` (the group-local core index).
+2. **V-chain construction** (`CoreChainInfo` setup): for each head, the chain
+   is exactly the 10 cores of that head's group, in physical order. `chain[0]`
+   is the injector, `chain[-1]` is the sink. No "excluded" cores.
+
+Compute kernel, reader, and writer are untouched. Q chunk remapping
+(`q_chunk_remapping.hpp`) is also untouched — but its meaning shifts: a core's
+`pair_idx` no longer determines pos_in_head; instead, the core's group-local
+index does.
+
+### Cross-reference
+
+`reverse_k_sim.py` (in this repo root) models this exact scheme under
+`cfg["distribution"] = "head_grouped"` (the `MLA_100K` config). Run it to emit
+`reverse_k_visualization.html` and inspect chain layouts and per-timestamp
+behavior — useful for sanity-checking before the C++ work. The flat
+distribution is preserved under `cfg["distribution"] = "flat"` (the
+`CSV_ORACLE` config) and still passes its existing CSV regression check.

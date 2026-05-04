@@ -25,6 +25,7 @@ MLA_100K = dict(
     NHK=1,
     NH=32,
     num_q_chunks=20,
+    distribution="head_grouped",
 )
 # CSV oracle config (matches existing idea-ring_iter0_timestamps.csv):
 CSV_ORACLE = dict(
@@ -37,6 +38,7 @@ CSV_ORACLE = dict(
     NHK=1,
     NH=29,
     num_q_chunks=20,
+    distribution="flat",
 )
 
 ENABLE_ZIGZAG = True
@@ -78,6 +80,13 @@ def zigzag_q(cfg: dict, pos_in_head: int) -> tuple[int, bool]:
 
 
 def build_core_work(cfg: dict) -> list[dict]:
+    """Dispatch to flat (program_factory.cpp) or head_grouped distribution."""
+    if cfg.get("distribution") == "head_grouped":
+        return _build_core_work_head_grouped(cfg)
+    return _build_core_work_flat(cfg)
+
+
+def _build_core_work_flat(cfg: dict) -> list[dict]:
     """Per-core work assignment mirroring program_factory.cpp 861-929."""
     base, extra, cores_extra = compute_split(cfg)
     n = cfg["num_q_chunks"]
@@ -138,6 +147,79 @@ def build_core_work(cfg: dict) -> list[dict]:
     return cores
 
 
+def _build_core_work_head_grouped(cfg: dict) -> list[dict]:
+    """Head-grouped distribution.
+
+    Group cores into blocks of `cores_per_group = pairs_per_head = num_q_chunks // 2`.
+    Each block serves a contiguous range of heads; within a block, core i (0..cps-1)
+    owns pair index i = (light=i, heavy=N-1-i) of every head in the block.
+
+    For mla-100k (110 cores, 32 heads, 20 q-chunks): 11 groups of 10 cores; the
+    first 10 groups serve 3 heads each, the last group serves 2. Cores 0-99 own
+    3 pairs (6 chunks); cores 100-109 own 2 pairs (4 chunks).
+    """
+    n = cfg["num_q_chunks"]
+    nc = cfg["num_cores"]
+    NH = cfg["NH"]
+    pairs_per_head = n // 2
+    cores_per_group = pairs_per_head
+    assert nc % cores_per_group == 0, (nc, cores_per_group)
+    num_groups = nc // cores_per_group
+    heads_per_group = NH // num_groups
+    extra_head_groups = NH % num_groups
+
+    group_heads: list[list[int]] = []
+    head_cursor = 0
+    for g in range(num_groups):
+        cnt = heads_per_group + (1 if g < extra_head_groups else 0)
+        assert cnt >= 1, f"group {g} would get 0 heads (NH={NH}, num_groups={num_groups})"
+        group_heads.append(list(range(head_cursor, head_cursor + cnt)))
+        head_cursor += cnt
+    assert head_cursor == NH, (head_cursor, NH)
+
+    cores = []
+    flat_q_cursor = 0
+    for ci in range(nc):
+        g = ci // cores_per_group
+        i = ci % cores_per_group
+        heads = group_heads[g]
+        chunk_count = len(heads) * 2
+        head_work = [{"batch": 0, "head": h, "q_chunk_start": i, "q_chunk_count": 2} for h in heads]
+        pairs = []
+        for p, h in enumerate(heads):
+            ql = i
+            qh = n - 1 - i
+            assert ql + qh == n - 1
+            pairs.append(
+                {
+                    "pair_idx": p,
+                    "head": h,
+                    "l": ql,
+                    "h": qh,
+                    "ql": ql,
+                    "qh": qh,
+                    "q_iter_light": 2 * p,
+                    "q_iter_heavy": 2 * p + 1,
+                }
+            )
+        x, y = physical_core(cfg, ci)
+        cores.append(
+            {
+                "core_idx": ci,
+                "x": x,
+                "y": y,
+                "global_q_start": flat_q_cursor,
+                "global_q_count": chunk_count,
+                "head_work": head_work,
+                "pairs": pairs,
+            }
+        )
+        flat_q_cursor += chunk_count
+    total_q = cfg["B"] * NH * n
+    assert flat_q_cursor == total_q, (flat_q_cursor, total_q)
+    return cores
+
+
 # -------- layer 2: chain roles --------
 def select_k_injector(core_work: list[dict]) -> int:
     best, best_idx = -1, -1
@@ -149,6 +231,13 @@ def select_k_injector(core_work: list[dict]) -> int:
 
 
 def build_v_chains(cfg: dict, core_work: list[dict]) -> dict[int, dict]:
+    """Dispatch to flat or head_grouped V-chain construction."""
+    if cfg.get("distribution") == "head_grouped":
+        return _build_v_chains_head_grouped(cfg, core_work)
+    return _build_v_chains_flat(cfg, core_work)
+
+
+def _build_v_chains_flat(cfg: dict, core_work: list[dict]) -> dict[int, dict]:
     chains: dict[int, dict] = {}
     by_head: dict[int, list[int]] = {}
     for c in core_work:
@@ -173,6 +262,35 @@ def build_v_chains(cfg: dict, core_work: list[dict]) -> dict[int, dict]:
         uniform = all(core_work[ci]["global_q_count"] == core_work[chain[0]]["global_q_count"] for ci in chain)
         is_mcast = same_row and contiguous and uniform
         chains[head] = {"chain": chain, "inj": chain[0], "snk": chain[-1], "mcast": is_mcast, "excluded": excluded}
+    return chains
+
+
+def _build_v_chains_head_grouped(cfg: dict, core_work: list[dict]) -> dict[int, dict]:
+    """Head-grouped V chains: each head's chain is exactly its core-group, in order.
+
+    No exclusion is needed — every core that serves a head participates in that
+    head's chain. `inj = chain[0]`, `snk = chain[-1]`.
+    """
+    chains: dict[int, dict] = {}
+    by_head: dict[int, list[int]] = {}
+    for c in core_work:
+        for hw in c["head_work"]:
+            by_head.setdefault(hw["head"], []).append(c["core_idx"])
+    for head, cores in by_head.items():
+        chain = sorted(cores)
+        positions = [physical_core(cfg, ci) for ci in chain]
+        same_row = all(p[1] == positions[0][1] for p in positions)
+        xs = [p[0] for p in positions]
+        contiguous = (max(xs) - min(xs) + 1) == len(xs)
+        uniform = all(core_work[ci]["global_q_count"] == core_work[chain[0]]["global_q_count"] for ci in chain)
+        is_mcast = same_row and contiguous and uniform
+        chains[head] = {
+            "chain": chain,
+            "inj": chain[0],
+            "snk": chain[-1],
+            "mcast": is_mcast,
+            "excluded": [],
+        }
     return chains
 
 
@@ -332,26 +450,60 @@ def compute_per_t_actions(cfg, core_work, v_chains, static_roles, k_inj) -> list
 
 # -------- verification --------
 def verify_mla_100k(cfg, core_work, v_chains, static_roles, timestamps, k_inj):
-    base, extra, cores_extra = compute_split(cfg)
-    assert (base, extra, cores_extra) == (4, 2, 100), (base, extra, cores_extra)
-    total_q = cfg["B"] * cfg["NH"] * cfg["num_q_chunks"]
+    assert cfg.get("distribution") == "head_grouped", cfg.get("distribution")
     nc = cfg["num_cores"]
+    NH = cfg["NH"]
+    n = cfg["num_q_chunks"]
+    total_q = cfg["B"] * NH * n
     assert sum(c["global_q_count"] for c in core_work) == total_q
+
+    # head-group structure (mla-100k: 11 groups × 10 cores; first 10 groups own 3
+    # heads, last group owns 2)
+    pairs_per_head = n // 2
+    cores_per_group = pairs_per_head
+    assert nc % cores_per_group == 0
+    num_groups = nc // cores_per_group
+    heads_per_group = NH // num_groups
+    extra_head_groups = NH % num_groups
+    group_heads = []
+    head_cursor = 0
+    for g in range(num_groups):
+        cnt = heads_per_group + (1 if g < extra_head_groups else 0)
+        group_heads.append(list(range(head_cursor, head_cursor + cnt)))
+        head_cursor += cnt
+    assert head_cursor == NH
+    assert num_groups == 11 and group_heads[0] == [0, 1, 2] and group_heads[10] == [30, 31]
+
+    # per-core: chunk count and pair contents
     for ci in range(nc):
-        expected = 6 if ci < 100 else 4
-        assert core_work[ci]["global_q_count"] == expected, (ci, expected)
-    for ci in range(4):
-        p0 = core_work[ci]["pairs"][0]
-        assert p0["head"] == 0
-        assert p0["ql"] == 3 * ci, (ci, p0["ql"])
-        assert p0["qh"] == cfg["num_q_chunks"] - 1 - 3 * ci
-    assert core_work[3]["pairs"][1]["head"] == 1
+        g = ci // cores_per_group
+        i = ci % cores_per_group
+        heads = group_heads[g]
+        expected_chunks = len(heads) * 2
+        assert core_work[ci]["global_q_count"] == expected_chunks, (ci, expected_chunks)
+        pairs = core_work[ci]["pairs"]
+        assert len(pairs) == len(heads), (ci, len(pairs), len(heads))
+        for p, h in enumerate(heads):
+            pr = pairs[p]
+            assert pr["head"] == h, (ci, p, pr["head"], h)
+            assert pr["ql"] == i and pr["qh"] == n - 1 - i, (ci, p, pr["ql"], pr["qh"])
+
+    # K injector: still the first max-work core (cores 0..99 all tie at 6 chunks)
     assert sum(static_roles["k_role"]) == 1
     assert k_inj == 0, k_inj
-    assert len(v_chains) == 32
-    for h, info in v_chains.items():
-        assert len(info["chain"]) >= 2, (h, info)
-    n = cfg["num_q_chunks"]
+
+    # V chains: one per head, each exactly cores_per_group long, chain = group cores
+    assert len(v_chains) == NH, len(v_chains)
+    for g in range(num_groups):
+        expected_chain = list(range(g * cores_per_group, (g + 1) * cores_per_group))
+        for h in group_heads[g]:
+            info = v_chains[h]
+            assert info["chain"] == expected_chain, (h, info["chain"], expected_chain)
+            assert info["inj"] == expected_chain[0]
+            assert info["snk"] == expected_chain[-1]
+            assert info["excluded"] == []
+
+    # K-set schedule (driven only by pair_local_t, unchanged by distribution)
     half = n // 2
     for t in range(len(timestamps)):
         ll = t % T_PER_PAIR
@@ -364,6 +516,9 @@ def verify_mla_100k(cfg, core_work, v_chains, static_roles, timestamps, k_inj):
             assert kset == [half]
         else:
             assert kset == [n - ll], (t, ll, kset)
+
+    # active cores per t: max_pairs is 3 (from groups 0..9). After t=41 (pair 2
+    # finishes at t=62), the last group (2 pairs) goes idle from t=42 onward.
     for t in range(len(timestamps)):
         expected = 110 if t < 42 else 100
         assert timestamps[t]["active_cores"] == expected, (t, timestamps[t]["active_cores"])
