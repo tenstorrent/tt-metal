@@ -52,6 +52,10 @@ targets:
         - efficientnetb0
         - llama-3.2-1b
       trace: [7, 8]
+    - model:
+        - whisper_2
+        - whisper_3
+      trace: [17, 18, 19, 20]
 
 registry:
   - trace_id: 1
