@@ -31,10 +31,8 @@ import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
-    create_single_galaxy_combined_spec_decode_pipeline_configuration,
     create_single_galaxy_pipeline_configuration,
     create_single_galaxy_spec_decode_pipeline_configuration,
-    create_single_pod_combined_spec_decode_pipeline_configuration,
 )
 from models.demos.deepseek_v3_b1.demo.stage import (
     TOKEN_META_PAGE_SIZE_BYTES,
@@ -65,12 +63,14 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MTPWeights,
     DeepSeekV3SpecWeights,
+    prepare_embedding_weights,
     prepare_lm_head_weights,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 _LM_HEAD_SAMPLING_REFERENCE_PT_ENV = "DEEPSEEK_V3_LM_HEAD_SAMPLING_REFERENCE_PT"
+_MTP_MODULE_REFERENCE_TRACE_PATH = Path(__file__).parent / "reference_data" / "reference_mtp_module_trace.pt"
 
 
 def create_fabric_router_config(max_payload_size):
@@ -117,6 +117,80 @@ def lm_head_sampling_reference_payload():
 
 def _payload_tensor(payload: dict, key: str) -> torch.Tensor:
     value = payload[key]
+    if not isinstance(value, torch.Tensor):
+        value = torch.as_tensor(value)
+    return value.detach().cpu()
+
+
+def _load_mtp_module_reference_trace(path: Path = _MTP_MODULE_REFERENCE_TRACE_PATH) -> dict:
+    path = Path(path)
+    if not path.is_file():
+        pytest.skip(f"MTP module reference trace not found at {path}")
+
+    trace = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(trace, dict):
+        pytest.fail(f"Expected MTP module reference trace to be a dict, got {type(trace)} from {path}")
+    if trace.get("schema_version") != 1:
+        pytest.fail(f"Unsupported MTP module reference trace schema_version={trace.get('schema_version')}")
+
+    required_top_level = {"schema_version", "name", "params", "metadata", "sequence"}
+    missing_top_level = sorted(required_top_level - set(trace.keys()))
+    if missing_top_level:
+        pytest.fail(f"MTP module reference trace is missing top-level keys: {missing_top_level}")
+
+    sequence = trace["sequence"]
+    if not isinstance(sequence, dict):
+        pytest.fail(f"MTP module reference trace sequence must be a dict, got {type(sequence)}")
+    required_sequence_keys = {
+        "round_id",
+        "depth",
+        "base_token_id",
+        "base_token_position_id",
+        "base_hidden_position_id",
+        "position_id",
+        "spec_token_id",
+        "spec_position_id",
+        "base_hidden_states_after_last_layer",
+        "mtp_decoder_hidden_states_before_lm_head",
+    }
+    missing_sequence_keys = sorted(required_sequence_keys - set(sequence.keys()))
+    if missing_sequence_keys:
+        pytest.fail(f"MTP module reference trace sequence is missing keys: {missing_sequence_keys}")
+
+    base_hidden = _mtp_module_trace_tensor(trace, "base_hidden_states_after_last_layer")
+    mtp_hidden = _mtp_module_trace_tensor(trace, "mtp_decoder_hidden_states_before_lm_head")
+    if base_hidden.ndim != 2:
+        pytest.fail(f"Expected base_hidden_states_after_last_layer to be 2D, got shape={tuple(base_hidden.shape)}")
+    if mtp_hidden.shape != base_hidden.shape:
+        pytest.fail(
+            "MTP module reference trace hidden tensor shape mismatch: "
+            f"base={tuple(base_hidden.shape)}, mtp={tuple(mtp_hidden.shape)}"
+        )
+    num_records, hidden_size = base_hidden.shape
+    if num_records <= 0:
+        pytest.fail("MTP module reference trace has no sequence records")
+
+    metadata_hidden_size = int(trace["metadata"].get("hidden_size", hidden_size))
+    if metadata_hidden_size != hidden_size:
+        pytest.fail(
+            f"MTP module reference trace hidden_size mismatch: metadata={metadata_hidden_size}, tensor={hidden_size}"
+        )
+
+    scalar_keys = required_sequence_keys - {
+        "base_hidden_states_after_last_layer",
+        "mtp_decoder_hidden_states_before_lm_head",
+    }
+    for key in sorted(scalar_keys):
+        value = _mtp_module_trace_tensor(trace, key)
+        if value.shape != (num_records,):
+            pytest.fail(
+                f"MTP module reference trace sequence[{key!r}] shape={tuple(value.shape)}, expected=({num_records},)"
+            )
+    return trace
+
+
+def _mtp_module_trace_tensor(trace: dict, key: str) -> torch.Tensor:
+    value = trace["sequence"][key]
     if not isinstance(value, torch.Tensor):
         value = torch.as_tensor(value)
     return value.detach().cpu()
@@ -322,7 +396,12 @@ def _mtp_golden_weights(hf_state_dict) -> tuple[torch.Tensor, torch.Tensor, torc
 
 
 def _verification_lm_head_golden_weights(hf_state_dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    return _lm_head_golden_weights(hf_state_dict)
+    _assert_hf_checkpoint_is_dequantized(hf_state_dict)
+    mtp_layer_idx = _infer_mtp_layer_idx(hf_state_dict)
+    gamma = hf_state_dict[f"model.layers.{mtp_layer_idx}.shared_head.norm.weight"].reshape(1, -1)
+    vocab = hf_state_dict["lm_head.weight"].T
+    indices = torch.arange(vocab.shape[-1], dtype=torch.int32).reshape(1, -1)
+    return gamma, vocab, indices
 
 
 def _rms_norm_golden(input_tensor: torch.Tensor, gamma: torch.Tensor, *, epsilon: float = 1e-6) -> torch.Tensor:
@@ -840,6 +919,28 @@ def _topk_vocab_ids_from_scores(scores_flat: torch.Tensor, k: int = 10) -> torch
     return idx.to(torch.uint32)
 
 
+def _compute_reference_topk_from_hidden_rows(
+    hidden_rows: torch.Tensor,
+    gamma: torch.Tensor,
+    vocab: torch.Tensor,
+    *,
+    topk: int,
+) -> torch.Tensor:
+    rows = []
+    for row_idx in range(hidden_rows.shape[0]):
+        scores_flat = _golden_logits_flat(hidden_rows[row_idx : row_idx + 1].to(dtype=gamma.dtype), gamma, vocab)
+        rows.append(_topk_vocab_ids_from_scores(scores_flat, k=topk))
+    return torch.stack(rows, dim=0).to(torch.int64)
+
+
+def _topk_hit_counts(tokens: torch.Tensor, reference_topk: torch.Tensor) -> tuple[int, int]:
+    tokens = tokens.to(torch.int64).reshape(-1)
+    reference_topk = reference_topk.to(torch.int64)
+    top1 = int((tokens == reference_topk[:, 0]).sum().item())
+    topk = sum(int(tokens[i].item()) in {int(tok.item()) for tok in reference_topk[i]} for i in range(tokens.numel()))
+    return top1, int(topk)
+
+
 def _compute_reference_topk_token_ids_real(state_dict, input_token_ids: torch.Tensor, topk: int = 10) -> torch.Tensor:
     """Per row of ``input_token_ids`` (vocab ids into ``embed_tokens``), top-`topk` output vocab ids from HF logits.
 
@@ -1250,6 +1351,52 @@ class _ReferencePayloadMTPWeightProvider:
         return _prepare_reference_spec_weights(device, self._hf_state_dict)
 
 
+class _MTPModuleTraceWeightProvider:
+    """Trace-driven MTP provider with separate hidden-state input rows and real MTP token embeddings."""
+
+    def __init__(self, trace: dict, hf_state_dict) -> None:
+        _assert_hf_checkpoint_is_dequantized(hf_state_dict)
+        self._trace = trace
+        self._hf_state_dict = hf_state_dict
+        self._trace_hidden_rows = _mtp_module_trace_tensor(trace, "base_hidden_states_after_last_layer").to(
+            torch.bfloat16
+        )
+
+    def load_trace_input_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        embedding_tt = ttnn.from_torch(
+            self._trace_hidden_rows.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        return DeepSeekV3EmbeddingLayerWeights(embedding=embedding_tt)
+
+    def load_real_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        return prepare_embedding_weights(
+            {"model.embed_tokens.weight": self._hf_state_dict["model.embed_tokens.weight"]},
+            device,
+            move_to_device=True,
+        )
+
+    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        return prepare_lm_head_weights(
+            {
+                "lm_head.weight": self._hf_state_dict["lm_head.weight"],
+                "model.norm.weight": self._hf_state_dict["model.norm.weight"],
+            },
+            device,
+            move_to_device=True,
+        )
+
+    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+        return _prepare_reference_mtp_weights(device, self._hf_state_dict)
+
+    def load_spec(self, device: ttnn.MeshDevice) -> DeepSeekV3SpecWeights:
+        return _prepare_reference_spec_weights(device, self._hf_state_dict)
+
+
 def _create_reference_spec_decode_pipeline_configuration(
     weight_provider: _ReferencePayloadMTPWeightProvider,
     *,
@@ -1266,6 +1413,7 @@ def _create_reference_spec_decode_pipeline_configuration(
         return EmbeddingStage(
             weight_provider.load_embedding(device),
             d2h_page_size=TOKEN_META_PAGE_SIZE_BYTES,
+            forward_metadata=True,
         )
 
     def stage_1(device: ttnn.MeshDevice):
@@ -1287,6 +1435,45 @@ def _create_reference_spec_decode_pipeline_configuration(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=weight_provider.load_spec_weights(device),
+        )
+
+    return PipelineConfiguration({0: stage_0, 1: stage_1, 2: stage_2, 3: stage_3})
+
+
+def _create_mtp_module_trace_pipeline_configuration(
+    weight_provider: _MTPModuleTraceWeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+) -> PipelineConfiguration:
+    """4-stage trace pipeline: captured hidden rows -> base LM head+MTP -> passthrough -> spec LM head."""
+
+    def stage_0(device: ttnn.MeshDevice):
+        return EmbeddingStage(
+            weight_provider.load_trace_input_embedding(device),
+            d2h_page_size=TOKEN_META_PAGE_SIZE_BYTES,
+            forward_metadata=True,
+        )
+
+    def stage_1(device: ttnn.MeshDevice):
+        return BaseLMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            mtp_weights=weight_provider.load_mtp(device),
+            send_mtp_output_downstream=True,
+            embedding_weights=weight_provider.load_real_embedding(device),
+        )
+
+    def stage_2(device: ttnn.MeshDevice):
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    def stage_3(device: ttnn.MeshDevice):
+        return SpecLMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            spec_weights=weight_provider.load_spec(device),
         )
 
     return PipelineConfiguration({0: stage_0, 1: stage_1, 2: stage_2, 3: stage_3})
@@ -4851,39 +5038,65 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     ],
     indirect=True,
 )
-def test_persistent_mode_spec_decode(mesh_device, use_fp32):
-    """4-stage 4x2 single-galaxy pipeline with MTP + verification:
-    P1(Embedding + SpecLMHead) -> P2(BaseLMHead+EH Matmul) -> P3(Passthrough ACTIVATION_W_TOKEN_META) -> P4(Passthrough ACTIVATION_W_TOKEN_META) -> P1(D2H TOKEN_META).
+def test_persistent_mode_spec_decode(mesh_device, use_fp32, hf_state_dict):
+    """Trace-driven MTP module check with real weights.
 
-    The verification stage (P1) receives gathered logits + token metadata, runs its
-    own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
-
-    TOKEN_META page layout (uint32 words):
-      [0] token_type  [1] tok0_id  [2] tok0_pos
-      [3] tok1_id     [4] tok1_pos                    [5] slot_id
+    Stage 0 embeds row ids into captured base hidden states from the trace.  The
+    base LM-head stage uses real MTP weights and the real vocabulary embedding to
+    consume the traced base token id, then the verify stage runs the shared-head
+    LM head.  The returned TOKEN_META page is checked against reference top-k
+    logits computed from the trace hidden-state inputs and outputs.
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
     num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
-    iterations = 50
-    run_golden = False
-    run_on = "pod"  # "pod" or "glx"
+    trace = _load_mtp_module_reference_trace()
+    if int(trace["params"].get("spec_decode_depth", 1)) != 1:
+        pytest.skip("This test currently covers spec_decode_depth=1 traces")
 
-    if run_on == "pod":
-        config = create_single_pod_combined_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(),
-            fp32_dest_acc_en=use_fp32,
-        )
-    elif run_on == "glx":
-        config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(),
-            fp32_dest_acc_en=use_fp32,
-        )
-    else:
-        raise ValueError(f"Invalid run_on value: {run_on}")
+    base_hidden_rows = _mtp_module_trace_tensor(trace, "base_hidden_states_after_last_layer")
+    mtp_hidden_rows = _mtp_module_trace_tensor(trace, "mtp_decoder_hidden_states_before_lm_head")
+    base_token_ids = _mtp_module_trace_tensor(trace, "base_token_id").to(torch.int64)
+    base_token_position_ids = _mtp_module_trace_tensor(trace, "base_token_position_id").to(torch.int64)
+    base_hidden_position_ids = _mtp_module_trace_tensor(trace, "base_hidden_position_id").to(torch.int64)
+    mtp_position_ids = _mtp_module_trace_tensor(trace, "position_id").to(torch.int64)
+    spec_token_ids = _mtp_module_trace_tensor(trace, "spec_token_id").to(torch.int64)
+    spec_position_ids = _mtp_module_trace_tensor(trace, "spec_position_id").to(torch.int64)
+
+    iterations = int(base_hidden_rows.shape[0])
+    topk = 5
+    base_gamma, base_vocab, _ = _lm_head_golden_weights(hf_state_dict)
+    spec_gamma, spec_vocab, _ = _verification_lm_head_golden_weights(hf_state_dict)
+    base_ref_topk = _compute_reference_topk_from_hidden_rows(base_hidden_rows, base_gamma, base_vocab, topk=topk)
+    spec_ref_topk = _compute_reference_topk_from_hidden_rows(mtp_hidden_rows, spec_gamma, spec_vocab, topk=topk)
+
+    trace_base_top1, trace_base_top5 = _topk_hit_counts(base_token_ids, base_ref_topk)
+    trace_spec_top1, trace_spec_top5 = _topk_hit_counts(spec_token_ids, spec_ref_topk)
+    logger.info(
+        "MTP trace reference-token top-k coverage: "
+        f"base top1={trace_base_top1}/{iterations}, base top{topk}={trace_base_top5}/{iterations}; "
+        f"spec top1={trace_spec_top1}/{iterations}, spec top{topk}={trace_spec_top5}/{iterations}"
+    )
+    assert trace_base_top5 == iterations, (
+        f"Trace base_token_id is not in the real-weight reference top-{topk} for all rows: "
+        f"{trace_base_top5}/{iterations}"
+    )
+    assert trace_spec_top5 == iterations, (
+        f"Trace spec_token_id is not in the real-weight reference top-{topk} for all rows: "
+        f"{trace_spec_top5}/{iterations}"
+    )
+
+    provider = _MTPModuleTraceWeightProvider(trace, hf_state_dict)
+    config = _create_mtp_module_trace_pipeline_configuration(
+        provider,
+        fp32_dest_acc_en=use_fp32,
+        persistent_mode=True,
+    )
 
     print(f"[TEST] config created, building pipeline", flush=True)
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
@@ -4896,7 +5109,6 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     pid = pipeline.my_mesh_id
     logger.debug(f"[TEST P{pid}] pipeline built, calling setup_and_run")
 
-    pos_id = 0
     slot_id = 23
 
     try:
@@ -4906,27 +5118,32 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
         token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
 
         if pipeline.my_mesh_id == 0:
-            if run_golden:
-                logger.debug(f"[TEST] computing golden...")
-                golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
-                logger.debug(f"[TEST] golden computed, creating config")
-            else:
-                logger.debug(f"[TEST] skipping golden computation")
-
-            tok0_id = 0
-            token_type = 0
-            tok0_pos = 0
-            tok1_id = 0
-            tok1_pos = 0
+            got_base_tokens = []
+            got_spec_tokens = []
 
             for iteration in range(iterations):
                 logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
+                base_hidden_pos = int(base_hidden_position_ids[iteration].item())
+                expected_base_pos = int(base_token_position_ids[iteration].item())
+                expected_spec_pos = int(spec_position_ids[iteration].item())
+                mtp_input_pos = int(mtp_position_ids[iteration].item())
+                assert expected_base_pos == base_hidden_pos + 1, (
+                    f"Trace row {iteration} has inconsistent base positions: "
+                    f"base_hidden_position_id={base_hidden_pos}, base_token_position_id={expected_base_pos}"
+                )
+                assert expected_spec_pos == base_hidden_pos + 2, (
+                    f"Trace row {iteration} has inconsistent spec position: "
+                    f"base_hidden_position_id={base_hidden_pos}, spec_position_id={expected_spec_pos}"
+                )
+                assert mtp_input_pos > 0, f"Trace row {iteration} has invalid position_id={mtp_input_pos}"
+
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 2] = iteration
+                torch_token[0, 0] = 0
+                torch_token[0, 2] = mtp_input_pos - 1
                 torch_token[0, 5] = slot_id
                 torch_token[0, 6] = iteration
-                torch_token[0, 7] = iteration
-                torch_token[0, 8] = iteration
+                torch_token[0, 7] = base_hidden_pos
+                torch_token[0, 8] = int(base_token_ids[iteration].item())
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
                     torch.zeros(1, token_meta_words, dtype=torch.uint32),
@@ -4937,28 +5154,48 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
                 pipeline.read_output(output_tensor)
                 logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
-                raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
+                token_meta = _parse_token_meta_page(ttnn.to_torch(output_tensor))
 
-                token_type = raw[0].item()
-                tok0_id = raw[1].item()
-                tok0_pos = raw[2].item()
-                tok1_id = raw[3].item()
-                tok1_pos = raw[4].item()
-
-                if run_golden:
-                    expected_base, expected_spec = golden[iteration]
-                else:
-                    expected_base = None
-                    expected_spec = None
+                got_base_tokens.append(token_meta["tok0_id"])
+                got_spec_tokens.append(token_meta["tok1_id"])
+                assert token_meta["token_type"] == 0, f"Trace row {iteration} returned non-BASE token_type={token_meta}"
+                assert token_meta["slot_id"] == slot_id, f"Trace row {iteration} returned wrong slot_id: {token_meta}"
+                assert (
+                    token_meta["tok0_pos"] == expected_base_pos
+                ), f"Trace row {iteration} base position mismatch: expected={expected_base_pos}, got={token_meta}"
+                assert (
+                    token_meta["tok1_pos"] == expected_spec_pos
+                ), f"Trace row {iteration} spec position mismatch: expected={expected_spec_pos}, got={token_meta}"
 
                 type_name = {0: "BASE", 1: "SPEC"}
                 logger.debug(
                     f"[TEST P{pid}] iter {iteration} "
-                    f"t0={tok0_id}/{type_name.get(token_type,'?')} "
-                    f"t1={tok1_id} ",
-                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
-                    f"golden base token={expected_base} golden spec token={expected_spec}",
+                    f"t0={token_meta['tok0_id']}/{type_name.get(token_meta['token_type'],'?')} "
+                    f"t1={token_meta['tok1_id']} "
+                    f"t0 pos={token_meta['tok0_pos']} t1 pos={token_meta['tok1_pos']} "
+                    f"trace base token={int(base_token_ids[iteration].item())} "
+                    f"trace spec token={int(spec_token_ids[iteration].item())}",
                 )
+
+            got_base_tokens = torch.tensor(got_base_tokens, dtype=torch.int64)
+            got_spec_tokens = torch.tensor(got_spec_tokens, dtype=torch.int64)
+            base_top1, base_top5 = _topk_hit_counts(got_base_tokens, base_ref_topk)
+            spec_top1, spec_top5 = _topk_hit_counts(got_spec_tokens, spec_ref_topk)
+            logger.info(
+                "MTP module device-token top-k coverage: "
+                f"base top1={base_top1}/{iterations}, base top{topk}={base_top5}/{iterations}; "
+                f"spec top1={spec_top1}/{iterations}, spec top{topk}={spec_top5}/{iterations}"
+            )
+            logger.info(f"MTP module device base tokens: {got_base_tokens.tolist()}")
+            logger.info(f"MTP module device spec tokens: {got_spec_tokens.tolist()}")
+            assert base_top5 == iterations, (
+                f"MTP module base output token top-{topk} accuracy too low: {base_top5}/{iterations}; "
+                f"got={got_base_tokens.tolist()}, ref_top{topk}={base_ref_topk.tolist()}"
+            )
+            assert spec_top5 == iterations, (
+                f"MTP module speculation token top-{topk} accuracy too low: {spec_top5}/{iterations}; "
+                f"got={got_spec_tokens.tolist()}, ref_top{topk}={spec_ref_topk.tolist()}"
+            )
 
         logger.debug(f"[TEST P{pid}] all iterations done, barrier")
         pipeline.barrier()
