@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -7,6 +7,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "sfpi.h"
 
 namespace ckernel
 {
@@ -25,7 +26,7 @@ inline void _calculate_where_sfp_rows_(const int in0_offset_idx, const int in1_o
     TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in0_offset_idx); // condition -> LREG0
     TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in1_offset_idx); // true_val  -> LREG1
 
-    TTI_SFPSETCC(0, p_sfpu::LREG0, 6); // CC := (LREG0 == 0) (mod1=6 = SFPSETCC_MOD1_LREG_EQ0)
+    TTI_SFPSETCC(0, p_sfpu::LREG0, sfpi::SFPSETCC_MOD1_LREG_EQ0); // CC := (LREG0 == 0)
 
     TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in2_offset_idx); // false_val -> LREG1 only on CC-enabled lanes
 

@@ -262,8 +262,8 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
     torch_format_out = format_dict[formats.output_format]
     golden_tensor = golden_tensor.to(torch_format_out)
 
-    unpack_to_dest = formats.input_format.is_32_bit() == (
-        dest_acc == DestAccumulation.Yes
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
     # src_B is unused by the where kernel but StimuliConfig requires a non-None
@@ -366,8 +366,8 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc_implied_test_case_input_dims):
     torch_format_out = format_dict[formats.output_format]
     golden_tensor = golden_tensor.to(torch_format_out)
 
-    unpack_to_dest = formats.input_format.is_32_bit() == (
-        dest_acc == DestAccumulation.Yes
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
     src_B_dummy = torch.zeros_like(condition)
