@@ -197,6 +197,14 @@ public:
     // the ETH state in a mode where AllGather traffic hangs.  Python tests must skip AllGather
     // when any non-MMIO device has stale base-UMD channels.
     virtual bool is_fabric_stale_base_umd_channels() const { return false; }
+    // FIX RZ2 (#42429): Called by FabricFirmwareInitializer::configure() after ring-sync and
+    // health verification complete successfully.  fabric_stale_base_umd_channels_ was set by
+    // FIX M when base-UMD channels were transitioned via launch_msg.  After the ring barrier
+    // passes and all channels are verified healthy (channels_not_ready=false), the channels are
+    // running proper fabric firmware — the stale flag is no longer accurate and must be cleared.
+    // Leaving it set permanently causes FIX QW to skip ALL subsequent tests and FIX RX to
+    // skip quiesce in TearDown, each leading to progressively degraded hardware state.
+    virtual void clear_fabric_stale_base_umd_channels() {}
     virtual bool is_fabric_teardown_timed_out() const { return false; }
     virtual void set_fabric_teardown_timed_out() {}
     // Called by FabricFirmwareInitializer when a non-MMIO device enters dead_relay_devices_

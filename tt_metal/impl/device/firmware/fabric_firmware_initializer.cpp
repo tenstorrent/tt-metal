@@ -255,6 +255,40 @@ void FabricFirmwareInitializer::configure() {
             }
         } else {
             verify_all_fabric_channels_healthy();
+            // FIX RZ2 (#42429): After ring-sync + health verification complete without errors,
+            // clear fabric_stale_base_umd_channels_ for any device where the channels are now
+            // confirmed healthy (not_ready=false, relay_broken=false).
+            //
+            // Background: FIX M sets fabric_stale_base_umd_channels_=true when base-UMD relay
+            // channels are transitioned via launch_msg instead of soft reset.  The flag is set
+            // BEFORE ring-sync runs and was never cleared, even on the healthy path.  This caused
+            // two cascading problems:
+            //
+            //   1. FIX QW (test guards) skipped ALL subsequent tests because stale_base_umd=true,
+            //      even when channels had fully transitioned and ring-sync succeeded.
+            //
+            //   2. FIX RX (TearDown) skipped quiesce_devices() because fabric_broken=true
+            //      (stale_base_umd → fabric_broken), leaving ETH channels in a partially
+            //      initialized state.  Each improper teardown left MORE channels in base-UMD
+            //      state on the next init (2 → 4 → 4 per non-MMIO device), ultimately causing
+            //      ring-sync timeouts and ALL t3k_ttnn_tests to skip indefinitely.
+            //
+            // Fix: if ring-sync passed and health check passed (channels_not_ready=false,
+            // relay_broken=false), the channels are running proper fabric firmware. Clear the
+            // stale flag so FIX QW allows tests to run and FIX RX allows proper quiesce.
+            for (auto* dev : devices_) {
+                if (dev && dev->is_fabric_stale_base_umd_channels() &&
+                    !dev->is_fabric_channels_not_ready_for_traffic() &&
+                    !dev->is_fabric_relay_path_broken()) {
+                    dev->clear_fabric_stale_base_umd_channels();
+                    log_info(
+                        tt::LogMetal,
+                        "FIX RZ2 (#42429): Device {} base-UMD channels confirmed healthy after "
+                        "ring-sync + health check — clearing fabric_stale_base_umd_channels_. "
+                        "FIX QW will allow tests to run; FIX RX will allow proper quiesce.",
+                        dev->id());
+                }
+            }
         }
     }
     initialized_.test_and_set();

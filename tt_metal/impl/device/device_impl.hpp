@@ -212,6 +212,7 @@ public:
     bool is_fabric_relay_path_broken() const override { return fabric_relay_path_broken_.load(); }
     bool is_fabric_channels_not_ready_for_traffic() const override { return fabric_channels_not_ready_for_traffic_.load(); }
     bool is_fabric_stale_base_umd_channels() const override { return fabric_stale_base_umd_channels_.load(); }
+    void clear_fabric_stale_base_umd_channels() override { fabric_stale_base_umd_channels_.store(false); }
     bool is_fabric_teardown_timed_out() const override { return fabric_teardown_timed_out_.load(); }
     // Called by FabricFirmwareInitializer::post_teardown() after teardown_fabric_config() records
     // timed-out chip IDs.  Sets the flag so FIX AB hard-resets MMIO ETH channels at process exit.
