@@ -44,6 +44,7 @@ class DistributionKind(str, Enum):
     IDENTITY = "identity"
     FACE_IDENTITY = "face_identity"
     CUSTOM = "custom"
+    ULP_SWEEP = "ulp_sweep"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -131,6 +132,22 @@ class StimuliSpec:
             Participates in the normal face loop, so it works naturally
             with face_specs and masked_faces.  Ignores *low*,
             *high*, *seed*, *value*.
+
+        "ulp_sweep"
+            Exhaustive 1-ULP sweep: enumerates every finite representable
+            value in [low, high] for the target format (sorted, deduplicated),
+            pads with zeros to fill the tensor.  Only Float16_b and
+            Float16 formats are supported.  Bypasses the face loop
+            (tensor-level operation).  Ignores *seed*, *mean*, *std*,
+            *value*, *intervals*, *face_specs*, *masked_faces*.
+
+            **Dimension auto-sizing (operand A only):** when spec_A uses
+            ULP_SWEEP, generate_stimuli_v2 ignores any caller-supplied
+            input_dimensions_A and computes a 32×(32*N) layout large
+            enough to hold all representable values.  When spec_B is
+            omitted, input_dimensions_B is mirrored from A.  If spec_B
+            is provided explicitly, input_dimensions_B is *not*
+            auto-sized — the caller must supply compatible dimensions.
 
         callable
             fn(size: int, dtype: torch.dtype, generator: Optional[torch.Generator]) -> torch.Tensor.
@@ -390,6 +407,22 @@ class StimuliSpec:
             low=low,
             high=high,
             **kwargs,
+        )
+
+    @classmethod
+    def ulp_sweep(cls, low: float, high: float, **kwargs) -> "StimuliSpec":
+        """Exhaustive 1-ULP sweep of all representable values in [low, high].
+
+        Enumerates every finite representable value for the target format,
+        sorted and deduplicated, padding with zeros to fill the tensor.
+        Only Float16_b and Float16 formats are supported.
+
+        When used as spec_A, generate_stimuli_v2 auto-sizes input_dimensions_A
+        and mirrors it to B if spec_B is omitted.  Explicit spec_B is not
+        auto-sized — the caller must supply compatible input_dimensions_B.
+        """
+        return cls(
+            distribution=DistributionKind.ULP_SWEEP, low=low, high=high, **kwargs
         )
 
 
@@ -1410,6 +1443,66 @@ def generate_face_v2(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ULP sweep helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _enumerate_representable(
+    stimuli_format: DataFormat,
+    low: float,
+    high: float,
+    max_elements: int = 2**16,
+) -> torch.Tensor:
+    """Return all finite representable values in [low, high] for a 16-bit float format.
+
+    Iterates all 2^16 bit patterns, reinterprets them as the target dtype,
+    filters to finite values within [low, high], then sorts, deduplicates
+    (e.g. -0.0 == +0.0), and clips to max_elements.
+
+    Args:
+        stimuli_format: Must be Float16_b (bfloat16) or Float16 (float16).
+        low: Lower bound (inclusive).
+        high: Upper bound (inclusive).
+        max_elements: Safety cap on the number of returned values.
+
+    Returns:
+        1-D tensor in the native dtype of stimuli_format.
+
+    Raises:
+        ValueError: If stimuli_format is not Float16_b or Float16.
+    """
+    if stimuli_format == DataFormat.Float16_b:
+        dtype = torch.bfloat16
+    elif stimuli_format == DataFormat.Float16:
+        dtype = torch.float16
+    else:
+        raise ValueError(
+            f"ULP_SWEEP only supports Float16_b and Float16 formats, "
+            f"got {stimuli_format.name!r}"
+        )
+
+    # Enumerate all 2^16 bit patterns via int16 (wraps 32768..65535 to -32768..-1,
+    # but the byte representation is correct for a bitcast view).
+    all_bits = torch.arange(0, 2**16, dtype=torch.int16)
+    # Bitcast: both int16 and bfloat16/float16 are 2 bytes each.
+    all_vals = all_bits.view(dtype).to(torch.float32)
+
+    mask = torch.isfinite(all_vals) & (all_vals >= low) & (all_vals <= high)
+    vals = all_vals[mask]
+
+    vals, _ = torch.sort(vals)
+
+    if vals.numel() > 1:
+        unique_mask = torch.cat([torch.tensor([True]), vals[1:] != vals[:-1]])
+        vals = vals[unique_mask]
+
+    if vals.numel() > max_elements:
+        vals = vals[:max_elements]
+
+    return vals.to(dtype)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Private: full operand tensor
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1441,7 +1534,11 @@ def _generate_source_tensor_v2(
 
     # ── masked_faces validation for short-circuit distributions ──────────
     _SHORT_CIRCUIT_DISTRIBUTIONS = frozenset(
-        {DistributionKind.IDENTITY, DistributionKind.SEQUENTIAL}
+        {
+            DistributionKind.IDENTITY,
+            DistributionKind.SEQUENTIAL,
+            DistributionKind.ULP_SWEEP,
+        }
         | _LINSPACE_DISTRIBUTIONS
     )
     if spec.masked_faces and spec.distribution in _SHORT_CIRCUIT_DISTRIBUTIONS:
@@ -1471,6 +1568,19 @@ def _generate_source_tensor_v2(
 
     if spec.distribution == DistributionKind.SEQUENTIAL:
         tensor = _generate_sequential(spec, num_elements, dtype, stimuli_format)
+        if stimuli_format == DataFormat.Bfp4_b:
+            tensor = bfp4b_to_float16b(tensor)
+        return tensor
+
+    # ── ULP sweep: enumerate all representable values (no face loop) ─────
+    if spec.distribution == DistributionKind.ULP_SWEEP:
+        vals = _enumerate_representable(stimuli_format, spec.low, spec.high)
+        n = vals.numel()
+        if n >= num_elements:
+            tensor = vals[:num_elements]
+        else:
+            padding = torch.zeros(num_elements - n, dtype=vals.dtype)
+            tensor = torch.cat([vals, padding])
         if stimuli_format == DataFormat.Bfp4_b:
             tensor = bfp4b_to_float16b(tensor)
         return tensor
@@ -1608,6 +1718,8 @@ def generate_stimuli_v2(
     Returns:
         (srcA_tensor, tile_cnt_A, srcB_tensor, tile_cnt_B).
     """
+    _spec_B_originally_none = spec_B is None
+
     if input_dimensions_A is None:
         input_dimensions_A = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
     if input_dimensions_B is None:
@@ -1616,6 +1728,22 @@ def generate_stimuli_v2(
         spec_A = _default_spec_for_format(stimuli_format_A)
     if spec_B is None:
         spec_B = _default_spec_for_format(stimuli_format_B)
+
+    # ULP_SWEEP: auto-size input_dimensions_A from the count of representable values,
+    # ignoring any caller-supplied value. Mirror B if the caller didn't specify spec_B.
+    if spec_A.distribution == DistributionKind.ULP_SWEEP:
+        _ulp_vals = _enumerate_representable(stimuli_format_A, spec_A.low, spec_A.high)
+        _num_ulp = _ulp_vals.numel()
+        _tile_size = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+        _num_tiles = max(1, math.ceil(_num_ulp / _tile_size))
+        # Align to 16 tiles when above the DestSync.Half limit (8) so the layout
+        # satisfies both DestSync.Half (needs num_tiles % 8 == 0) and DestSync.Full
+        # (needs num_tiles % 16 == 0 when > 16). LCM(8, 16) = 16.
+        if _num_tiles > 8:
+            _num_tiles = math.ceil(_num_tiles / 16) * 16
+        input_dimensions_A = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM * _num_tiles]
+        if _spec_B_originally_none:
+            input_dimensions_B = list(input_dimensions_A)
 
     if tile_dimensions is not None:
         if face_r_dim != MAX_FACE_R_DIM:
