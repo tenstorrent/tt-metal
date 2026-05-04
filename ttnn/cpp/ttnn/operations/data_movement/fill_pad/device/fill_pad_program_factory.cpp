@@ -452,6 +452,7 @@ FillPadL1ShardedProgramFactory::cached_program_t FillPadL1ShardedProgramFactory:
 
     // All-active CoreRangeSet for CB creation.
     std::vector<CoreRange> all_active_vec;
+    all_active_vec.reserve(active.size());
     for (const auto& ci : active) {
         all_active_vec.emplace_back(ci.coord, ci.coord);
     }
