@@ -137,6 +137,7 @@ void kernel_main() {
     uint64_t sender_c9_slot_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, sender_idle_c9_scratch_l1_offset + core_id * sizeof(uint32_t));
     noc_inline_dw_write(sender_c9_slot_noc_addr, my_c9_l1_offset);
+    noc_async_write_barrier();  // ensure c_9 offset has landed before atomic inc wakes sender
     noc_semaphore_inc(sender_data_ready_noc_addr, 1);
     noc_async_atomic_barrier();
 
