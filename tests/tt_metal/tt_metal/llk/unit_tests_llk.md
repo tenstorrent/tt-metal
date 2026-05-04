@@ -61,8 +61,8 @@ environment variable toggles the underlying device behavior.
 
 | Mode | Env | What runs / what skips |
 |---|---|---|
-| **Fast dispatch** (FD) | `unset TT_METAL_SLOW_DISPATCH_MODE` | All dispatch-agnostic tests. SD-only fixtures auto-skip. |
-| **Slow dispatch** (SD) | `TT_METAL_SLOW_DISPATCH_MODE=1` | All dispatch-agnostic tests plus the SD-only set. FD-only fixtures auto-skip. |
+| **Fast dispatch** (FD) | `unset TT_METAL_SLOW_DISPATCH_MODE` | Dispatch-agnostic tests. SD-only fixtures auto-skip; arch-specific fixtures auto-skip on the wrong arch. |
+| **Slow dispatch** (SD) | `TT_METAL_SLOW_DISPATCH_MODE=1` | Dispatch-agnostic tests plus the SD-only set. FD-only fixtures auto-skip; arch-specific fixtures auto-skip on the wrong arch. |
 
 Each test opts into a mode via its fixture choice — see [Fixtures](#fixtures).
 
@@ -222,13 +222,15 @@ on the wrong architecture and run on the right one wherever it is available.
 
 ## CI integration
 
-The same binary runs in three places, each with a different filter:
+The same binary runs in merge gate and L2 nightly with different filters:
 
 | Job | Workflow | Trigger | Dispatch | Filter |
 |---|---|---|---|---|
-| `llk-fd-unit-tests-{arch}` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | FD | none (full FD set) |
-| `llk-sd-unit-tests-{arch}` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | SD | SD-only fixtures plus arch-specific fixtures |
-| `llk-sd-unit-tests` | `tt-metal-l2-nightly.yaml` | nightly cron / `workflow_dispatch` | SD | none (full SD set) |
+| `llk-fd-unit-tests-wormhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | FD | default `*` filter |
+| `llk-fd-unit-tests-blackhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | FD | excludes `LLKBlackholeSingleCardFixture.*` and `*MulReduceScalarTest*`; those run in BH SD |
+| `llk-sd-unit-tests-wormhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | SD | `LLKMeshDeviceFixtureSlowDispatchOnly.*` plus Quasar fixture filters (currently skip on WH) |
+| `llk-sd-unit-tests-blackhole` | `merge-gate.yaml` | LLK changes when entering merge queue (or push to `main`) | SD | `LLKMeshDeviceFixtureSlowDispatchOnly.*`, `LLKBlackholeSingleCardFixture.*`, `*MulReduceScalarTest*`, plus Quasar fixture filters (currently skip on BH) |
+| `llk-sd-unit-tests` | `tt-metal-l2-nightly.yaml` | nightly cron / `workflow_dispatch` | SD | default `*` filter |
 
 The merge-gate FD jobs are sharded across multiple runners using
 `GTEST_TOTAL_SHARDS` / `GTEST_SHARD_INDEX` and run with
@@ -243,8 +245,8 @@ queue.
 
 Trigger gating uses `find-changed-files.sh`'s `llk-unit-tests-changed` flag,
 which fires on any change under `tests/tt_metal/tt_metal/llk/**`. Changes to
-the LLK engine itself (under `tt_metal/tt-llk/**`) also trigger the same jobs
-via the per-arch LLK-changed flags.
+the LLK engine itself (under `tt_metal/tt-llk/**`), SFPI version pins, and LLK
+CI files also trigger the same jobs via the per-arch/common/SFPI/CI flags.
 
 ---
 
