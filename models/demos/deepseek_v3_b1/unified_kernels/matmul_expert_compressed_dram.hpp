@@ -812,18 +812,41 @@ struct MatmulExpertCompressedDRAM {
                                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                                                 CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
 
-                                        // Walk ALL (K, N) tiles in DRAM order, print fmt + offset + size.
+                                        // Per-K dump of (K, N=2) tile bytes inline with header so
+                                        // /data/yugao/tt-metal/decode_bfp_tiles.py can decode fp32.
+                                        // Walks N=0..1 / N=3..6 just to advance the byte offset.
                                         uint32_t walk_byte_off = 0;
                                         for (uint32_t k = 0; k < CTArgs::num_tiles_k; k++) {
-                                            for (uint32_t n = 0; n < 7; n++) {
+                                            for (uint32_t n = 0; n < 2; n++) {
                                                 uint32_t ti = 7 * k + n;
                                                 uint32_t fmt_w = fmt_p[ti / 10];
                                                 uint32_t f = (fmt_w >> (3 + 3 * (ti % 10))) & 0x3;
-                                                uint32_t sz = f == 0 ? 0 : f == 1 ? 320 : f == 2 ? 576 : 1088;
-                                                DPRINT << "[exp_i=0 K=" << k << " N=" << n << " fmt=" << f
-                                                       << " off=" << HEX() << walk_byte_off << " sz=" << sz << "]"
-                                                       << ENDL();
-                                                walk_byte_off += sz;
+                                                walk_byte_off += f == 0 ? 0 : f == 1 ? 320 : f == 2 ? 576 : 1088;
+                                            }
+                                            uint32_t target_ti = 7 * k + 2;
+                                            uint32_t target_w = fmt_p[target_ti / 10];
+                                            uint32_t target_f = (target_w >> (3 + 3 * (target_ti % 10))) & 0x3;
+                                            uint32_t target_sz = target_f == 0   ? 0
+                                                                 : target_f == 1 ? 320
+                                                                 : target_f == 2 ? 576
+                                                                                 : 1088;
+                                            DPRINT << "[exp_i=0 K=" << k << " N=2 fmt=" << target_f << " off=" << HEX()
+                                                   << walk_byte_off << " sz=" << target_sz << "]:";
+                                            if (target_sz > 0) {
+                                                volatile tt_l1_ptr uint32_t* tile_p =
+                                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                                        in1_addr_for_print + walk_byte_off);
+                                                for (uint32_t i = 0; i < target_sz / 4; i++) {
+                                                    DPRINT << " " << HEX() << tile_p[i];
+                                                }
+                                            }
+                                            DPRINT << ENDL();
+                                            walk_byte_off += target_sz;
+                                            for (uint32_t n = 3; n < 7; n++) {
+                                                uint32_t ti = 7 * k + n;
+                                                uint32_t fmt_w = fmt_p[ti / 10];
+                                                uint32_t f = (fmt_w >> (3 + 3 * (ti % 10))) & 0x3;
+                                                walk_byte_off += f == 0 ? 0 : f == 1 ? 320 : f == 2 ? 576 : 1088;
                                             }
                                         }
 
