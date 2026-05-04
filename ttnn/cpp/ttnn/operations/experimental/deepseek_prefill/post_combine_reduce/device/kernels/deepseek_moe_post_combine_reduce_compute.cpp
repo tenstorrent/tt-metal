@@ -25,92 +25,109 @@ constexpr uint32_t indices_pages_per_core = get_compile_time_arg_val(3);
 constexpr bool use_dispatch_table_skip = get_compile_time_arg_val(4) != 0;
 
 void kernel_main() {
-    constexpr uint32_t TOKENS_PER_CORE = 32;
+    constexpr uint32_t TOKENS_PER_CHUNK = 32;
     uint32_t token_start_idx = get_arg_val<uint32_t>(0);
-    constexpr uint32_t total_token_tiles = TOKENS_PER_CORE * emb_dim_cb_tiles;
+    uint32_t num_chunks = get_arg_val<uint32_t>(1);
+    constexpr uint32_t total_token_tiles = TOKENS_PER_CHUNK * emb_dim_cb_tiles;
 
     if constexpr (use_dispatch_table_skip) {
-        // Wait for writer to finish loading scratch data
+        // Wait for writer to finish pre-loading scratch data (all chunks' indices)
         cb_wait_front(cb_dispatch_table, dispatch_table_num_pages);
-        cb_wait_front(cb_indices, indices_pages_per_core);
+        cb_wait_front(cb_indices, num_chunks * TOKENS_PER_CHUNK);
     }
 
     binary_op_init_common(cb_combine_input, cb_weights, cb_output);
 
-    cb_reserve_back(cb_rowmajor, total_token_tiles);
+    using namespace compute_kernel_lib::tilize_config;
 
-    // Process one expert at a time: both input (c_0) and weight (c_1) are streamed
-    // one expert at a time by reader and writer respectively.
-    for (uint32_t i = 0; i < TOKENS_PER_CORE; ++i) {
-        mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
+    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        cb_reserve_back(cb_rowmajor, total_token_tiles);
 
-        // first_active tracks whether we've picked the accumulator-initializing
-        // expert yet: the DeepSeek path looks for a locally-mapped expert via
-        // the dispatch table; the GPT-OSS path looks for a non-zero routing
-        // weight. A single pass skips inactive experts; if none qualified,
-        // the last expert is forced through to initialise the accumulator.
-        bool first_active = true;
-        for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-            cb_wait_front(cb_combine_input, emb_dim_cb_tiles);
-            cb_wait_front(cb_weights, 1);
+        // Process one expert at a time: both input (c_0) and weight (c_1) are streamed
+        // one expert at a time by reader and writer respectively.
+        for (uint32_t i = 0; i < TOKENS_PER_CHUNK; ++i) {
+            mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
 
-            bool skip_expert = false;
-            bool must_zero_init = false;
-            if constexpr (use_dispatch_table_skip) {
-                // Look up global expert ID from indices CB
-                uint32_t expert_id = read_tile_value(cb_indices, i, expert_idx);
-                // Check dispatch table: -1 (0xFFFFFFFF) means non-local
-                uint32_t chip_id = read_tile_value(cb_dispatch_table, 0, expert_id);
-                bool is_local = (chip_id != 0xFFFFFFFF);
+            // first_active tracks whether we've picked the accumulator-initializing
+            // expert yet: the DeepSeek path looks for a locally-mapped expert via
+            // the dispatch table; the GPT-OSS path looks for a non-zero routing
+            // weight. A single pass skips inactive experts; if none qualified,
+            // the last expert is forced through to initialise the accumulator.
+            bool first_active = true;
+            for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
+                cb_wait_front(cb_combine_input, emb_dim_cb_tiles);
+                cb_wait_front(cb_weights, 1);
 
-                // On the last expert, if none were local, we must process it to
-                // initialize the accumulator. Writer guarantees the weight is zero
-                // for this case, so multiply produces zeros.
-                bool is_last = (expert_idx == num_experts - 1);
-                must_zero_init = is_last && first_active;
-                skip_expert = !is_local && !must_zero_init;
-            } else {
-                // Read weight value — if zero, skip (but always process at least one
-                // expert so the accumulator gets initialized with valid data)
-                uint32_t weight_val = read_tile_value(cb_weights, 0, 0);
-                skip_expert = (weight_val == 0) && !first_active;
-            }
+                bool skip_expert = false;
+                bool must_zero_init = false;
+                if constexpr (use_dispatch_table_skip) {
+                    // Absolute index into the pre-loaded indices CB for this token
+                    uint32_t token_cb_idx = chunk * TOKENS_PER_CHUNK + i;
+                    uint32_t expert_id = read_tile_value(cb_indices, token_cb_idx, expert_idx);
+                    // Check dispatch table: -1 (0xFFFFFFFF) means non-local
+                    uint32_t chip_id = read_tile_value(cb_dispatch_table, 0, expert_id);
+                    bool is_local = (chip_id != 0xFFFFFFFF);
 
-            if (skip_expert) {
+                    // On the last expert, if none were local, we must process it to
+                    // initialize the accumulator. Writer guarantees the weight is zero
+                    // for this case, so multiply produces zeros.
+                    bool is_last = (expert_idx == num_experts - 1);
+                    must_zero_init = is_last && first_active;
+                    skip_expert = !is_local && !must_zero_init;
+                } else {
+                    // Read weight value — if zero, skip (but always process at least one
+                    // expert so the accumulator gets initialized with valid data)
+                    uint32_t weight_val = read_tile_value(cb_weights, 0, 0);
+                    skip_expert = (weight_val == 0) && !first_active;
+                }
+
+                if (skip_expert) {
+                    cb_pop_front(cb_combine_input, emb_dim_cb_tiles);
+                    cb_pop_front(cb_weights, 1);
+                    continue;
+                }
+
+                if (!first_active) {
+                    pack_reconfig_l1_acc(1);  // accumulate
+                } else {
+                    pack_reconfig_l1_acc(0);  // overwrite
+                    first_active = false;
+                }
+
+                tile_regs_acquire();
+
+                for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
+                    mul_tiles_bcast<BroadcastType::SCALAR>(cb_combine_input, cb_weights, j, 0, j);
+                }
+
+                tile_regs_commit();
+                tile_regs_wait();
+
+                for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
+                    pack_tile<true>(j, cb_rowmajor, i * emb_dim_cb_tiles + j);
+                }
+
+                tile_regs_release();
+
                 cb_pop_front(cb_combine_input, emb_dim_cb_tiles);
                 cb_pop_front(cb_weights, 1);
-                continue;
             }
-
-            if (!first_active) {
-                pack_reconfig_l1_acc(1);  // accumulate
-            } else {
-                pack_reconfig_l1_acc(0);  // overwrite
-                first_active = false;
-            }
-
-            tile_regs_acquire();
-
-            for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
-                mul_tiles_bcast<BroadcastType::SCALAR>(cb_combine_input, cb_weights, j, 0, j);
-            }
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
-                pack_tile<true>(j, cb_rowmajor, i * emb_dim_cb_tiles + j);
-            }
-
-            tile_regs_release();
-
-            cb_pop_front(cb_combine_input, emb_dim_cb_tiles);
-            cb_pop_front(cb_weights, 1);
+            pack_reconfig_l1_acc(0);
         }
-        pack_reconfig_l1_acc(0);
-    }
-    cb_push_back(cb_rowmajor, total_token_tiles);
+        cb_push_back(cb_rowmajor, total_token_tiles);
 
-    // Tilize all 32 tokens' row-major scratch into the output CB as one block.
-    compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output>(1);
+        // Avoid redundant tilize init/uninit on every chunk: init once on the first,
+        // skip both on middle chunks, uninit once on the last.
+        const bool is_first = (chunk == 0);
+        const bool is_last_chunk = (chunk == num_chunks - 1);
+        if (num_chunks == 1) {
+            compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output, InitUninitMode::InitAndUninit>(1);
+        } else if (is_first) {
+            compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output, InitUninitMode::InitOnly>(1);
+        } else if (is_last_chunk) {
+            compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output, InitUninitMode::UninitOnly>(1);
+        } else {
+            compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output, InitUninitMode::Neither>(1);
+        }
+    }
 }
