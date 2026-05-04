@@ -560,8 +560,7 @@ TEST(MultiHost, Test32x4QuadGalaxyFabric2DSanity) {
 
     // Validate control plane apis
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto fabric_type =
-        get_fabric_type(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY, tt::tt_metal::ClusterType::BLACKHOLE_GALAXY);
+    const auto fabric_type = get_fabric_type(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY, true);
 
     FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
     MeshCoordinate src_mesh_coord(0, 3);
@@ -675,8 +674,7 @@ TEST(MultiHost, TestQuadGalaxyFabric2DSanity) {
 
     // Validate control plane apis
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto fabric_type =
-        get_fabric_type(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY, tt::tt_metal::ClusterType::BLACKHOLE_GALAXY);
+    const auto fabric_type = get_fabric_type(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY, true);
 
     FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
     MeshCoordinate src_mesh_coord(0, 3);
