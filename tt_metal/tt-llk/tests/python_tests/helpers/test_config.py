@@ -44,6 +44,7 @@ from .device import (
     handle_if_assert_hit,
     reset_mailboxes,
     set_tensix_soft_reset,
+    wait_brisc_boot_ready,
 )
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -1221,9 +1222,19 @@ class TestConfig:
                     risc_name="brisc",
                     verify_write=True,
                 )
+                # Pre-clear BriscCounter so we cannot latch onto a stale
+                # boot-ready sentinel left in L1 by a prior pytest process —
+                # mailboxes live at fixed L1 addresses outside any ELF
+                # section, so they survive ELF reload.
+                write_words_to_device(
+                    TestConfig.TENSIX_LOCATION,
+                    device_module.Mailboxes.BriscCounter.value,
+                    [0],
+                )
                 commit_tensix_soft_reset(
                     0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
                 )
+                wait_brisc_boot_ready(TestConfig.TENSIX_LOCATION)
             if TestConfig.ARCH != ChipArchitecture.QUASAR:
                 commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.RESET_TRISCS)
         else:

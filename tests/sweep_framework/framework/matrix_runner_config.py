@@ -232,7 +232,7 @@ LOCAL_HARDWARE_MESH_CAPABILITY_RULES = (
     },
     {
         "match": {"device_series": "tt_galaxy_wh"},
-        "allowed_mesh_shapes": ("1x1", "1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2"),
+        "allowed_mesh_shapes": ("1x1", "1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2", "1x32", "32x1"),
     },
     {
         "match": {"board_type": "blackhole", "device_series": "p150b", "card_count": 1},

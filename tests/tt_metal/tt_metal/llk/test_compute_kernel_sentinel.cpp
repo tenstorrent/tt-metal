@@ -105,6 +105,8 @@ bool single_core_compute_kernel_sentinel(
     defines["LIGHTWEIGHT_KERNEL_ASSERTS"] = "1";
     defines["TT_METAL_COMPUTE_KERNEL_SENTINEL_ENABLED"] = "1";
     defines["TT_METAL_COMPUTE_KERNEL_SENTINEL_DEFAULT_INJECTION"] = "1";
+    defines["REDUCE_OP"] = "PoolType::SUM";
+    defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     auto compute_kernel = tt_metal::CreateKernel(
         program_,

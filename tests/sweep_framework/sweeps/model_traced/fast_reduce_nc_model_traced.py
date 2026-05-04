@@ -11,11 +11,17 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -125,23 +131,56 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Pre-allocate output tensor if the master config recorded one (named "output")
+    output_info = extract_named_tensor_kwargs(kwargs, "output")
+    output_pre = None
+    if output_info and output_info.get("shape"):
+        ot_shape = tuple(output_info["shape"])
+        ot_dtype = output_info.get("dtype") or input_a_dtype
+        if isinstance(ot_dtype, dict):
+            ot_dtype = parse_dict_value("dtype", ot_dtype) or input_a_dtype
+        ot_layout = output_info.get("layout") or input_a_layout
+        if isinstance(ot_layout, dict):
+            ot_layout = parse_dict_value("layout", ot_layout) or input_a_layout
+        ot_mem_cfg_raw = output_info.get("memory_config")
+        ot_mem_cfg = (
+            parse_dict_value("memory_config", ot_mem_cfg_raw)
+            if isinstance(ot_mem_cfg_raw, dict)
+            else (ot_mem_cfg_raw or input_a_memory_config)
+        )
+        ot_placement = output_info.get("tensor_placement")
+        torch_out_alloc = torch.zeros(ot_shape, dtype=torch.float32)
+        if is_mesh_device and ot_placement:
+            output_pre = create_tensor_on_mesh(torch_out_alloc, device, ot_dtype, ot_layout, ot_mem_cfg, ot_placement)
+        elif not is_host:
+            output_pre = ttnn.from_torch(
+                torch_out_alloc, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg
+            )
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, output=None, **op_kwargs)
+    if output_pre is not None:
+        output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, output=output_pre, **op_kwargs)
+    else:
+        output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, **op_kwargs)
 
     # Calculate expected output shape (reduce dims to 1)
     output_shape = list(shape)
     for dim in dims:
         output_shape[dim] = 1
 
-    # Convert to torch, unpad from tile, then compare
+    # Convert to torch, unpad from tile, then compare. On a mesh device the
+    # output is sharded across chips and must be reassembled with
+    # mesh_tensor_to_torch (taking just device_tensors[0] returns only the
+    # chip-0 slice and leaves the rest of the global tensor empty).
     if is_mesh_device:
-        device_tensors = ttnn.get_device_tensors(output_tensor)
-        output_tensor = device_tensors[0].cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
+        output_tensor = mesh_tensor_to_torch(output_tensor, device)
     else:
         output_tensor = output_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(output_shape).to_torch()
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - use 0.999 threshold like unit test
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]
