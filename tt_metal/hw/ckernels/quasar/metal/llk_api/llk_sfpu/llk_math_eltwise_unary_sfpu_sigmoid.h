@@ -10,14 +10,17 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <[[maybe_unused]] bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sigmoid_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::sigmoid, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sigmoid>();
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <
+    [[maybe_unused]] bool APPROXIMATE,
+    [[maybe_unused]] bool is_fp32_dest_acc_en,
+    int ITERATIONS = SFPU_ITERATIONS>
 inline void llk_math_eltwise_unary_sfpu_sigmoid(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(sfpu::calculate_sigmoid, dst_index, ITERATIONS);
+    _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_sigmoid, dst_index, ITERATIONS);
 }
 
 }  // namespace ckernel

@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
+/*
 #pragma once
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_common.h"
 #include "ckernel_sfpu_silu.h"
 
 namespace ckernel {
@@ -21,3 +21,4 @@ inline void llk_math_eltwise_unary_sfpu_silu(uint dst_index) {
 }
 
 }  // namespace ckernel
+*/
