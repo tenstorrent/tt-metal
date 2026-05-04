@@ -23,8 +23,9 @@ namespace ttnn::operations::experimental::conv3d {
 template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
-    auto transformed_tensor = input_tensor.host_tensor().transform(compute);
-    return Tensor(tt::tt_metal::HostTensor(transformed_tensor.buffer(), output_spec, input_tensor.tensor_topology()));
+    auto transformed_buffer = input_tensor.host_storage().buffer().transform(
+        compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    return Tensor(tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
 }
 
 template <typename Func, typename... Args>

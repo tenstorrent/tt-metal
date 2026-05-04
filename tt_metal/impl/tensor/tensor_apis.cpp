@@ -333,9 +333,11 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
         TT_THROW("Unreachable");
     };
 
-    auto transformed_tensor = tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); });
+    auto transformed_buffer = tensor.buffer().transform(
+        [&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
     return HostTensor(
-        transformed_tensor.buffer(),
+        std::move(transformed_buffer),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -636,9 +638,11 @@ HostTensor pad_impl(
         return output_buffer;
     };
 
-    auto transformed_tensor = tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); });
+    auto transformed_buffer = tensor.buffer().transform(
+        [&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
     return HostTensor(
-        transformed_tensor.buffer(),
+        std::move(transformed_buffer),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -712,9 +716,11 @@ HostTensor unpad_impl(
         return output_buffer;
     };
 
-    auto transformed_tensor = tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); });
+    auto transformed_buffer = tensor.buffer().transform(
+        [&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
     return HostTensor(
-        transformed_tensor.buffer(),
+        std::move(transformed_buffer),
         TensorSpec(
             tt::tt_metal::Shape(output_shape),
             tt::tt_metal::TensorLayout(
