@@ -26,6 +26,7 @@ MLA_100K = dict(
     NH=32,
     num_q_chunks=20,
     distribution="head_grouped",
+    layout="col_major",
 )
 # CSV oracle config (matches existing idea-ring_iter0_timestamps.csv):
 CSV_ORACLE = dict(
@@ -39,6 +40,7 @@ CSV_ORACLE = dict(
     NH=29,
     num_q_chunks=20,
     distribution="flat",
+    layout="row_major",
 )
 
 ENABLE_ZIGZAG = True
@@ -68,7 +70,21 @@ def compute_split(cfg: dict) -> tuple[int, int, int]:
 
 
 def physical_core(cfg: dict, core_idx: int) -> tuple[int, int]:
+    if cfg.get("layout") == "col_major":
+        rows = cfg["num_cores"] // cfg["sdpa_cols"]
+        return core_idx // rows, core_idx % rows
     return core_idx % cfg["sdpa_cols"], core_idx // cfg["sdpa_cols"]
+
+
+def _positions_form_line(positions: list[tuple[int, int]]) -> bool:
+    """True iff `positions` are colinear and contiguous on either axis (1xN or Nx1)."""
+    xs = [p[0] for p in positions]
+    ys = [p[1] for p in positions]
+    same_x = all(x == xs[0] for x in xs)
+    same_y = all(y == ys[0] for y in ys)
+    contig_x = (max(xs) - min(xs) + 1) == len(xs)
+    contig_y = (max(ys) - min(ys) + 1) == len(ys)
+    return (same_y and contig_x) or (same_x and contig_y)
 
 
 def zigzag_q(cfg: dict, pos_in_head: int) -> tuple[int, bool]:
@@ -256,11 +272,8 @@ def _build_v_chains_flat(cfg: dict, core_work: list[dict]) -> dict[int, dict]:
         excluded = cores[:inj_pos]
         chain = cores[inj_pos:]
         positions = [physical_core(cfg, ci) for ci in chain]
-        same_row = all(p[1] == positions[0][1] for p in positions)
-        xs = [p[0] for p in positions]
-        contiguous = (max(xs) - min(xs) + 1) == len(xs)
         uniform = all(core_work[ci]["global_q_count"] == core_work[chain[0]]["global_q_count"] for ci in chain)
-        is_mcast = same_row and contiguous and uniform
+        is_mcast = _positions_form_line(positions) and uniform
         chains[head] = {"chain": chain, "inj": chain[0], "snk": chain[-1], "mcast": is_mcast, "excluded": excluded}
     return chains
 
@@ -279,11 +292,8 @@ def _build_v_chains_head_grouped(cfg: dict, core_work: list[dict]) -> dict[int, 
     for head, cores in by_head.items():
         chain = sorted(cores)
         positions = [physical_core(cfg, ci) for ci in chain]
-        same_row = all(p[1] == positions[0][1] for p in positions)
-        xs = [p[0] for p in positions]
-        contiguous = (max(xs) - min(xs) + 1) == len(xs)
         uniform = all(core_work[ci]["global_q_count"] == core_work[chain[0]]["global_q_count"] for ci in chain)
-        is_mcast = same_row and contiguous and uniform
+        is_mcast = _positions_form_line(positions) and uniform
         chains[head] = {
             "chain": chain,
             "inj": chain[0],
@@ -502,6 +512,24 @@ def verify_mla_100k(cfg, core_work, v_chains, static_roles, timestamps, k_inj):
             assert info["inj"] == expected_chain[0]
             assert info["snk"] == expected_chain[-1]
             assert info["excluded"] == []
+
+    # col_major layout: each group's cores form a single full column.
+    if cfg.get("layout") == "col_major":
+        rows = nc // cfg["sdpa_cols"]
+        assert physical_core(cfg, 0) == (0, 0)
+        assert physical_core(cfg, 9) == (0, 9)
+        assert physical_core(cfg, 10) == (1, 0)
+        assert physical_core(cfg, 109) == (10, 9)
+        for g in range(num_groups):
+            chain = list(range(g * cores_per_group, (g + 1) * cores_per_group))
+            positions = [physical_core(cfg, ci) for ci in chain]
+            xs = {p[0] for p in positions}
+            ys = sorted(p[1] for p in positions)
+            assert len(xs) == 1 and xs == {g}, (g, positions)
+            assert ys == list(range(rows)), (g, ys)
+        # every chain is mcast-eligible: column-aligned + uniform work
+        for h, info in v_chains.items():
+            assert info["mcast"] is True, (h, info)
 
     # K-set schedule (driven only by pair_local_t, unchanged by distribution)
     half = n // 2

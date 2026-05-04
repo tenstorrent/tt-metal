@@ -993,3 +993,11 @@ index does.
 behavior — useful for sanity-checking before the C++ work. The flat
 distribution is preserved under `cfg["distribution"] = "flat"` (the
 `CSV_ORACLE` config) and still passes its existing CSV regression check.
+
+The simulator also exposes `cfg["layout"] ∈ {"row_major", "col_major"}`, which
+controls both the physical `(col, row)` mapping for `core_idx` and the mcast
+line check (column-aligned chains are accepted in addition to row-aligned).
+`MLA_100K` is set to `col_major` so each head-group's 10 cores form a single
+full column on the 11×10 SDPA grid — every V chain becomes a clean 1D mcast
+line, and the visualization renders chains as vertical arrows down columns.
+`CSV_ORACLE` stays on `row_major`.
