@@ -45,10 +45,6 @@ protected:
         drisc_l1_base_ = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
         drisc_l1_noc_addr_ = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
         tensix_l1_base_ = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
-        // Use the allocator's managed base rather than a raw HAL constant. We don't
-        // formally allocate a buffer here because each test owns the DRAM exclusively
-        // for its duration and nothing else allocates into this region concurrently.
-        dram_unreserved_base_ = device_->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         dram_unreserved_size_ = hal.get_dev_size(HalDramMemAddrType::UNRESERVED);
     }
 
@@ -73,7 +69,6 @@ protected:
     uint32_t drisc_l1_base_{};
     uint64_t drisc_l1_noc_addr_{};
     uint32_t tensix_l1_base_{};
-    uint32_t dram_unreserved_base_{};
     uint32_t dram_unreserved_size_{};
 };
 
@@ -251,6 +246,16 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
         num_endpoints * total_bytes_per_core,
         dram_unreserved_size_);
 
+    // One page per bank: interleaved allocation gives every bank the same bank-relative
+    // base address, so each DRISC DMA can write into its own bank at that address.
+    auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
+        .device = device_,
+        .size = num_banks * num_endpoints * total_bytes_per_core,
+        .page_size = num_endpoints * total_bytes_per_core,
+        .buffer_type = BufferType::DRAM,
+    });
+    uint32_t dram_addr = dram_buffer->address();
+
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
     log_info(LogTest, "Random seed: {}", seed);
     std::vector<uint32_t> data = create_random_vector_of_bfloat16(bytes_per_iter, 1000.0f, seed);
@@ -268,7 +273,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
                 logical_core,
                 DramConfig{.noc = NOC::NOC_0, .defines = {{"L1_TO_GDDR_WRITE_TEST", "1"}}});
             // Partition DRAM gddr dst addr by endpoint row
-            const uint32_t dram_dst_gddr_addr = dram_unreserved_base_ + row * total_bytes_per_core;
+            const uint32_t dram_dst_gddr_addr = dram_addr + row * total_bytes_per_core;
             SetRuntimeArgs(program, k_id, logical_core, {dram_dst_gddr_addr, drisc_l1_base_, bytes_per_iter, iters});
         }
     }
@@ -292,7 +297,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
             tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
                 device_,
                 dram_channel,
-                dram_unreserved_base_ + bytes_per_iter * (iters - 1) + total_bytes_per_core * row,
+                dram_addr + bytes_per_iter * (iters - 1) + total_bytes_per_core * row,
                 bytes_per_iter,
                 result);
             EXPECT_EQ(result, data) << "Data mismatch on DRAM from core (bank=" << col << ", endpoint=" << row << ")";
@@ -330,6 +335,16 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
         "Not enough DRAM for {} endpoint source regions",
         num_endpoints);
 
+    // One page per bank: interleaved allocation gives every bank the same bank-relative
+    // base address, so each DRISC DMA reads from its own bank at that address.
+    auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
+        .device = device_,
+        .size = num_banks * num_endpoints * bytes_per_iter,
+        .page_size = num_endpoints * bytes_per_iter,
+        .buffer_type = BufferType::DRAM,
+    });
+    uint32_t dram_addr = dram_buffer->address();
+
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
     log_info(LogTest, "Random seed: {}", seed);
     std::vector<uint32_t> data = create_random_vector_of_bfloat16(bytes_per_iter, 1000.0f, seed);
@@ -339,7 +354,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
         uint32_t dram_channel = device_->dram_channel_from_logical_core(CoreCoord{col, 0});
         for (uint32_t row = 0; row < num_endpoints; row++) {
             tt::tt_metal::detail::WriteToDeviceDRAMChannel(
-                device_, dram_channel, dram_unreserved_base_ + row * bytes_per_iter, data);
+                device_, dram_channel, dram_addr + row * bytes_per_iter, data);
         }
     }
 
@@ -353,7 +368,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
                 logical_core,
                 DramConfig{.noc = NOC::NOC_0});
             // Partition DRAM gddr src addr by endpoint row
-            const uint32_t dram_src_gddr_addr = dram_unreserved_base_ + row * bytes_per_iter;
+            const uint32_t dram_src_gddr_addr = dram_addr + row * bytes_per_iter;
             SetRuntimeArgs(program, k_id, logical_core, {dram_src_gddr_addr, drisc_l1_base_, bytes_per_iter, iters});
         }
     }
@@ -420,8 +435,17 @@ TEST_F(DramKernelFixture, DramKernelDRISCReadFromDRAMMcastToTensix) {
     CoreCoord sub_worker_end_coord =
         device_->virtual_core_from_logical_core(tensix_sub_logical_end_coord, CoreType::WORKER);
 
+    // Allocate a single-page DRAM buffer. Page_size == size pins it to bank 0 (logical_core {0,0})
+    auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
+        .device = device_,
+        .size = total_bytes,
+        .page_size = total_bytes,
+        .buffer_type = BufferType::DRAM,
+    });
+    uint32_t dram_addr = dram_buffer->address();
+
     // Write data into DRAM for DRISCs to read
-    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dram_channel, dram_unreserved_base_, data);
+    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dram_channel, dram_addr, data);
 
     Program program = CreateProgram();
     auto mcast_k_id = CreateKernel(
@@ -433,7 +457,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCReadFromDRAMMcastToTensix) {
         program,
         mcast_k_id,
         logical_core,
-        {dram_unreserved_base_,
+        {dram_addr,
          drisc_l1_base_,
          tensix_l1_base_,
          sub_worker_start_coord.x,
@@ -491,8 +515,17 @@ TEST_F(DramKernelFixture, DramKernelDRISCRTensixParallelDRAMReads) {
     CoreRangeSet tensix_range({CoreRange(worker_start, worker_end)});
     CoreRangeSet drisc_endpoint_range({CoreRange(drisc_endpoint_start, drisc_endpoint_end)});
 
+    // Allocate a single-page DRAM buffer. Page_size == size pins it to bank 0 (logical_core {0,0})
+    auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
+        .device = device_,
+        .size = total_bytes,
+        .page_size = total_bytes,
+        .buffer_type = BufferType::DRAM,
+    });
+    uint32_t dram_addr = dram_buffer->address();
+
     // Write data into the DRAM for DRISCs and Tensix to read
-    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dram_channel, dram_unreserved_base_, data);
+    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dram_channel, dram_addr, data);
 
     Program program = CreateProgram();
 
@@ -502,7 +535,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCRTensixParallelDRAMReads) {
         "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
         drisc_endpoint_range,
         DramConfig{.noc = NOC::NOC_0});
-    SetRuntimeArgs(program, drisc_k_id, drisc_endpoint_range, {dram_unreserved_base_, drisc_l1_base_, total_bytes, 1});
+    SetRuntimeArgs(program, drisc_k_id, drisc_endpoint_range, {dram_addr, drisc_l1_base_, total_bytes, 1});
 
     // Tensix Kernel
     auto tensix_k_id = CreateKernel(
@@ -510,7 +543,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCRTensixParallelDRAMReads) {
         "tests/tt_metal/tt_metal/test_kernels/misc/tensix_dram_reads.cpp",
         tensix_range,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-    SetRuntimeArgs(program, tensix_k_id, tensix_range, {bank_id, dram_unreserved_base_, tensix_l1_base_, total_bytes});
+    SetRuntimeArgs(program, tensix_k_id, tensix_range, {bank_id, dram_addr, tensix_l1_base_, total_bytes});
 
     run_workload(std::move(program));
 
@@ -565,7 +598,16 @@ TEST_P(DramKernelDRISCGDDRBWSweepFixture, DRISCDMAUcastToTensix) {
     uint32_t dram_channel = device_->dram_channel_from_logical_core(logical_core);
     CoreCoord tensix_logical{0, 0};
     CoreCoord sub_worker = device_->virtual_core_from_logical_core(tensix_logical, CoreType::WORKER);
-    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dram_channel, dram_unreserved_base_, data);
+
+    // Allocate a single-page DRAM buffer. Page_size == size pins it to bank 0 (logical_core {0,0})
+    auto dram_buffer = CreateBuffer(InterleavedBufferConfig{
+        .device = device_,
+        .size = total_bytes,
+        .page_size = total_bytes,
+        .buffer_type = BufferType::DRAM,
+    });
+    uint32_t dram_addr = dram_buffer->address();
+    tt::tt_metal::detail::WriteToDeviceDRAMChannel(device_, dram_channel, dram_addr, data);
 
     Program program = CreateProgram();
     auto drisc_ucast_k_id = CreateKernel(
@@ -578,7 +620,7 @@ TEST_P(DramKernelDRISCGDDRBWSweepFixture, DRISCDMAUcastToTensix) {
         drisc_ucast_k_id,
         logical_core,
         {
-            dram_unreserved_base_,
+            dram_addr,
             drisc_l1_base_,
             tensix_l1_base_,
             sub_worker.x,
