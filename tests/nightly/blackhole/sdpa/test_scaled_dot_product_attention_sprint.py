@@ -4,6 +4,8 @@
 
 import os
 import math
+from unittest import mock
+
 import torch
 from itertools import product
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -443,10 +445,8 @@ def test_sdpa_perf_check(shape_id, q_chunk_size, k_chunk_size, expected_util):
 
     subdir = "ttnn_sdpa_perf_check"
     test_id = f"k{k_chunk_size}-q{q_chunk_size}-bf16"
-    # CI=false override: subprocess inherits CI=true under GitHub Actions, which would
-    # trigger the @skipif on test_sdpa_sweep_perf_impl and leave the profiler with no ops.
     command = (
-        f"CI=false pytest tests/nightly/blackhole/sdpa/"
+        f"pytest tests/nightly/blackhole/sdpa/"
         f"test_scaled_dot_product_attention_sprint.py::test_sdpa_sweep_perf_impl"
         f"[{shape_id}-{test_id}]"
     )
@@ -454,7 +454,8 @@ def test_sdpa_perf_check(shape_id, q_chunk_size, k_chunk_size, expected_util):
     float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
     cols = ["ATTRIBUTES"]
 
-    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    with mock.patch.dict(os.environ, {"CI": "false"}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log(
         subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
     )

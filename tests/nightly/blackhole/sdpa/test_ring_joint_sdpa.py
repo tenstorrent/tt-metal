@@ -20,6 +20,8 @@ BH adaptation: uses init_device_compute_kernel_config instead of WormholeCompute
 """
 import os
 import math
+from unittest import mock
+
 import torch
 from dataclasses import dataclass, field
 from itertools import product
@@ -1217,11 +1219,8 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
     local_nhq = model.nhq
 
     subdir = "ttnn_ring_joint_sdpa_perf_check"
-    # CI=false override: subprocess inherits CI=true under GitHub Actions, which would
-    # trigger the @skipif on test_ring_joint_attention_sdpa_sweep_perf_impl and leave the
-    # profiler with no ops.
     command = (
-        f"CI=false pytest tests/nightly/blackhole/sdpa/"
+        f"pytest tests/nightly/blackhole/sdpa/"
         f"test_ring_joint_sdpa.py::test_ring_joint_attention_sdpa_sweep_perf_impl"
         f"[{config_id}]"
     )
@@ -1229,7 +1228,8 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
     float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
     cols = ["ATTRIBUTES"]
 
-    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    with mock.patch.dict(os.environ, {"CI": "false"}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log(
         subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
     )

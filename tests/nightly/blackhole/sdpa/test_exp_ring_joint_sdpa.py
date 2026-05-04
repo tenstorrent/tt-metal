@@ -15,6 +15,8 @@ Perf tests are included but skipped on CI.
 
 import math
 import os
+from unittest import mock
+
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 import ttnn
@@ -819,11 +821,8 @@ def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_siz
     local_seq_len = total_seq // sp_size
 
     subdir = "ttnn_exp_ring_joint_sdpa_perf_check"
-    # CI=false override: subprocess inherits CI=true under GitHub Actions, which would
-    # trigger the @skipif on test_exp_ring_joint_attention_sdpa_sweep_perf_impl and leave
-    # the profiler with no ops.
     command = (
-        f"CI=false pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::"
+        f"pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::"
         f"test_exp_ring_joint_attention_sdpa_sweep_perf_impl"
         f"[{config_id}-bf16-{payload_id}]"
     )
@@ -831,7 +830,8 @@ def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_siz
     float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
     cols = ["ATTRIBUTES"]
 
-    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    with mock.patch.dict(os.environ, {"CI": "false"}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
     r = post_process_ops_log(
         subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
     )
