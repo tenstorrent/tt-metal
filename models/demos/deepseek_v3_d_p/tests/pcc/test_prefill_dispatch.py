@@ -140,6 +140,9 @@ def test_ttnn_dispatch(
     if use_fp8_output and is_wormhole_b0():
         pytest.skip("fp8 output not supported on Wormhole hardware")
 
+    if use_fp8_output and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("fp8 output not supported with row_major input layout")
+
     torch.manual_seed(42)
 
     mesh_config = extract_mesh_config(mesh_device)
