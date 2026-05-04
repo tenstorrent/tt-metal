@@ -794,6 +794,7 @@ jobs:
     needs: [check-harbor, resolve-inputs]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:

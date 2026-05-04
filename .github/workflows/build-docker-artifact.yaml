@@ -9,12 +9,13 @@ name: "Build tt-metal docker artifact"
 #
 # Outputs use the "-tag" suffix (e.g., ci-build-tag, dev-tag).
 #
-# Bake steps use vars.HARBOR_PREFIX for docker-image:// layer contexts on GitHub-hosted
-# runners; runtime pull strings for test jobs use check-harbor + resolve-docker-pull-refs
-# (or inline format) in calling workflows — those are intentionally separate.
+# Bake steps use the checked harbor-prefix input for docker-image:// layer contexts;
+# runtime pull strings for test jobs use check-harbor + resolve-docker-pull-refs
+# (or inline format) in calling workflows.
 # =============================================================================
 
 permissions:
+  contents: read
   packages: write
 
 env:
@@ -60,6 +61,11 @@ on:
         description: >-
           When true, metadata still computes LLK tag / existence, but the build-llk-images job is skipped
           (caller builds the LLK image separately, e.g. build-all-docker-images).
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Checked Harbor pull-through prefix from check-harbor; empty to pull GHCR directly"
     outputs:
       ci-build-tag:
         value: ${{ jobs.metadata.outputs.ci_build_tag }}
@@ -99,6 +105,11 @@ on:
         default: "amd64"
         options:
           - "amd64"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use for prebuilt layer contexts (empty for direct GHCR)"
 
 jobs:
   metadata:
@@ -251,7 +262,9 @@ jobs:
     if: |
       always() && !failure() && !cancelled() &&
       fromJson(needs.metadata.outputs.platform_data).distro == 'ubuntu' &&
-      (fromJson(needs.metadata.outputs.platform_data).dev_exists != 'true' ||
+      (fromJson(needs.metadata.outputs.platform_data).ci_build_exists != 'true' ||
+       fromJson(needs.metadata.outputs.platform_data).ci_test_exists != 'true' ||
+       fromJson(needs.metadata.outputs.platform_data).dev_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).basic_dev_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists != 'true')
     timeout-minutes: 90
@@ -290,12 +303,14 @@ jobs:
         env:
           PLATFORM_DATA: ${{ needs.metadata.outputs.platform_data }}
           TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
-          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
+          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         run: |
           set -euo pipefail
 
           CI_BUILD_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')
           CI_TEST_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')
+          CI_BUILD_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_exists')
+          CI_TEST_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_exists')
           DEV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.dev_exists')
           BASIC_DEV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_exists')
           BASIC_TTNN_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_exists')
@@ -328,17 +343,19 @@ jobs:
 
           ALL_TOOLS=(ccache mold doxygen cba gdb cmake yq sfpi openmpi)
 
-          if [ "$DEV_EXISTS" != "true" ]; then
-            for target in ci-build ci-test dev; do
-              TARGETS+="${target},"
-              add_tool_contexts "$target" "${ALL_TOOLS[@]}"
-              add_venv_contexts "$target"
-              SET+="${target}.output=${BAKE_OUTPUT}"$'\n'
-            done
-            SET+="ci-build.tags=${CI_BUILD_TAG}"$'\n'
-            SET+="ci-test.tags=${CI_TEST_TAG}"$'\n'
-            SET+="dev.tags=${DEV_TAG}"$'\n'
-          fi
+          add_main_target() {
+            local target="$1"
+            local tag="$2"
+            TARGETS+="${target},"
+            add_tool_contexts "$target" "${ALL_TOOLS[@]}"
+            add_venv_contexts "$target"
+            SET+="${target}.tags=${tag}"$'\n'
+            SET+="${target}.output=${BAKE_OUTPUT}"$'\n'
+          }
+
+          [ "$CI_BUILD_EXISTS" != "true" ] && add_main_target "ci-build" "$CI_BUILD_TAG"
+          [ "$CI_TEST_EXISTS" != "true" ] && add_main_target "ci-test" "$CI_TEST_TAG"
+          [ "$DEV_EXISTS" != "true" ] && add_main_target "dev" "$DEV_TAG"
 
           BASIC_TOOLS=(cmake sfpi openmpi ccache)
           if [ "$BASIC_DEV_EXISTS" != "true" ]; then
@@ -416,7 +433,7 @@ jobs:
         env:
           PLATFORM_DATA: ${{ needs.metadata.outputs.platform_data }}
           TOOL_TAGS: ${{ needs.metadata.outputs.tool_tags }}
-          HARBOR_PREFIX: ${{ vars.HARBOR_PREFIX || '' }}
+          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
         run: |
           set -euo pipefail
 

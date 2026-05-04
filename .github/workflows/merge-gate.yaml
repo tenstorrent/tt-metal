@@ -118,6 +118,7 @@ jobs:
     needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -144,6 +145,7 @@ jobs:
     needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -169,6 +171,7 @@ jobs:
     needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-wrapper.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -235,6 +238,7 @@ jobs:
     needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:

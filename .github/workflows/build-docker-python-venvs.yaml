@@ -6,6 +6,7 @@ name: "[internal] Build Docker Python venv images"
 # Expects platform-data JSON from preflight containing venv tags, exists flags, and version.
 # Uses manual docker buildx bake (dockerfile/docker-bake.hcl) for builds.
 permissions:
+  contents: read
   packages: write
 
 env:
@@ -47,8 +48,8 @@ jobs:
   build:
     name: "🐍 Build missing venvs"
     if: |
-      fromJson(inputs.platform-data).ci_build_venv_exists != true ||
-      fromJson(inputs.platform-data).ci_test_venv_exists != true
+      fromJson(inputs.platform-data).ci_build_venv_exists != 'true' ||
+      fromJson(inputs.platform-data).ci_test_venv_exists != 'true'
     timeout-minutes: 45
     runs-on: tt-ubuntu-2204-large-stable
     steps:

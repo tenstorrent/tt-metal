@@ -258,6 +258,7 @@ jobs:
     if: ${{ inputs.dev-docker-image == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:

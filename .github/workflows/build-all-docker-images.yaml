@@ -75,6 +75,7 @@ on:
         description: "Force rebuild of all Docker images even if they exist in registry"
 
 permissions:
+  contents: read
   packages: write
 
 jobs:
@@ -227,6 +228,7 @@ jobs:
     with:
       build-manylinux: true
       skip-llk-build: true
+      harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       platform-data: ${{ needs.preflight.outputs.platform-2204-data }}
     secrets: inherit
@@ -240,6 +242,7 @@ jobs:
     with:
       build-manylinux: false
       skip-llk-build: true
+      harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       platform-data: ${{ needs.preflight.outputs.platform-2404-data }}
     secrets: inherit

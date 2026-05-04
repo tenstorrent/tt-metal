@@ -73,7 +73,7 @@ BASIC_DEV_NAME="${DISTRO}-${VERSION}-basic-dev-${ARCH}"
 BASIC_TTNN_NAME="${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}"
 
 # Extra files for hash computation
-EXTRA_FILES=".github/workflows/build-docker-artifact.yaml dockerfile/Dockerfile.tools"
+EXTRA_FILES=".github/workflows/build-docker-artifact.yaml dockerfile/docker-bake.hcl dockerfile/Dockerfile.tools"
 BASIC_DEV_EXTRA_FILES="$EXTRA_FILES"
 MANYLINUX_EXTRA_FILES="$EXTRA_FILES"
 VENV_EXTRA_FILES="dockerfile/docker-bake.hcl .github/workflows/build-docker-python-venvs.yaml"

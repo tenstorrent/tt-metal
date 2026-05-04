@@ -1,5 +1,6 @@
 name: "Build tt-metal artifacts"
 permissions:
+  contents: read
   packages: write
 on:
   workflow_call:
@@ -290,6 +291,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
       ref: ${{ inputs.ref }}
+      harbor-prefix: ${{ inputs.harbor-prefix }}
   download-artifacts:
     if: ${{ inputs.use-artifacts-from-run != '' }}
     runs-on: ubuntu-latest
@@ -357,7 +359,10 @@ jobs:
     container:
       image: >-
         ${{
-          (inputs.ci-build-docker-image != '' && inputs.ci-build-docker-image) ||
+          (inputs.ci-build-docker-image != '' &&
+            (startsWith(inputs.ci-build-docker-image, 'harbor.ci.tenstorrent.net/') &&
+              inputs.ci-build-docker-image ||
+              format('{0}{1}', inputs.harbor-prefix, inputs.ci-build-docker-image))) ||
           format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
         }}
       env:
@@ -647,7 +652,10 @@ jobs:
       python-version: ${{ needs.determine-python-version.outputs.python-version }}
       docker-image: >-
         ${{
-          (inputs.manylinux-docker-image != '' && inputs.manylinux-docker-image) ||
+          (inputs.manylinux-docker-image != '' &&
+            (startsWith(inputs.manylinux-docker-image, 'harbor.ci.tenstorrent.net/') &&
+              inputs.manylinux-docker-image ||
+              format('{0}{1}', inputs.harbor-prefix, inputs.manylinux-docker-image))) ||
           format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
         }}
       ref: ${{ inputs.ref || '' }}

@@ -64,6 +64,7 @@ jobs:
     needs: [check-harbor, parse-platform]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -80,6 +81,7 @@ jobs:
     needs: [check-harbor, parse-platform]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -96,6 +98,7 @@ jobs:
     needs: [check-harbor, parse-platform]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:

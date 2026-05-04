@@ -127,13 +127,16 @@ jobs:
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
     if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    needs: check-harbor
     uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   resolve-docker-pull-refs:
     needs: [check-harbor, build-docker-image]

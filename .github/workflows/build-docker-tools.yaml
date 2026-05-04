@@ -6,6 +6,7 @@ name: "[internal] Build Docker tool images"
 # Expects tool-data JSON from preflight containing tool_tags, any_missing, and *_exists flags.
 # Uses manual docker buildx bake (dockerfile/docker-bake.hcl) to build missing tools.
 permissions:
+  contents: read
   packages: write
 
 env:
