@@ -333,8 +333,9 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
         TT_THROW("Unreachable");
     };
 
+    auto transformed_tensor = tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); });
     return HostTensor(
-        tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); }),
+        transformed_tensor.buffer(),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -635,8 +636,9 @@ HostTensor pad_impl(
         return output_buffer;
     };
 
+    auto transformed_tensor = tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); });
     return HostTensor(
-        tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); }),
+        transformed_tensor.buffer(),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -710,8 +712,9 @@ HostTensor unpad_impl(
         return output_buffer;
     };
 
+    auto transformed_tensor = tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); });
     return HostTensor(
-        tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(unpad(buffer)); }),
+        transformed_tensor.buffer(),
         TensorSpec(
             tt::tt_metal::Shape(output_shape),
             tt::tt_metal::TensorLayout(

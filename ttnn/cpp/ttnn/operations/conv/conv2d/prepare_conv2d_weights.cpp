@@ -147,7 +147,8 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
 template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
-    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
+    auto transformed_tensor = input_tensor.host_tensor().transform(compute);
+    return Tensor(tt::tt_metal::HostTensor(transformed_tensor.buffer(), output_spec, input_tensor.tensor_topology()));
 }
 
 template <typename Func, typename... Args>
@@ -959,7 +960,7 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
         {out_channels, in_channels * stride[0] * stride[1], padded_kernel_h / stride[0], padded_kernel_w / stride[1]});
 
     auto fold_weights = [&]<typename T>(const tt::tt_metal::HostStorage& storage) {
-        auto folded_storage = storage.transform([&](const tt::tt_metal::HostBuffer& input_host_buffer) {
+        auto folded_tensor = storage.host_tensor().transform([&](const tt::tt_metal::HostBuffer& input_host_buffer) {
             auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
 
             std::vector<T> output_buffer(output_shape.volume(), T(0));
@@ -1004,12 +1005,12 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
 
             return tt::tt_metal::HostBuffer(std::move(output_buffer));
         });
-        return Tensor(
-            std::move(folded_storage),
+        return Tensor(tt::tt_metal::HostTensor(
+            folded_tensor.buffer(),
             TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
-            conv_weight_tensor.tensor_topology());
+            conv_weight_tensor.tensor_topology()));
     };
 
     const auto& storage = conv_weight_tensor.host_storage();

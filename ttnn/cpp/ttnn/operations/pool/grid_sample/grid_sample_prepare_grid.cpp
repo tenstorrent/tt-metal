@@ -196,7 +196,8 @@ Tensor convert_grid_tensor(
 
     TT_FATAL(is_cpu_tensor(input_tensor), "Prepare_grid_sample_grid only supports host tensors");
 
-    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
+    auto transformed_tensor = input_tensor.host_tensor().transform(compute);
+    return Tensor(tt::tt_metal::HostTensor(transformed_tensor.buffer(), output_spec, input_tensor.tensor_topology()));
 }
 
 }  // anonymous namespace
