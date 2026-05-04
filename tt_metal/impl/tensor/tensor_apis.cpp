@@ -7,6 +7,8 @@
 #include <functional>
 #include <unordered_set>
 
+#include "host_tensor_impl.hpp"
+
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/impl/tensor_impl.hpp>
 
@@ -91,7 +93,7 @@ void enqueue_read_tensor(
 
     auto mesh_buffer = device_tensor.mesh_buffer_invariant_breaking();
 
-    cq.enqueue_read(mesh_buffer, host_tensor.buffer(), /*shards=*/std::nullopt, blocking);
+    cq.enqueue_read(mesh_buffer, host_tensor.impl().buffer(), /*shards=*/std::nullopt, blocking);
     host_tensor.update_tensor_topology(device_tensor.tensor_topology());
 }
 

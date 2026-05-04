@@ -41,7 +41,7 @@ class HostTensorImpl;
  * Invariants of HostTensor:
  * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
  *   move construction will be UB. This exists to allow for default constructed HostTensor. Incompatible member function
- *   call to this state is checked by TT_ASSERT (enabled at debug build) in accessors. This is mirrors MeshTensor.
+ *   call to this state is checked by TT_FATAL in accessors. This is mirrors MeshTensor.
  * - Initialized: The HostTensor holds some tensor configurations and associated HostBuffer.
  */
 class HostTensor {
@@ -180,11 +180,6 @@ public:
      */
     const DistributedHostBuffer& buffer() const;
 
-    // TODO(#40348): This should be removed.
-    // We need to maintain invariant of this buffer.
-    // Giving out mutable reference allows user to assign into it.
-    DistributedHostBuffer& buffer();
-
     // Derivables:
 
     DataType dtype() const;
@@ -217,8 +212,16 @@ public:
     // Updates the topology of the HostTensor post construction.
     void update_tensor_topology(TensorTopology tensor_topology);
 
+    /**
+     * Access to the implementation.
+     *
+     * pre-condition: The HostTensor must be engaged.
+     */
+    HostTensorImpl& impl();
+    const HostTensorImpl& impl() const;
+
 private:
-    std::unique_ptr<HostTensorImpl> impl;
+    std::unique_ptr<HostTensorImpl> impl_;
 };
 
 }  // namespace tt::tt_metal
