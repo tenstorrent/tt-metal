@@ -33,12 +33,23 @@ struct SelectTargetLogitDeviceOperation {
 
 namespace ttnn::prim {
 
+// Selects the target-logit value at each (n, s) position from a (possibly vocab-sharded) logit
+// tensor.  The shard window for each device is derived inside the program factory:
+//
+//   tp_rank        = cluster_axis ? mesh_coord[*cluster_axis] : 0
+//   device_first_v = first_v + tp_rank * local_V
+//   device_last_v  = device_first_v + local_V
+//
+// Real callers (e.g. vocab-parallel cross-entropy loss) pass `local_V` and the TP `cluster_axis`
+// and leave `first_v = 0`.  `first_v` exists so single-device unit tests can still simulate
+// non-zero shard windows without standing up a multi-device mesh.
 ttml::metal::ops::select_target_logit::device::SelectTargetLogitDeviceOperation::tensor_return_value_t
 ttml_select_target_logit(
     const ttnn::Tensor& logit,
     const ttnn::Tensor& target,
-    uint32_t first_v,
-    uint32_t last_v,
+    uint32_t local_V,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    uint32_t first_v = 0U,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttnn::prim

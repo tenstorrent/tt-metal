@@ -124,8 +124,9 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
 
     // Step 4: target_logit_local via select_target_logit:
     // Each TP device k owns vocab [k*local_V, (k+1)*local_V).  We pre-allocate
-    // a [B,1,S,1] BF16 output replicated across all devices.
-    // Then for each device we call ttml_select_target_logit with its shard boundaries.
+    // a [B,1,S,1] BF16 output replicated across all devices and dispatch a single
+    // mesh workload — the program factory derives each device's shard window from
+    // its mesh coordinate (no host-side per-device loop, no get_device_tensors).
     auto targets_raw = targets->get_value();
     if (targets_raw.layout() != ttnn::Layout::ROW_MAJOR) {
         targets_raw = ttnn::to_layout(targets_raw, ttnn::Layout::ROW_MAJOR);
@@ -139,18 +140,14 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     auto gather_output = ttnn::empty(
         ttnn::Shape({B, 1U, S, 1U}), ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device, ttnn::DRAM_MEMORY_CONFIG);
 
-    auto logit_shards = ttnn::distributed::get_device_tensors(logits_val);
-    auto target_shards = ttnn::distributed::get_device_tensors(targets_raw);
-    auto output_shards = ttnn::distributed::get_device_tensors(gather_output);
+    ttnn::prim::ttml_select_target_logit(
+        logits_val, targets_raw, /*local_V=*/local_V, /*cluster_axis=*/cluster_axis, /*first_v=*/0U, gather_output);
 
-    // For each TP shard k, extract target_logit_local[b,s] = logits[b,s,targets[b,s]]
-    // if targets[b,s] ∈ [k*local_V, (k+1)*local_V), else 0.
-    // After all-reduce the contributions sum to the full x[b,s,targets[b,s]].
-    std::vector<uint32_t> tp_ranks(logit_shards.size());
-    for (size_t i = 0; i < logit_shards.size(); ++i) {
+    // tp_ranks is still needed below for subtract_at_target in the backward pass; the analogous
+    // mesh-workload conversion for that op is deferred to a follow-up commit.
+    std::vector<uint32_t> tp_ranks(static_cast<size_t>(mesh_shape.mesh_size()));
+    for (size_t i = 0; i < tp_ranks.size(); ++i) {
         tp_ranks[i] = tp_rank_from_device_idx(i, mesh_shape, cluster_axis);
-        ttnn::prim::ttml_select_target_logit(
-            logit_shards[i], target_shards[i], tp_ranks[i] * local_V, (tp_ranks[i] + 1U) * local_V, output_shards[i]);
     }
     // All-reduce to collect contributions from all TP shards  [B,1,S,1]
     auto target_logit = ttnn_fixed::distributed::all_reduce(gather_output, cluster_axis);

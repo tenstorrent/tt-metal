@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <optional>
 #include <random>
 
 #include "autograd/auto_context.hpp"
@@ -55,7 +56,7 @@ TEST_F(SelectTargetLogitTest, SmallFullVocab) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::select_target_logit(logit_dev, target_dev, 0U, 8U);
+    auto result = metal::select_target_logit(logit_dev, target_dev, /*local_V=*/8U);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 0U, 8U);
@@ -78,7 +79,8 @@ TEST_F(SelectTargetLogitTest, SmallPartialVocab) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::select_target_logit(logit_dev, target_dev, 4U, 8U);
+    auto result = metal::select_target_logit(
+        logit_dev, target_dev, /*local_V=*/4U, /*cluster_axis=*/std::nullopt, /*first_v=*/4U);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 4U, 8U);
@@ -116,7 +118,7 @@ TEST_F(SelectTargetLogitTest, BatchedNonAlignedShape) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::select_target_logit(logit_dev, target_dev, 0U, V);
+    auto result = metal::select_target_logit(logit_dev, target_dev, /*local_V=*/V);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 0U, V);
@@ -154,7 +156,8 @@ TEST_F(SelectTargetLogitTest, BatchedPartialVocabShard) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::select_target_logit(logit_dev, target_dev, first_v, last_v);
+    auto result = metal::select_target_logit(
+        logit_dev, target_dev, /*local_V=*/local_V, /*cluster_axis=*/std::nullopt, /*first_v=*/first_v);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = select_target_logit_reference(logit_t, target_t, first_v, last_v);
@@ -182,7 +185,7 @@ TEST_F(SelectTargetLogitTest, LargeVocab) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::select_target_logit(logit_dev, target_dev, 0U, V);
+    auto result = metal::select_target_logit(logit_dev, target_dev, /*local_V=*/V);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 0U, V);
@@ -217,7 +220,7 @@ TEST_F(SelectTargetLogitTest, NIGHTLY_LargeBatchLargeVocab) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::select_target_logit(logit_dev, target_dev, 0U, V);
+    auto result = metal::select_target_logit(logit_dev, target_dev, /*local_V=*/V);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = select_target_logit_reference(logit_t, target_t, 0U, V);

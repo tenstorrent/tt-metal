@@ -4,13 +4,24 @@
 
 #pragma once
 
+#include <optional>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::select_target_logit::device {
 
+// The shard window for each device is derived per-coord inside the program factory:
+//
+//   tp_rank        = cluster_axis.has_value() ? mesh_coord[*cluster_axis] : linear_index
+//   device_first_v = first_v + tp_rank * local_V
+//   device_last_v  = device_first_v + local_V
+//
+// Real callers pass (local_V, cluster_axis) and leave first_v = 0; first_v exists so
+// single-device unit tests can still exercise non-zero shard windows.
 struct operation_attributes_t {
     uint32_t first_v{0U};
-    uint32_t last_v{std::numeric_limits<uint32_t>::max()};
+    uint32_t local_V{0U};
+    std::optional<uint32_t> cluster_axis{};
 };
 
 struct tensor_args_t {
@@ -21,8 +32,9 @@ struct tensor_args_t {
 };
 
 // output: [N, 1, S, 1] TILE BFLOAT16
-// output[n, 0, s, 0] = logit[n, 0, s, target[n, s] - first_v]   if target[n, s] in [first_v, last_v)
-//                     = 0.0                                        otherwise
+// output[n, 0, s, 0] = logit[n, 0, s, target[n, s] - device_first_v]
+//                       if target[n, s] in [device_first_v, device_last_v)
+//                     = 0.0 otherwise
 using tensor_return_value_t = ttnn::Tensor;
 using spec_return_value_t = ttnn::TensorSpec;
 

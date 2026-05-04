@@ -50,11 +50,18 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
         "SelectTargetLogit: logit must be rank 4, got rank {}",
         tensor_args.logit.logical_shape().rank());
 
-    TT_FATAL(
-        args.first_v < args.last_v,
-        "SelectTargetLogit: first_v ({}) must be less than last_v ({})",
-        args.first_v,
-        args.last_v);
+    TT_FATAL(args.local_V > 0U, "SelectTargetLogit: local_V must be > 0");
+
+    if (args.cluster_axis.has_value()) {
+        auto* device = tensor_args.logit.device();
+        TT_FATAL(device != nullptr, "SelectTargetLogit: logit must be on a (mesh) device");
+        const auto mesh_shape = device->shape();
+        TT_FATAL(
+            *args.cluster_axis < mesh_shape.dims(),
+            "SelectTargetLogit: cluster_axis ({}) is out of range for mesh shape with {} dim(s)",
+            *args.cluster_axis,
+            mesh_shape.dims());
+    }
 
     if (tensor_args.preallocated_output.has_value()) {
         const auto& out = tensor_args.preallocated_output.value();
@@ -101,7 +108,8 @@ SelectTargetLogitDeviceOperation::tensor_return_value_t SelectTargetLogitDeviceO
 
 ttsl::hash::hash_t SelectTargetLogitDeviceOperation::compute_program_hash(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // first_v/last_v are runtime args and don't affect the compiled kernel binary.
+    // first_v / local_V / cluster_axis only affect runtime args (they're patched by
+    // override_runtime_arguments per coord); they don't change the compiled kernel binary.
     return tt::tt_metal::operation::hash_operation<SelectTargetLogitDeviceOperation>(
         tensor_args.logit.dtype(), tensor_args.logit.logical_shape());
 }
@@ -114,12 +122,14 @@ ttml::metal::ops::select_target_logit::device::SelectTargetLogitDeviceOperation:
 ttml_select_target_logit(
     const ttnn::Tensor& logit,
     const ttnn::Tensor& target,
+    uint32_t local_V,
+    std::optional<uint32_t> cluster_axis,
     uint32_t first_v,
-    uint32_t last_v,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttml::metal::ops::select_target_logit::device::SelectTargetLogitDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{first_v, last_v};
+    auto operation_attributes =
+        OperationType::operation_attributes_t{.first_v = first_v, .local_V = local_V, .cluster_axis = cluster_axis};
     auto tensor_args =
         OperationType::tensor_args_t{.logit = logit, .target = target, .preallocated_output = preallocated_output};
 
