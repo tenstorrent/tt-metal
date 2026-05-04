@@ -93,6 +93,12 @@ def test_ttnn_combine(
     if use_fp8_output and dispatched_buffer_layout != ttnn.TILE_LAYOUT:
         pytest.skip("fp8 combine output is only supported with TILE layout")
 
+    # FP8_E4M3 hardware support (Fp8_e4m3 DataFormat in CBs, packer FP8 path) only exists on
+    # Blackhole. TtCombineModule already raises ValueError if fp8_output is requested on
+    # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
+    if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
+        pytest.skip("fp8 combine output requires Blackhole hardware")
+
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
