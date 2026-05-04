@@ -316,7 +316,7 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
     }
 
     auto source_layout = tensor.layout();
-    auto tile = tensor.tensor_spec().tile();
+    auto tile = source_layout == Layout::TILE ? tensor.tensor_spec().tile() : Tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
     auto convert =
         [tile, &physical_shape, source_layout, target_layout](const HostBuffer& input_host_buffer) -> std::vector<T> {
@@ -333,13 +333,14 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
         TT_THROW("Unreachable");
     };
 
+    auto target_tile = target_layout == Layout::TILE ? tile : std::optional<Tile>(std::nullopt);
     return HostTensor(
         tensor.transform([&](const HostBuffer& buffer) { return HostBuffer(convert(buffer)); }),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
-                PageConfig(target_layout, tensor.tensor_spec().tile()),
+                PageConfig(target_layout, target_tile),
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.padded_shape())),
@@ -641,7 +642,9 @@ HostTensor pad_impl(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
-                PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
+                PageConfig(
+                    tensor.layout(),
+                    tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : std::optional<Tile>(std::nullopt)),
                 MemoryConfig{},
                 tensor.logical_shape(),
                 output_padded_shape)),
@@ -716,7 +719,9 @@ HostTensor unpad_impl(
             tt::tt_metal::Shape(output_shape),
             tt::tt_metal::TensorLayout(
                 tensor.dtype(),
-                tt::tt_metal::PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
+                tt::tt_metal::PageConfig(
+                    tensor.layout(),
+                    tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : std::optional<Tile>(std::nullopt)),
                 tt::tt_metal::MemoryConfig{})),
         tensor.tensor_topology());
 }
@@ -948,7 +953,8 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             dtype,
-            tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile()),
+            tt::tt_metal::PageConfig(
+                layout, layout == Layout::TILE ? input_tensor.tensor_spec().tile() : std::optional<Tile>(std::nullopt)),
             input_tensor.tensor_spec().memory_config(),
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
