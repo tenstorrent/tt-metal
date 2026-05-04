@@ -8,7 +8,6 @@ permissions:
   checks: write
   contents: read
   packages: write
-  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
@@ -105,13 +104,6 @@ jobs:
         run: |
           zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip perf_data/
           echo "Performance data zipped successfully"
-
-      - name: Upload code coverage for this runner
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: ${{ matrix.test-group.coverage == true }}
-        with:
-          name: code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.info
 
       - name: Upload performance data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -225,13 +217,6 @@ jobs:
         run: |
           zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip perf_data/
           echo "Performance data zipped successfully"
-
-      - name: Upload code coverage for this runner
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: ${{ matrix.test-group.coverage == true }}
-        with:
-          name: code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.info
 
       - name: Upload performance data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

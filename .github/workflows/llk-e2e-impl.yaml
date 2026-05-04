@@ -109,27 +109,12 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
-      - name: Zip performance data
-        if: always() && contains(inputs.pytest-markers, 'perf') && hashFiles('tt_metal/tt-llk/tests/python_tests/perf_data/**') != ''
-        shell: bash
-        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
-        run: |
-          zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip perf_data/
-          echo "Performance data zipped successfully"
-
       - name: Upload code coverage for this runner
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: ${{ inputs.coverage && matrix.test-group.coverage }}
         with:
           name: code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: ${{ env.LLK_PATH }}/code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.info
-
-      - name: Upload performance data
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: always() && contains(inputs.pytest-markers, 'perf') && hashFiles(format('tt_metal/tt-llk/tests/python_tests/perf_data-{0}-{1}.zip', env.CHIP_ARCH, matrix.test-group.split_group)) != ''
-        with:
-          name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -144,9 +129,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
-          name: >-
-            ${{ (contains(inputs.pytest-markers, 'perf') && !contains(inputs.pytest-markers, 'not perf'))
-                && 'perf-' || '' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          name: junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
 
       - name: Publish Test Results

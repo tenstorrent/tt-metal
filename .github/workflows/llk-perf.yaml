@@ -10,7 +10,6 @@ permissions:
   checks: write
   contents: read
   packages: write
-  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
@@ -26,11 +25,7 @@ jobs:
   report-status:
     name: "Report status"
     runs-on: ubuntu-latest
-    if: >-
-      ${{
-        always() &&
-        (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-      }}
+    if: always()
     needs: perf-tests
     steps:
       - name: Checkout repository
