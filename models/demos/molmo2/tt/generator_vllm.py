@@ -164,15 +164,14 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         # warmup_all_buckets runs text-only (pixel_values=None), which skips the vision
         # feature injection path (ttnn.add for image patches). Run one forward_prefill
         # with dummy vision inputs to JIT that path and avoid the first-inference stall.
+        # Use 1 frame → N_pooled=81 image tokens, S=128 (smallest bucket ≥ 81).
         logger.info("Pre-compiling vision-integrated prefill (image feature injection)...")
-        _n_patches, _k_pool = 729, 9
-        _n_pooled = model._POOL_CHUNK_WINDOWS  # 4096 — same as warmup_vision_compile
-        _dummy_pv = torch.zeros(1, 8, _n_patches, 588)  # 8 crops (max batch)
+        _n_patches, _k_pool, _n_pooled = 729, 9, 81  # 1 frame: 81 pooled positions
+        _dummy_pv = torch.zeros(1, 8, _n_patches, 588)  # 8 crops (max ViT batch)
         _dummy_pool_idx = torch.zeros(1, _n_pooled, _k_pool, dtype=torch.long)
-        # S = 128 (smallest bucket): 81 image-patch tokens + 47 text tokens
-        _S_warmup = PREFILL_BUCKETS[0]  # 128
+        _S_warmup = PREFILL_BUCKETS[0]  # 128 — smallest bucket ≥ 81
         _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
-        _dummy_ids[0, :81] = cfg.image_patch_id  # mark first 81 as image patches
+        _dummy_ids[0, :_n_pooled] = cfg.image_patch_id  # 81 image-patch tokens
         _ = model.forward_prefill(
             input_ids=_dummy_ids,
             pixel_values=_dummy_pv,
