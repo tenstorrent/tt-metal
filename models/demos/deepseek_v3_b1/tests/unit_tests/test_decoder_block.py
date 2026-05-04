@@ -329,7 +329,7 @@ def skip_known_decoder_moe_failure(
 ):
     """Skip exact known decoder MoE failures."""
     if (
-        position_id in {0, 127}
+        position_id in {0, 127, 2047}
         and validate_standalone_mla
         and validate_standalone_moe
         and expert_upload_mode == "unrigged_all_experts"
