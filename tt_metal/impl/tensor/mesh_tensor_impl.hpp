@@ -25,17 +25,7 @@ namespace tt::tt_metal {
 class MeshTensorImpl {
 public:
     MeshTensorImpl(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
-        MeshTensorImpl(std::move(mesh_buffer), std::move(spec), std::move(topology), nullptr) {}
-
-    MeshTensorImpl(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer,
-        TensorSpec spec,
-        TensorTopology topology,
-        std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer) :
-        mesh_buffer_(std::move(mesh_buffer)),
-        spec_(std::move(spec)),
-        topology_(std::move(topology)),
-        root_mesh_buffer_(std::move(root_mesh_buffer)) {
+        mesh_buffer_(std::move(mesh_buffer)), spec_(std::move(spec)), topology_(std::move(topology)) {
         TT_FATAL(mesh_buffer_ != nullptr, "MeshBuffer cannot be nullptr.");
         TT_FATAL(mesh_buffer_->is_allocated(), "MeshBuffer must be allocated.");
         TT_FATAL(
@@ -46,10 +36,7 @@ public:
     // Two step construction for MeshTensor,
     // for transiet purpose.
     MeshTensorImpl(MeshTensorImpl&& other, TensorSpec spec, TensorTopology topology) :
-        mesh_buffer_(std::move(other.mesh_buffer_)),
-        spec_(std::move(spec)),
-        topology_(std::move(topology)),
-        root_mesh_buffer_(std::move(other.root_mesh_buffer_)) {}
+        mesh_buffer_(std::move(other.mesh_buffer_)), spec_(std::move(spec)), topology_(std::move(topology)) {}
 
     const distributed::MeshBuffer& mesh_buffer() const { return *raw_mesh_buffer(); }
     const std::shared_ptr<distributed::MeshBuffer>& raw_mesh_buffer() const { return mesh_buffer_; }
@@ -65,10 +52,6 @@ private:
     TensorSpec spec_;
     // TODO(river): What is the invariant of topology?
     TensorTopology topology_;
-
-    // Experimental feature: Accomodates #38101
-    // This keeps mesh_buffer_ alive in limited cases.
-    std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer_;
 };
 
 }  // namespace tt::tt_metal
