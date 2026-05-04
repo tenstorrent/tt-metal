@@ -39,8 +39,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                                   ? (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::Both : ckernel::Transpose::InterFace)
                                                   : (params.UNPACK_TRANSPOSE_WITHIN_FACE ? ckernel::Transpose::IntraFace : ckernel::Transpose::None);
 
-    _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
-
     // Configure hardware for unpacking, no broadcast, no transpose
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
@@ -53,6 +51,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.total_num_faces(),
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
+
+    // Must come after _llk_unpack_hw_configure_, otherwise the ALU stoch-rnd
+    // bits programmed here are overwritten by configure_unpack_AB().
+    _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
 
     _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, transpose);
 
