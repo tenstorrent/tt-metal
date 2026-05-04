@@ -33,12 +33,23 @@ struct SubtractAtTargetDeviceOperation {
 
 namespace ttnn::prim {
 
+// Subtracts a scalar at each (n, s)'s target column from a (possibly vocab-sharded) input.
+// The shard window for each device is derived inside the program factory:
+//
+//   tp_rank        = cluster_axis ? mesh_coord[*cluster_axis] : flat_index(mesh_coord)
+//   device_first_v = first_v + tp_rank * local_V
+//   device_last_v  = device_first_v + local_V
+//
+// Real callers (e.g. vocab-parallel cross-entropy backward) pass `local_V` and the TP
+// `cluster_axis` and leave `first_v = 0`.  `first_v` exists so single-device unit tests can
+// still simulate non-zero shard windows without standing up a multi-device mesh.
 ttml::metal::ops::subtract_at_target::device::SubtractAtTargetDeviceOperation::tensor_return_value_t
 ttml_subtract_at_target(
     const ttnn::Tensor& input,
     const ttnn::Tensor& target,
-    uint32_t first_v,
-    uint32_t last_v,
+    uint32_t local_V,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    uint32_t first_v = 0U,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
     float subtract_value = 1.0F);
 

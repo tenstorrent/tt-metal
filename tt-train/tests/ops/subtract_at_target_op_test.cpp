@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <optional>
 #include <random>
 
 #include "autograd/auto_context.hpp"
@@ -53,7 +54,7 @@ TEST_F(SubtractAtTargetTest, SmallFullVocab) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::subtract_at_target(input_dev, target_dev, 0U, 8U);
+    auto result = metal::subtract_at_target(input_dev, target_dev, /*local_V=*/8U);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = subtract_at_target_reference(input_t, target_t, 0U, 8U);
@@ -76,7 +77,8 @@ TEST_F(SubtractAtTargetTest, SmallPartialVocab) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::subtract_at_target(input_dev, target_dev, 4U, 8U);
+    auto result =
+        metal::subtract_at_target(input_dev, target_dev, /*local_V=*/4U, /*cluster_axis=*/std::nullopt, /*first_v=*/4U);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = subtract_at_target_reference(input_t, target_t, 4U, 8U);
@@ -112,7 +114,7 @@ TEST_F(SubtractAtTargetTest, BatchedNonAlignedShape) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::subtract_at_target(input_dev, target_dev, 0U, V);
+    auto result = metal::subtract_at_target(input_dev, target_dev, /*local_V=*/V);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = subtract_at_target_reference(input_t, target_t, 0U, V);
@@ -148,7 +150,8 @@ TEST_F(SubtractAtTargetTest, BatchedPartialVocabShard) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::subtract_at_target(input_dev, target_dev, first_v, last_v);
+    auto result = metal::subtract_at_target(
+        input_dev, target_dev, /*local_V=*/local_V, /*cluster_axis=*/std::nullopt, /*first_v=*/first_v);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = subtract_at_target_reference(input_t, target_t, first_v, last_v);
@@ -182,7 +185,13 @@ TEST_F(SubtractAtTargetTest, CustomSubtractValue) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::subtract_at_target(input_dev, target_dev, 0U, V, subtract_value);
+    auto result = metal::subtract_at_target(
+        input_dev,
+        target_dev,
+        /*local_V=*/V,
+        /*cluster_axis=*/std::nullopt,
+        /*first_v=*/0U,
+        subtract_value);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = subtract_at_target_reference(input_t, target_t, 0U, V, subtract_value);
@@ -219,7 +228,8 @@ TEST_F(SubtractAtTargetTest, CustomSubtractValuePartialVocab) {
     auto target_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_t, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 
-    auto result = metal::subtract_at_target(input_dev, target_dev, first_v, last_v, subtract_value);
+    auto result = metal::subtract_at_target(
+        input_dev, target_dev, /*local_V=*/local_V, /*cluster_axis=*/std::nullopt, /*first_v=*/first_v, subtract_value);
 
     auto result_xt = core::to_xtensor(result);
     auto expected_xt = subtract_at_target_reference(input_t, target_t, first_v, last_v, subtract_value);

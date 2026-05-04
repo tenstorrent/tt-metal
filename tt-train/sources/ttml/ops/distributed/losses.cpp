@@ -9,30 +9,14 @@
 #include <enchantum/enchantum.hpp>
 #include <stdexcept>
 #include <variant>
-#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 #include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
-#include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_configs.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
-
-namespace {
-
-// Map flat device index to TP rank along cluster_axis (row-major mesh enumeration).
-uint32_t tp_rank_from_device_idx(
-    size_t idx, const tt::tt_metal::distributed::MeshShape& mesh_shape, std::optional<uint32_t> cluster_axis) {
-    if (!cluster_axis.has_value() || mesh_shape.dims() <= 1U) {
-        return static_cast<uint32_t>(idx);
-    }
-    const uint32_t dim1 = mesh_shape[1U];
-    return (cluster_axis.value() == 0U) ? static_cast<uint32_t>(idx) / dim1 : static_cast<uint32_t>(idx) % dim1;
-}
-
-}  // namespace
 
 namespace ttml::ops::distributed {
 
@@ -102,8 +86,6 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     const uint32_t local_V = logits_shape[3];
     const uint32_t N = B * S;
 
-    auto mesh_shape = device->shape();
-
     // Step 1: local max [B,1,S,1] per device (BF16 — no precision loss)
     auto local_max = ttnn::max(logits->get_value(), 3, /* keepdim */ true);
 
@@ -143,12 +125,6 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     ttnn::prim::ttml_select_target_logit(
         logits_val, targets_raw, /*local_V=*/local_V, /*cluster_axis=*/cluster_axis, /*first_v=*/0U, gather_output);
 
-    // tp_ranks is still needed below for subtract_at_target in the backward pass; the analogous
-    // mesh-workload conversion for that op is deferred to a follow-up commit.
-    std::vector<uint32_t> tp_ranks(static_cast<size_t>(mesh_shape.mesh_size()));
-    for (size_t i = 0; i < tp_ranks.size(); ++i) {
-        tp_ranks[i] = tp_rank_from_device_idx(i, mesh_shape, cluster_axis);
-    }
     // All-reduce to collect contributions from all TP shards  [B,1,S,1]
     auto target_logit = ttnn_fixed::distributed::all_reduce(gather_output, cluster_axis);
 
@@ -171,33 +147,31 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     // target position; the ordering matches the reference cross_entropy_bw kernel,
     // whose writer does the onehot subtraction directly on the already-scaled BF16 tile.
     // ---------------------------------------------------------------
-    autograd::GradFunction grad_fn =
-        [logits, out, global_max, global_sum, targets_raw, local_V, tp_ranks = std::move(tp_ranks), N]() {
-            if (!out->is_grad_initialized()) {
-                return;
-            }
-            const float inv_N = 1.0F / static_cast<float>(N);
+    autograd::GradFunction grad_fn = [logits, out, global_max, global_sum, targets_raw, local_V, cluster_axis, N]() {
+        if (!out->is_grad_initialized()) {
+            return;
+        }
+        const float inv_N = 1.0F / static_cast<float>(N);
 
-            auto shifted = ttnn::subtract(logits->get_value(), global_max, ttnn::DataType::FLOAT32);
-            auto local_exp = ttnn::exp(shifted);
+        auto shifted = ttnn::subtract(logits->get_value(), global_max, ttnn::DataType::FLOAT32);
+        auto local_exp = ttnn::exp(shifted);
 
-            auto softmax_k = ttnn::multiply(local_exp, ttnn::reciprocal(global_sum));
-            auto scaled_softmax = ttnn::multiply(softmax_k, inv_N, ttnn::DataType::BFLOAT16);
-            auto sm_shards = ttnn::distributed::get_device_tensors(scaled_softmax);
-            auto tgt_shards = ttnn::distributed::get_device_tensors(targets_raw);
+        auto softmax_k = ttnn::multiply(local_exp, ttnn::reciprocal(global_sum));
+        auto scaled_softmax = ttnn::multiply(softmax_k, inv_N, ttnn::DataType::BFLOAT16);
 
-            for (size_t i = 0; i < sm_shards.size(); ++i) {
-                ttnn::prim::ttml_subtract_at_target(
-                    sm_shards[i],
-                    tgt_shards[i],
-                    tp_ranks[i] * local_V,
-                    (tp_ranks[i] + 1U) * local_V,
-                    sm_shards[i],
-                    inv_N);
-            }
+        // Single mesh workload — the program factory derives each device's shard window
+        // from its mesh coordinate, mirroring the forward-pass select_target_logit call.
+        ttnn::prim::ttml_subtract_at_target(
+            scaled_softmax,
+            targets_raw,
+            /*local_V=*/local_V,
+            /*cluster_axis=*/cluster_axis,
+            /*first_v=*/0U,
+            scaled_softmax,
+            /*subtract_value=*/inv_N);
 
-            logits->add_grad(ttnn::multiply(scaled_softmax, out->get_grad(), ttnn::DataType::BFLOAT16));
-        };
+        logits->add_grad(ttnn::multiply(scaled_softmax, out->get_grad(), ttnn::DataType::BFLOAT16));
+    };
 
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, logits));
     return out;

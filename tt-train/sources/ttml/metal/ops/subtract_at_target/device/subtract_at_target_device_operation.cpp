@@ -50,11 +50,18 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
         "SubtractAtTarget: input must be rank 4, got rank {}",
         tensor_args.input.logical_shape().rank());
 
-    TT_FATAL(
-        args.first_v < args.last_v,
-        "SubtractAtTarget: first_v ({}) must be less than last_v ({})",
-        args.first_v,
-        args.last_v);
+    TT_FATAL(args.local_V > 0U, "SubtractAtTarget: local_V must be > 0");
+
+    if (args.cluster_axis.has_value()) {
+        auto* device = tensor_args.input.device();
+        TT_FATAL(device != nullptr, "SubtractAtTarget: input must be on a (mesh) device");
+        const auto mesh_shape = device->shape();
+        TT_FATAL(
+            *args.cluster_axis < mesh_shape.dims(),
+            "SubtractAtTarget: cluster_axis ({}) is out of range for mesh shape with {} dim(s)",
+            *args.cluster_axis,
+            mesh_shape.dims());
+    }
 
     if (tensor_args.preallocated_output.has_value()) {
         check_tensor(
@@ -83,6 +90,8 @@ SubtractAtTargetDeviceOperation::tensor_return_value_t SubtractAtTargetDeviceOpe
 
 ttsl::hash::hash_t SubtractAtTargetDeviceOperation::compute_program_hash(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    // first_v / local_V / cluster_axis / subtract_value only affect runtime args (they're patched
+    // by override_runtime_arguments per coord); they don't change the compiled kernel binary.
     return tt::tt_metal::operation::hash_operation<SubtractAtTargetDeviceOperation>(
         tensor_args.input.dtype(), tensor_args.input.logical_shape());
 }
@@ -95,13 +104,15 @@ ttml::metal::ops::subtract_at_target::device::SubtractAtTargetDeviceOperation::t
 ttml_subtract_at_target(
     const ttnn::Tensor& input,
     const ttnn::Tensor& target,
+    uint32_t local_V,
+    std::optional<uint32_t> cluster_axis,
     uint32_t first_v,
-    uint32_t last_v,
     const std::optional<ttnn::Tensor>& preallocated_output,
     float subtract_value) {
     using OperationType = ttml::metal::ops::subtract_at_target::device::SubtractAtTargetDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{first_v, last_v, subtract_value};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .first_v = first_v, .local_V = local_V, .cluster_axis = cluster_axis, .subtract_value = subtract_value};
     auto tensor_args =
         OperationType::tensor_args_t{.input = input, .target = target, .preallocated_output = preallocated_output};
 
