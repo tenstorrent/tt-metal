@@ -66,12 +66,10 @@ void kernel_main() {
     const auto output_addrg = TensorAccessor(output_accessor_args, output_addr);
 
     uint32_t dispatch_table_write_addr = 0;
-    uint32_t indices_write_addr = 0;
 
     if constexpr (use_dispatch_table_skip) {
         const auto dispatch_table_addrg =
             TensorAccessor(dispatch_table_accessor_args, dispatch_table_addr, dispatch_table_page_size);
-        const auto indices_addrg = TensorAccessor(indices_accessor_args, indices_addr, indices_page_size);
 
         // Pre-load dispatch table into CB (c_2) — read once, used by compute for all chunks
         cb_reserve_back(cb_dispatch_table, dispatch_table_num_pages);
@@ -82,37 +80,36 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_dispatch_table, dispatch_table_num_pages);
-
-        // Pre-load indices for ALL of this core's tokens (all chunks) into CB (c_3)
-        uint32_t total_tokens_this_core = num_chunks * TOKENS_PER_CHUNK;
-        cb_reserve_back(cb_indices, total_tokens_this_core);
-        indices_write_addr = get_write_ptr(cb_indices);
-        for (uint32_t i = 0; i < total_tokens_this_core; i++) {
-            uint32_t page_idx = token_start_idx + i;
-            noc_async_read_page(page_idx, indices_addrg, indices_write_addr + i * indices_aligned_page_size);
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_indices, total_tokens_this_core);
     }
 
     constexpr uint32_t cb_output_tiles = emb_dim_cb_tiles * TOKENS_PER_CHUNK;
 
-    uint32_t token_cb_offset = 0;  // tracks position within the pre-loaded indices CB
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        // Load indices for this chunk into CB (c_3) — one chunk at a time to save L1
+        uint32_t indices_write_addr = 0;
+        if constexpr (use_dispatch_table_skip) {
+            const auto indices_addrg = TensorAccessor(indices_accessor_args, indices_addr, indices_page_size);
+            cb_reserve_back(cb_indices, TOKENS_PER_CHUNK);
+            indices_write_addr = get_write_ptr(cb_indices);
+            for (uint32_t i = 0; i < TOKENS_PER_CHUNK; i++) {
+                noc_async_read_page(
+                    token_start_idx + i, indices_addrg, indices_write_addr + i * indices_aligned_page_size);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_indices, TOKENS_PER_CHUNK);
+        }
+
         // Phase 1: Stream one weight per expert per token for this chunk
         for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CHUNK; ++token_idx) {
             uint32_t global_token_idx = token_start_idx + token_idx;
 
             bool has_local = true;
             if constexpr (use_dispatch_table_skip) {
-                // Access dispatch table and indices from L1 (data still valid after cb_push_back)
                 int32_t* dispatch_table = (int32_t*)dispatch_table_write_addr;
-                uint32_t token_cb_idx = token_cb_offset + token_idx;
-                int32_t* token_indices = (int32_t*)(indices_write_addr + token_cb_idx * indices_aligned_page_size);
+                int32_t* token_indices = (int32_t*)(indices_write_addr + token_idx * indices_aligned_page_size);
                 has_local = false;
                 for (uint32_t k = 0; k < num_experts; ++k) {
-                    int32_t expert_id = token_indices[k];
-                    if (dispatch_table[expert_id] != -1) {
+                    if (dispatch_table[token_indices[k]] != -1) {
                         has_local = true;
                         break;
                     }
@@ -145,7 +142,6 @@ void kernel_main() {
                 cb_push_back(cb_weights, 1);
             }
         }
-        token_cb_offset += TOKENS_PER_CHUNK;
 
         // Phase 2: Write output tiles after compute finishes this chunk.
         // The output CB holds TOKENS_PER_CHUNK * emb_dim_cb_tiles tile-sized pages

@@ -145,11 +145,10 @@ CreatedProgram create_at(
                 .set_page_size(tt::CBIndex::c_2, dispatch_table_aligned_page_size);
         tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_dispatch_table_config);
 
-        // c_3: Indices scratch — loaded once for ALL of this core's tokens (all chunks).
-        // Sized for the maximum any core will handle: base+1 chunks when extra_chunks > 0.
+        // c_3: Indices scratch — loaded one chunk at a time (reused per chunk).
         indices_page_size_val = get_page_size(indices);
         indices_aligned_page_size = get_aligned_page_size(indices);
-        indices_pages_per_core = (base_chunks_per_core + (extra_chunks > 0 ? 1 : 0)) * TOKENS_PER_CHUNK;
+        indices_pages_per_core = TOKENS_PER_CHUNK;
         uint32_t indices_cb_size = indices_pages_per_core * indices_aligned_page_size;
         tt::tt_metal::CircularBufferConfig cb_indices_config =
             tt::tt_metal::CircularBufferConfig(indices_cb_size, {{tt::CBIndex::c_3, indices_cb_data_format}})

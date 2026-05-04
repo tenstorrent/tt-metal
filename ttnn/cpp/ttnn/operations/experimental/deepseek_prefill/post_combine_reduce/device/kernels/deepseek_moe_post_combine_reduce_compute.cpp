@@ -30,14 +30,18 @@ void kernel_main() {
     constexpr uint32_t total_token_tiles = TOKENS_PER_CHUNK * emb_dim_cb_tiles;
 
     if constexpr (use_dispatch_table_skip) {
-        // Wait for writer to finish pre-loading scratch data (all chunks' indices)
+        // Wait for writer to finish pre-loading dispatch table (loaded once for all chunks)
         cb_wait_front(cb_dispatch_table, dispatch_table_num_pages);
-        cb_wait_front(cb_indices, num_chunks * TOKENS_PER_CHUNK);
     }
 
     binary_op_init_common(cb_combine_input, cb_weights, cb_output);
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        if constexpr (use_dispatch_table_skip) {
+            // Wait for writer to load this chunk's indices (one chunk at a time)
+            cb_wait_front(cb_indices, TOKENS_PER_CHUNK);
+        }
+
         cb_reserve_back(cb_rowmajor, total_token_tiles);
 
         // Process one expert at a time: both input (c_0) and weight (c_1) are streamed
@@ -58,9 +62,7 @@ void kernel_main() {
                 bool skip_expert = false;
                 bool must_zero_init = false;
                 if constexpr (use_dispatch_table_skip) {
-                    // Absolute index into the pre-loaded indices CB for this token
-                    uint32_t token_cb_idx = chunk * TOKENS_PER_CHUNK + i;
-                    uint32_t expert_id = read_tile_value(cb_indices, token_cb_idx, expert_idx);
+                    uint32_t expert_id = read_tile_value(cb_indices, i, expert_idx);
                     // Check dispatch table: -1 (0xFFFFFFFF) means non-local
                     uint32_t chip_id = read_tile_value(cb_dispatch_table, 0, expert_id);
                     bool is_local = (chip_id != 0xFFFFFFFF);
@@ -111,6 +113,12 @@ void kernel_main() {
             }
             pack_reconfig_l1_acc(0);
         }
+
+        if constexpr (use_dispatch_table_skip) {
+            // Release this chunk's indices so writer can load the next chunk's
+            cb_pop_front(cb_indices, TOKENS_PER_CHUNK);
+        }
+
         cb_push_back(cb_rowmajor, total_token_tiles);
 
         compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output>(1);
