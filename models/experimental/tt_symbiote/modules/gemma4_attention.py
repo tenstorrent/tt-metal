@@ -60,6 +60,9 @@ class TTNNGemma4Attention(TTNNModule):
     - After k_proj, the shared output gets k_norm -> K and v_norm -> V
 
     Both use scaling=1.0 (norms replace 1/sqrt(d) scaling) and full RoPE.
+
+    Q/K/V head-split uses ``ttnn.experimental.nlp_create_qkv_heads(_decode)``
+    (no fallback).
     """
 
     def __init__(self):
@@ -105,6 +108,12 @@ class TTNNGemma4Attention(TTNNModule):
         new_attn.is_sliding = hf_attn.is_sliding
         new_attn.layer_idx = hf_attn.layer_idx
         new_attn.num_attention_heads = config.num_attention_heads  # 32
+        # nlp_create_qkv_heads_decode kernel caps at 32 Q heads
+        # (see nlp_create_qkv_heads_decode_device_operation.cpp:135-136).
+        # Gemma4 ships with 32 Q heads; assert defensively to surface config drift early.
+        assert (
+            new_attn.num_attention_heads <= 32
+        ), f"nlp_create_qkv_heads supports num_heads<=32, got {new_attn.num_attention_heads}"
         # num_key_value_heads is a local variable in HF's __init__, not stored as self attr.
         # Replicate the HF logic: use num_global_key_value_heads for global (k=v) layers,
         # otherwise use config.num_key_value_heads.
@@ -359,7 +368,7 @@ class TTNNGemma4Attention(TTNNModule):
         """
         return norm_module(states)
 
-    def _project_qkv(self, hidden_states, batch_size, seq_length, apply_rope=False, for_decode=False):
+    def _project_qkv(self, hidden_states, batch_size, seq_length, for_decode=False):
         """Project hidden states to Q, K, V via fused QKV matmul and apply per-head norms.
 
         Uses a single fused QKV projection (TTNNLinearIColShardedWAllReduced)
@@ -367,16 +376,22 @@ class TTNNGemma4Attention(TTNNModule):
         from the norm; the fused linear does matmul + reduce_scatter + all_gather
         in 1 matmul + 2 CCL ops (vs 3 matmuls + 4 CCL ops before).
 
-        For decode (S=1, for_decode=True), uses an optimized reshape path that
-        goes directly from [B, 1, proj_size] to [num_heads, head_dim] for norm,
-        skipping the intermediate [B, S, H, D] reshape. This saves 2 reshape ops
-        per projection (6 total for Q/K/V).
+        Head-split uses ``ttnn.experimental.nlp_create_qkv_heads(_decode)``
+        unconditionally (no fallback). The decode variant emits
+        [1, B, nH, D] HEIGHT_SHARDED; the prefill variant emits [B, nH, S, D].
+        Per-head Q/K/V RMSNorms operate on dim=-1 (head_dim) and are
+        layout-invariant.
+
+        UAF hazard (decode and prefill paths): rank-3 -> rank-4 ttnn.reshape on
+        TILE_LAYOUT DRAM_INTERLEAVED is metadata-only (a view). The
+        ttnn.deallocate(qkv_states) MUST happen AFTER the fused op consumes
+        qkv_4d; freeing the source before the op reads the view is a silent
+        use-after-free. See research_topics.md:765 for the generic class.
 
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
             batch_size: Batch dimension
             seq_length: Sequence length
-            apply_rope: Unused, kept for signature compatibility (always False)
             for_decode: If True, skip the permute to [B,H,S,D] and return
                 [B,S,H,D] directly (avoids 3 trace ops when S=1).
 
@@ -390,39 +405,43 @@ class TTNNGemma4Attention(TTNNModule):
         # Fused QKV: single matmul + all_reduce produces replicated output
         qkv_states = self.qkv_proj(hidden_states)
 
-        # Slice into Q, K, V components
         q_size = self._q_size
         kv_size = self._kv_size
-        query_states = ttnn.slice(qkv_states, [0, 0, 0], [batch_size, seq_length, q_size])
-        key_states = ttnn.slice(qkv_states, [0, 0, q_size], [batch_size, seq_length, q_size + kv_size])
-        # V is always present in fused QKV (for K=V sharing, V weight = K weight copy)
-        value_states = ttnn.slice(qkv_states, [0, 0, q_size + kv_size], [batch_size, seq_length, q_size + 2 * kv_size])
-        ttnn.deallocate(qkv_states)
 
         if for_decode and seq_length == 1:
-            # Optimized decode path: skip intermediate [B,S,H,D] reshape.
-            # Go directly from [B, 1, proj_size] to [num_heads, head_dim] for norm,
-            # then reshape to [B, 1, H, D]. Saves 2 reshapes per projection.
-            query_states = ttnn.reshape(query_states, (self.num_attention_heads, self.head_dim))
-            key_states = ttnn.reshape(key_states, (self.num_key_value_heads, self.head_dim))
-            value_states = ttnn.reshape(value_states, (self.num_key_value_heads, self.head_dim))
-
-            query_states = self.q_norm(query_states)
-            key_states = self.k_norm(key_states)
-            if self.v_norm is not None:
-                value_states = self.v_norm(value_states)
-
-            query_states = ttnn.reshape(query_states, (1, batch_size, self.num_attention_heads, self.head_dim))
-            key_states = ttnn.reshape(key_states, (1, batch_size, self.num_key_value_heads, self.head_dim))
-            value_states = ttnn.reshape(value_states, (1, batch_size, self.num_key_value_heads, self.head_dim))
-        else:
-            # Prefill path: standard reshape chain
-            query_states = ttnn.reshape(query_states, (batch_size, seq_length, self.num_attention_heads, self.head_dim))
-            key_states = ttnn.reshape(key_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
-            value_states = ttnn.reshape(value_states, (batch_size, seq_length, self.num_key_value_heads, self.head_dim))
-
+            # Fused decode head-split. Op signature: input [1, 1, B, fused],
+            # output Q [1, B, nQ, D] / K,V [1, B, nKV, D] HEIGHT_SHARDED.
+            qkv_4d = ttnn.reshape(qkv_states, (1, 1, batch_size, q_size + 2 * kv_size))
+            # HEIGHT_SHARDED output mem-config — same idiom as the K/V reshard
+            # block in _forward_decode_paged.
+            tile_size = 32
+            shard_h = ((self.num_key_value_heads + tile_size - 1) // tile_size) * tile_size
+            assert batch_size <= 8, f"HEIGHT_SHARDED memcfg core_grid=(y=1, x={batch_size}) exceeds T3K 8x8 grid"
+            hs_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(shard_h, self.head_dim),
+                core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+                qkv_4d,
+                num_heads=self.num_attention_heads,
+                num_kv_heads=self.num_key_value_heads,
+                memory_config=hs_mem_cfg,
+            )
+            ttnn.deallocate(qkv_4d)
+            ttnn.deallocate(qkv_states)  # UAF guard: see _project_qkv docstring (research_topics.md:765).
+            # DRAM-out for paged_sdpa_decode requirement (Q must be DRAM when not sharded).
+            q_interleaved = ttnn.sharded_to_interleaved(q, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(q)
+            # Reshard K/V back to interleaved: ttnn.rms_norm doesn't accept HEIGHT_SHARDED inputs (attention_1d.py:618).
+            k_interleaved = ttnn.sharded_to_interleaved(k, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(k)
+            v_interleaved = ttnn.sharded_to_interleaved(v, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(v)
             query_states = self._apply_per_head_norm(
-                query_states,
+                q_interleaved,
                 self.q_norm,
                 batch_size,
                 seq_length,
@@ -430,7 +449,7 @@ class TTNNGemma4Attention(TTNNModule):
                 self.head_dim,
             )
             key_states = self._apply_per_head_norm(
-                key_states,
+                k_interleaved,
                 self.k_norm,
                 batch_size,
                 seq_length,
@@ -439,20 +458,59 @@ class TTNNGemma4Attention(TTNNModule):
             )
             if self.v_norm is not None:
                 value_states = self._apply_per_head_norm(
-                    value_states,
+                    v_interleaved,
                     self.v_norm,
                     batch_size,
                     seq_length,
                     self.num_key_value_heads,
                     self.head_dim,
                 )
-
-            # Permute to [batch, num_heads, seq_len, head_dim] for prefill attention
-            query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-            key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-            value_states = ttnn.permute(value_states, (0, 2, 1, 3))
-
-        return query_states, key_states, value_states
+            else:
+                value_states = v_interleaved
+            return query_states, key_states, value_states
+        else:
+            # Fused prefill head-split. rank-3 [B, S, fused] -> rank-4 [B, 1, S, fused] required by op.
+            qkv_4d = ttnn.reshape(qkv_states, (batch_size, 1, seq_length, q_size + 2 * kv_size))
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv_4d,
+                num_heads=self.num_attention_heads,
+                num_kv_heads=self.num_key_value_heads,
+                # transpose_k_heads=False: required for paged_sdpa downstream layout
+                # (see nlp_create_qkv_heads.cpp:31).
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(qkv_4d)
+            ttnn.deallocate(qkv_states)  # UAF guard: see _project_qkv docstring (research_topics.md:765).
+            # Apply per-head norms on [B, nH, S, D]; norms are dim=-1 invariant.
+            query_states = self._apply_per_head_norm(
+                q,
+                self.q_norm,
+                batch_size,
+                seq_length,
+                self.num_attention_heads,
+                self.head_dim,
+            )
+            key_states = self._apply_per_head_norm(
+                k,
+                self.k_norm,
+                batch_size,
+                seq_length,
+                self.num_key_value_heads,
+                self.head_dim,
+            )
+            if self.v_norm is not None:
+                value_states = self._apply_per_head_norm(
+                    v,
+                    self.v_norm,
+                    batch_size,
+                    seq_length,
+                    self.num_key_value_heads,
+                    self.head_dim,
+                )
+            else:
+                value_states = v
+            return query_states, key_states, value_states
 
     def _apply_rope(self, query_states, key_states, cos, sin, token_index=None):
         """Apply rotary position embedding to Q and K.
