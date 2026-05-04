@@ -51,8 +51,6 @@ def test_forward_pass(
     num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
 
     # Get state dict from actual model - pass directly to convert_weights
-    torch.use_deterministic_algorithms(True)
-    torch.utils.deterministic.fill_uninitialized_memory = False
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
     hf_state_dict = reference_model.state_dict()
 
