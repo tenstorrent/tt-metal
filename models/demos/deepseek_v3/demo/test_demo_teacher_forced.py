@@ -312,14 +312,14 @@ def test_demo_teacher_forcing_accuracy(
 
             pred_ids = gen.get("predicted_tokens")
             if pred_ids:
-                record["tt_predicted_output"] = tokenizer.decode(
-                    [int(x) for x in pred_ids], skip_special_tokens=False
-                )
+                record["tt_predicted_output"] = tokenizer.decode([int(x) for x in pred_ids], skip_special_tokens=False)
 
             output_records.append(record)
         artifact_dir = ARTIFACT_DIR
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        output_file = artifact_dir / f"{_timestamped_artifact_stem(f'teacher_forced_generated_outputs_{upr_suffix}')}.json"
+        output_file = (
+            artifact_dir / f"{_timestamped_artifact_stem(f'teacher_forced_generated_outputs_{upr_suffix}')}.json"
+        )
         with output_file.open("w", encoding="utf-8") as f:
             json.dump(output_records, f, ensure_ascii=False, indent=2)
             f.write("\n")
