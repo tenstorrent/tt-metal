@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    apply_tensor_placement_topology,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
@@ -534,10 +535,46 @@ def run(
     # between the two; revisit once the op handles sharded weights at scale.
     placement_safe = activation_cells <= 134_217_728
 
+    def _host_replicate_with_topology(torch_t, dtype, tensor_placement):
+        """HOST-side replicate to mesh, with master's Shard placement stamped.
+
+        Above the placement_safe threshold, building a ShardTensor2dMesh host
+        tensor triggers a multi-minute prepare_conv2d_weights hang on the
+        1024x1024 / in_channels=256 / DRAM_WIDTH 16-slice path. Going through
+        ReplicateTensorToMesh on host ships an identical per-device buffer to
+        each chip via the broadcast path (bypassing the slow per-shard prepare)
+        while ``apply_tensor_placement_topology`` stamps the master's
+        ``PlacementShard`` metadata so the operation tracer captures matching
+        ``tensor_placement`` for the trace config_hash. Master records these
+        weights/biases as ``StorageType.HOST``; we keep the tensor host-side
+        (no ``device=``) to round-trip storage_type as well.
+        """
+        import ast as _ast0
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        t = ttnn.from_torch(torch_t, dtype, mesh_mapper=mesh_mapper)
+        if tensor_placement:
+            mesh_shape_raw = tensor_placement.get("mesh_device_shape", "[1, 1]")
+            if isinstance(mesh_shape_raw, str):
+                try:
+                    mesh_shape_raw = _ast0.literal_eval(mesh_shape_raw)
+                except Exception:
+                    mesh_shape_raw = [1, 1]
+            mesh_shape_tuple = tuple(mesh_shape_raw) if isinstance(mesh_shape_raw, (list, tuple)) else (1, 1)
+            if len(mesh_shape_tuple) < 2:
+                mesh_shape_tuple = (mesh_shape_tuple[0] if mesh_shape_tuple else 1, 1)
+            try:
+                apply_tensor_placement_topology(t, tensor_placement, mesh_shape_tuple)
+            except Exception:
+                pass
+        return t
+
     if placement_safe:
         tt_weight = _from_torch_host_with_placement(
             torch_weight, effective_weight_dtype, weight_tensor_placement, device, is_mesh_device
         )
+    elif is_mesh_device and weight_tensor_placement:
+        tt_weight = _host_replicate_with_topology(torch_weight, effective_weight_dtype, weight_tensor_placement)
     else:
         tt_weight = ttnn.from_torch(torch_weight, effective_weight_dtype)
 
@@ -550,6 +587,8 @@ def run(
             tt_bias = _from_torch_host_with_placement(
                 torch_bias, effective_bias_dtype, bias_tensor_placement, device, is_mesh_device
             )
+        elif is_mesh_device and bias_tensor_placement:
+            tt_bias = _host_replicate_with_topology(torch_bias, effective_bias_dtype, bias_tensor_placement)
         else:
             tt_bias = ttnn.from_torch(torch_bias, effective_bias_dtype)
 

@@ -78,6 +78,7 @@ def run(
     torch.manual_seed(0)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(
         kwargs,
@@ -87,22 +88,53 @@ def run(
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Default scalar_value if not provided
-    if scalar_value is None:
+    # arg1 may be a traced tensor (unpacked to input_b_*) or a scalar. The Flux
+    # master records arg1 as a tensor; using a scalar produces a config_hash diff.
+    has_input_b = input_b_shape not in (None, "__ABSENT__")
+    if not has_input_b and scalar_value is None:
         scalar_value = kwargs.get("scalar_value", 0.5)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
 
-    # Multiply by scalar
-    torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
+    if has_input_b:
+        shape_b = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
+        torch_input_tensor_b = gen_func_with_cast_tt(
+            partial(torch_random, low=-100, high=100, dtype=torch.float32),
+            input_b_dtype or input_a_dtype,
+        )(shape_b)
+        torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
+    else:
+        torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
+    def _make_b(mem_config):
+        if is_host:
+            return ttnn.from_torch(
+                torch_input_tensor_b, dtype=input_b_dtype or input_a_dtype, layout=input_b_layout or input_a_layout
+            )
+        if is_mesh_device and input_b_tensor_placement:
+            return create_tensor_on_mesh(
+                torch_input_tensor_b,
+                device,
+                input_b_dtype or input_a_dtype,
+                input_b_layout or input_a_layout,
+                mem_config,
+                input_b_tensor_placement,
+            )
+        return ttnn.from_torch(
+            torch_input_tensor_b,
+            dtype=input_b_dtype or input_a_dtype,
+            layout=input_b_layout or input_a_layout,
+            device=device,
+            memory_config=mem_config,
+        )
+
     # Create tensor A and run multiply_ with L1 clash fallback.
     # Wrap both tensor creation and op call so we can deallocate and retry on DRAM.
-    def _create_and_run(mem_config, extra_kwargs):
+    def _create_and_run(mem_config_a, mem_config_b, extra_kwargs):
         if not is_host:
             if is_mesh_device and input_a_tensor_placement:
                 t = create_tensor_on_mesh(
@@ -110,7 +142,7 @@ def run(
                     device,
                     input_a_dtype,
                     input_a_layout,
-                    mem_config,
+                    mem_config_a,
                     input_a_tensor_placement,
                 )
             else:
@@ -119,21 +151,27 @@ def run(
                     dtype=input_a_dtype,
                     layout=input_a_layout,
                     device=device,
-                    memory_config=mem_config,
+                    memory_config=mem_config_a,
                 )
         else:
             t = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
         st = start_measuring_time()
-        ttnn.multiply_(t, scalar_value, **extra_kwargs)
+        if has_input_b:
+            tb = _make_b(mem_config_b)
+            ttnn.multiply_(t, tb, **extra_kwargs)
+        else:
+            ttnn.multiply_(t, scalar_value, **extra_kwargs)
         out = mesh_tensor_to_torch(t, device if is_mesh_device else None)
         perf = stop_measuring_time(st)
         return out, perf
 
     try:
-        output_tensor, e2e_perf = _create_and_run(input_a_memory_config, op_kwargs)
+        output_tensor, e2e_perf = _create_and_run(
+            input_a_memory_config, input_b_memory_config or input_a_memory_config, op_kwargs
+        )
     except Exception as e:
         if "circular buffers" in str(e) and "clash with L1 buffers" in str(e):
-            output_tensor, e2e_perf = _create_and_run(ttnn.DRAM_MEMORY_CONFIG, {})
+            output_tensor, e2e_perf = _create_and_run(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, {})
         else:
             raise
 

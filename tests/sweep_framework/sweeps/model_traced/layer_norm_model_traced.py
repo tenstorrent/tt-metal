@@ -77,6 +77,15 @@ def run(
     if "program_config" in op_kwargs and output_memory_config is not None:
         op_kwargs["memory_config"] = output_memory_config
 
+    # Master Flux layer_norm sites pass ``weight=`` and ``bias=`` tensors
+    # (replicated across the mesh). The loader expands them to weight_*/bias_*
+    # named-tensor metadata which build_op_kwargs filters out. Reconstruct real
+    # ttnn.Tensors and re-add them so the sweep config_hash matches master.
+    weight_shape = kwargs.get("weight_shape")
+    bias_shape = kwargs.get("bias_shape")
+    has_weight = weight_shape not in (None, "__ABSENT__")
+    has_bias = bias_shape not in (None, "__ABSENT__")
+
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
@@ -112,6 +121,55 @@ def run(
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    def _build_named_tensor(prefix):
+        t_shape = kwargs.get(f"{prefix}_shape")
+        if t_shape in (None, "__ABSENT__"):
+            return None, None
+        t_dtype = kwargs.get(f"{prefix}_dtype") or input_a_dtype
+        t_layout = kwargs.get(f"{prefix}_layout") or input_a_layout
+        t_mem = kwargs.get(f"{prefix}_memory_config") or ttnn.DRAM_MEMORY_CONFIG
+        t_placement = kwargs.get(f"{prefix}_tensor_placement")
+        if t_placement == "__ABSENT__":
+            t_placement = None
+        t_shape_t = tuple(t_shape) if isinstance(t_shape, (list, tuple)) else t_shape
+        torch_t = (
+            torch.ones(t_shape_t, dtype=torch.float32)
+            if prefix == "weight"
+            else torch.zeros(t_shape_t, dtype=torch.float32)
+        )
+        if not is_host:
+            if is_mesh_device and t_placement:
+                ttnn_t = create_tensor_on_mesh(torch_t, device, t_dtype, t_layout, t_mem, t_placement)
+            else:
+                ttnn_t = ttnn.from_torch(
+                    torch_t,
+                    dtype=t_dtype,
+                    layout=t_layout,
+                    device=device,
+                    memory_config=t_mem,
+                )
+        else:
+            ttnn_t = ttnn.from_torch(torch_t, dtype=t_dtype, layout=t_layout)
+        return ttnn_t, torch_t
+
+    weight_tensor, torch_weight = (None, None)
+    bias_tensor, torch_bias = (None, None)
+    if has_weight:
+        weight_tensor, torch_weight = _build_named_tensor("weight")
+        op_kwargs["weight"] = weight_tensor
+    if has_bias:
+        bias_tensor, torch_bias = _build_named_tensor("bias")
+        op_kwargs["bias"] = bias_tensor
+
+    # Recompute golden with weight/bias if traced
+    if torch_weight is not None or torch_bias is not None:
+        torch_output_tensor = torch.nn.functional.layer_norm(
+            torch_input_tensor_a,
+            normalized_shape,
+            weight=torch_weight.reshape(normalized_shape) if torch_weight is not None else None,
+            bias=torch_bias.reshape(normalized_shape) if torch_bias is not None else None,
+        )
 
     start_time = start_measuring_time()
     output_tensor = ttnn.layer_norm(input_tensor_a, **op_kwargs)

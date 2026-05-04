@@ -65,16 +65,26 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Restore output memory_config for the op if present in traced kwargs
-    traced_memory_config = kwargs.get("memory_config")
-    if traced_memory_config is not None and traced_memory_config != "__ABSENT__" and "memory_config" not in op_kwargs:
-        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+    # Master Flux gelu sites (config_id 80, 81) trace ``output_tensor=`` (preallocated)
+    # rather than ``memory_config=``. Detect the unpacked named-tensor metadata and
+    # reconstruct a real preallocated buffer so the sweep config_hash matches master.
+    has_traced_output_tensor = kwargs.get("output_tensor_shape") not in (None, "__ABSENT__")
 
-        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
-        if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
-    elif output_memory_config is not None and "memory_config" not in op_kwargs:
-        op_kwargs["memory_config"] = output_memory_config
+    if not has_traced_output_tensor:
+        # Restore output memory_config for the op if present in traced kwargs
+        traced_memory_config = kwargs.get("memory_config")
+        if (
+            traced_memory_config is not None
+            and traced_memory_config != "__ABSENT__"
+            and "memory_config" not in op_kwargs
+        ):
+            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+            parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+            if parsed_mc is not None:
+                op_kwargs["memory_config"] = parsed_mc
+        elif output_memory_config is not None and "memory_config" not in op_kwargs:
+            op_kwargs["memory_config"] = output_memory_config
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -130,6 +140,30 @@ def run(
                         pass  # Stay on DRAM if shard spec is incompatible
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Reconstruct the preallocated output_tensor= buffer when master traced one.
+    # ``build_op_kwargs`` filters output_tensor_* keys as named-tensor metadata.
+    if has_traced_output_tensor:
+        ot_shape = kwargs.get("output_tensor_shape")
+        ot_dtype = kwargs.get("output_tensor_dtype") or input_a_dtype
+        ot_layout = kwargs.get("output_tensor_layout") or input_a_layout
+        ot_mem_config = kwargs.get("output_tensor_memory_config") or input_a_memory_config
+        ot_placement = kwargs.get("output_tensor_tensor_placement") or input_a_tensor_placement
+        ot_shape_t = tuple(ot_shape) if isinstance(ot_shape, (list, tuple)) else ot_shape
+        torch_ot = torch.zeros(ot_shape_t, dtype=torch.float32)
+        if is_mesh_device and ot_placement:
+            preallocated_output = create_tensor_on_mesh(
+                torch_ot, device, ot_dtype, ot_layout, ot_mem_config, ot_placement
+            )
+        else:
+            preallocated_output = ttnn.from_torch(
+                torch_ot,
+                dtype=ot_dtype,
+                layout=ot_layout,
+                device=device,
+                memory_config=ot_mem_config,
+            )
+        op_kwargs["output_tensor"] = preallocated_output
 
     start_time = start_measuring_time()
     output_tensor = ttnn.gelu(input_tensor_a, **op_kwargs)
