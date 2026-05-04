@@ -1,8 +1,8 @@
-# LLK nightly — python_tests compile producer/consumer with coverage (5-way split, no speed-of-light).
+# LLK e2e — python_tests compile producer/consumer with coverage (5-way split, no speed-of-light).
 # Split style matches tests/pipeline_reorg/ttnn-tests.yaml: one matrix row per --group with cmd + skus.timeout.
 # PYTEST_MARKERS is set by llk-e2e-impl from workflow_dispatch (default matches historical fallback).
 
-- name: llk_nightly_wormhole group 1/5
+- name: llk_e2e_wormhole group 1/5
   split_group: 1
   team: llk
   coverage: true
@@ -33,7 +33,7 @@
         - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
-- name: llk_nightly_wormhole group 2/5
+- name: llk_e2e_wormhole group 2/5
   split_group: 2
   team: llk
   coverage: true
@@ -64,7 +64,7 @@
         - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
-- name: llk_nightly_wormhole group 3/5
+- name: llk_e2e_wormhole group 3/5
   split_group: 3
   team: llk
   coverage: true
@@ -95,7 +95,7 @@
         - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
-- name: llk_nightly_wormhole group 4/5
+- name: llk_e2e_wormhole group 4/5
   split_group: 4
   team: llk
   coverage: true
@@ -126,7 +126,7 @@
         - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
-- name: llk_nightly_wormhole group 5/5
+- name: llk_e2e_wormhole group 5/5
   split_group: 5
   team: llk
   coverage: true
@@ -157,7 +157,7 @@
         - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
-- name: llk_nightly_blackhole group 1/5
+- name: llk_e2e_blackhole group 1/5
   split_group: 1
   team: llk
   coverage: true
@@ -188,7 +188,7 @@
         - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
 
-- name: llk_nightly_blackhole group 2/5
+- name: llk_e2e_blackhole group 2/5
   split_group: 2
   team: llk
   coverage: true
@@ -219,7 +219,7 @@
         - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
 
-- name: llk_nightly_blackhole group 3/5
+- name: llk_e2e_blackhole group 3/5
   split_group: 3
   team: llk
   coverage: true
@@ -250,7 +250,7 @@
         - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
 
-- name: llk_nightly_blackhole group 4/5
+- name: llk_e2e_blackhole group 4/5
   split_group: 4
   team: llk
   coverage: true
@@ -281,7 +281,7 @@
         - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
 
-- name: llk_nightly_blackhole group 5/5
+- name: llk_e2e_blackhole group 5/5
   split_group: 5
   team: llk
   coverage: true
