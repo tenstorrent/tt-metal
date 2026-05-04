@@ -214,6 +214,116 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
             }
             initialize_and_launch_firmware(device_id);
         }
+
+        // FIX TV (#42429): Wait for MMIO ETH channels to complete rebooting to base-UMD
+        // firmware after reset_cores() may have PCIe-force-reset them.
+        //
+        // Root cause of probe_dead regression (run 25295860739):
+        //   Session N left MMIO ETH channels running FABRIC firmware (degraded-cluster
+        //   fast teardown didn't send TERMINATE).  Session N+1's reset_cores() detected
+        //   them as still-running, sent exit signals, got no response, and PCIe-force-reset
+        //   them (assert+deassert risc_reset).  The channels enter hardware reset and begin
+        //   rebooting (~1-2s to base-UMD).  Session N+1's fabric init immediately called
+        //   terminate_stale_erisc_routers(), which probes MMIO channels via ReadFromDeviceL1
+        //   (ETH command-queue protocol, requires ERISC to be running to service reads).
+        //   Since the ERISCs are still mid-reboot, the command-queue read times out →
+        //   probe_dead on MMIO devices.  probe_dead on MMIO cascades to relay_timeout on
+        //   non-MMIO (relay path not yet established) → all ETH channels dead.
+        //
+        // Fix: poll MMIO ETH heartbeat after the reset_cores() loop.  If channels are
+        // already running base-UMD (no force-reset happened), they respond in <1 poll
+        // interval (~10ms, negligible overhead).  If they were force-reset, we wait up to
+        // kMmioEthRebootMs for the heartbeat to become non-zero and start incrementing.
+        if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
+            hal_.get_eth_fw_is_cooperative() && get_control_plane_) {
+            const uint32_t hb_addr = hal_.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+            if (hb_addr == 0u) {
+                log_debug(
+                    tt::LogAlways,
+                    "run_launch_phase: FIX TV — ETH heartbeat address not wired for this arch; "
+                    "skipping MMIO ETH reboot wait. (#42429)");
+            } else {
+                struct EthRebootPollState {
+                    tt_cxy_pair target;
+                    uint32_t prev_hb = 0;
+                    bool nonzero_seen = false;
+                    bool ready = false;
+                };
+                std::vector<EthRebootPollState> poll_states;
+                for (const tt::ChipId mmio_id : mmio_ids_set) {
+                    for (const auto& logical_core :
+                         this->get_control_plane_().get_active_ethernet_cores(mmio_id)) {
+                        CoreCoord virt = cluster_.get_virtual_coordinate_from_logical_coordinates(
+                            mmio_id, logical_core, CoreType::ETH);
+                        poll_states.push_back({tt_cxy_pair(mmio_id, virt), 0, false, false});
+                    }
+                }
+                if (!poll_states.empty()) {
+                    constexpr int kMmioEthRebootMs = 3000;
+                    constexpr auto kPollInterval = std::chrono::milliseconds(10);
+                    const auto tv_start = std::chrono::steady_clock::now();
+                    while (true) {
+                        bool all_done = true;
+                        for (auto& ps : poll_states) {
+                            if (ps.ready) continue;
+                            uint32_t hb_val = 0;
+                            try {
+                                cluster_.read_reg(&hb_val, ps.target, hb_addr);
+                            } catch (...) {
+                                ps.ready = true;  // PCIe read failed — count as done
+                                continue;
+                            }
+                            if (!ps.nonzero_seen) {
+                                if (hb_val != 0) {
+                                    ps.prev_hb = hb_val;
+                                    ps.nonzero_seen = true;
+                                }
+                            } else if (hb_val != ps.prev_hb) {
+                                ps.ready = true;
+                            }
+                            if (!ps.ready) all_done = false;
+                        }
+                        if (all_done) break;
+                        const auto elapsed_ms =
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - tv_start)
+                                .count();
+                        if (elapsed_ms >= kMmioEthRebootMs) {
+                            const auto not_ready = static_cast<int>(std::count_if(
+                                poll_states.begin(),
+                                poll_states.end(),
+                                [](const EthRebootPollState& ps) { return !ps.ready; }));
+                            log_warning(
+                                tt::LogAlways,
+                                "run_launch_phase: FIX TV — MMIO ETH heartbeat poll timed out after {}ms; "
+                                "{}/{} channel(s) not yet reporting base firmware. "
+                                "terminate_stale_erisc_routers may see probe_dead on these channels. (#42429)",
+                                elapsed_ms,
+                                not_ready,
+                                static_cast<int>(poll_states.size()));
+                            break;
+                        }
+                        std::this_thread::sleep_for(kPollInterval);
+                    }
+                    const auto tv_elapsed_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - tv_start)
+                            .count();
+                    const auto ready_count = static_cast<int>(std::count_if(
+                        poll_states.begin(),
+                        poll_states.end(),
+                        [](const EthRebootPollState& ps) { return ps.ready; }));
+                    if (ready_count == static_cast<int>(poll_states.size())) {
+                        log_info(
+                            tt::LogAlways,
+                            "run_launch_phase: FIX TV — all {} MMIO ETH channel(s) confirmed base "
+                            "firmware heartbeat in {}ms. (#42429)",
+                            poll_states.size(),
+                            tv_elapsed_ms);
+                    }
+                }
+            }
+        }
     }
     initialized_ = true;
 }
