@@ -315,9 +315,19 @@ class TTNNQwen3OmniMoeVisionRotaryEmbedding(TTNNModule):
     def from_torch(cls, torch_layer):
         m = cls()
         m._fallback_torch_layer = torch_layer
-        m.dim = int(torch_layer.dim)
-        m.theta = float(torch_layer.theta)
-        m._inv_freq_cpu = torch_layer.inv_freq.detach().float().contiguous().clone()
+        inv = torch_layer.inv_freq.detach().float().contiguous().clone()
+        m._inv_freq_cpu = inv
+        # Older HF stores ``dim`` / ``theta`` on the module; newer builds only register ``inv_freq``.
+        dim = getattr(torch_layer, "dim", None)
+        if dim is None:
+            # HF: ``inv_freq`` uses ``torch.arange(0, dim, 2)`` → ``len(inv_freq) == dim // 2`` for even ``dim``.
+            m.dim = int(inv.shape[0] * 2)
+        else:
+            m.dim = int(dim)
+        theta = getattr(torch_layer, "theta", None)
+        if theta is None:
+            theta = getattr(torch_layer, "rope_theta", 10000.0)
+        m.theta = float(theta)
         return m
 
     def preprocess_weights_impl(self):

@@ -10,25 +10,120 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
-from models.experimental.tt_symbiote.modules.moe import TTNNExperts, _to_torch_any, _to_ttnn_raw
+from models.experimental.tt_symbiote.modules.moe import (
+    TTNNExperts,
+    _consolidate_talker_experts_from_module_list,
+    _to_torch_any,
+    _to_ttnn_raw,
+)
+
+
+def _thinker_gate_router_attrs(thinker_mlp):
+    """HF thinker MoE gate may be ``Qwen3OmniMoeThinkerTextTopKRouter`` or a plain ``nn.Linear`` (router logits)."""
+    g = thinker_mlp.gate
+    cfg = getattr(thinker_mlp, "config", None)
+
+    top_k = getattr(g, "top_k", None)
+    if top_k is None and cfg is not None:
+        top_k = getattr(cfg, "num_experts_per_tok", None) or getattr(cfg, "moe_top_k", None)
+    if top_k is None:
+        top_k = 8
+
+    norm_topk_prob = getattr(g, "norm_topk_prob", None)
+    if norm_topk_prob is None and cfg is not None:
+        norm_topk_prob = getattr(cfg, "norm_topk_prob", True)
+    if norm_topk_prob is None:
+        norm_topk_prob = True
+
+    num_experts = getattr(g, "num_experts", None)
+    if num_experts is None and isinstance(g, torch.nn.Linear):
+        num_experts = int(g.out_features)
+    if num_experts is None and cfg is not None:
+        num_experts = getattr(cfg, "num_experts", None) or getattr(cfg, "n_routed_experts", None)
+    if num_experts is None:
+        ex = thinker_mlp.experts
+        if hasattr(ex, "gate_up_proj"):
+            num_experts = int(ex.gate_up_proj.shape[0])
+        else:
+            num_experts = len(ex)
+
+    return int(top_k), bool(norm_topk_prob), int(num_experts)
+
+
+def _thinker_config_fallback_from_modules(thinker_mlp):
+    """Infer MoE config when HF omits ``config`` on ``Qwen3OmniMoeThinkerTextSparseMoeBlock`` (ModuleList experts)."""
+    g = thinker_mlp.gate
+    hf_experts = thinker_mlp.experts
+    n = len(hf_experts)
+    if n == 0:
+        raise ValueError("Thinker sparse MoE has empty experts ModuleList")
+    ex0 = hf_experts[0]
+
+    hidden = None
+    if isinstance(g, torch.nn.Linear):
+        hidden = int(g.in_features)
+    if hidden is None and hasattr(ex0, "gate_proj"):
+        hidden = int(ex0.gate_proj.in_features)
+    if hidden is None and hasattr(ex0, "down_proj"):
+        hidden = int(ex0.down_proj.out_features)
+    if hidden is None:
+        raise ValueError("Cannot infer thinker hidden_size from gate/expert weights")
+
+    interm = None
+    if hasattr(ex0, "gate_proj"):
+        interm = int(ex0.gate_proj.out_features)
+    if interm is None:
+        raise ValueError("Cannot infer thinker moe_intermediate_size from expert MLP")
+
+    top_k, _, _ = _thinker_gate_router_attrs(thinker_mlp)
+    cfg = type("ThinkerMoEInferredConfig", (), {})()
+    cfg.hidden_size = hidden
+    cfg.moe_intermediate_size = interm
+    cfg.n_routed_experts = n
+    cfg.num_experts = n
+    cfg.num_experts_per_tok = top_k
+    return cfg
 
 
 def _thinker_experts_adapter(thinker_mlp):
-    """Adapt HF thinker experts for TTNNExperts (needs config + gate_up/down tensors)."""
+    """Adapt HF thinker experts for TTNNExperts (stacked tensors or ModuleList → consolidated tensors)."""
     hf_experts = thinker_mlp.experts
-    cfg = getattr(hf_experts, "config", None)
-    if cfg is None:
-        cfg = type("ThinkerExpertsConfig", (), {})()
-    cfg.hidden_size = getattr(cfg, "hidden_size", hf_experts.gate_up_proj.shape[2])
-    cfg.moe_intermediate_size = getattr(cfg, "moe_intermediate_size", hf_experts.gate_up_proj.shape[1] // 2)
-    cfg.n_routed_experts = getattr(cfg, "n_routed_experts", hf_experts.gate_up_proj.shape[0])
-    cfg.num_experts_per_tok = getattr(cfg, "num_experts_per_tok", None) or getattr(thinker_mlp.gate, "top_k", 8)
+    layer_cfg = getattr(thinker_mlp, "config", None) or getattr(hf_experts, "config", None)
 
-    adapter = type("ThinkerExpertsAdapter", (), {})()
-    adapter.gate_up_proj = hf_experts.gate_up_proj
-    adapter.down_proj = hf_experts.down_proj
-    adapter.config = cfg
-    return adapter
+    if hasattr(hf_experts, "gate_up_proj") and hasattr(hf_experts, "down_proj"):
+        cfg = getattr(hf_experts, "config", None)
+        if cfg is None:
+            cfg = type("ThinkerExpertsConfig", (), {})()
+        cfg.hidden_size = getattr(cfg, "hidden_size", hf_experts.gate_up_proj.shape[2])
+        cfg.moe_intermediate_size = getattr(cfg, "moe_intermediate_size", hf_experts.gate_up_proj.shape[1] // 2)
+        cfg.n_routed_experts = getattr(cfg, "n_routed_experts", hf_experts.gate_up_proj.shape[0])
+        cfg.num_experts_per_tok = (
+            getattr(cfg, "num_experts_per_tok", None) or _thinker_gate_router_attrs(thinker_mlp)[0]
+        )
+
+        adapter = type("ThinkerExpertsAdapter", (), {})()
+        adapter.gate_up_proj = hf_experts.gate_up_proj
+        adapter.down_proj = hf_experts.down_proj
+        adapter.config = cfg
+        return adapter
+
+    # Newer HF: nn.ModuleList of Qwen3OmniMoeThinkerTextMLP (per-expert gate/up/down Linear).
+    if layer_cfg is None:
+        layer_cfg = _thinker_config_fallback_from_modules(thinker_mlp)
+    if getattr(layer_cfg, "moe_intermediate_size", None) is None and len(hf_experts):
+        ex0 = hf_experts[0]
+        if hasattr(ex0, "gate_proj"):
+            mi = int(ex0.gate_proj.out_features)
+            try:
+                object.__setattr__(layer_cfg, "moe_intermediate_size", mi)
+            except Exception:
+                setattr(layer_cfg, "moe_intermediate_size", mi)
+    consolidated = _consolidate_talker_experts_from_module_list(hf_experts, layer_cfg)
+    if getattr(consolidated.config, "n_routed_experts", None) is None:
+        consolidated.config.n_routed_experts = getattr(consolidated.config, "num_experts", len(hf_experts))
+    if getattr(consolidated.config, "num_experts_per_tok", None) is None:
+        consolidated.config.num_experts_per_tok = _thinker_gate_router_attrs(thinker_mlp)[0]
+    return consolidated
 
 
 class TTNNQwen3OmniMoeThinkerTextSparseMoeBlock(TTNNModule):
@@ -127,10 +222,13 @@ class TTNNQwen3OmniThinkerMoE(TTNNModule):
         module = cls()
         module._fallback_torch_layer = thinker_mlp
         g = thinker_mlp.gate
+        if not hasattr(g, "weight"):
+            raise TypeError(f"Thinker MoE gate must expose ``weight`` (Linear or TopKRouter); got {type(g).__name__}")
         module._gate_w_torch = g.weight.data.clone()
-        module.top_k = int(g.top_k)
-        module.norm_topk_prob = bool(g.norm_topk_prob)
-        module.num_experts = int(g.num_experts)
+        top_k, norm_topk_prob, num_experts = _thinker_gate_router_attrs(thinker_mlp)
+        module.top_k = top_k
+        module.norm_topk_prob = norm_topk_prob
+        module.num_experts = num_experts
         experts_for_tt = _thinker_experts_adapter(thinker_mlp)
         module.experts = TTNNExperts.from_torch(experts_for_tt)
         return module
