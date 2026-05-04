@@ -17,9 +17,14 @@ from __future__ import annotations
 
 import torch
 import ttnn
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
 from ttnn.operations.transformer import SDPAProgramConfig
+
+# Tracy (perf): vision Matmul/SDPA ops report HiFi4; lower fidelity here for ViT matmuls + SDPA only.
+# Norms (RMS/LayerNorm) stay HiFi4 — not part of this path.
+VISION_MATMUL_MATH_FIDELITY = ttnn.MathFidelity.HiFi2
 
 
 # ---------------------------------------------------------------------------
@@ -386,28 +391,25 @@ class TTNNDotsVisionMLP(TTNNModule):
 
         return new_mlp
 
-    def _prepare_weight(self, w):
-        if w is None:
-            return None
-        return torch.transpose(w, -2, -1).contiguous()
-
-    def _prepare_bias(self, b):
-        if b is None:
-            return None
-        return b.reshape(1, 1, 1, -1)
-
     def preprocess_weights_impl(self):
-        def _to_host(w, layout=ttnn.TILE_LAYOUT):
+        """Linear weights in bfloat8_b (PyTorch Linear [out,in]; preprocessing applies TT layout)."""
+
+        def pw(w):
             if w is None:
                 return None
-            return ttnn.from_torch(w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=layout)
+            return preprocess_linear_weight(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
 
-        self.tt_fc1_weight = _to_host(self._prepare_weight(self._fc1_weight))
-        self.tt_fc1_bias = _to_host(self._prepare_bias(self._fc1_bias))
-        self.tt_fc2_weight = _to_host(self._prepare_weight(self._fc2_weight))
-        self.tt_fc2_bias = _to_host(self._prepare_bias(self._fc2_bias))
-        self.tt_fc3_weight = _to_host(self._prepare_weight(self._fc3_weight))
-        self.tt_fc3_bias = _to_host(self._prepare_bias(self._fc3_bias))
+        def pb(b):
+            if b is None:
+                return None
+            return preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+
+        self.tt_fc1_weight = pw(self._fc1_weight)
+        self.tt_fc1_bias = pb(self._fc1_bias)
+        self.tt_fc2_weight = pw(self._fc2_weight)
+        self.tt_fc2_bias = pb(self._fc2_bias)
+        self.tt_fc3_weight = pw(self._fc3_weight)
+        self.tt_fc3_bias = pb(self._fc3_bias)
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
@@ -418,7 +420,7 @@ class TTNNDotsVisionMLP(TTNNModule):
             return ttnn.to_device(t, self.device, memory_config=mem)
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -529,13 +531,13 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         if self._proj_weight is not None:
             self.tt_proj_weight = ttnn.from_torch(
                 self._proj_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
             )
         if self._proj_bias is not None:
             self.tt_proj_bias = ttnn.from_torch(
                 self._proj_bias.reshape(1, 1, 1, -1).to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
             )
         if self._norm_weight is not None:
@@ -562,7 +564,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -720,11 +722,6 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         return new_attn
 
-    def _transpose_for_linear(self, w):
-        if w is None:
-            return None
-        return torch.transpose(w, -2, -1).contiguous()
-
     def _permute_qkv_hf_to_meta(self, qkv_tensor, is_bias=False):
         """Permute Q/K portions of fused QKV from HF to meta-style for rotary_embedding_llama."""
         from models.tt_transformers.tt.load_checkpoints import reverse_permute
@@ -749,19 +746,18 @@ class TTNNDotsVisionAttention(TTNNModule):
             return torch.cat([q_part, k_part, v_part], dim=0)
 
     def preprocess_weights_impl(self):
-        def _to_host(w, layout=ttnn.TILE_LAYOUT):
-            if w is None:
-                return None
-            return ttnn.from_torch(w.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=layout)
-
         qkv_w = self._permute_qkv_hf_to_meta(self._qkv_weight)
-        self.tt_qkv_weight = _to_host(self._transpose_for_linear(qkv_w))
+        self.tt_qkv_weight = preprocess_linear_weight(qkv_w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
         if self._qkv_bias is not None:
             qkv_b = self._permute_qkv_hf_to_meta(self._qkv_bias, is_bias=True)
-            self.tt_qkv_bias = _to_host(qkv_b.reshape(1, 1, 1, -1))
-        self.tt_o_proj_weight = _to_host(self._transpose_for_linear(self._o_proj_weight))
+            self.tt_qkv_bias = preprocess_linear_bias(qkv_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        self.tt_o_proj_weight = preprocess_linear_weight(
+            self._o_proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        )
         if self._o_proj_bias is not None:
-            self.tt_o_proj_bias = _to_host(self._o_proj_bias.reshape(1, 1, 1, -1))
+            self.tt_o_proj_bias = preprocess_linear_bias(
+                self._o_proj_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+            )
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
@@ -772,7 +768,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             return ttnn.to_device(t, self.device, memory_config=mem)
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -782,6 +778,14 @@ class TTNNDotsVisionAttention(TTNNModule):
         self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
         self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
         self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
+
+        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
         # Build transformation matrix for rotary_embedding_llama (must be 32x32, kernel operates per-tile)
         from models.tt_transformers.tt.common import get_rot_transformation_mat
@@ -860,6 +864,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 v,
                 is_causal=False,
                 program_config=program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
             )
             ctx = ttnn.experimental.nlp_concat_heads(
                 ctx,
@@ -884,6 +889,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                 v,
                 is_causal=False,
                 program_config=program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
             )
         else:
             ctx_segments = []
@@ -905,6 +911,7 @@ class TTNNDotsVisionAttention(TTNNModule):
                     v_seg,
                     is_causal=False,
                     program_config=program_config,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
                 )
                 ctx_segments.append(ctx_seg)
 
@@ -1104,10 +1111,26 @@ class TTNNDotsPatchMerger(TTNNModule):
                 w = w.view(1, 1, dim).reshape(1, 1, dim // tile, tile)
                 self.tt_ln_weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        self.tt_w1 = _to_host(self._w1_weight)
-        self.tt_w2 = _to_host(self._w2_weight)
-        self.tt_w1_bias = _to_host(self._w1_bias)
-        self.tt_w2_bias = _to_host(self._w2_bias)
+        self.tt_w1 = (
+            ttnn.from_torch(self._w1_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            if self._w1_weight is not None
+            else None
+        )
+        self.tt_w2 = (
+            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            if self._w2_weight is not None
+            else None
+        )
+        self.tt_w1_bias = (
+            ttnn.from_torch(self._w1_bias.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            if self._w1_bias is not None
+            else None
+        )
+        self.tt_w2_bias = (
+            ttnn.from_torch(self._w2_bias.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            if self._w2_bias is not None
+            else None
+        )
 
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
@@ -1136,7 +1159,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             # Re-create w2 on device with col-shard mapper
             self.tt_w2 = ttnn.from_torch(
                 self._w2_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=mem,
@@ -1145,7 +1168,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             if self._w2_bias is not None:
                 self.tt_w2_bias = ttnn.from_torch(
                     self._w2_bias.to(torch.bfloat16),
-                    dtype=ttnn.bfloat16,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=mem,
@@ -1158,7 +1181,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             self.tt_w2_bias = _to_dev(self.tt_w2_bias)
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

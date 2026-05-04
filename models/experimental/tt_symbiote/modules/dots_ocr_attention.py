@@ -12,8 +12,8 @@ from models.experimental.tt_symbiote.modules.attention import (
     TTNNSDPAAttention,
 )
 from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearIColShardedWAllReduced,
-    TTNNLinearIReplicatedWColSharded,
+    TTNNLinearLLamaIColShardedWAllReduced,
+    TTNNLinearLLamaIReplicatedWColSharded,
 )
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
 
@@ -82,7 +82,7 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         fused_linear = torch.nn.Linear(new_attn.hidden_size, q_size + 2 * kv_size, bias=False)
         fused_linear.weight.data = fused_weight
-        new_attn.qkv_proj = TTNNLinearIColShardedWAllReduced.from_torch(fused_linear)
+        new_attn.qkv_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(fused_linear)
 
         # Store bias tensors for manual application
         if hf_attn.q_proj.bias is not None:
@@ -108,7 +108,7 @@ class TTNNDotsOCRAttention(TTNNModule):
             )
 
         # O projection
-        new_attn.o_proj = TTNNLinearIReplicatedWColSharded.from_torch(hf_attn.o_proj)
+        new_attn.o_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(hf_attn.o_proj)
 
         new_attn.sdpa = TTNNSDPAAttention()
         new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
