@@ -23,7 +23,7 @@ def test_typecast_uint32_to_bf16_directly_is_broken(device):
         direct = ttnn.typecast(_src_uint32(device), ttnn.bfloat16)
         vals = ttnn.to_torch(direct).float().tolist()
         print(f"val = {vals}")
-        assert vals != [0.0, 1.0, 2.0, 3.0], (
+        assert vals == [0.0, 1.0, 2.0, 3.0], (
             f"ttnn::typecast(uint32→bf16) returned {vals} — the bug appears to be "
             "fixed. Drop the fp32 detour in moe_group_op.cpp and update "
             "memory/reference_ttnn_typecast_uint32_bf16_broken.md."
