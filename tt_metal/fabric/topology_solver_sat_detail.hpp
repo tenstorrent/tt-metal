@@ -611,7 +611,7 @@ bool topology_sat_build_initial_domains(
 template <typename TargetNode, typename GlobalNode>
 bool topology_sat_apply_arc_consistency(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    [[maybe_unused]] const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     ConnectionValidationMode validation_mode,
     TopologySatHardEncoding& enc,
     std::vector<std::vector<size_t>>& domain) {
@@ -863,7 +863,7 @@ void topology_sat_encode_adjacency_support(
 template <typename TargetNode, typename GlobalNode>
 void topology_sat_encode_same_rank_groups(
     TopologySatSolver& solver,
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    [[maybe_unused]] const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     const TopologySatHardEncoding& enc) {
     const size_t nt = enc.assign_lit.size();
