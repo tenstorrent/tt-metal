@@ -79,6 +79,8 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Qwen 2.5-7B | N150, N300 |
 | Qwen 2.5-72B | WH LoudBox |
 | Qwen2.5-VL-32B | WH LoudBox |
+| Qwen3-Embedding-0.6B | N150 |
+| Qwen3-Embedding-4B | N150 |
 | Phi-3 | N150 |
 
 

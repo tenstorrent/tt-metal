@@ -235,8 +235,8 @@
     wh_n150:
       timeout: 3
       tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
+  owner_id: D0ASF0MJ12R # Ashai Reddy Ginuga
+  team: runtime
 
 - name: Qwen3-Embedding-0.6B e2e tests
   cmd: |
@@ -247,8 +247,8 @@
     wh_n150:
       timeout: 3
       tier: 3
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
+  owner_id: D0ASF0MJ12R # Ashai Reddy Ginuga
+  team: runtime
 
 # Qwen2.5-72B: disabled, ci-token-matching hanging on CI
 # - name: Qwen2.5-72B e2e tests
