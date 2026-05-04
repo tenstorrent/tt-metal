@@ -110,6 +110,9 @@ enum class SfpuType : std::uint32_t
     le_int,
     ge_int,
     mul_int,
+    topk_local_sort,
+    topk_merge,
+    topk_rebuild,
 };
 
 enum class BinaryOp : std::uint8_t
