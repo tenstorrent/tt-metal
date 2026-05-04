@@ -6,6 +6,53 @@
 // topology backend (fabric mapper / grouping sources and fabric unit tests). `topology_solver.hpp` / `.tpp` stay
 // solver-agnostic; `control_plane.hpp` forward-declares TopologyMapper so llrt does not compile this file.
 
+// ── Architecture Overview ────────────────────────────────────────────────────
+//
+// This file implements a SAT-based graph embedding engine layered as follows:
+//
+//  Layer 1 – TopologySatSolver
+//      Thin IPASIR-style wrapper around Kissat.  Manages variable allocation
+//      (declare_one_more_variable), clause addition (add / add(0) terminators),
+//      and the solve / val query interface.
+//
+//  Layer 2 – Cardinality / combinatorial primitives  (free functions, public)
+//      topology_sat_combinations_exceed_limit
+//      topology_sat_emit_combinations_indices
+//      topology_sat_add_at_least_k_counter     – sequential counter (Sinz 2005)
+//      topology_sat_add_at_least_k_literals    – combinatorial or counter fallback
+//      topology_sat_add_at_most_one_sequential – sequential (Sinz) AMO
+//
+//  Layer 3 – Domain-preprocessing helpers  (anonymous namespace)
+//      are_globals_adjacent                    – sorted adjacency binary search
+//      topology_sat_check_edge_feasibility     – partial-mapping edge check
+//      topology_sat_preferred_upper_bound      – remaining preferred capacity UB
+//      topology_sat_preferred_exact_lower_bound – exhaustive/budget DFS LB
+//      topology_sat_preferred_greedy_lower_bound – greedy multi-order LB
+//
+//  Layer 4 – Hard constraint encoding  (free functions, public)
+//      topology_sat_build_initial_domains      – degree + constraint filtering
+//      topology_sat_apply_arc_consistency      – AC-3 propagation loop
+//      topology_sat_create_assignment_variables – one SAT literal per (t, g)
+//      topology_sat_encode_exactly_one_per_target – ALO unit + AMO sequential
+//      topology_sat_encode_injectivity         – AMO over globals
+//      topology_sat_encode_adjacency_support   – support clauses for edges
+//      topology_sat_encode_same_rank_groups    – binary incompatibility clauses
+//      topology_sat_encode_cardinality_constraints – at-least-k per entry
+//      topology_sat_encode_hard_constraints    – thin orchestrator (public API)
+//
+//  Layer 5 – Soft / objective encoding  (free functions, public)
+//      topology_sat_append_preferred_hit_indicators
+//      topology_sat_define_indicator_as_or_of_pairwise_and
+//      topology_sat_relaxed_channel_threshold_literal_count_upper_bound
+//      topology_sat_append_relaxed_channel_threshold_literals
+//
+//  Layer 6 – SatSearchEngine::search  (member function, public API entry point)
+//      Ties all layers together: encodes hard constraints, optionally computes
+//      preferred-hit lower bounds and adds soft at-least-k clauses, runs Kissat,
+//      and decodes the model back to a target->global mapping.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
 #pragma once
 
 #ifndef TT_METALIUM_TOPOLOGY_SOLVER_SAT_DETAIL_HPP
@@ -102,10 +149,12 @@ struct TopologySatHardEncoding {
     std::vector<std::vector<int>> assign_lit;
 };
 
+// ── Adjacency and Edge Helpers ────────────────────────────────────────────────
 namespace {
 
 template <typename TargetNode, typename GlobalNode>
-bool global_adjacent_idx(const GraphIndexData<TargetNode, GlobalNode>& graph_data, size_t global_i, size_t global_j) {
+bool are_globals_adjacent(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data, size_t global_i, size_t global_j) {
     if (global_i >= graph_data.n_global || global_j >= graph_data.n_global) {
         return false;
     }
@@ -114,7 +163,7 @@ bool global_adjacent_idx(const GraphIndexData<TargetNode, GlobalNode>& graph_dat
 }
 
 template <typename TargetNode, typename GlobalNode>
-bool topology_sat_edges_ok_if_assign(
+bool topology_sat_check_edge_feasibility(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const std::vector<int>& mapping,
     size_t target_idx,
@@ -124,15 +173,17 @@ bool topology_sat_edges_ok_if_assign(
             continue;
         }
         const size_t gg = static_cast<size_t>(mapping[tn]);
-        if (!global_adjacent_idx(graph_data, global_idx, gg)) {
+        if (!are_globals_adjacent(graph_data, global_idx, gg)) {
             return false;
         }
     }
     return true;
 }
 
+// ── Preferred-Hit Bound Helpers ───────────────────────────────────────────────
+
 template <typename TargetNode, typename GlobalNode>
-size_t topology_sat_remaining_preferred_upper_bound(
+size_t topology_sat_preferred_upper_bound(
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     const TopologySatHardEncoding& enc,
     const std::vector<bool>& used_global,
@@ -167,10 +218,10 @@ size_t topology_sat_remaining_preferred_upper_bound(
 // Lower bound on maximum simultaneously satisfiable preferred targets, using the same per-target allowed globals as
 // the SAT encoding.  Explores partial assignments with edge checks + injective constraint; pruning uses a simple
 // upper bound on remaining preferred-capable targets.  When max_nodes is huge (n_target <= kExactLbMaxTargets), this
-// becomes an exhaustive search → exact optimum for small instances; otherwise it stops after max_nodes expansions and
+// becomes an exhaustive search -> exact optimum for small instances; otherwise it stops after max_nodes expansions and
 // returns the best complete mapping found (still a safe lower bound for at-least-k).
 template <typename TargetNode, typename GlobalNode>
-size_t topology_sat_max_preferred_lower_bound_with_encoding(
+size_t topology_sat_preferred_exact_lower_bound(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     const TopologySatHardEncoding& enc,
@@ -186,7 +237,7 @@ size_t topology_sat_max_preferred_lower_bound_with_encoding(
             return;
         }
         ++explored;
-        if (pref_so_far + topology_sat_remaining_preferred_upper_bound(constraint_data, enc, used, ti, nt) <= best) {
+        if (pref_so_far + topology_sat_preferred_upper_bound(constraint_data, enc, used, ti, nt) <= best) {
             return;
         }
         if (ti == nt) {
@@ -215,7 +266,7 @@ size_t topology_sat_max_preferred_lower_bound_with_encoding(
 
         for (const Cand& cand : cands) {
             const size_t g = cand.g;
-            if (!topology_sat_edges_ok_if_assign(graph_data, mapping, ti, g)) {
+            if (!topology_sat_check_edge_feasibility(graph_data, mapping, ti, g)) {
                 continue;
             }
             mapping[ti] = static_cast<int>(g);
@@ -231,7 +282,7 @@ size_t topology_sat_max_preferred_lower_bound_with_encoding(
 }
 
 template <typename TargetNode, typename GlobalNode>
-size_t topology_sat_greedy_pref_lower_bound_with_encoding(
+size_t topology_sat_preferred_greedy_lower_bound(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
     const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
     const TopologySatHardEncoding& enc) {
@@ -299,7 +350,7 @@ size_t topology_sat_greedy_pref_lower_bound_with_encoding(
             std::stable_partition(cands.begin(), cands.end(), [](const Cand& c) { return c.is_pref; });
             bool placed = false;
             for (const Cand& cand : cands) {
-                if (!topology_sat_edges_ok_if_assign(graph_data, mapping, ti, cand.g)) {
+                if (!topology_sat_check_edge_feasibility(graph_data, mapping, ti, cand.g)) {
                     continue;
                 }
                 mapping[ti] = static_cast<int>(cand.g);
@@ -323,6 +374,8 @@ size_t topology_sat_greedy_pref_lower_bound_with_encoding(
 }
 
 }  // namespace
+
+// ── Cardinality Encoding Primitives ──────────────────────────────────────────
 
 inline bool topology_sat_combinations_exceed_limit(size_t n, size_t r, size_t max_combinations) {
     if (r > n) {
@@ -472,7 +525,7 @@ inline bool topology_sat_add_at_least_k_literals(
 }
 
 // Sequential (Sinz 2005) at-most-one encoding: O(n) clauses + O(n) auxiliary register variables instead of the
-// O(n²) pairwise binary clauses.  Sequential encoding improves unit-propagation on large domains.
+// O(n^2) pairwise binary clauses.  Sequential encoding improves unit-propagation on large domains.
 inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, const std::vector<int>& lits) {
     const size_t n = lits.size();
     if (n <= 1) {
@@ -508,8 +561,497 @@ inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, c
     solver.add(0);
 }
 
-// One auxiliary literal per target: true iff the chosen global for that target is in its preferred set (and the
-// target has at least one feasible preferred assignment literal).
+// ── Hard Constraint Encoding Sub-functions ────────────────────────────────────
+//
+// The following functions collectively implement topology_sat_encode_hard_constraints,
+// broken into one function per constraint type for clarity.  The top-level function
+// (at the bottom of this section) is a thin orchestrator that calls them in order.
+
+// Step 1: Build per-target candidate domains by applying degree and constraint filtering.
+// Any global whose degree is below the target degree, or that fails is_valid_mapping, is
+// excluded.  Returns false (and sets enc.trivial_unsat) if any target has an empty domain.
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_build_initial_domains(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    TopologySatHardEncoding& enc,
+    std::vector<std::vector<size_t>>& domain_out) {
+    const size_t nt = graph_data.n_target;
+    const size_t ng = graph_data.n_global;
+    domain_out.resize(nt);
+    for (size_t t = 0; t < nt; ++t) {
+        for (size_t g = 0; g < ng; ++g) {
+            if (!constraint_data.is_valid_mapping(t, g)) {
+                continue;
+            }
+            if (graph_data.global_deg[g] < graph_data.target_deg[t]) {
+                continue;
+            }
+            domain_out[t].push_back(g);
+        }
+        if (domain_out[t].empty()) {
+            enc.trivial_unsat = true;
+            enc.trivial_reason = fmt::format("topology_sat: no allowed global for target_idx {}", t);
+            return false;
+        }
+    }
+    return true;
+}
+
+// Step 2: AC-3 arc-consistency propagation.
+//
+// WHY AC-3: After degree/constraint filtering the domains can still contain globals that
+// have no feasible partner for some adjacent target.  AC-3 iteratively removes such
+// "unsupported" values.  Smaller domains mean fewer SAT variables and shorter support
+// clauses in Step 6, which substantially speeds up Kissat on dense instances.
+//
+// The worklist starts with every arc (t, t_neigh).  Whenever a domain shrinks, all arcs
+// pointing INTO t are re-added so their support can be re-checked.  The iteration cap of
+// 100 prevents quadratic blow-up on pathological inputs while handling real topologies.
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_apply_arc_consistency(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    ConnectionValidationMode validation_mode,
+    TopologySatHardEncoding& enc,
+    std::vector<std::vector<size_t>>& domain) {
+    const size_t nt = graph_data.n_target;
+
+    // Build membership sets for fast O(1) domain lookup during support checks.
+    std::vector<std::unordered_set<size_t>> domain_set(nt);
+    for (size_t t = 0; t < nt; ++t) {
+        domain_set[t].insert(domain[t].begin(), domain[t].end());
+    }
+
+    // has_support(t, g, t_neigh): true iff there exists at least one value g2 in domain[t_neigh]
+    // adjacent to g (and meeting channel requirements in STRICT mode).
+    auto has_support = [&](size_t t, size_t g, size_t t_neigh) -> bool {
+        size_t required_channels = 1;
+        if (validation_mode == ConnectionValidationMode::STRICT) {
+            if (t < graph_data.target_conn_count.size()) {
+                const auto& tc = graph_data.target_conn_count[t];
+                const auto itc = tc.find(t_neigh);
+                if (itc != tc.end()) {
+                    required_channels = itc->second;
+                }
+            }
+        }
+        for (size_t g2 : graph_data.global_adj_idx[g]) {
+            if (g2 == g) {
+                continue;
+            }
+            if (domain_set[t_neigh].count(g2) == 0) {
+                continue;
+            }
+            if (validation_mode == ConnectionValidationMode::STRICT && required_channels > 1) {
+                size_t actual = 0;
+                if (g < graph_data.global_conn_count.size()) {
+                    const auto& gc = graph_data.global_conn_count[g];
+                    const auto itg = gc.find(g2);
+                    if (itg != gc.end()) {
+                        actual = itg->second;
+                    }
+                }
+                if (actual < required_channels) {
+                    continue;
+                }
+            }
+            return true;
+        }
+        return false;
+    };
+
+    // Collect all arcs (t, t_neigh) to check.
+    std::vector<std::pair<size_t, size_t>> worklist;
+    for (size_t t = 0; t < nt; ++t) {
+        for (size_t tn : graph_data.target_adj_idx[t]) {
+            worklist.emplace_back(t, tn);
+        }
+    }
+
+    static constexpr size_t kMaxAC3Iterations = 100;
+    for (size_t iter = 0; iter < kMaxAC3Iterations && !worklist.empty(); ++iter) {
+        std::vector<std::pair<size_t, size_t>> next_worklist;
+        for (const auto& [t, tn] : worklist) {
+            auto& dom = domain[t];
+            size_t before = dom.size();
+            dom.erase(
+                std::remove_if(dom.begin(), dom.end(), [&](size_t g) { return !has_support(t, g, tn); }), dom.end());
+            if (dom.size() < before) {
+                domain_set[t].clear();
+                domain_set[t].insert(dom.begin(), dom.end());
+                if (dom.empty()) {
+                    enc.trivial_unsat = true;
+                    enc.trivial_reason =
+                        fmt::format("topology_sat: arc consistency emptied domain for target_idx {}", t);
+                    return false;
+                }
+                // Re-enqueue arcs into t so their support is re-checked now that domain[t] shrank.
+                for (size_t t2 : graph_data.target_adj_idx[t]) {
+                    if (t2 != tn) {
+                        next_worklist.emplace_back(t2, t);
+                    }
+                }
+            }
+        }
+        worklist = std::move(next_worklist);
+    }
+
+    return true;
+}
+
+// Step 3: Allocate one SAT Boolean variable per (target, domain-global) pair and record
+// them in enc.assign_lit / enc.allowed_global_idx.  Preferred globals for a target are
+// listed first in the row so that Kissat's internal variable-order heuristic naturally
+// tries preferred assignments first under a single solve (no MaxSAT needed).
+template <typename TargetNode, typename GlobalNode>
+void topology_sat_create_assignment_variables(
+    TopologySatSolver& solver,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    TopologySatHardEncoding& enc,
+    std::vector<std::vector<size_t>>& domain) {
+    const size_t nt = domain.size();
+
+    // Sort each domain so preferred globals come first.
+    for (size_t t = 0; t < nt; ++t) {
+        if (t < constraint_data.preferred_global_indices.size() &&
+            !constraint_data.preferred_global_indices[t].empty()) {
+            const auto& pref = constraint_data.preferred_global_indices[t];
+            auto& dom = domain[t];
+            std::stable_partition(
+                dom.begin(), dom.end(), [&](size_t g) { return std::binary_search(pref.begin(), pref.end(), g); });
+        }
+    }
+
+    for (size_t t = 0; t < nt; ++t) {
+        enc.allowed_global_idx[t] = std::move(domain[t]);
+        enc.assign_lit[t].reserve(enc.allowed_global_idx[t].size());
+        for (size_t k = 0; k < enc.allowed_global_idx[t].size(); ++k) {
+            (void)k;
+            const int v = solver.declare_one_more_variable();
+            enc.assign_lit[t].push_back(v);
+        }
+    }
+}
+
+// Step 4: Exactly-one constraint per target.
+// For each target t:
+//   - At-least-one: unit clause (x_{t,g0} v x_{t,g1} v ... v x_{t,gk}).
+//   - At-most-one:  sequential (Sinz) encoding to avoid O(domain^2) pairwise clauses.
+template <typename TargetNode, typename GlobalNode>
+void topology_sat_encode_exactly_one_per_target(
+    TopologySatSolver& solver, const TopologySatHardEncoding& enc) {
+    const size_t nt = enc.assign_lit.size();
+    for (size_t t = 0; t < nt; ++t) {
+        const auto& lits = enc.assign_lit[t];
+        TT_ASSERT(lits.size() == enc.allowed_global_idx[t].size());
+        for (int lit : lits) {
+            solver.add(lit);
+        }
+        solver.add(0);
+        topology_sat_add_at_most_one_sequential(solver, lits);
+    }
+}
+
+// Step 5: Injectivity -- each global node may be used by at most one target.
+// Collect all assign literals that reference each global, then add AMO over that set.
+template <typename TargetNode, typename GlobalNode>
+void topology_sat_encode_injectivity(
+    TopologySatSolver& solver,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const TopologySatHardEncoding& enc) {
+    const size_t nt = enc.assign_lit.size();
+    const size_t ng = graph_data.n_global;
+
+    std::vector<std::vector<int>> lits_per_global(ng);
+    for (size_t t = 0; t < nt; ++t) {
+        for (size_t k = 0; k < enc.assign_lit[t].size(); ++k) {
+            const size_t g = enc.allowed_global_idx[t][k];
+            lits_per_global[g].push_back(enc.assign_lit[t][k]);
+        }
+    }
+    for (size_t g = 0; g < ng; ++g) {
+        topology_sat_add_at_most_one_sequential(solver, lits_per_global[g]);
+    }
+}
+
+// Step 6: Adjacency preservation via support encoding.
+//
+// WHY support encoding (not pairwise clauses):
+//   For each directed arc (t1 -> g_a) and each adjacent target t2, we emit ONE clause:
+//       not x_{t1,g_a}  v  x_{t2,g_{b1}}  v  x_{t2,g_{b2}}  v  ...
+//   where g_{bi} ranges over all globals in domain[t2] adjacent (and channel-compatible
+//   in STRICT mode) to g_a.  This is O(edges x domain_size) clauses, vs. the naive
+//   O(edges x domain_size^2) pairwise incompatibility clauses.  When a candidate has NO
+//   compatible partner the clause degenerates to the unit clause not x_{t1,g_a}, giving
+//   implicit arc-consistency filtering inside the solver.
+template <typename TargetNode, typename GlobalNode>
+void topology_sat_encode_adjacency_support(
+    TopologySatSolver& solver,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode) {
+    const size_t nt = enc.assign_lit.size();
+
+    for (size_t t1 = 0; t1 < nt; ++t1) {
+        for (size_t t2 : graph_data.target_adj_idx[t1]) {
+            if (t2 <= t1) {
+                continue;
+            }
+            const auto& gidx1 = enc.allowed_global_idx[t1];
+            const auto& lit1 = enc.assign_lit[t1];
+            const auto& gidx2 = enc.allowed_global_idx[t2];
+            const auto& lit2 = enc.assign_lit[t2];
+            size_t required_channels = 1;
+            if (t1 < graph_data.target_conn_count.size()) {
+                const auto& tc = graph_data.target_conn_count[t1];
+                const auto itc = tc.find(t2);
+                if (itc != tc.end()) {
+                    required_channels = itc->second;
+                }
+            }
+            auto is_compatible = [&](size_t ga, size_t gb) -> bool {
+                if (ga == gb) {
+                    return false;
+                }
+                if (!are_globals_adjacent(graph_data, ga, gb)) {
+                    return false;
+                }
+                if (validation_mode == ConnectionValidationMode::STRICT) {
+                    size_t actual_channels = 0;
+                    if (ga < graph_data.global_conn_count.size()) {
+                        const auto& gc = graph_data.global_conn_count[ga];
+                        const auto itg = gc.find(gb);
+                        if (itg != gc.end()) {
+                            actual_channels = itg->second;
+                        }
+                    }
+                    if (actual_channels < required_channels) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            // Forward direction: if t1 is assigned g_a, t2 must map to some compatible g_b.
+            for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
+                solver.add(-lit1[i1]);
+                for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
+                    if (is_compatible(gidx1[i1], gidx2[i2])) {
+                        solver.add(lit2[i2]);
+                    }
+                }
+                solver.add(0);
+            }
+            // Backward direction: if t2 is assigned g_b, t1 must map to some compatible g_a.
+            for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
+                solver.add(-lit2[i2]);
+                for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
+                    if (is_compatible(gidx1[i1], gidx2[i2])) {
+                        solver.add(lit1[i1]);
+                    }
+                }
+                solver.add(0);
+            }
+        }
+    }
+}
+
+// Step 7: Same-rank group constraints.
+// Targets in the same group (target_to_group[t] == tg, tg != SIZE_MAX) must all map to
+// globals that share the same global_to_same_rank_group label.  Pairs with different
+// labels get a binary incompatibility clause not x_{t1,g1} v not x_{t2,g2}.
+template <typename TargetNode, typename GlobalNode>
+void topology_sat_encode_same_rank_groups(
+    TopologySatSolver& solver,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const TopologySatHardEncoding& enc) {
+    const size_t nt = enc.assign_lit.size();
+    const auto& target_to_group = constraint_data.target_to_group;
+    const auto& global_rank = constraint_data.global_to_same_rank_group;
+    if (target_to_group.empty() || global_rank.empty()) {
+        return;
+    }
+    for (size_t t1 = 0; t1 < nt; ++t1) {
+        if (t1 >= target_to_group.size()) {
+            continue;
+        }
+        const size_t tg = target_to_group[t1];
+        if (tg == SIZE_MAX) {
+            continue;
+        }
+        for (size_t t2 = t1 + 1; t2 < nt; ++t2) {
+            if (t2 >= target_to_group.size() || target_to_group[t2] != tg) {
+                continue;
+            }
+            const auto& gidx1 = enc.allowed_global_idx[t1];
+            const auto& lit1 = enc.assign_lit[t1];
+            const auto& gidx2 = enc.allowed_global_idx[t2];
+            const auto& lit2 = enc.assign_lit[t2];
+            for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
+                const size_t glob1 = gidx1[i1];
+                if (glob1 >= global_rank.size()) {
+                    continue;
+                }
+                const int L1 = global_rank[glob1];
+                for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
+                    const size_t glob2 = gidx2[i2];
+                    if (glob2 >= global_rank.size()) {
+                        continue;
+                    }
+                    const int L2 = global_rank[glob2];
+                    if (L1 != L2) {
+                        solver.add(-lit1[i1]);
+                        solver.add(-lit2[i2]);
+                        solver.add(0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Step 8: Cardinality constraints -- at-least-k over specified (target, global) pairs.
+// For each entry in constraint_data.cardinality_constraints, collect the assign literals
+// corresponding to feasible pairs in the current domains and encode at-least-k using
+// either the combinatorial or sequential counter encoding (whichever is cheaper).
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_encode_cardinality_constraints(
+    TopologySatSolver& solver,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    TopologySatHardEncoding& enc) {
+    static constexpr size_t kMaxCardinalityCombClauses = 500000;
+
+    for (const auto& card_entry : constraint_data.cardinality_constraints) {
+        const auto& pair_set = card_entry.first;
+        const size_t min_count = card_entry.second;
+        std::set<int> distinct_lits;
+        for (const auto& pr : pair_set) {
+            const size_t ti = pr.first;
+            const size_t gi = pr.second;
+            if (ti >= enc.allowed_global_idx.size()) {
+                continue;
+            }
+            const auto& globs = enc.allowed_global_idx[ti];
+            const auto& lits_row = enc.assign_lit[ti];
+            for (size_t kk = 0; kk < globs.size(); ++kk) {
+                if (globs[kk] == gi) {
+                    distinct_lits.insert(lits_row[kk]);
+                    break;
+                }
+            }
+        }
+        std::vector<int> lits(distinct_lits.begin(), distinct_lits.end());
+        static constexpr size_t kMaxCardinalityLiterals = 4096;
+        if (lits.size() > kMaxCardinalityLiterals) {
+            enc.trivial_unsat = true;
+            enc.trivial_reason = fmt::format(
+                "topology_sat: cardinality has {} distinct feasible pair literals (cap {}); narrow the pair set or "
+                "raise the cap",
+                lits.size(),
+                kMaxCardinalityLiterals);
+            return false;
+        }
+        if (lits.size() < min_count) {
+            enc.trivial_unsat = true;
+            enc.trivial_reason = fmt::format(
+                "topology_sat: cardinality needs {} satisfied literals but only {} (target,global) pairs are "
+                "feasible in the current domains",
+                min_count,
+                lits.size());
+            return false;
+        }
+        std::string card_reason;
+        if (!topology_sat_add_at_least_k_literals(solver, lits, min_count, kMaxCardinalityCombClauses, &card_reason)) {
+            enc.trivial_unsat = true;
+            enc.trivial_reason =
+                card_reason.empty() ? std::string("topology_sat: cardinality encoding failed") : std::move(card_reason);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Top-level hard constraint orchestrator.  Calls the eight sub-functions above in order:
+//   1. Build initial domains  (degree + constraint filtering)
+//   2. Apply AC-3 arc consistency
+//   3. Create assignment variables
+//   4. Exactly-one per target (ALO + AMO)
+//   5. Injectivity (AMO over globals)
+//   6. Adjacency support clauses
+//   7. Same-rank group incompatibility clauses
+//   8. Cardinality at-least-k constraints
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_encode_hard_constraints(
+    TopologySatSolver& solver,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED) {
+    enc = TopologySatHardEncoding{};
+    const size_t nt = graph_data.n_target;
+
+    if (nt == 0) {
+        return true;
+    }
+
+    enc.allowed_global_idx.resize(nt);
+    enc.assign_lit.resize(nt);
+
+    // 1. Initial domain: constraint + degree filtering.
+    std::vector<std::vector<size_t>> domain;
+    if (!topology_sat_build_initial_domains(graph_data, constraint_data, enc, domain)) {
+        return false;
+    }
+
+    // 2. Arc consistency (AC-3).
+    if (!topology_sat_apply_arc_consistency(graph_data, constraint_data, validation_mode, enc, domain)) {
+        return false;
+    }
+
+    // 3. Create assignment variables (preferred globals listed first in each row).
+    topology_sat_create_assignment_variables(solver, constraint_data, enc, domain);
+
+    // 4. Exactly one global choice per target.
+    topology_sat_encode_exactly_one_per_target<TargetNode, GlobalNode>(solver, enc);
+
+    // 5. Injective: each global node used by at most one target.
+    topology_sat_encode_injectivity(solver, graph_data, enc);
+
+    // 6. Adjacency preservation via support encoding.
+    topology_sat_encode_adjacency_support(solver, graph_data, enc, validation_mode);
+
+    // 7. Same-rank target groups.
+    topology_sat_encode_same_rank_groups(solver, graph_data, constraint_data, enc);
+
+    // 8. Cardinality: at least min_count of the listed (target, global) assignment literals must be true.
+    if (!topology_sat_encode_cardinality_constraints(solver, constraint_data, enc)) {
+        return false;
+    }
+
+    return true;
+}
+
+// ── Soft / Objective Encoding ─────────────────────────────────────────────────
+
+// topology_sat_append_preferred_hit_indicators
+//
+// For each target t that has at least one preferred global reachable in its domain,
+// introduce a Tseitin indicator variable p_t and add the bidirectional equivalence:
+//
+//     p_t  <=>  (x_{t,g_{p1}} v x_{t,g_{p2}} v ... v x_{t,g_{pk}})
+//
+// where g_{p1..pk} are the globals in domain[t] intersect preferred_globals[t].
+//
+// Tseitin encoding: two clause groups enforce the equivalence without introducing
+// exponential blowup:
+//   Forward  (p -> OR):  not p  v  x_{t,g_{p1}}  v  ...  v  x_{t,g_{pk}}
+//   Backward (x -> p):  for each pi:  not x_{t,g_{pi}}  v  p
+//
+// The resulting p_t literals are collected into pref_hit_literals_out and later
+// fed into topology_sat_add_at_least_k_literals to force Kissat toward the
+// maximum simultaneously achievable preferred-hit count.
 template <typename TargetNode, typename GlobalNode>
 void topology_sat_append_preferred_hit_indicators(
     TopologySatSolver& solver,
@@ -526,6 +1068,8 @@ void topology_sat_append_preferred_hit_indicators(
         if (preferred_globals.empty()) {
             continue;
         }
+
+        // Collect assign literals for this target that correspond to preferred globals.
         const auto& globs = enc.allowed_global_idx[t];
         const auto& row_lits = enc.assign_lit[t];
         std::vector<int> row_pref_lits;
@@ -537,17 +1081,24 @@ void topology_sat_append_preferred_hit_indicators(
         if (row_pref_lits.empty()) {
             continue;
         }
+
+        // Introduce indicator p and encode p <=> OR(row_pref_lits) via two clause groups.
         const int p = solver.declare_one_more_variable();
+
+        // Forward: not p v x_{t,g_{p1}} v ... v x_{t,g_{pk}}
         solver.add(-p);
         for (int lit : row_pref_lits) {
             solver.add(lit);
         }
         solver.add(0);
+
+        // Backward: for each pi, not x_{t,g_{pi}} v p
         for (int lit : row_pref_lits) {
             solver.add(p);
             solver.add(-lit);
             solver.add(0);
         }
+
         pref_hit_literals_out.push_back(p);
     }
 }
@@ -676,7 +1227,7 @@ bool topology_sat_append_relaxed_channel_threshold_literals(
                         if (glob1 == glob2) {
                             continue;
                         }
-                        if (!global_adjacent_idx(graph_data, glob1, glob2)) {
+                        if (!are_globals_adjacent(graph_data, glob1, glob2)) {
                             continue;
                         }
                         size_t actual_channels = 0;
@@ -724,328 +1275,6 @@ bool topology_sat_append_relaxed_channel_threshold_literals(
 }
 
 template <typename TargetNode, typename GlobalNode>
-bool topology_sat_encode_hard_constraints(
-    TopologySatSolver& solver,
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED) {
-    enc = TopologySatHardEncoding{};
-    const size_t nt = graph_data.n_target;
-    const size_t ng = graph_data.n_global;
-
-    if (nt == 0) {
-        return true;
-    }
-
-    enc.allowed_global_idx.resize(nt);
-    enc.assign_lit.resize(nt);
-
-    // Initial domain: constraint + degree filtering.
-    std::vector<std::vector<size_t>> domain(nt);
-    for (size_t t = 0; t < nt; ++t) {
-        for (size_t g = 0; g < ng; ++g) {
-            if (!constraint_data.is_valid_mapping(t, g)) {
-                continue;
-            }
-            if (graph_data.global_deg[g] < graph_data.target_deg[t]) {
-                continue;
-            }
-            domain[t].push_back(g);
-        }
-        if (domain[t].empty()) {
-            enc.trivial_unsat = true;
-            enc.trivial_reason = fmt::format("topology_sat: no allowed global for target_idx {}", t);
-            return false;
-        }
-    }
-
-    // Arc consistency (AC-3): prune domains so every value has at least one compatible support
-    // for each neighboring target.  Build membership sets for fast lookup.
-    std::vector<std::unordered_set<size_t>> domain_set(nt);
-    for (size_t t = 0; t < nt; ++t) {
-        domain_set[t].insert(domain[t].begin(), domain[t].end());
-    }
-
-    auto has_support = [&](size_t t, size_t g, size_t t_neigh) -> bool {
-        size_t required_channels = 1;
-        if (validation_mode == ConnectionValidationMode::STRICT) {
-            if (t < graph_data.target_conn_count.size()) {
-                const auto& tc = graph_data.target_conn_count[t];
-                const auto itc = tc.find(t_neigh);
-                if (itc != tc.end()) {
-                    required_channels = itc->second;
-                }
-            }
-        }
-        for (size_t g2 : graph_data.global_adj_idx[g]) {
-            if (g2 == g) {
-                continue;
-            }
-            if (domain_set[t_neigh].count(g2) == 0) {
-                continue;
-            }
-            if (validation_mode == ConnectionValidationMode::STRICT && required_channels > 1) {
-                size_t actual = 0;
-                if (g < graph_data.global_conn_count.size()) {
-                    const auto& gc = graph_data.global_conn_count[g];
-                    const auto itg = gc.find(g2);
-                    if (itg != gc.end()) {
-                        actual = itg->second;
-                    }
-                }
-                if (actual < required_channels) {
-                    continue;
-                }
-            }
-            return true;
-        }
-        return false;
-    };
-
-    // Collect all arcs (t, t_neigh) to check.
-    std::vector<std::pair<size_t, size_t>> worklist;
-    for (size_t t = 0; t < nt; ++t) {
-        for (size_t tn : graph_data.target_adj_idx[t]) {
-            worklist.emplace_back(t, tn);
-        }
-    }
-
-    static constexpr size_t kMaxAC3Iterations = 100;
-    for (size_t iter = 0; iter < kMaxAC3Iterations && !worklist.empty(); ++iter) {
-        std::vector<std::pair<size_t, size_t>> next_worklist;
-        for (const auto& [t, tn] : worklist) {
-            auto& dom = domain[t];
-            size_t before = dom.size();
-            dom.erase(
-                std::remove_if(dom.begin(), dom.end(), [&](size_t g) { return !has_support(t, g, tn); }), dom.end());
-            if (dom.size() < before) {
-                domain_set[t].clear();
-                domain_set[t].insert(dom.begin(), dom.end());
-                if (dom.empty()) {
-                    enc.trivial_unsat = true;
-                    enc.trivial_reason =
-                        fmt::format("topology_sat: arc consistency emptied domain for target_idx {}", t);
-                    return false;
-                }
-                for (size_t t2 : graph_data.target_adj_idx[t]) {
-                    if (t2 != tn) {
-                        next_worklist.emplace_back(t2, t);
-                    }
-                }
-            }
-        }
-        worklist = std::move(next_worklist);
-    }
-
-    // When there are preferred globals for a target, list them first in the assignment matrix order so unit
-    // propagation / heuristic order favors them under a single solve (no MaxSAT on preferred-hit count).
-    for (size_t t = 0; t < nt; ++t) {
-        if (t < constraint_data.preferred_global_indices.size() &&
-            !constraint_data.preferred_global_indices[t].empty()) {
-            const auto& pref = constraint_data.preferred_global_indices[t];
-            auto& dom = domain[t];
-            std::stable_partition(
-                dom.begin(), dom.end(), [&](size_t g) { return std::binary_search(pref.begin(), pref.end(), g); });
-        }
-    }
-
-    for (size_t t = 0; t < nt; ++t) {
-        enc.allowed_global_idx[t] = std::move(domain[t]);
-        enc.assign_lit[t].reserve(enc.allowed_global_idx[t].size());
-        for (size_t k = 0; k < enc.allowed_global_idx[t].size(); ++k) {
-            (void)k;
-            const int v = solver.declare_one_more_variable();
-            enc.assign_lit[t].push_back(v);
-        }
-    }
-
-    // Exactly one global choice per target.
-    for (size_t t = 0; t < nt; ++t) {
-        const auto& lits = enc.assign_lit[t];
-        TT_ASSERT(lits.size() == enc.allowed_global_idx[t].size());
-        for (int lit : lits) {
-            solver.add(lit);
-        }
-        solver.add(0);
-        topology_sat_add_at_most_one_sequential(solver, lits);
-    }
-
-    // Injective: each global node used by at most one target.
-    std::vector<std::vector<int>> lits_per_global(ng);
-    for (size_t t = 0; t < nt; ++t) {
-        for (size_t k = 0; k < enc.assign_lit[t].size(); ++k) {
-            const size_t g = enc.allowed_global_idx[t][k];
-            lits_per_global[g].push_back(enc.assign_lit[t][k]);
-        }
-    }
-    for (size_t g = 0; g < ng; ++g) {
-        topology_sat_add_at_most_one_sequential(solver, lits_per_global[g]);
-    }
-
-    // Adjacency preservation via support encoding: for each target edge (t1,t2), for each candidate global g_a
-    // assigned to one endpoint, add a clause requiring the other endpoint to map to some adjacent (and, in STRICT
-    // mode, channel-compatible) global.  This produces O(edges * domain_size) clauses instead of the
-    // O(edges * domain_size²) pairwise incompatibility clauses of the naïve encoding.  When a candidate has no
-    // compatible partner the clause becomes a unit clause ¬x_{t,g}, giving implicit arc-consistency filtering.
-    for (size_t t1 = 0; t1 < nt; ++t1) {
-        for (size_t t2 : graph_data.target_adj_idx[t1]) {
-            if (t2 <= t1) {
-                continue;
-            }
-            const auto& gidx1 = enc.allowed_global_idx[t1];
-            const auto& lit1 = enc.assign_lit[t1];
-            const auto& gidx2 = enc.allowed_global_idx[t2];
-            const auto& lit2 = enc.assign_lit[t2];
-            size_t required_channels = 1;
-            if (t1 < graph_data.target_conn_count.size()) {
-                const auto& tc = graph_data.target_conn_count[t1];
-                const auto itc = tc.find(t2);
-                if (itc != tc.end()) {
-                    required_channels = itc->second;
-                }
-            }
-            auto is_compatible = [&](size_t ga, size_t gb) -> bool {
-                if (ga == gb) {
-                    return false;
-                }
-                if (!global_adjacent_idx(graph_data, ga, gb)) {
-                    return false;
-                }
-                if (validation_mode == ConnectionValidationMode::STRICT) {
-                    size_t actual_channels = 0;
-                    if (ga < graph_data.global_conn_count.size()) {
-                        const auto& gc = graph_data.global_conn_count[ga];
-                        const auto itg = gc.find(gb);
-                        if (itg != gc.end()) {
-                            actual_channels = itg->second;
-                        }
-                    }
-                    if (actual_channels < required_channels) {
-                        return false;
-                    }
-                }
-                return true;
-            };
-            for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
-                solver.add(-lit1[i1]);
-                for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
-                    if (is_compatible(gidx1[i1], gidx2[i2])) {
-                        solver.add(lit2[i2]);
-                    }
-                }
-                solver.add(0);
-            }
-            for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
-                solver.add(-lit2[i2]);
-                for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
-                    if (is_compatible(gidx1[i1], gidx2[i2])) {
-                        solver.add(lit1[i1]);
-                    }
-                }
-                solver.add(0);
-            }
-        }
-    }
-
-    // Same-rank target groups: targets sharing target_to_group must agree on global_to_same_rank_group label.
-    const auto& target_to_group = constraint_data.target_to_group;
-    const auto& global_rank = constraint_data.global_to_same_rank_group;
-    if (!target_to_group.empty() && !global_rank.empty()) {
-        for (size_t t1 = 0; t1 < nt; ++t1) {
-            if (t1 >= target_to_group.size()) {
-                continue;
-            }
-            const size_t tg = target_to_group[t1];
-            if (tg == SIZE_MAX) {
-                continue;
-            }
-            for (size_t t2 = t1 + 1; t2 < nt; ++t2) {
-                if (t2 >= target_to_group.size() || target_to_group[t2] != tg) {
-                    continue;
-                }
-                const auto& gidx1 = enc.allowed_global_idx[t1];
-                const auto& lit1 = enc.assign_lit[t1];
-                const auto& gidx2 = enc.allowed_global_idx[t2];
-                const auto& lit2 = enc.assign_lit[t2];
-                for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
-                    const size_t glob1 = gidx1[i1];
-                    if (glob1 >= global_rank.size()) {
-                        continue;
-                    }
-                    const int L1 = global_rank[glob1];
-                    for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
-                        const size_t glob2 = gidx2[i2];
-                        if (glob2 >= global_rank.size()) {
-                            continue;
-                        }
-                        const int L2 = global_rank[glob2];
-                        if (L1 != L2) {
-                            solver.add(-lit1[i1]);
-                            solver.add(-lit2[i2]);
-                            solver.add(0);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Cardinality: at least min_count of the listed (target, global) assignment literals must be true.
-    static constexpr size_t kMaxCardinalityCombClauses = 500000;
-
-    for (const auto& card_entry : constraint_data.cardinality_constraints) {
-        const auto& pair_set = card_entry.first;
-        const size_t min_count = card_entry.second;
-        std::set<int> distinct_lits;
-        for (const auto& pr : pair_set) {
-            const size_t ti = pr.first;
-            const size_t gi = pr.second;
-            if (ti >= enc.allowed_global_idx.size()) {
-                continue;
-            }
-            const auto& globs = enc.allowed_global_idx[ti];
-            const auto& lits_row = enc.assign_lit[ti];
-            for (size_t kk = 0; kk < globs.size(); ++kk) {
-                if (globs[kk] == gi) {
-                    distinct_lits.insert(lits_row[kk]);
-                    break;
-                }
-            }
-        }
-        std::vector<int> lits(distinct_lits.begin(), distinct_lits.end());
-        static constexpr size_t kMaxCardinalityLiterals = 4096;
-        if (lits.size() > kMaxCardinalityLiterals) {
-            enc.trivial_unsat = true;
-            enc.trivial_reason = fmt::format(
-                "topology_sat: cardinality has {} distinct feasible pair literals (cap {}); narrow the pair set or "
-                "raise the cap",
-                lits.size(),
-                kMaxCardinalityLiterals);
-            return false;
-        }
-        if (lits.size() < min_count) {
-            enc.trivial_unsat = true;
-            enc.trivial_reason = fmt::format(
-                "topology_sat: cardinality needs {} satisfied literals but only {} (target,global) pairs are "
-                "feasible in the current domains",
-                min_count,
-                lits.size());
-            return false;
-        }
-        std::string card_reason;
-        if (!topology_sat_add_at_least_k_literals(solver, lits, min_count, kMaxCardinalityCombClauses, &card_reason)) {
-            enc.trivial_unsat = true;
-            enc.trivial_reason =
-                card_reason.empty() ? std::string("topology_sat: cardinality encoding failed") : std::move(card_reason);
-            return false;
-        }
-    }
-
-    return true;
-}
-
-template <typename TargetNode, typename GlobalNode>
 bool topology_sat_decode_hard_solution(
     TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out) {
     if (enc.trivial_unsat) {
@@ -1075,6 +1304,9 @@ bool topology_sat_decode_hard_solution(
     }
     return true;
 }
+
+// ── SatSearchEngine::search -- Main Entry Point ───────────────────────────────
+
 template <typename TargetNode, typename GlobalNode>
 bool SatSearchEngine<TargetNode, GlobalNode>::search(
     const GraphIndexData<TargetNode, GlobalNode>& graph_data,
@@ -1199,16 +1431,16 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
             const size_t nt = graph_data.n_target;
             size_t k_lb = 0;
             if (nt <= kExactPreferredLbMaxTargets) {
-                k_lb = topology_sat_max_preferred_lower_bound_with_encoding(
+                k_lb = topology_sat_preferred_exact_lower_bound(
                     graph_data, constraint_data, enc, kPreferredLbDfsBudgetSmall);
             } else if (nt <= kMidPreferredLbMaxTargets) {
-                k_lb = topology_sat_max_preferred_lower_bound_with_encoding(
+                k_lb = topology_sat_preferred_exact_lower_bound(
                     graph_data, constraint_data, enc, kPreferredLbDfsBudgetMid);
             } else {
-                k_lb = topology_sat_greedy_pref_lower_bound_with_encoding(graph_data, constraint_data, enc);
+                k_lb = topology_sat_preferred_greedy_lower_bound(graph_data, constraint_data, enc);
                 if (k_lb == 0) {
                     k_lb =
-                        topology_sat_max_preferred_lower_bound_with_encoding(graph_data, constraint_data, enc, 600'000);
+                        topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, 600'000);
                 }
             }
             if (k_lb > 0) {
@@ -1267,4 +1499,5 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
 }
 
 }  // namespace tt::tt_fabric::detail
+
 #endif  // TT_METALIUM_TOPOLOGY_SOLVER_SAT_DETAIL_HPP
