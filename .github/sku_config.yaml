@@ -237,5 +237,4 @@ skus:
       count: 16
       match_labels:
         exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: sp4_works
-        exabox.tenstorrent.com/SP5: C110
+        exabox.tenstorrent.com/superpod: A29
