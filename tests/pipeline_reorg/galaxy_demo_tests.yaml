@@ -54,7 +54,7 @@
 
 - name: Galaxy Wan2.2 demo tests
   cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1
     pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
   model: wan22
   skus:
@@ -65,7 +65,7 @@
 
 - name: Galaxy Mochi demo tests
   cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1
     pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500
   model: mochi
   skus:
@@ -87,7 +87,7 @@
 
 - name: Galaxy QwenImage demo tests
   cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1
     pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k "4x8" --timeout 1200
   model: qwenimage
   skus:
