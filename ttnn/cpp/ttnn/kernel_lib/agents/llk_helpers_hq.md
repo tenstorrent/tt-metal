@@ -39,6 +39,63 @@ ttnn/cpp/ttnn/kernel_lib/
   agents/                 <- this directory (pipeline docs + agent prompts)
 ```
 
+## Approval Gates
+
+Two BLOCKING gates between phases of any pipeline run. Both gates require an
+**explicit go-ahead from the human**. These gates exist because a previous
+helper-creation run conflated a scope answer ("yes, full surface migration")
+with API approval and shipped a 24-file design + a 12-test pytest with no
+review. Don't repeat that.
+
+### Gate 1 — API proposal requires explicit user approval
+
+> BLOCKING REQUIREMENT — do NOT write any `.inl`, `.cpp`, kernel source, or
+> test file until the user has explicitly approved the API proposal.
+
+After Phase 3 (Proposal), the agent's turn ENDS. The agent must:
+
+1. Write the proposal artifact at the standard path (`{category}_helper_proposal.md`).
+2. Output one line: `Proposal at <path>. Awaiting sign-off.`
+3. Stop. Do not start implementation, validation kernels, or tests.
+
+Implementation phases (4 onwards) DO NOT START until the user replies with
+explicit approval on the proposal.
+
+### Gate 2 — Test plan requires explicit user approval
+
+> BLOCKING REQUIREMENT — do NOT add, remove, skip, retitle, change tolerance,
+> change parameterization, change dtype matrix, or mark XFAIL↔PASS on any
+> test until the user has explicitly approved the test plan.
+
+The validation phase posts a test plan (kernel-by-kernel: shape, num_tiles,
+dtype matrix, PCC threshold, skip rationale) as a SEPARATE artifact and
+ends its turn. Implementation of test kernels and pytest only begins after
+explicit user approval on that plan.
+
+What counts as a test change for this gate: adding a test, removing a test,
+skipping a test, changing the dtype matrix, changing the tolerance, changing
+the parameterization (num_tiles, shapes, etc.), marking XFAIL→PASS or
+PASS→XFAIL.
+
+### What counts as "explicit approval"
+
+- An explicit message containing "approved", "sign off", "ship it", "looks
+  good", "go ahead", or an explicit list of accepted/rejected sections.
+- An empty user message, a `<system-reminder>`, or a tool-result echo does
+  NOT count.
+- **Answers to clarifying questions about scope, naming, or coverage do NOT
+  count as design or test approval.** Scope sign-off and design sign-off are
+  different things. If the human says "yes, full surface migration", that
+  approves *what* gets migrated — not *how* the API looks or *which* tests
+  cover it. The agent must still post a written proposal and a written test
+  plan, and wait for explicit approval on each, before any implementation.
+
+When in doubt, ASK. The cost of one extra round-trip is small. The cost of
+landing an unapproved API or unapproved test list is much larger — the
+artifact is harder to redline once it exists than to design on paper.
+
+Compression modes (caveman, ultra, terse) do NOT override these gates.
+
 ## Helper Design Principles (general)
 
 Rules below apply across every helper family, not just eltwise. Per-helper specifics (policy enum values, op-struct catalog, batching pitfalls) live in the helper's own header doc-comment.
@@ -273,10 +330,6 @@ Rules below govern the migration pipeline / orchestration layer itself. These ar
 ### HQ doc carries helper-agnostic blockers only
 
 This document must list only blockers that apply across **every** helper family — control-flow shape, CB lifecycle hand-off across helper boundaries, in-DEST hold loops, init-state clobbering, dtype dispatch matching. Helper-specific blockers (e.g. eltwise's `WaitAndPop + cb_tile_idx == 0` rule, `Auto + PerTile` deadlock at small CB capacity) live in the helper's own header doc-comment. When this doc accumulates eltwise-only or reduce-only items it sets a false ceiling on what other helper families think is migratable. Audit this doc on every cycle: if a blocker mentions a specific policy enum value or a specific op struct, it does not belong here — move it to the helper header.
-
-### Test changes require explicit user approval
-
-Adding, removing, or skipping tests **requires explicit user approval** before the pipeline lands the change. "I added a test" is not approval; "I disabled the int32 dtype variant because it failed" is the failure mode that motivates this rule — disabled tests slip past review and the regression ships. The pipeline must surface each test add / skip / tolerance change as a separate approval gate, with the diff and the reason.
 
 ### Phase 2 has an explicit handoff step
 

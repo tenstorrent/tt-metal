@@ -292,21 +292,7 @@ Helper-specific blockers (e.g. "DestReuseOp's `WaitAndPop` requires `cb_tile_idx
 
 ---
 
-## 6. Generalize on second use, not first
-
-| First version | Second consumer appeared | Generalized to |
-|---|---|---|
-| `DestReuseMul<CB>` | `batch_norm` stage 2 needed `ELWSUB` with `DEST_TO_SRCB` | `DestReuseOp<CB, OpType, ReuseType, Slot>` + `DestReuseMul` alias |
-| `CopyTile` only had hardcoded tile 0, default policy | Multi-CB upfront + indexed access | `cb_tile_idx`, `CopyTilePolicy`, `Reconfig` template params + `WaitUpfrontPopAtEnd` |
-| `binary_op` PostOp = lambda | `DestReuseMul` PostOp pattern | `PostOp = NoOp \| EltwiseChain<...>`, single ops wrap |
-| 3-corner CopyTilePolicy | Fan-out second-load explicit | 4-corner `{Wait,NoWait} × {Pop,NoPop}` |
-| `chain_has_any_copy_tile_v` | `DestReuseOp` chains needed reinit | `clashes_with_fpu` + `chain_has_non_copy_tile_fpu_clash_v` |
-
-Don't preemptively generalize. Don't refuse to generalize past the second consumer. The compile-time interface (template params + traits) absorbs the new dimension cleanly when the trigger is real.
-
----
-
-## 7. Naming evolution is part of the design
+## 6. Naming evolution is part of the design
 
 These all happened mid-branch and were worth doing:
 
@@ -324,7 +310,7 @@ Rename when the new name reveals what the thing IS. Don't keep cryptic names "fo
 
 ---
 
-## 8. Validation suite — non-negotiable
+## 7. Validation suite — non-negotiable
 
 Every helper change (new op, new policy, new reconfig path, new enum value) must land alongside a pytest that runs a custom compute kernel on device against a torch golden. Build-only is not enough — kernels JIT.
 
@@ -341,7 +327,7 @@ Add a sister "raw-LLK" diagnostic kernel for any new compute path. If both helpe
 
 The dtype-matrix and untestable-locally rules are general — see [llk_helpers_hq.md → Step 4](llk_helpers_hq.md#step-4--verify-on-device).
 
-### 8.1 srcB reconfig path is its own dimension (eltwise-specific)
+### 7.1 srcB reconfig path is its own dimension (eltwise-specific)
 
 Standard FPU binary (`add_tiles`, `sub_tiles`, `mul_tiles`) consumes srcA *and* srcB; either operand can drive a format reconfig on entry. `DestReuseOp` adds the `DEST_TO_SRCB` path (DEST → srcB, CB → srcA). In every case srcA-reconfig and srcB-reconfig are **separate LLK paths** even when they share a single helper enum value (e.g. `BinaryDataFormatReconfig::INPUT_AND_OUTPUT`, `DestReuseReconfig::Input`, see §2.4). A migration that only validates srcA-reconfig has not validated the srcB branch.
 
@@ -355,9 +341,23 @@ Test matrix must cover:
 
 Add a dedicated test variant per srcB path the helper supports, or document explicitly that srcB-reconfig is untested and untouched in the migration. Don't assume "srcA worked, so srcB works" — they hit different unpacker MOPs.
 
+The combined LLK call is literally the sum of the two single-side calls — no fused fast path under the hood:
+
+```
+reconfig_data_format(a, b)  ≡  reconfig_data_format_srca(a) + reconfig_data_format_srcb(b)
+reconfig_data_format(a_old, a_new, b_old, b_new)
+                            ≡  reconfig_data_format_srca(a_old, a_new)
+                             + reconfig_data_format_srcb(b_old, b_new)
+```
+
+Source: `tt_metal/hw/inc/api/compute/reconfig_data_format.h` — the combined overloads expand to the same `llk_unpack_reconfig_data_format` + `llk_math_reconfig_data_format` pair that the per-side overloads issue independently. Two consequences:
+
+- **Helper-side**: a binary op that only changes one operand dtype must call the single-side variant, not the combined one with the unchanged side. Combined call is convenience, not optimization — it does the same two MOPs you'd issue by hand.
+- **Test-side**: this confirms §7.1's "two genuinely separate paths" — covering only srcA exercises only half the MOP issue path. The combined-call variant is not a third path to test, just the union of the two.
+
 ---
 
-## 9. Eltwise-specific migration enablers
+## 8. Eltwise-specific migration enablers
 
 The pattern is fixed: real kernel can't migrate → identify the missing primitive (op struct, policy, reconfig path, index mode) → small CRTP/policy addition → kernel migrates. Not features added speculatively. Don't enumerate the historical fixes here — they rot the moment the helper grows or kernels rename.
 
@@ -366,13 +366,13 @@ Track open work in a `feature_gap_map` keyed by `GAP-N`. Each gap entry pins:
 - The missing primitive (policy / reconfig path / index mode).
 - The list of currently blocked kernels.
 - Fix complexity (LOC, new template params, new test variants).
-- Whether the gap is real (per §11.3) or fix-and-continue (per §11.2 — missing op struct alone is not a gap).
+- Whether the gap is real (per §10.3) or fix-and-continue (per §10.2 — missing op struct alone is not a gap).
 
 Close gaps by yield: kernels-unblocked-per-LOC. The gap map is the only roadmap; closed entries get deleted, not archived in the doc.
 
 ---
 
-## 10. Things to avoid in the eltwise helper
+## 9. Things to avoid in the eltwise helper
 
 - **Auto fast paths.** Single-op fast paths in chains, auto-batching, auto-merge of same-CB CopyTiles. Make optimizations explicit, never silent.
 - **Default init hoisting.** Hoisting is opt-in and gated on the strict precondition set in §3.4 (chain = `CopyTile + 1 SFPU op`, single CB input, no clobbering element). Never the default — wrong output is not a perf win.
@@ -380,23 +380,23 @@ Close gaps by yield: kernels-unblocked-per-LOC. The gap map is the only roadmap;
 - **Hidden broadcast inference.** `BroadcastDim` is always passed explicitly by the caller — the helper does NOT default-pick based on operand shape. Every value of the enum (e.g. `NONE` for no broadcast, `ROW` / `COL` for 1-D broadcasts, `SCALAR` for a 1×1 tile, plus any others the helper supports) is a distinct dispatch path the caller chooses; "infer it from `Ht`/`Wt`" is forbidden.
 - **Mid-loop dtype swaps without policy support.** Helpers do one entry-time reconfig. If the kernel switches dtypes mid-loop, that path stays raw or grows a mid-chain reinit policy.
 - **Skipping `fp32_dest_acc_en=True` testing.** Every binary migration runs against `fp32_dest_acc_en ∈ {False, True}` and any mixed-dtype combo the original supported.
-- **Hand-coding around a missing op struct in a kernel.** Add the op struct to the helper, rebuild, then migrate (see §11.2 — missing op struct is fix-first, not a blocker). The kernel never gets a workaround copy of the LLK call.
+- **Hand-coding around a missing op struct in a kernel.** Add the op struct to the helper, rebuild, then migrate (see §10.2 — missing op struct is fix-first, not a blocker). The kernel never gets a workaround copy of the LLK call.
 
 Migration-pipeline rules (test-change approvals, partial-migration log format, untestable-locally handoff, HQ doc audit, Phase-2 handoff) live in [llk_helpers_hq.md → Pipeline Self-Maintenance](llk_helpers_hq.md#pipeline-self-maintenance). General helper-design rules (helper owns CB lifecycle, DEST capacity is compile-time) live in [llk_helpers_hq.md → Helper Design Principles](llk_helpers_hq.md#helper-design-principles-general).
 
 ---
 
-## 11. Migration triage — what to skip, what to fix-and-continue
+## 10. Migration triage — what to skip, what to fix-and-continue
 
 A kernel showing up in the survey is not automatically a migration target. Triage before touching it:
 
-### 11.1 Skip macro-injection kernels
+### 10.1 Skip macro-injection kernels
 
 Kernels that build their compute path via `#define`-macro injection — single source file compiled once per op via per-op compile flags (`#define ELTWISE_OP add_tiles`, `#define SFPU_INIT exp_tile_init`, etc.) — are out of scope for eltwise-helper migration. The helper produces a typed chain at compile time; macro-injection produces an opaque text substitution at preprocess time. Fitting one inside the other either re-implements the macro dispatch as templates (huge change, often per-op) or strips the dispatch entirely (breaks every consumer flag). Neither belongs in a per-kernel migration PR.
 
 Mark macro-injection kernels `skipped:macro-injection` in the survey and move on. Revisit only as a separate workstream that converts the dispatch surface itself, not as part of the eltwise migration sweep.
 
-### 11.2 Missing op struct ≠ blocker
+### 10.2 Missing op struct ≠ blocker
 
 If the only thing standing between a kernel and the helper is a missing op struct (the LLK call exists, the SFPU/FPU primitive exists, no new policy is needed — just no `Foo {}` in the helper headers yet), that is **not** a blocker. The fix is:
 
@@ -404,11 +404,11 @@ If the only thing standing between a kernel and the helper is a missing op struc
 2. Rebuild.
 3. Continue the migration in the same PR.
 
-Real blockers are missing **policies** (cumulative wait, in-DEST hold, mid-loop dtype reconfig, a wait/pop combination not in §2.1) or missing **primitives** (a hardware op nobody has wrapped yet). A missing op struct is template boilerplate, recorded under §9's enabler table, not in the gap map.
+Real blockers are missing **policies** (cumulative wait, in-DEST hold, mid-loop dtype reconfig, a wait/pop combination not in §2.1) or missing **primitives** (a hardware op nobody has wrapped yet). A missing op struct is template boilerplate, recorded under §8's enabler table, not in the gap map.
 
-### 11.3 Genuine blockers
+### 10.3 Genuine blockers
 
-- Missing policy (see §2.1, §3.7, §10 mid-loop dtype).
+- Missing policy (see §2.1, §3.7, §9 mid-loop dtype).
 - Missing primitive — LLK call doesn't exist yet.
 - Index mode the helper doesn't support (per §2.7) — add the mode rather than skipping, unless the mode itself requires new primitives.
-- Macro-injection (per §11.1) — the only "skip permanently" category.
+- Macro-injection (per §10.1) — the only "skip permanently" category.

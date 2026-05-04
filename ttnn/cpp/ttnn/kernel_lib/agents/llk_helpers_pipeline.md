@@ -8,11 +8,22 @@ End-to-end workflow for creating or updating `compute_kernel_lib` helpers. Orche
 Phase 0: Catalog ─> Phase 1: Investigation ─> Phase 2: Verification
                     (parallel per group)
 
-─> Phase 3: Proposal ─> Phase 4: Validation ─> Phase 5: Implementation
-                         (TDD sub-stages)
+─> Phase 3: Proposal ─> [STOP — Gate 1: explicit user sign-off on API]
+                         │
+                         v
+   Phase 3.5: Test Plan ─> [STOP — Gate 2: explicit user sign-off on test plan]
+                         │
+                         v
+   Phase 4: Validation ─> Phase 5: Implementation
+                         (TDD sub-stages 4a..4d)
 
 ─> Phase 6: Report
 ```
+
+Gates 1 and 2 are BLOCKING REQUIREMENTS. See
+[llk_helpers_hq.md → Approval Gates](llk_helpers_hq.md#approval-gates) for
+what counts as approval (and what does not — scope answers don't).
+Compression / terse modes don't override the gates.
 
 ---
 
@@ -22,8 +33,10 @@ Before starting, check if outputs from previous runs exist:
 
 1. `agent_logs/{category_slug}/catalog_*.md` → skip Phase 0
 2. `{category}_investigation.md` → skip Phase 1
-3. `{category}_helper_proposal.md` → skip Phase 3
-4. Existing `.hpp`/`.inl` → start at Phase 4 (validation only)
+3. `{category}_helper_proposal.md` → skip Phase 3 (still requires Gate 1
+   sign-off in conversation history before resuming downstream phases)
+4. `{category}_test_plan.md` → skip Phase 3.5 (still requires Gate 2 sign-off)
+5. Existing `.hpp`/`.inl` → start at Phase 4 (validation only)
 
 If prior outputs exist, resume from the earliest phase with missing outputs. Never ask the human to choose a path — the pipeline decides based on what exists.
 
@@ -116,7 +129,64 @@ INCORRECT verdicts are high-value — they directly change the helper design.
 
 **Output**: `{category}_helper_proposal.md`
 
-**Checkpoint**: Review proposal before proceeding. Check LLK sequence validation table, before/after examples, tier assignments, loop ownership justification, parameter independence analysis.
+### STOP — Gate 1: API proposal sign-off
+
+> BLOCKING REQUIREMENT. Do NOT proceed to Phase 4 (or write any `.inl`,
+> `.cpp`, kernel source, or test file) until the user explicitly approves
+> the proposal.
+
+After writing the proposal:
+
+1. Output one line: `Proposal at <path>. Awaiting sign-off.`
+2. End the turn. Do not continue.
+3. Wait for the user reply.
+
+What counts as approval is defined in
+[llk_helpers_hq.md → Approval Gates](llk_helpers_hq.md#what-counts-as-explicit-approval).
+Notably: scope answers ("yes, full surface migration") do NOT approve the
+API. Clarifying-question answers do NOT approve the API. The user must
+explicitly accept the proposal sections (or list deltas) for the gate to
+clear.
+
+If the user lists deltas, revise the proposal artifact and re-post for a
+second sign-off. Don't smuggle deltas into Phase 4.
+
+---
+
+## Phase 3.5: Test Plan
+
+**Goal**: Propose the validation test list as a separate artifact before any
+test kernel or pytest is written.
+
+**Input**: Approved proposal.
+
+**Output**: `{category}_test_plan.md` containing per-test:
+- Kernel name + source path it will live at
+- What it covers (which proposal section)
+- `num_tiles` parameterization
+- Dtype matrix (and **explicit list of dtypes / fp32_dest_acc / mixed-dtype
+  combos that will be SKIPPED, with rationale**)
+- PCC threshold
+- Skip-on-arch list (e.g. Blackhole)
+
+### STOP — Gate 2: Test plan sign-off
+
+> BLOCKING REQUIREMENT. Do NOT write any test kernel, pytest, or run any
+> validation until the user explicitly approves the test plan.
+
+After writing the test plan:
+
+1. Output one line: `Test plan at <path>. Awaiting sign-off.`
+2. End the turn. Wait for the user reply.
+
+The list of test changes that need approval is enumerated in
+[llk_helpers_hq.md → Gate 2](llk_helpers_hq.md#gate-2--test-plan-requires-explicit-user-approval):
+adding, removing, skipping, retitling, changing tolerance, changing
+parameterization, changing dtype matrix, marking XFAIL↔PASS.
+
+If the test plan needs revision mid-validation (e.g. a dtype combo turns
+out to be unsupported), STOP and re-post the revised plan. Don't disable
+tests inline.
 
 ---
 
@@ -229,10 +299,16 @@ Commit the report.
 catalog ──> investigation (parallel per group)
                 │
                 v
-         verification ──> proposal ──> validation (4a->4b->4c->4d)
+         verification ──> proposal ──> [STOP: Gate 1 sign-off]
                                             │
                                             v
-                                     implementation ──> report
+                                       test_plan ──> [STOP: Gate 2 sign-off]
+                                                          │
+                                                          v
+                                            validation (4a->4b->4c->4d)
+                                                          │
+                                                          v
+                                                   implementation ──> report
 ```
 
 ---
