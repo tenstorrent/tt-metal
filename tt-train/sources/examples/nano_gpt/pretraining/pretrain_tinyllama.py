@@ -1229,7 +1229,7 @@ def _tensor_to_numpy_entry(tensor: "ttml.autograd.Tensor") -> dict:
     layout = inner.get_layout()
     # prefer_half=True reads bf16 storage directly, avoiding a device-side float32 typecast
     # (and its persistent cache in AutocastTensor); the cast to float32 is done on the host.
-    numpy_array = tensor.to_numpy(prefer_half=True).astype(np.float32)
+    numpy_array = tensor.to_numpy(cast_on_device=False)  # .astype(np.float32)
     return {
         "data": numpy_array,
         "layout": layout.value if hasattr(layout, "value") else str(layout),
