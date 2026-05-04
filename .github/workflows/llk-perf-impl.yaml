@@ -9,11 +9,6 @@ permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
-    github.ref }}
-  cancel-in-progress: true
-
 env:
   LLK_PATH: tt_metal/tt-llk
 
