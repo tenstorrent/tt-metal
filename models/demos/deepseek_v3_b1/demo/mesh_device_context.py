@@ -14,7 +14,7 @@ from conftest import bh_2d_mesh_device_context
 from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS_DEFAULT = "30000"
-FABRIC_ROUTER_ETH_PORT = 15232
+FABRIC_PACKET_SIZE_BYTES = 15232
 
 # TODO: Store these values inside the stages and fetch based on pipeline config
 DEFAULT_WORKER_L1_SIZE = 1431568
@@ -72,7 +72,7 @@ def open_mesh_device():
     worker_l1_size = _worker_l1_size_for_rank(num_procs=num_procs)
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
-        "fabric_router_config": create_fabric_router_config(FABRIC_ROUTER_ETH_PORT),
+        "fabric_router_config": create_fabric_router_config(FABRIC_PACKET_SIZE_BYTES),
         "worker_l1_size": worker_l1_size,
     }
 
