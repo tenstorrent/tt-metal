@@ -206,7 +206,7 @@ def _perf_param(op, worker_file, worker_test, topo, nlinks, expected_ns, op_filt
     model_name = f"deepseek_v3_{op}_{topo}_8_{nlinks}link"
     if layout != "tile":
         model_name += f"_{layout}"
-    k_filter = f"perf_no_pcc and {worker_id} and random and {layout}"
+    k_filter = f"perf_no_pcc and {worker_id} and random and {layout} and bf16_out"
     return (
         f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} " f"-k '{k_filter}'",
         expected_ns,
