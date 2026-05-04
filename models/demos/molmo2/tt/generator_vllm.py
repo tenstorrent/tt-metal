@@ -161,24 +161,27 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         logger.info("Pre-compiling vision JIT kernels...")
         model.warmup_vision_compile()
 
-        # warmup_all_buckets runs text-only (pixel_values=None), which skips the vision
-        # feature injection path (ttnn.add for image patches). Run one forward_prefill
-        # with dummy vision inputs to JIT that path and avoid the first-inference stall.
-        # Use 1 frame → N_pooled=81 image tokens, S=128 (smallest bucket ≥ 81).
-        logger.info("Pre-compiling vision-integrated prefill (image feature injection)...")
+        # warmup_all_buckets runs text-only (pixel_values=None), skipping the vision
+        # feature injection path (ttnn.add for image patches). Run forward_prefill with
+        # dummy vision inputs for EVERY bucket to JIT all decoder/add paths in vision mode.
+        # Without this, each new bucket triggers a ~25s JIT stall on first vision request.
+        logger.info("Pre-compiling vision-integrated prefill for all buckets...")
         _n_patches, _k_pool, _n_pooled = 729, 9, 81  # 1 frame: 81 pooled positions
         _dummy_pv = torch.zeros(1, 8, _n_patches, 588)  # 8 crops (max ViT batch)
         _dummy_pool_idx = torch.zeros(1, _n_pooled, _k_pool, dtype=torch.long)
-        _S_warmup = PREFILL_BUCKETS[0]  # 128 — smallest bucket ≥ 81
-        _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
-        _dummy_ids[0, :_n_pooled] = cfg.image_patch_id  # 81 image-patch tokens
-        _ = model.forward_prefill(
-            input_ids=_dummy_ids,
-            pixel_values=_dummy_pv,
-            pooled_patches_idx=_dummy_pool_idx,
-            token_type_ids=None,
-            user_id=0,
-        )
+        for _S_warmup in PREFILL_BUCKETS:
+            if _S_warmup < _n_pooled:
+                continue  # bucket too small to hold n_pooled image tokens
+            _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
+            _dummy_ids[0, :_n_pooled] = cfg.image_patch_id
+            logger.info(f"  vision-integrated prefill bucket {_S_warmup}...")
+            _ = model.forward_prefill(
+                input_ids=_dummy_ids,
+                pixel_values=_dummy_pv,
+                pooled_patches_idx=_dummy_pool_idx,
+                token_type_ids=None,
+                user_id=0,
+            )
         logger.info("JIT warmup complete — server ready to serve")
 
         return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)
