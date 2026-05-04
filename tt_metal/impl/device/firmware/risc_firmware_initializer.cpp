@@ -277,8 +277,15 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                                 if (hb_val != 0) {
                                     ps.prev_hb = hb_val;
                                     ps.nonzero_seen = true;
+                                    // FIX TW (#42429): UMD base firmware writes a static 0xABCDxxxx
+                                    // marker to the heartbeat register — it never increments.
+                                    // Detect it immediately rather than waiting for a value change.
+                                    if ((hb_val >> 16) == 0xABCDu) {
+                                        ps.ready = true;
+                                    }
                                 }
-                            } else if (hb_val != ps.prev_hb) {
+                            } else if ((hb_val >> 16) == 0xABCDu || hb_val != ps.prev_hb) {
+                                // Ready if UMD static marker OR incrementing counter detected.
                                 ps.ready = true;
                             }
                             if (!ps.ready) all_done = false;
@@ -575,10 +582,14 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                                 if (hb_val != 0) {
                                     ps.prev_hb = hb_val;
                                     ps.nonzero_seen = true;
+                                    // FIX TW (#42429): UMD base firmware writes a static 0xABCDxxxx
+                                    // marker — detect it immediately, no increment to wait for.
+                                    if ((hb_val >> 16) == 0xABCDu) {
+                                        ps.ready = true;
+                                    }
                                 }
-                            } else if (hb_val != ps.prev_hb) {
-                                // WH heartbeat (0x1F80) is a plain incrementing counter,
-                                // not 0xABCDxxxx format — just check that the value changed.
+                            } else if ((hb_val >> 16) == 0xABCDu || hb_val != ps.prev_hb) {
+                                // Ready if UMD static marker OR incrementing counter detected.
                                 ps.ready = true;
                             }
                             if (!ps.ready) all_done = false;
@@ -1033,10 +1044,14 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                                 if (hb_val != 0) {
                                     ps.prev_hb = hb_val;
                                     ps.nonzero_seen = true;
+                                    // FIX TW (#42429): UMD base firmware writes a static 0xABCDxxxx
+                                    // marker — detect it immediately, no increment to wait for.
+                                    if ((hb_val >> 16) == 0xABCDu) {
+                                        ps.ready = true;
+                                    }
                                 }
-                            } else if (hb_val != ps.prev_hb) {
-                                // WH heartbeat (0x1F80) is a plain incrementing counter,
-                                // not 0xABCDxxxx format — just check that the value changed.
+                            } else if ((hb_val >> 16) == 0xABCDu || hb_val != ps.prev_hb) {
+                                // Ready if UMD static marker OR incrementing counter detected.
                                 ps.ready = true;
                             }
                             if (!ps.ready) all_done = false;
