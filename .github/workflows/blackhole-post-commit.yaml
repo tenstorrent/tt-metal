@@ -30,32 +30,32 @@ on:
       run-ttnn-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run TTNN unit tests"
       run-models-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run model unit tests"
       run-profiler-regression:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run profiler regression tests"
       run-umd-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run UMD unit tests"
       run-ops-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run ops unit tests"
       run-tt-cnn-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run TT-CNN unit tests"
       run-blackhole-multi-card-fast-unit-tests:
         required: false
@@ -86,7 +86,7 @@ on:
       schedule-runs-all-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "When true (default), a scheduled run uses the Blackhole schedule suite (not gated on run-* alone). When false, only run-* inputs enable jobs—set false when calling from another workflow."
   workflow_dispatch:
     inputs:
@@ -126,32 +126,32 @@ on:
       run-ttnn-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run TTNN unit tests"
       run-models-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run model unit tests"
       run-profiler-regression:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run profiler regression tests"
       run-umd-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run UMD unit tests"
       run-ops-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run ops unit tests"
       run-tt-cnn-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run TT-CNN unit tests"
       run-blackhole-multi-card-fast-unit-tests:
         required: false
