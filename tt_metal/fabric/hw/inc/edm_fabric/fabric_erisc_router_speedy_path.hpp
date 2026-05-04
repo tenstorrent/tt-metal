@@ -36,6 +36,7 @@ static_assert(
 struct SpeedySenderState {
     size_t completion_count = 0;
     uint32_t sender_amort_counter = 0;
+    uint32_t connection_liveness_check_counter = 0;
 };
 
 template <size_t VC_ID>
@@ -90,6 +91,7 @@ template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
     size_t SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL,
+    bool MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER,
     typename SenderChannelT,
     typename WorkerInterfaceT,
     typename ReceiverPointersT,
@@ -186,6 +188,32 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             local_sender_channel_worker_interface, sender_state.completion_count, channel_connection_established);
         sender_state.sender_amort_counter -= sender_state.completion_count;
         sender_state.completion_count = 0;
+    }
+
+    if constexpr (MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER) {
+        // Speedy sender service cadence is still decoupled from the credit
+        // amortization cadence. A period of N gives a 1:N liveness polling
+        // ratio for the helper-managed VC0 path.
+        static constexpr uint32_t speedy_connection_liveness_check_period = 1;
+        static_assert(speedy_connection_liveness_check_period > 0);
+
+        sender_state.connection_liveness_check_counter++;
+        const bool reached_liveness_poll_period =
+            sender_state.connection_liveness_check_counter >= speedy_connection_liveness_check_period;
+        if (reached_liveness_poll_period) {
+            // Reset on the scheduled poll boundary so the cadence stays exact
+            // even when there is no open/close transition to process.
+            sender_state.connection_liveness_check_counter = 0;
+
+            auto check_connection_status =
+                !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
+            if (check_connection_status) {
+                check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+                    local_sender_channel_worker_interface,
+                    channel_connection_established,
+                    sender_channel_free_slots_stream_id);
+            }
+        }
     }
     return progress;
 }
