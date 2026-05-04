@@ -624,15 +624,14 @@ struct MatmulExpertCompressedDRAM {
             constexpr uint32_t num_subblocks_k_local = CTArgs::num_subblocks_k_local;
             constexpr uint32_t act_k_slice_byte_offset =
                 CTArgs::k_slice_idx * num_subblocks_k_local * CTArgs::subblock_k * in0_page_size;
-
-            reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
-            pack_reconfig_data_format<true>(CTArgs::cb_out);
-            compressed_custom_mm_block_init_short<false, true, false>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             if constexpr (CTArgs::accum_experts) {
                 cb_wait_front(CTArgs::cb_in0, num_tiles_k * num_active_experts);
             } else {
                 cb_wait_front(CTArgs::cb_in0, num_tiles_k);
             }
+            reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
+            pack_reconfig_data_format<true>(CTArgs::cb_out);
+            compressed_custom_mm_block_init_short<false, true, false>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
             uint32_t in0_base = 0, in0_cb_base = 0;
             UNPACK(({ in0_cb_base = unified_kernels::get_cb_rd_ptr(CTArgs::cb_in0); }));
@@ -822,12 +821,12 @@ struct MatmulExpertCompressedDRAM {
                 // wr_ptr) AND slot 0 (sender's NOC write) have landed in cb_out's L1.
                 if (num_dram_experts > 0) {
                     cb_push_back(CTArgs::cb_out, cb_out_num_pages);
+                    cb_wait_front(CTArgs::cb_out, cb_out_num_pages);
                 }
 
                 // pop_out: drain the final cb_out push (looping mode).
                 if constexpr (pop_out) {
                     if (num_dram_experts > 0) {
-                        cb_wait_front(CTArgs::cb_out, cb_out_num_pages);
                         cb_pop_front(CTArgs::cb_out, cb_out_num_pages);
                     }
                 }
