@@ -234,8 +234,12 @@ void kernel_main() {
                     max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
                 }
 
-                // TODO implement accumulation for <=9 MPWI SFPU so we can use this version for large kernels as well
-                constexpr uint32_t max_mpwi_kernel_size = window_size_hw <= 9 ? 9 : 32;
+                // Route to the 9-row LLK variant whenever the per-chunk valid stick count fits.
+                // Small non-large kernels (window_size_hw <= 9) keep the existing path. For large
+                // kernels with sticks_per_chunk <= 9, use the 9-row variant + accumulate (added
+                // in the BH LLK in this branch). Everything else stays on the 32-row generic path.
+                constexpr uint32_t max_mpwi_kernel_size =
+                    (window_size_hw <= 9 || (is_large_kernel && sticks_per_chunk <= 9)) ? 9 : 32;
                 max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR, is_large_kernel>(
                     data_dst_idx, index_dst_idx, chunk);
 

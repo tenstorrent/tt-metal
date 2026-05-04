@@ -38,9 +38,11 @@ template <
 inline void _calculate_max_pool_with_indices_(const std::uint32_t values_tile_idx, const std::uint32_t indices_tile_idx, const std::uint32_t chunk)
 {
     // size of each tile in Dest is 64 rows
-    constexpr std::uint32_t dst_tile_size   = 64;
-    const std::uint32_t values_tile_offset  = values_tile_idx * dst_tile_size;
-    const std::uint32_t indices_tile_offset = indices_tile_idx * dst_tile_size;
+    constexpr std::uint32_t dst_tile_size         = 64;
+    const std::uint32_t values_tile_offset        = values_tile_idx * dst_tile_size;
+    const std::uint32_t indices_tile_offset       = indices_tile_idx * dst_tile_size;
+    const std::uint32_t values_accum_tile_offset  = (values_tile_idx + 1) * dst_tile_size;
+    const std::uint32_t indices_accum_tile_offset = (indices_tile_idx + 1) * dst_tile_size;
     // each face is 16 rows
     constexpr std::uint32_t face_offset    = 16;
     constexpr std::uint8_t instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
@@ -68,7 +70,8 @@ inline void _calculate_max_pool_with_indices_(const std::uint32_t values_tile_id
         // Face 0 Row 8
         // Face 1 Row 8
 
-        auto process_columns = [values_tile_offset, indices_tile_offset](const std::uint32_t col_offset) __attribute__((always_inline))
+        auto process_columns = [values_tile_offset, indices_tile_offset, values_accum_tile_offset, indices_accum_tile_offset, chunk](
+                                   const std::uint32_t col_offset) __attribute__((always_inline))
         {
             // data
             TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, values_tile_offset + 0 + col_offset);
@@ -90,6 +93,23 @@ inline void _calculate_max_pool_with_indices_(const std::uint32_t values_tile_id
             TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, indices_tile_offset + 16 + col_offset);
 
             TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+
+            // For chunked accumulation in large kernels: at this point LREG0/LREG4 hold this chunk's max.
+            // Mirror the generic 32-row variant: combine with the running max stored in
+            // (values_accum_tile_offset, indices_accum_tile_offset), then store the running
+            // result back to the accum tiles AND to tile 0 / tile 2 for the caller to consume.
+            if constexpr (accumulate)
+            {
+                if (chunk > 0)
+                {
+                    TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, values_accum_tile_offset + 0 + col_offset);
+                    TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, indices_accum_tile_offset + 0 + col_offset);
+                    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                }
+                // Store running cumulative max to the accum tiles for the next chunk to read.
+                TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, indices_accum_tile_offset + 0 + col_offset);
+                TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, values_accum_tile_offset + 0 + col_offset);
+            }
 
             TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, indices_tile_offset + 0 + col_offset);
             TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, values_tile_offset + 0 + col_offset);
