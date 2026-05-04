@@ -29,6 +29,61 @@ from tracy.common import (
 # WebSocket port is always HTTP+1 (see run_server).
 DEFAULT_HTTP_PORT = 8080
 
+_SERVER_LOG_BASENAME = "tracy_wasm_gui_server.log"
+
+
+def _resolve_under_root(root: Path, strict: bool) -> Path:
+    try:
+        return root.resolve(strict=strict)
+    except FileNotFoundError:
+        return root.resolve(strict=False)
+
+
+def _safe_trace_file_path(traces_dir: Path, filename: str) -> Path | None:
+    """Resolve a trace basename under traces_dir, or None if invalid or escapes the directory."""
+    if not filename or "\x00" in filename:
+        return None
+    if "\r" in filename or "\n" in filename:
+        return None
+    if "/" in filename or "\\" in filename:
+        return None
+    if filename != os.path.basename(filename):
+        return None
+    if not filename.endswith(".tracy") or filename == ".tracy":
+        return None
+    root = _resolve_under_root(traces_dir, strict=False)
+    candidate = _resolve_under_root(root / filename, strict=False)
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _validated_wasm_serve_directory(directory: str | os.PathLike[str]) -> Path:
+    """Ensure the serve root stays under PROFILER_WASM_DIR (path traversal / arbitrary chdir)."""
+    root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
+    resolved = _resolve_under_root(Path(directory), strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as e:
+        raise ValueError(f"Refusing to serve outside {root}: {directory}") from e
+    return resolved
+
+
+def _profiler_server_log_path() -> Path:
+    """Log file path fixed under PROFILER_ARTIFACTS_DIR (constant basename only)."""
+    artifacts = _resolve_under_root(Path(PROFILER_ARTIFACTS_DIR), strict=False)
+    log_path = artifacts / _SERVER_LOG_BASENAME
+    resolved = _resolve_under_root(log_path, strict=False)
+    try:
+        resolved.relative_to(artifacts)
+    except ValueError as e:
+        raise RuntimeError(f"Invalid profiler log path under {artifacts}") from e
+    if resolved.name != _SERVER_LOG_BASENAME:
+        raise RuntimeError("Profiler log path basename mismatch")
+    return resolved
+
 
 def _resolve_wasm_http_port(explicit_port=None):
     if explicit_port is not None:
@@ -64,10 +119,12 @@ def launch_server_subprocess(directory=None, port=None, daemon=True):
         f"(WebSocket for live reload: ws://localhost:{ws_port}/)"
     )
     _kill_previous_server_process()
-    log_path = PROFILER_ARTIFACTS_DIR / "tracy_wasm_gui_server.log"
+    log_path = _profiler_server_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, __file__, "--port", str(http_port)]
     if directory is not None:
-        cmd += ["--dir", directory]
+        validated_dir = _validated_wasm_serve_directory(directory)
+        cmd += ["--dir", str(validated_dir)]
     logger.info(f"Running command: {' '.join(cmd)}")
     log_file = open(log_path, "a", buffering=1)  # line-buffered
     env = os.environ.copy()
@@ -106,30 +163,29 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
             filename = filename.split("?", 1)[0]
             filename = urllib.parse.unquote(filename)
             print(f"[DEBUG] DELETE /traces/ raw filename: {repr(filename)}")
-            file_path = os.path.join(traces_dir, filename)
+            file_path = _safe_trace_file_path(Path(traces_dir), filename)
             print(f"[DEBUG] DELETE /traces/ resolved file_path: '{file_path}'")
-            # Only allow .tracy files, no path traversal
-            if not filename.endswith(".tracy") or "/" in filename or "\\" in filename:
+            if file_path is None:
                 print(f"[DEBUG] DELETE /traces/ rejected filename: '{filename}'")
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b"Invalid filename")
                 return
-            if not os.path.isfile(file_path):
+            if not file_path.is_file():
                 print(f"[DEBUG] DELETE /traces/ file not found: '{file_path}'")
                 self.send_response(404)
                 self.end_headers()
                 self.wfile.write(b"File not found")
                 return
             try:
-                os.remove(file_path)
+                os.remove(str(file_path))
                 print(f"[DEBUG] DELETE /traces/ deleted file: '{file_path}'")
                 # Check if embed.tracy is a symlink to the deleted file
                 embed_path = os.path.join(PROFILER_WASM_DIR, PROFILER_WASM_TRACE_FILE_NAME)
                 if os.path.islink(embed_path):
                     target = os.readlink(embed_path)
                     abs_target = os.path.abspath(os.path.join(os.path.dirname(embed_path), target))
-                    abs_deleted = os.path.abspath(file_path)
+                    abs_deleted = os.path.abspath(str(file_path))
                     if abs_target == abs_deleted:
                         os.unlink(embed_path)
                         # Find first available .tracy file
@@ -201,7 +257,7 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
             filename = filename.split("?", 1)[0]
             filename = urllib.parse.unquote(filename)
             print(f"[DEBUG] /traces/ raw filename: {repr(filename)}")
-            file_path = os.path.join(traces_dir, filename)
+            file_path = _safe_trace_file_path(Path(traces_dir), filename)
             print(f"[DEBUG] /traces/ resolved file_path: '{file_path}'")
             # List directory contents for debugging
             try:
@@ -209,14 +265,13 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                 print(f"[DEBUG] /traces/ directory listing: {dir_listing}")
             except Exception as e:
                 print(f"[DEBUG] /traces/ could not list directory: {e}")
-            # Only allow .tracy files, no path traversal
-            if not filename.endswith(".tracy") or "/" in filename or "\\" in filename:
+            if file_path is None:
                 print(f"[DEBUG] /traces/ rejected filename: '{filename}'")
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b"Invalid filename")
                 return
-            if not os.path.isfile(file_path):
+            if not file_path.is_file():
                 print(f"[DEBUG] /traces/ file not found: '{file_path}'")
                 self.send_response(404)
                 self.end_headers()
@@ -240,13 +295,13 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
 
             filename = self.path[len("/set-embed-tracy/") :]
             filename = urllib.parse.unquote(filename)
-            if not filename.endswith(".tracy") or "/" in filename or "\\" in filename:
+            src_path = _safe_trace_file_path(Path(traces_dir), filename)
+            if src_path is None or not src_path.is_file():
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b"Invalid filename")
                 return
-            src_path = os.path.join(traces_dir, filename)
-            dst_path = os.path.join(PROFILER_WASM_DIR, PROFILER_WASM_TRACE_FILE_NAME)
+            dst_path = Path(PROFILER_WASM_DIR) / PROFILER_WASM_TRACE_FILE_NAME
             import shutil
 
             try:
@@ -316,8 +371,13 @@ def run_server(directory, port):
         print(f"Server is already running on WebSocket port {ws_port}. Exiting.")
         return
 
-    os.chdir(directory)
-    print(f"Serving WASM from {directory} on http://0.0.0.0:{port} ...")
+    try:
+        serve_root = _validated_wasm_serve_directory(directory)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    os.chdir(serve_root)
+    print(f"Serving WASM from {serve_root} on http://0.0.0.0:{port} ...")
     # Start WebSocket server in a separate thread
     ws_thread = threading.Thread(target=start_websocket_server, args=(ws_port,), daemon=True)
     ws_thread.start()
