@@ -28,8 +28,6 @@
   skus:
     wh_n150_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_wormhole group 2/5
@@ -59,8 +57,6 @@
   skus:
     wh_n150_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_wormhole group 3/5
@@ -90,8 +86,6 @@
   skus:
     wh_n150_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_wormhole group 4/5
@@ -121,8 +115,6 @@
   skus:
     wh_n150_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_wormhole group 5/5
@@ -152,8 +144,6 @@
   skus:
     wh_n150_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 1/5
@@ -183,8 +173,6 @@
   skus:
     bh_p150b_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 2/5
@@ -214,8 +202,6 @@
   skus:
     bh_p150b_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 3/5
@@ -245,8 +231,6 @@
   skus:
     bh_p150b_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 4/5
@@ -276,8 +260,6 @@
   skus:
     bh_p150b_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 5/5
@@ -307,6 +289,4 @@
   skus:
     bh_p150b_civ2:
       timeout: 360
-      runs_on:
-        - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K

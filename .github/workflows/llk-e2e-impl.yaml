@@ -30,6 +30,11 @@ env:
   LLK_PATH: tt_metal/tt-llk
 
 jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:

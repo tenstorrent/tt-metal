@@ -18,10 +18,6 @@ permissions:
   packages: write
 
 jobs:
-  build-images:
-    name: "Docker setup"
-    uses: ./.github/workflows/build-docker-artifact.yaml
-
   llk-e2e-tests:
     name: "LLK e2e Tests"
     needs: build-images
@@ -30,7 +26,7 @@ jobs:
     with:
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
       enabled-skus: ALL_SKUS_IN_TESTS
-      pytest-markers: ${{ inputs.pytest_markers }}
+      pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
       coverage: true
 
   llk-e2e-summary:

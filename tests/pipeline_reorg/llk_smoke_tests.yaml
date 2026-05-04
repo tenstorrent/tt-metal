@@ -21,8 +21,6 @@
   skus:
     wh_n150_civ2:
       timeout: 80
-      runs_on:
-        - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_smoke_wormhole group 2/2
@@ -45,8 +43,6 @@
   skus:
     wh_n150_civ2:
       timeout: 80
-      runs_on:
-        - tt-ubuntu-2204-n150-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_smoke_blackhole group 1/2
@@ -69,8 +65,6 @@
   skus:
     bh_p150b_civ2:
       timeout: 80
-      runs_on:
-        - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
 
 - name: llk_smoke_blackhole group 2/2
@@ -93,6 +87,4 @@
   skus:
     bh_p150b_civ2:
       timeout: 80
-      runs_on:
-        - tt-ubuntu-2204-p150b-stable
   owner_id: U07J3K6KS1K
