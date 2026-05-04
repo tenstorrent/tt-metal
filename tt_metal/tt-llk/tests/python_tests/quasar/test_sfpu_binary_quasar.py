@@ -67,7 +67,7 @@ def test_sfpu_binary_add_quasar(data_format, dest_acc, src0_idx, src1_idx, dst_i
         stimuli_format_B=data_format,
         input_dimensions_B=input_dimensions,
         sfpu=False,
-        full_range=True,
+        full_2sc_int_range=True,
     )
 
     num_faces = 4
@@ -115,6 +115,7 @@ def test_sfpu_binary_add_quasar(data_format, dest_acc, src0_idx, src1_idx, dst_i
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_count_res,
             num_faces=num_faces,
+            twos_complement=data_format.is_integer(),
         ),
         unpack_to_dest=True,
         dest_acc=dest_acc,
