@@ -1096,6 +1096,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         {"cb_in0_intermediate", tt::CBIndex::c_8},
         {"cb_in1_intermediate", tt::CBIndex::c_9},
         {"cb_in0_transposed", tt::CBIndex::c_10},
+        {"bias_ntiles", per_core_N},
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};

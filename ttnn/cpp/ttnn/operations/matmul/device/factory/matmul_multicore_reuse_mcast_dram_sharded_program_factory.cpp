@@ -1338,6 +1338,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         {"cb_in0_intermediate", tt::CBIndex::c_8},
         {"cb_in1_intermediate", tt::CBIndex::c_9},
         {"cb_in0_transposed", tt::CBIndex::c_10},
+        {"bias_ntiles", per_core_N_compute},
     };
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
