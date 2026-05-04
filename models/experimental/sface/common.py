@@ -5,10 +5,14 @@
 
 import os
 
+from models.experimental.yunet.common import YUNET_L1_SMALL_SIZE
+
 # L1 small size for SFace model
 # SFace has larger intermediate tensors (112x112 input, up to 1024 channels)
 # Need larger L1 allocation than YuNet
 SFACE_L1_SMALL_SIZE = 32768  # 32KB - tuned for 112x112 input
+
+FACE_PIPELINE_L1_SMALL_SIZE = int(os.environ.get("TT_FACE_PIPELINE_L1_SMALL", str(YUNET_L1_SMALL_SIZE)))
 
 # ONNX model URL and path
 SFACE_ONNX_URL = (

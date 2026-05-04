@@ -63,7 +63,6 @@ class VerifyResponse(BaseModel):
 
 # YuNet imports
 from models.experimental.yunet.common import (
-    YUNET_L1_SMALL_SIZE,
     STRIDES,
     DEFAULT_NMS_IOU_THRESHOLD,
     load_torch_model as load_yunet_torch_model,
@@ -72,7 +71,7 @@ from models.experimental.yunet.common import (
 from models.experimental.yunet.tt.ttnn_yunet import create_yunet_model
 
 # SFace imports
-from models.experimental.sface.common import get_sface_onnx_path
+from models.experimental.sface.common import FACE_PIPELINE_L1_SMALL_SIZE, get_sface_onnx_path
 from models.experimental.sface.reference.sface_model import load_sface_from_onnx
 from models.experimental.sface.tt.ttnn_sface import create_sface_model
 
@@ -148,13 +147,12 @@ async def root():
 async def startup():
     global yunet_model, sface_model, device
 
-    # Enable model/program caching to avoid recompilation
-    ttnn.CONFIG.enable_model_cache = True
-    logging.info("Enabled TTNN model cache")
+    if os.environ.get("TT_FACE_DISABLE_MODEL_CACHE", "").strip() in ("1", "true", "yes"):
+        ttnn.CONFIG.enable_model_cache = False
+    else:
+        ttnn.CONFIG.enable_model_cache = True
 
-    # Use YuNet's L1 size — it's the tighter constraint (tuned for WH compatibility)
-    # SFace uses auto sharding + DRAM slicing so it works with smaller L1 too
-    l1_size = YUNET_L1_SMALL_SIZE
+    l1_size = FACE_PIPELINE_L1_SMALL_SIZE
     logging.info(f"Initializing Tenstorrent device with l1_small_size={l1_size}...")
     device = ttnn.open_device(device_id=0, l1_small_size=l1_size)
 
@@ -166,39 +164,42 @@ async def startup():
     yunet_model = create_yunet_model(device, yunet_torch)
     logging.info("YuNet loaded!")
 
-    # Load SFace (TTNN only)
-    logging.info("Loading SFace model...")
-    sface_onnx = get_sface_onnx_path()
-    sface_torch = load_sface_from_onnx(sface_onnx)
-    sface_torch.eval()
-    sface_model = create_sface_model(device, sface_torch)
-    logging.info("SFace loaded! (TTNN, 0.95+ PCC)")
-
-    # Load previously registered faces from disk
-    load_faces_from_disk()
-
-    # Warmup both models to compile ALL kernel variants (prevents runtime lag)
-    logging.info("Warming up models (multiple iterations)...")
-
-    # Warmup YuNet (detection) - multiple iterations with real-like data
-    for i in range(3):
+    yunet_warmup_iters = max(1, min(5, int(os.environ.get("TT_FACE_YUNET_WARMUP_ITERS", "1"))))
+    sface_warmup_iters = max(1, min(5, int(os.environ.get("TT_FACE_SFACE_WARMUP_ITERS", "1"))))
+    logging.info(f"Warming up YuNet ({yunet_warmup_iters})...")
+    for i in range(yunet_warmup_iters):
+        t0 = time.perf_counter()
         warmup_yunet = torch.randint(0, 256, (1, 640, 640, 3), dtype=torch.float32).to(torch.bfloat16)
         warmup_yunet_tt = ttnn.from_torch(
             warmup_yunet, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
         _ = yunet_model(warmup_yunet_tt)
         ttnn.synchronize_device(device)
-    logging.info("  YuNet warmup done (3 iterations)")
+        logging.info(f"  YuNet warmup {i + 1}/{yunet_warmup_iters} done in {time.perf_counter() - t0:.1f}s")
+    logging.info("  YuNet warmup complete")
 
-    # Warmup SFace (recognition) - multiple iterations
-    for i in range(3):
+    # Load SFace (TTNN only)
+    logging.info("Loading SFace model...")
+    sface_onnx = get_sface_onnx_path()
+    sface_torch = load_sface_from_onnx(sface_onnx)
+    sface_torch.eval()
+    sface_model = create_sface_model(device, sface_torch)
+    logging.info("SFace loaded!")
+
+    # Load previously registered faces from disk
+    load_faces_from_disk()
+
+    logging.info(f"Warming up SFace ({sface_warmup_iters} iteration(s))...")
+    for i in range(sface_warmup_iters):
+        t0 = time.perf_counter()
         warmup_sface = torch.randint(0, 256, (1, 112, 112, 3), dtype=torch.float32)
         warmup_sface_tt = ttnn.from_torch(
             warmup_sface, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
         _ = sface_model(warmup_sface_tt)
         ttnn.synchronize_device(device)
-    logging.info("  SFace warmup done (3 iterations)")
+        logging.info(f"  SFace warmup {i + 1}/{sface_warmup_iters} done in {time.perf_counter() - t0:.1f}s")
+    logging.info("  SFace warmup complete")
 
     # Load mock database for POC
     load_mock_database()
@@ -661,11 +662,8 @@ def extract_face_embedding_from_image(image: Image.Image) -> Optional[np.ndarray
     """
     global yunet_model, sface_model, device
 
-    # Detect face
-    img_np = np.array(image)
     input_size = 640
 
-    # Resize for detection
     img_resized = image.resize((input_size, input_size))
     img_np_resized = np.array(img_resized).astype(np.float32)
     tensor = torch.from_numpy(img_np_resized).unsqueeze(0).to(torch.bfloat16)
@@ -697,7 +695,6 @@ def extract_face_embedding_from_image(image: Image.Image) -> Optional[np.ndarray
 
     face_crop = image.crop((x1, y1, x2, y2)).resize((112, 112))
 
-    # Get embedding
     embedding = get_face_embedding(face_crop)
     return embedding
 

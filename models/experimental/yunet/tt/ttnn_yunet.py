@@ -10,8 +10,8 @@ import ttnn
 from ttnn.device import Arch
 from typing import Tuple
 from models.tt_cnn.tt.builder import (
-    AutoShardedStrategyConfiguration,
     Conv2dConfiguration,
+    HeightShardedStrategyConfiguration,
     MaxPool2dConfiguration,
     TtConv2d,
     TtMaxPool2d,
@@ -57,7 +57,7 @@ class TTNNDPUnit:
                 dilation=(1, 1),
                 weight=self.conv1_weight,
                 bias=self.conv1_bias,
-                sharding_strategy=AutoShardedStrategyConfiguration(),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 weights_dtype=ttnn.bfloat8_b,
                 enable_act_double_buffer=False,
                 enable_weights_double_buffer=False,
@@ -81,7 +81,7 @@ class TTNNDPUnit:
                 dilation=(1, 1),
                 weight=self.conv2_weight,
                 bias=self.conv2_bias,
-                sharding_strategy=AutoShardedStrategyConfiguration(),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 activation=ttnn.UnaryOpType.RELU,
                 weights_dtype=ttnn.bfloat8_b,
                 enable_act_double_buffer=False,
@@ -130,7 +130,7 @@ class TTNNConvBN:
                 dilation=(1, 1),
                 weight=self.weight,
                 bias=self.bias,
-                sharding_strategy=AutoShardedStrategyConfiguration(),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 activation=ttnn.UnaryOpType.RELU,
                 weights_dtype=ttnn.bfloat8_b,
                 enable_act_double_buffer=False,
@@ -174,7 +174,7 @@ class TTNNConv1x1:
                 dilation=(1, 1),
                 weight=self.weight,
                 bias=self.bias,
-                sharding_strategy=AutoShardedStrategyConfiguration(),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 weights_dtype=ttnn.bfloat8_b,
                 enable_act_double_buffer=False,
                 enable_weights_double_buffer=False,
@@ -202,8 +202,7 @@ class TTNNMaxPool:
         self.device = device
         self.kernel_size, self.stride, self.padding = kernel_size, stride, padding
         self._pool_cache = {}
-        # Check if Wormhole - needs ROW_MAJOR workaround for max_pool2d
-        self._is_wormhole = device.arch() == Arch.WORMHOLE_B0
+        self._use_row_major_pool_path = device.arch() == Arch.WORMHOLE_B0
 
     def _get_pool(self, batch_size: int, h: int, w: int, c: int):
         key = (batch_size, h, w, c)
@@ -224,9 +223,8 @@ class TTNNMaxPool:
     def __call__(
         self, x: ttnn.Tensor, batch_size: int, height: int, width: int, channels: int
     ) -> Tuple[ttnn.Tensor, int, int]:
-        """Pool needs NHWC. On Wormhole, requires ROW_MAJOR to avoid sharding hang."""
-        if self._is_wormhole:
-            # Wormhole workaround: convert to DRAM + ROW_MAJOR before pool
+        """Pool with NHWC; uses DRAM + ROW_MAJOR path when required for this arch."""
+        if self._use_row_major_pool_path:
             if x.memory_config().is_sharded():
                 x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x = ttnn.reshape(x, [batch_size, height, width, channels])
@@ -239,7 +237,7 @@ class TTNNMaxPool:
             if x.memory_config().is_sharded():
                 x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
-            # Blackhole: original fast path
+            # Default max-pool path
             x = safe_reshape(x, [batch_size, height, width, channels], memory_config=ttnn.L1_MEMORY_CONFIG)
             pool = self._get_pool(batch_size, height, width, channels)
             x = pool(x)

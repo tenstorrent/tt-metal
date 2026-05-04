@@ -147,6 +147,10 @@ def main():
     logger.info("Creating Comprehensive Demo Test Video")
     logger.info("=" * 60)
 
+    # Ensure output dirs exist (Streamlit tab looks here even before first video)
+    TEST_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+    EXTRA_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
     # Load registered faces
     logger.info("\nLoading registered faces...")
     registered_faces = load_registered_faces()
@@ -156,7 +160,11 @@ def main():
     extra_images = load_extra_images()
 
     if not registered_faces and not extra_images:
-        logger.error("No images found!")
+        logger.error(
+            "No images found. Need at least one of:\n"
+            f"  - {REGISTERED_FACES_DIR}/<name>/face.jpg  (register via API or copy files)\n"
+            f"  - {EXTRA_IMAGES_DIR}/*.jpg|png|webp  (optional extra slides in the video)"
+        )
         return
 
     # Create video
