@@ -505,6 +505,8 @@ void device_module(nb::module_& m_device) {
         nb::arg("device"),
         nb::arg("cq_id") = nb::none(),
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        // Release GIL: sync can block a long time; other threads need it to run Python (e.g. real-time profiler
+        // callbacks).
         nb::call_guard<nb::gil_scoped_release>());
     m_device.def(
         "ReadDeviceProfiler",
