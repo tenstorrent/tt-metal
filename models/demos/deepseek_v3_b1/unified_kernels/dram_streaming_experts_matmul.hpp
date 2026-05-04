@@ -13,7 +13,6 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -273,14 +272,16 @@ struct DRAMStreamingExpertsMatmul {
             constexpr bool dense_packing = false;
 
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
-                custom_mm_block_init<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
-                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
-            } else {
-                reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
-                pack_reconfig_data_format<true>(CTArgs::cb_out);
-                custom_mm_block_init_short<transpose, split_acc, dense_packing>(
-                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+                if constexpr (CTArgs::fp32_dest_acc_en) {
+                    enable_fp32_dest_acc();
+                } else {
+                    disable_fp32_dest_acc();
+                }
             }
+            reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
+            pack_reconfig_data_format<true>(CTArgs::cb_out);
+            custom_mm_block_init_short<transpose, split_acc, dense_packing>(
+                CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<false>()));
@@ -317,10 +318,10 @@ struct DRAMStreamingExpertsMatmul {
                         tile_regs_commit();
 
                         // Run SiLU on PACK thread
-                        TTI_SEMWAIT(
+                        PACK(TTI_SEMWAIT(
                             p_stall::STALL_TDMA | p_stall::STALL_CFG,
                             semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO);
+                            p_stall::STALL_ON_ZERO));
                         PACK(TT_SETC16(
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
@@ -377,7 +378,11 @@ struct DRAMStreamingExpertsMatmul {
             custom_mm_block_uninit<dense_packing>();
             // Reset FP32 accum mode if different from DST_ACCUM_MODE
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
-                deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+                if constexpr (CTArgs::fp32_dest_acc_en) {
+                    disable_fp32_dest_acc();
+                } else {
+                    enable_fp32_dest_acc();
+                }
             }
 
             if constexpr (PopIn0) {

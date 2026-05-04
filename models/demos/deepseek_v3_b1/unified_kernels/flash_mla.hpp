@@ -10,10 +10,12 @@
 #include "api/dataflow/dataflow_api.h"
 #include "mcast.hpp"
 #include "dataflow_utils.hpp"
+#include "dataflow_common.hpp"
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #include "mcast.hpp"
 #include "dataflow_utils.hpp"
+#include "dataflow_common.hpp"
 #include "api/debug/assert.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
@@ -372,13 +374,22 @@ struct FlashMLADecode {
                             reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, READ_NOC_INDEX);
                         }
 
-                        constexpr uint32_t NUM_TRIDS = NOC_MAX_TRANSACTION_ID - 1;
+                        // Cycle through the free trid range owned by user-defined transactions.
+                        // Reserved trids for built-in writes/atomics/reads are declared in
+                        // unified_kernels::{write,write_reg,write_at,read}_trid (see dataflow_common.hpp).
+                        constexpr uint32_t TRID_MIN = unified_kernels::free_trid_base;
+                        constexpr uint32_t NUM_TRIDS = unified_kernels::free_trid_count;
+                        constexpr uint32_t TRID_MAX = TRID_MIN + NUM_TRIDS - 1;
+                        static_assert(TRID_MIN >= 1, "trid 0 is reserved");
+                        static_assert(TRID_MAX <= NOC_MAX_TRANSACTION_ID);
+                        static_assert(NUM_TRIDS >= 1);
+
                         uint32_t src_base_addr = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
                         uint32_t src_offset = 0;
                         uint32_t dst_addr = k_write_ptr;
 
-                        uint32_t curr_trid = 1;
-                        uint32_t wait_trid = 1;
+                        uint32_t curr_trid = TRID_MIN;
+                        uint32_t wait_trid = TRID_MIN;
                         uint32_t pages_issued = 0;
                         uint32_t pages_completed = 0;
                         if (wait_for_kv_cache_ready && (k_chunk + args.num_cores_per_head) >= k_chunk_end) {
@@ -395,7 +406,7 @@ struct FlashMLADecode {
                                 src_base_addr, src_offset, dst_addr, curr_trid, READ_NOC_INDEX);
                             src_offset += args.k_page_size;
                             dst_addr += args.k_page_size;
-                            curr_trid = (curr_trid % NUM_TRIDS) + 1;
+                            curr_trid = (curr_trid == TRID_MAX) ? TRID_MIN : (curr_trid + 1);
                             pages_issued++;
                         }
 
@@ -409,11 +420,11 @@ struct FlashMLADecode {
                                     src_base_addr, src_offset, dst_addr, curr_trid, READ_NOC_INDEX);
                                 src_offset += args.k_page_size;
                                 dst_addr += args.k_page_size;
-                                curr_trid = (curr_trid % NUM_TRIDS) + 1;
+                                curr_trid = (curr_trid == TRID_MAX) ? TRID_MIN : (curr_trid + 1);
                                 pages_issued++;
                             }
 
-                            wait_trid = (wait_trid % NUM_TRIDS) + 1;
+                            wait_trid = (wait_trid == TRID_MAX) ? TRID_MIN : (wait_trid + 1);
                         }
 
                         std::swap(ncrisc_brisc_sync_curr_ptr, ncrisc_brisc_sync_next_ptr);

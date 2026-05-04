@@ -25,6 +25,7 @@
 // - Each row: [Qnope heads 0-7 (1024)] [Qrope heads 0-7 (512)] = 1536 elements
 // - Total: 8 rows × 1536 = 12288 elements
 
+#include "../../../unified_kernels/deepseek_init.hpp"
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/rmsnorm.hpp"
@@ -2129,9 +2130,7 @@ void kernel_main() {
     } moe;
 #endif
 
-#if defined(COMPILE_FOR_TRISC)
-    deepseek_compute_kernel_init();
-#endif
+    unified_kernels::deepseek_init();
 
     // Setup all tensor-backed sharded buffers (marks pre-loaded tiles as ready)
     auto setup_mla_sharded_buffers = [&]() __attribute__((always_inline)) {};
@@ -2350,7 +2349,7 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("QNOPE/MATMUL3");
-                    deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
+                    deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false, true> matmul3;
                     matmul3(matmul3_args);
                 }
 

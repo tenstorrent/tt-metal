@@ -196,7 +196,7 @@ def run_demo(
             )
             assert generated_tokens is not None
             generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
+            # logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
         if launch_only and my_mesh_id == 0:
             # Keep process/pipeline alive until user interrupts

@@ -157,6 +157,7 @@ struct DistributedCreateQHeads {
             if (is_qnope_core) {
                 uint32_t dst_offset = my_col * half_qnope_data_size_bytes;
                 uint64_t dst_data_noc_addr_0 = original_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset);
+                uint64_t dst_data_noc_addr_1 = nope_helper_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset);
                 unified_kernels::unicast_write_increment_counters<true>(2, WRITE_NOC);
                 unified_kernels::unicast_atomic_inc_increment_counters<false>(2, WRITE_NOC);
                 unified_kernels::unicast_write_set_state<true, true, true, true, false, write_cmd_buf>(
@@ -169,7 +170,6 @@ struct DistributedCreateQHeads {
                 unified_kernels::noc_async_write_issue_txn(WRITE_NOC);
                 unified_kernels::noc_async_atomic_inc_issue_txn(WRITE_NOC);
 
-                uint64_t dst_data_noc_addr_1 = nope_helper_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset);
                 unified_kernels::unicast_write_set_state<true, true, true, false, false, write_cmd_buf>(
                     src_addr + half_qnope_data_size_bytes, dst_data_noc_addr_1, half_qnope_data_size_bytes, WRITE_NOC);
                 unified_kernels::noc_async_write_issue_txn(WRITE_NOC);

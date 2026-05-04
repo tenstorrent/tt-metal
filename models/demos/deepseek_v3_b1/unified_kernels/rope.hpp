@@ -139,9 +139,12 @@ struct Rope {
 #if defined(COMPILE_FOR_TRISC)
             constexpr uint32_t Wt = CTArgs::Wt;
             constexpr uint32_t Ht = CTArgs::Ht;
+            static_assert(Ht * Wt <= 8, "Ht * Wt must be less than or equal to 8");
             // Assumes all intermediate and output CBs are configured the same
-            reconfig_data_format_srcb<false, true>(args.in_cb);
+            reconfig_data_format<false, true>(args.trans_mat_cb, args.in_cb);
             pack_reconfig_data_format<true>(args.out_cb);
+            mm_init_short(args.in_cb, args.trans_mat_cb);
+            pack_block_contiguous_init(args.out_cb);
 
             // ================================================================
             // Wait for sharded CBs (signaled by NCRISC)
@@ -153,65 +156,58 @@ struct Rope {
             }
             cb_wait_front(args.cos_sin_cb, Wt * 2);  // Cos/Sin: Wt tiles (reused for all heads)
 
-            // ================================================================
-            // Main loop: process Ht heads, each head consumes Wt tiles
-            // ================================================================
-            for (uint32_t ht = 0; ht < Ht; ht++) {
-                reconfig_data_format_srca<false, true>(args.trans_mat_cb);
-                mm_init_short(args.in_cb, args.trans_mat_cb);
+            // Reserve intermediate and output buffers
+            // TODO: If we have bcast with dest reuse, we can get rid of rotated_in_interm_cb
+            // Currently it doesn't look like there is too much cost for this since it's overlapped with cos mul
+            cb_reserve_back(args.rotated_in_interm_cb, Ht * Wt);
+            cb_reserve_back(args.out_cb, Ht * Wt);
 
-                // Reserve intermediate and output buffers
-                // TODO: If we have bcast with dest reuse, we can get rid of rotated_in_interm_cb
-                // Currently it doesn't look like there is too much cost for this since it's overlapped with cos mul
-                cb_reserve_back(args.rotated_in_interm_cb, Wt);
-                cb_reserve_back(args.out_cb, Wt);
+            cb_wait_front(args.in_cb, Ht * Wt);
 
-                cb_wait_front(args.in_cb, Wt);
-
-                // ============================================================
-                // Step 1: rotated = input @ trans_mat (matmul for rotate_half)
-                // ============================================================
-                tile_regs_acquire();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    matmul_tiles(args.in_cb, args.trans_mat_cb, j, 0, j);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    pack_tile(j, args.rotated_in_interm_cb, j);
-                }
-                tile_regs_release();
-                cb_push_back(args.rotated_in_interm_cb, Wt);
-
-                // multiply does dest accum by default, so we add sin and cos by writing to same dest regs
-                // ============================================================
-                // Step 2: cos_interm = input * cos (broadcast multiply)
-                // ============================================================
-                reconfig_data_format_srca<false, true>(args.in_cb);
-                mul_bcast_rows_init_short(args.in_cb, args.cos_sin_cb);
-                tile_regs_acquire();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    mul_tiles_bcast<BroadcastType::ROW>(args.in_cb, args.cos_sin_cb, j, j, j);
-                }
-
-                // ============================================================
-                // Step 3: sin_interm = rotated * sin (broadcast multiply)
-                // ============================================================
-                cb_wait_front(args.rotated_in_interm_cb, Wt);
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    mul_tiles_bcast<BroadcastType::ROW>(args.rotated_in_interm_cb, args.cos_sin_cb, j, Wt + j, j);
-                }
-
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t j = 0; j < Wt; ++j) {
-                    pack_tile(j, args.out_cb);
-                }
-                tile_regs_release();
-                cb_push_back(args.out_cb, Wt);
-                cb_pop_front(args.in_cb, Wt);
-                cb_pop_front(args.rotated_in_interm_cb, Wt);
+            // ============================================================
+            // Step 1: rotated = input @ trans_mat (matmul for rotate_half)
+            // ============================================================
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < Ht * Wt; ++j) {
+                matmul_tiles(args.in_cb, args.trans_mat_cb, j, 0, j);
             }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_block_contiguous(0, args.rotated_in_interm_cb, Ht * Wt);
+            tile_regs_release();
+            cb_push_back(args.rotated_in_interm_cb, Ht * Wt);
+
+            // multiply does dest accum by default, so we add sin and cos by writing to same dest regs
+            // ============================================================
+            // Step 2: cos_interm = input * cos (broadcast multiply)
+            // ============================================================
+            reconfig_data_format_srca<false, true>(args.in_cb);
+            mul_bcast_rows_init_short(args.in_cb, args.cos_sin_cb);
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < Ht; i++) {
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    mul_tiles_bcast<BroadcastType::ROW>(args.in_cb, args.cos_sin_cb, i * Wt + j, j, i * Wt + j);
+                }
+            }
+
+            // ============================================================
+            // Step 3: sin_interm = rotated * sin (broadcast multiply)
+            // ============================================================
+            cb_wait_front(args.rotated_in_interm_cb, Ht * Wt);
+            for (uint32_t i = 0; i < Ht; i++) {
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    mul_tiles_bcast<BroadcastType::ROW>(
+                        args.rotated_in_interm_cb, args.cos_sin_cb, i * Wt + j, Wt + j, i * Wt + j);
+                }
+            }
+
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_block_contiguous(0, args.out_cb, Ht * Wt);
+            tile_regs_release();
+            cb_push_back(args.out_cb, Ht * Wt);
+            cb_pop_front(args.in_cb, Ht * Wt);
+            cb_pop_front(args.rotated_in_interm_cb, Ht * Wt);
 
             // ================================================================
             // Cleanup: pop sin/cos (trans_mat is reused, not popped)

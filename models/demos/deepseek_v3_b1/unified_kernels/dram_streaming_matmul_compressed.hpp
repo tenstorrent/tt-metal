@@ -13,7 +13,6 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"

@@ -507,8 +507,8 @@ struct Mcast {
                 (volatile tt_l1_ptr uint32_t*)(r.data_receiver_semaphore_addr);
             cb_reserve_back(r.dst_cb, r.dst_num_pages);
             noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
-            noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
             cb_push_back(r.dst_cb, r.dst_num_pages);
+            noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
         }
 
         static void mcast_grid_impl(const ReceiverArgs& r) {

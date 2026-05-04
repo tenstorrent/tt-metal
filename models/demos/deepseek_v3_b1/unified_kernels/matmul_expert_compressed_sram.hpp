@@ -19,7 +19,6 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_api.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 using namespace ckernel;
 #include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_runtime.h"
 #ifdef TRISC_PACK

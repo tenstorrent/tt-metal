@@ -2388,7 +2388,9 @@ class AttentionBlock:
 
         # CB 20: Rotated input intermediate CB — overlap with sdpa_out_interm L1 buffer
         # at offset 13888 B. This CB is consumed before SDPA runs.
-        qrope_interm_tile_size = qrope_head_dim_per_core_t * TILE_1x32.get_tile_size(data_format)
+        qrope_interm_tile_size = (
+            qrope_num_heads_per_core * qrope_head_dim_per_core_t * TILE_1x32.get_tile_size(data_format)
+        )
         qrope_rotated_input_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             qrope_rotated_input_interm_cb,
             ref_sdpa_out_interm_buffer,
