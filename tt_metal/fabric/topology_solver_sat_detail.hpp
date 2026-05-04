@@ -19,6 +19,7 @@
 #include <limits>
 #include <numeric>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 extern "C" {

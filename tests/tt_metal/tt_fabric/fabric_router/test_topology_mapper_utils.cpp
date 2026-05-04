@@ -455,7 +455,7 @@ protected:
                 candidates.push_back(pm);
             }
         }
-        EXPECT_EQ(candidates.size(), 1u) << "Mapped ASICs for logical mesh " << logical_mesh.get()
+        ASSERT_EQ(candidates.size(), 1u) << "Mapped ASICs for logical mesh " << logical_mesh.get()
                                          << " should lie in exactly one physical mesh subgraph";
         if (candidates.empty()) {
             return ::tt::tt_fabric::MeshId{0};
