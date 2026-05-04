@@ -163,7 +163,7 @@ inline void tilize_in_reuse_split_reader(
     // and trips the LLK bounds assert (see GH #42510).
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr_init));
     out_cb.push_back(out_cb_tiles);
-    fast_tilize_uninit(in2_cb_id, out_cb_id);
+    fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>

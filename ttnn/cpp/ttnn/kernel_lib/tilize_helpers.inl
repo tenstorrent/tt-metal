@@ -233,7 +233,7 @@ ALWI void tilize(
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
 
         if constexpr (use_fast) {
-            fast_tilize_uninit(input_cb, output_cb);
+            fast_tilize_uninit(input_cb, output_cb, block_width_tiles);
         } else {
             tilize_uninit(input_cb, output_cb);
         }

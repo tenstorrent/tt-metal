@@ -258,10 +258,18 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 }
 
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+#ifdef ARCH_BLACKHOLE
+    if (full_dim == 1) {
+        tilize_init(icb, full_dim, ocb, call_line);
+        return;
+    }
+#endif
+
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+
 #ifdef ARCH_BLACKHOLE
     // first_chunk = decompose_row(full_dim)[0]: avoids first reinit_xdim in block loop.
-    uint32_t first_chunk = (full_dim <= 1) ? 1 : (full_dim > 5) ? 4 : (full_dim == 5) ? 2 : full_dim;
+    uint32_t first_chunk = (full_dim > 5) ? 4 : (full_dim == 5) ? 2 : full_dim;
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim, first_chunk)));
     MATH((llk_math_fast_tilize_init(icb)));
     PACK((llk_pack_fast_tilize_init(icb, ocb, first_chunk)));
@@ -282,7 +290,14 @@ ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb
     fast_tilize_init(icb, full_dim, ocb);
 }
 
-ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
+ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
+#ifdef ARCH_BLACKHOLE
+    if (full_dim == 1) {
+        tilize_uninit(icb, ocb);
+        return;
+    }
+#endif
+
     UNPACK((llk_unpack_fast_tilize_uninit<DST_ACCUM_MODE>()));
     MATH((llk_math_fast_tilize_uninit<DST_ACCUM_MODE>(icb)));
     PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(ocb)));
@@ -291,13 +306,20 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
+    if (block == 1) {
+        tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
+        return;
+    }
+    ASSERT(block > 1);
+
     // BH fast-tilize: row streaming on both unpack and pack.
     // Unpack: acquire context once per call, stream all chunk MOPs, release once.
     // Pack: program output L1 destination once per call; replay advances per tile.
     {
+        input_tile_index = input_tile_index % block + (input_tile_index / block) * block * TILE_R_DIM;
+
         uint32_t tiles_done = 0;
-        // prev_chunk = 0: MOE callers may init with max width and block with smaller
-        // width, so hardware state is not predictable at block entry.
+        // Always program the current unit dim at block entry.
         uint32_t prev_chunk = 0;
 
         UNPACK((llk_unpack_fast_tilize_row_begin(icb, input_tile_index)));
