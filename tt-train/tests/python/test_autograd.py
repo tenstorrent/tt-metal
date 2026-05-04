@@ -22,6 +22,7 @@ def supported_autograd_types_except(*except_types):
             ttnn.DataType.BFLOAT4_B,
             ttnn.DataType.UINT8,
             ttnn.DataType.UINT16,
+            ttnn.DataType.FP8_E4M3,
         )
         + tuple(except_type for except_type in except_types)
     )
