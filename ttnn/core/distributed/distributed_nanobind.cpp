@@ -562,6 +562,8 @@ void py_module(nb::module_& mod) {
         nb::arg("offset") = nb::none(),
         nb::arg("physical_device_ids") = nb::cast(std::vector<int>{}),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
+    // Release GIL: close can block a long time; other threads need it to run Python (e.g. real-time profiler
+    // callbacks).
     mod.def("close_mesh_device", &close_mesh_device, nb::arg("mesh_device"), nb::call_guard<nb::gil_scoped_release>());
 
     auto py_placement_shard = static_cast<nb::class_<MeshMapperConfig::Shard>>(mod.attr("PlacementShard"));
