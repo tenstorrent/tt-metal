@@ -5,17 +5,33 @@
 #pragma once
 
 // This header provides amortized credit-passing "speedy" step functions for the
-// fabric erisc router.  They are only used when super_speedy_mode == true
-// (single sender channel with non-zero amortization frequencies).
+// fabric erisc router. They are only used when super_speedy_mode == true
+// for the explicit VC0 worker-only fast path.
 //
 // Must be included AFTER fabric_erisc_router_ct_args.hpp and all other router
 // headers that define helpers such as send_next_data, send_credits_to_upstream_workers,
 // receiver_send_completion_ack, receiver_send_received_ack, etc.
 
+static constexpr bool speedy_mode_has_non_worker_vc0_sender = []() constexpr {
+    for (size_t ch = 1; ch < ACTUAL_VC0_SENDER_CHANNELS; ++ch) {
+        if (is_sender_channel_serviced[ch]) {
+            return true;
+        }
+    }
+    return false;
+}();
+
 static_assert(
     !super_speedy_mode || !enable_deadlock_avoidance,
     "super_speedy_mode is incompatible with deadlock avoidance (bubble flow control)");
-static_assert(!super_speedy_mode || NUM_SENDER_CHANNELS == 1, "super_speedy_mode requires exactly 1 sender channel");
+static_assert(
+    !super_speedy_mode || !ENABLE_FIRST_LEVEL_ACK_VC0, "super_speedy_mode is incompatible with first-level ack on VC0");
+static_assert(
+    !super_speedy_mode || !speedy_mode_has_non_worker_vc0_sender,
+    "super_speedy_mode requires all serviced VC0 senders beyond channel 0 to be trimmed");
+static_assert(
+    !super_speedy_mode || !is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL] || disable_rx_ch0_forwarding,
+    "super_speedy_mode requires RX channel 0 forwarding to be disabled when RX0 is serviced");
 
 struct SpeedySenderState {
     size_t completion_count = 0;

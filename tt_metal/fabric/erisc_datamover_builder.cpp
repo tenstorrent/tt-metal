@@ -31,6 +31,7 @@
 #include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
@@ -1024,6 +1025,56 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
+    const auto& global_overrides = fabric_context.get_builder_context().get_channel_trimming_global_overrides();
+    // Global overrides replace the sender/receiver enablement decision for a VC,
+    // but they do not rewrite the imported per-router "forwarded-to" capture.
+    // Once a VC is overridden, we stop using that forwarding capture to infer a
+    // speedy-safe topology and fall back to the conservative non-speedy path.
+    std::array<bool, builder_config::MAX_NUM_VCS> can_use_forwarding_capture_by_vc{};
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        can_use_forwarding_capture_by_vc[vc] = !global_overrides.per_vc[vc].has_override();
+    }
+
+    // VC0 speedy mode is only valid when trim makes this router behave like the
+    // worker-only NeighborExchange-style fast path. The receiver activity bit on
+    // its own is too broad because it is also set for local-only delivery, so we
+    // pair it with the forwarded-to capture to tell "local delivery only" apart
+    // from true downstream forwarding.
+    bool vc0_receiver_observed_traffic = false;
+    bool vc0_has_downstream_forwarding = false;
+    bool vc0_is_terminal_or_source_only_after_trim = false;
+    bool vc0_is_worker_only_nonforwarding_after_trim = false;
+    const bool can_use_vc0_forwarding_capture =
+        channel_trimming_overrides_.has_value() && can_use_forwarding_capture_by_vc[0];
+    if (channel_trimming_overrides_.has_value()) {
+        const auto& overrides = *channel_trimming_overrides_;
+        const uint16_t used_bitfield = overrides.sender_channel_used_bitfield_by_vc;
+        const size_t vc0_width = std::min<size_t>(actual_sender_channels_vc0, 8u * sizeof(uint16_t));
+        const uint16_t vc0_mask = vc0_width == 0 ? 0 : static_cast<uint16_t>((1u << vc0_width) - 1u);
+        const uint16_t vc0_sender_mask = used_bitfield & vc0_mask;
+        vc0_receiver_observed_traffic = overrides.is_receiver_channel_data_forwarded(0);
+
+        if (can_use_vc0_forwarding_capture) {
+            vc0_has_downstream_forwarding = overrides.sender_channel_forwarded_to_bitfield_by_vc[0] != 0;
+            const bool vc0_worker_only = vc0_sender_mask == 0x1u;
+            const bool vc0_worker_only_or_idle = vc0_sender_mask == 0 || vc0_worker_only;
+            const bool vc0_has_no_downstream_forwarding =
+                !vc0_receiver_observed_traffic || !vc0_has_downstream_forwarding;
+            vc0_is_terminal_or_source_only_after_trim = vc0_worker_only_or_idle && vc0_has_no_downstream_forwarding;
+            vc0_is_worker_only_nonforwarding_after_trim = vc0_worker_only && vc0_has_no_downstream_forwarding;
+        }
+    }
+
+    const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    const bool final_enable_deadlock_avoidance =
+        base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
+    const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
+    // Preserve the existing explicit single-sender behavior, and also allow the
+    // same fast path when trimming collapses a wider VC0 router to that effective
+    // worker-only / non-forwarding shape.
+    const bool enable_speedy_vc0 = (actual_sender_channels_vc0 == 1 && !base_enable_deadlock_avoidance) ||
+                                   vc0_is_worker_only_nonforwarding_after_trim;
+
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
 
@@ -1123,13 +1174,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
-    named_args["ENABLE_DEADLOCK_AVOIDANCE"] = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
+    named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
-    named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = this->enable_first_level_ack;
+    named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = final_enable_first_level_ack_vc0 ? 1 : 0;
     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;  // VC1 does not use bubble flow control
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["Z_ROUTER_ENABLED"] = z_router_enabled;
@@ -1272,22 +1324,27 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS"] =
             static_cast<uint32_t>(config.datapath_usage_l1_address);
     }
-    if (channel_trimming_overrides_.has_value()) {
-        named_args["DISABLE_RX_CH0_FORWARDING"] =
-            channel_trimming_overrides_->is_receiver_channel_data_forwarded(0) ? 0 : 1;
-        named_args["DISABLE_RX_CH1_FORWARDING"] =
-            channel_trimming_overrides_->is_receiver_channel_data_forwarded(1) ? 0 : 1;
-        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
-    } else {
-        named_args["DISABLE_RX_CH0_FORWARDING"] = 0;
-        named_args["DISABLE_RX_CH1_FORWARDING"] = 0;
-        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
-    }
+    // Disabling RX forwarding is separate from "receiver saw traffic":
+    // receiver_channel_data_forwarded also covers local-only delivery, so use the
+    // forwarded-to capture when it is trustworthy and fall back to the safe
+    // non-speedy default otherwise.
+    auto compute_disable_rx_forwarding = [&](size_t vc) -> uint32_t {
+        if (vc == 0 && enable_speedy_vc0) {
+            return 1;
+        }
+        if (!channel_trimming_overrides_.has_value() || !can_use_forwarding_capture_by_vc[vc]) {
+            return 0;
+        }
+        return channel_trimming_overrides_->sender_channel_forwarded_to_bitfield_by_vc[vc] != 0 ? 0 : 1;
+    };
+    named_args["DISABLE_RX_CH0_FORWARDING"] = compute_disable_rx_forwarding(0);
+    named_args["DISABLE_RX_CH1_FORWARDING"] = compute_disable_rx_forwarding(1);
+    named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
 
     // Credit amortization named compile-time args
     uint32_t sender_amort_freq = 0;
     uint32_t receiver_amort_freq = 0;
-    if (actual_sender_channels_vc0 == 1) {
+    if (enable_speedy_vc0) {
         auto* static_alloc =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
         if (static_alloc != nullptr) {
