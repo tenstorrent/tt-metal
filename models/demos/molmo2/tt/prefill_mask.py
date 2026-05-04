@@ -85,15 +85,10 @@ def build_molmo2_prefill_mask(
     ttnn.deallocate(is_mm_k)
 
     # causal = lower-triangular 1s [1, 1, S, S]
-    # Use pre-built cache when available — avoids 32 MB H2D + ttnn.tril per call.
-    # Typecast to match dtype so all ops stay in one dtype (no mixed-precision).
+    # Use pre-built cache when available — avoids 32 MB H2D + ttnn.tril per call
     if causal_cache is not None:
-        if causal_cache.dtype != dtype:
-            causal = ttnn.typecast(causal_cache, dtype)
-            owns_causal = True
-        else:
-            causal = causal_cache
-            owns_causal = False
+        causal = causal_cache
+        owns_causal = False
     else:
         ones = _upload(torch.ones(1, 1, S, S))
         causal = ttnn.tril(ones)
