@@ -10,6 +10,7 @@
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "sfpi.h"
 
 namespace ckernel
 {
@@ -67,10 +68,10 @@ namespace sfpu
 // `_init_gelu_` in ckernel_sfpu_gelu.h.
 inline void _init_swiglu_()
 {
-    TTI_SFPLOADI(p_sfpu::LREG4, 0 /*Float16_b*/, 0x40E0); // +clamp_limit  =  +7.0f  (BF16 exact)
-    TTI_SFPLOADI(p_sfpu::LREG5, 0 /*Float16_b*/, 0x4160); // +2*clamp_limit = +14.0f (BF16 exact, used by nested-relu clip)
-    TTI_SFPLOADI(p_sfpu::LREG6, 0x8 /*UPPER*/, 0x3FD9);   // alpha = 1.702f, FP32 = 0x3FD9DB23 — high half
-    TTI_SFPLOADI(p_sfpu::LREG6, 0xA /*LOWER*/, 0xDB23);   // alpha low half — combined: exact FP32 1.702f
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0x40E0); // +clamp_limit   =  +7.0f  (BF16 exact)
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x4160); // +2*clamp_limit = +14.0f  (BF16 exact, used by nested-relu clip)
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x3FD9);  // alpha = 1.702f, FP32 = 0x3FD9DB23 — high half
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0xDB23);  // alpha low half — combined: exact FP32 1.702f
 }
 
 // Per-face inner loop: reads `iterations` (= TEST_FACE_R_DIM / SFP_ROWS)
