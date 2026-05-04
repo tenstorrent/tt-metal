@@ -1256,41 +1256,6 @@ def prepare_moe_routed_experts_bspm_tp8(
         bspm_data = load_bspm_for_layer(str(bspm_path))
         logger.info("  BSPM TP8 mixed-precision compression for {} experts", bspm_data["n_experts"])
 
-        # DEBUG: when an N-column has exactly 1 non-zero K-tile AND that tile is
-        # bfp2 specifically, BUMP one adjacent bfp0 K-tile up to bfp2. This adds
-        # a second MVMUL execution to the column. If dst[2] becomes clean with
-        # 2 bfp2 tiles vs wild with 1 → multiple MVMULs scrub stale state. If
-        # still wild → contamination is independent of K-count.
-        _down_proj_idx = 2
-        _down_K = state_dict[_key(layer_idx, "mlp.experts.0.down_proj.weight")].shape[1]
-        _down_N = state_dict[_key(layer_idx, "mlp.experts.0.down_proj.weight")].shape[0]
-        _down_N_padded = ((_down_N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
-        _tiles_h_full_d = _down_K // tile_w
-        _tiles_w_full_padded_d = _down_N_padded // tile_w
-        _tp_total = mesh_shape[0] * mesh_shape[1]
-        _K_tiles_per_device_d = _tiles_h_full_d // _tp_total
-        _BFP0_IDX = 3
-        _BFP2_IDX = 2
-        _bumped_count = 0
-        for _e in range(bspm_data["n_experts"]):
-            _flat = bspm_data["codes"][_e, _down_proj_idx]
-            _codes_kn = np.ascontiguousarray(_flat.reshape(_tiles_w_full_padded_d, _tiles_h_full_d).T).copy()
-            for _tp_idx in range(_tp_total):
-                _k_start = _tp_idx * _K_tiles_per_device_d
-                _k_end = _k_start + _K_tiles_per_device_d
-                for _n in range(_tiles_w_full_padded_d):
-                    _col = _codes_kn[_k_start:_k_end, _n]
-                    _nz = np.where(_col != _BFP0_IDX)[0]
-                    if len(_nz) == 1 and int(_col[_nz[0]]) == _BFP2_IDX:
-                        # Find first bfp0 K-tile in the column and bump it to bfp2.
-                        _zero_indices = np.where(_col == _BFP0_IDX)[0]
-                        if len(_zero_indices) > 0:
-                            _bump_local = int(_zero_indices[0])
-                            _codes_kn[_k_start + _bump_local, _n] = _BFP2_IDX
-                            _bumped_count += 1
-            bspm_data["codes"][_e, _down_proj_idx] = _codes_kn.T.flatten()
-        logger.info("  Bumped {} adjacent bfp0 K-tiles to bfp2 (debug)", _bumped_count)
-
     # (proj_name, shard_dim, subblock_k, subblock_n) — must match the kernel's
     # DRAM read pattern in setup_matmul_expert_dram.
     # - gate/up use K-split (k_parallel_per_bank=2): subblock_k=112 = Kt//k_parallel
