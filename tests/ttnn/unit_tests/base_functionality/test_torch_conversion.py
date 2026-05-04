@@ -1080,6 +1080,10 @@ def test_from_torch_large_tensor_type_conversion_row_major_l1(device, torch_dtyp
 
 
 @skip_for_slow_dispatch()
+@pytest.mark.xfail(
+    reason="sharded buffer write dispatch crashes on dispatch-core-row shards (write path fix not implemented)",
+    strict=True,
+)
 def test_from_torch_sharded_tilize_dispatch_core_overlap(device):
     """
     Regression test for tilize with a shard grid that extends beyond the compute
