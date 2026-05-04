@@ -95,11 +95,13 @@ class Flux2Pipeline:
             for submesh_device in self._submesh_devices
         ]
 
-        self.encoder_device = self._submesh_devices[0] if encoder_on_device else None
-        self.encoder_mesh_shape = ttnn.MeshShape(1, self._encoder_parallel_config.tensor_parallel.factor)
-        self.vae_device = self._submesh_devices[0]
         self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
-        self.vae_submesh_idx = 0  # Use submesh 0 for VAE
+        self.vae_submesh_idx = 1  # Use submesh 0 for VAE
+        self.encoder_device = self._submesh_devices[self.encoder_submesh_idx] if encoder_on_device else None
+        self.encoder_mesh_shape = (
+            self.encoder_device.shape
+        )  # ttnn.MeshShape(1, self._encoder_parallel_config.tensor_parallel.factor)
+        self.vae_device = self._submesh_devices[self.vae_submesh_idx]
 
         logger.info("loading models...")
 
@@ -383,10 +385,7 @@ class Flux2Pipeline:
             tt_prompt_rope_cos_list = []
             tt_prompt_rope_sin_list = []
             for i, submesh_device in enumerate(self._submesh_devices):
-                tt_prompt_embeds = tensor.from_torch(
-                    prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
-                    device=submesh_device,
-                )
+                tt_prompt_embeds = tensor.from_torch(prompt_embeds, device=submesh_device)
 
                 tt_initial_latents = tensor.from_torch(latents, device=submesh_device, mesh_axes=[None, sp_axis, None])
 
