@@ -12,17 +12,26 @@ permissions:
   packages: write
   pull-requests: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
+    github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  nightly-performance-tests:
-    name: "LLK Nightly Performance Tests"
-    uses: ./.github/workflows/llk-run-perf-tests.yaml
+  perf-tests:
+    name: "LLK Performance tests"
+    uses: ./.github/workflows/llk-perf-tests-impl.yaml
     secrets: inherit
 
   report-status:
     name: "Report status"
     runs-on: ubuntu-latest
-    if: always()
-    needs: nightly-performance-tests
+    if: >-
+      ${{
+        always() &&
+        (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      }}
+    needs: perf-tests
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,4 +43,4 @@ jobs:
           test_name: "Nightly Performance Tests"
           slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.nightly-performance-tests.result }}
+          status: ${{ needs.perf-tests.result }}
