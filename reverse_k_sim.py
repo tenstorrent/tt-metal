@@ -660,6 +660,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .controls .size-display { color: var(--fg); font-variant-numeric: tabular-nums; min-width: 36px; }
   .controls button { background: var(--bg-card-hi); color: var(--fg); border: 1px solid var(--border); border-radius: 5px; padding: 4px 12px; font: inherit; font-size: 13px; cursor: pointer; }
   .controls button:hover { background: var(--accent); color: #0b0d12; border-color: var(--accent); }
+  .mode-controls { margin-bottom: 12px; }
+  .mode-controls label { gap: 6px; }
+  .modebtn { margin-right: 0; }
+  .modebtn + .modebtn { margin-left: -1px; }
+  .modebtn.active { background: var(--accent); color: #0b0d12; border-color: var(--accent); font-weight: 600; }
+  .modebtn.active:hover { background: var(--accent); color: #0b0d12; }
 
   .stats-row { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; margin-bottom: 16px; }
   .stat { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 120px; flex: 1; }
@@ -699,6 +705,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </header>
 
   <main>
+    <section class="controls mode-controls">
+      <label>Distribution
+        <button class="modebtn" data-dist="flat">flat</button>
+        <button class="modebtn" data-dist="head_grouped">head-grouped</button>
+      </label>
+      <label>Layout
+        <button class="modebtn" data-layout="row_major">row-major</button>
+        <button class="modebtn" data-layout="col_major">col-major</button>
+      </label>
+    </section>
+
     <section class="controls">
       <label>Cell content
         <select id="cell-mode">
@@ -762,15 +779,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <script type="application/json" id="payload">__PAYLOAD_JSON__</script>
   <script>
-    const PAYLOAD = JSON.parse(document.getElementById('payload').textContent);
-    const CFG = PAYLOAD.config;
-    const STATIC = PAYLOAD.static;
-    const TS = PAYLOAD.timestamps;
-    const NUM_CORES = CFG.num_cores;
-    const SDPA_COLS = CFG.sdpa_cols;
-    const GRID_Y = CFG.grid_y;
-    const T_MAX = CFG.T_MAX;
-    const T_PER_PAIR = CFG.T_PER_PAIR;
+    const ENVELOPE = JSON.parse(document.getElementById('payload').textContent);
+    let PAYLOAD, CFG, STATIC, TS;
+    let NUM_CORES, SDPA_COLS, GRID_Y, T_MAX, T_PER_PAIR, NH;
+    let CURRENT_MODE = ENVELOPE.default;
 
     // action codes
     const K_NONE=0, K_DRAM=1, K_MCAST_SEND=2, K_AWAIT=3, K_RECV_DONE=4, K_IDLE=5;
@@ -795,7 +807,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     const COMP_COLORS = {[COMP_NONE]: '#1a1a25', [COMP_COMPUTE]: '#4ade80', [COMP_IDLE]: '#1a1a25'};
     const PHASE_COLORS = {1: '#6ea8fe', 2: '#f59e0b', 3: '#4ade80'};
 
-    const NH = CFG.NH;
     // Golden-angle shuffle so consecutive heads get maximally-distant hues.
     function headColor(h, alpha=1) {
       const hue = (h * 137.508) % 360;
@@ -806,17 +817,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function hueColor(idx, n, alpha=1) {
       const hue = (idx * 360 / n) | 0;
       return alpha < 1 ? `hsla(${hue}, 70%, 56%, ${alpha})` : `hsl(${hue}, 70%, 56%)`;
-    }
-
-    // populate head-select
-    {
-      const sel = document.getElementById('head-select');
-      for (let h = 0; h < NH; h++) {
-        const o = document.createElement('option');
-        o.value = h;
-        o.textContent = `Head ${h}`;
-        sel.appendChild(o);
-      }
     }
 
     const state = {
@@ -835,15 +835,59 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     const elOverlay = document.getElementById('grid-overlay');
     const elStrip   = document.getElementById('strip-canvas');
     const elTip     = document.getElementById('tooltip');
-    elGrid.width    = SDPA_COLS * GRID_CELL;
-    elGrid.height   = GRID_Y * GRID_CELL;
-    elOverlay.width  = elGrid.width;
-    elOverlay.height = elGrid.height;
-    elStrip.width   = T_MAX * STRIP_W;
-    elStrip.height  = NUM_CORES * STRIP_H + 4;
-    document.getElementById('t-slider').max = T_MAX - 1;
-    document.getElementById('header-sub').textContent =
-      `${CFG.name} · ring_iter=0 · ${NUM_CORES} cores × ${T_MAX} timestamps · 1 K mcast (full-grid) · ${NH} V chains (per head)`;
+
+    function loadMode(mode) {
+      CURRENT_MODE = mode;
+      PAYLOAD = ENVELOPE.payloads[mode];
+      CFG = PAYLOAD.config;
+      STATIC = PAYLOAD.static;
+      TS = PAYLOAD.timestamps;
+      NUM_CORES = CFG.num_cores;
+      SDPA_COLS = CFG.sdpa_cols;
+      GRID_Y = CFG.grid_y;
+      T_MAX = CFG.T_MAX;
+      T_PER_PAIR = CFG.T_PER_PAIR;
+      NH = CFG.NH;
+
+      elGrid.width     = SDPA_COLS * GRID_CELL;
+      elGrid.height    = GRID_Y * GRID_CELL;
+      elOverlay.width  = elGrid.width;
+      elOverlay.height = elGrid.height;
+      elStrip.width    = T_MAX * STRIP_W;
+      elStrip.height   = NUM_CORES * STRIP_H + 4;
+
+      const slider = document.getElementById('t-slider');
+      slider.max = T_MAX - 1;
+      if (state.t > T_MAX - 1) state.t = T_MAX - 1;
+      slider.value = state.t;
+
+      // populate head-select (clear + repopulate; preserves "— none —" at index 0)
+      const hsel = document.getElementById('head-select');
+      while (hsel.options.length > 1) hsel.remove(1);
+      for (let h = 0; h < NH; h++) {
+        const o = document.createElement('option');
+        o.value = h;
+        o.textContent = `Head ${h}`;
+        hsel.appendChild(o);
+      }
+      if (state.highlightHead >= NH) state.highlightHead = -1;
+      hsel.value = String(state.highlightHead);
+
+      const dist = mode.startsWith('grouped') ? 'head_grouped' : 'flat';
+      const layout = mode.endsWith('col') ? 'col_major' : 'row_major';
+      document.getElementById('header-sub').textContent =
+        `${CFG.name} · ring_iter=0 · ${NUM_CORES} cores × ${T_MAX} timestamps · ${NH} V chains · distribution=${dist} · layout=${layout}`;
+
+      // sync mode-button .active state
+      document.querySelectorAll('.modebtn[data-dist]').forEach(b => {
+        b.classList.toggle('active', b.dataset.dist === dist);
+      });
+      document.querySelectorAll('.modebtn[data-layout]').forEach(b => {
+        b.classList.toggle('active', b.dataset.layout === layout);
+      });
+    }
+
+    loadMode(CURRENT_MODE);
 
     function cellColor(ci, t, mode) {
       const ts = TS[t];
@@ -1226,6 +1270,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     });
 
     // controls
+    function applyMode(dist, layout) {
+      const d = dist === 'head_grouped' ? 'grouped' : 'flat';
+      const l = layout === 'col_major' ? 'col' : 'row';
+      const key = `${d}_${l}`;
+      if (!ENVELOPE.payloads[key]) return;
+      loadMode(key);
+      render();
+    }
+    document.querySelectorAll('.modebtn[data-dist]').forEach(b => {
+      b.addEventListener('click', () => {
+        const layout = CURRENT_MODE.endsWith('col') ? 'col_major' : 'row_major';
+        applyMode(b.dataset.dist, layout);
+      });
+    });
+    document.querySelectorAll('.modebtn[data-layout]').forEach(b => {
+      b.addEventListener('click', () => {
+        const dist = CURRENT_MODE.startsWith('grouped') ? 'head_grouped' : 'flat';
+        applyMode(dist, b.dataset.layout);
+      });
+    });
+
     document.getElementById('cell-mode').addEventListener('change', (e) => {
       state.cellMode = e.target.value; render();
     });
@@ -1302,15 +1367,25 @@ def main():
     verify_against_csv(CSV_ORACLE, ts, csv_path)
     print(f"  cores={CSV_ORACLE['num_cores']} timestamps={len(ts)} k_inj={ki}")
 
-    # 2) Build for actual mla-100k Galaxy
-    print(f"[run] {MLA_100K['name']}")
-    cw, vc, sr, ts, ki = run_sim(MLA_100K)
-    verify_mla_100k(MLA_100K, cw, vc, sr, ts, ki)
-    print(f"  cores={MLA_100K['num_cores']} timestamps={len(ts)} k_inj={ki}")
+    # 2) Build all 4 mla-100k variants for interactive toggling in the HTML
+    canonical = "grouped_col"
+    payloads: dict[str, dict] = {}
+    for distribution in ("flat", "head_grouped"):
+        for layout in ("row_major", "col_major"):
+            cfg = dict(MLA_100K, distribution=distribution, layout=layout)
+            d_short = "grouped" if distribution == "head_grouped" else "flat"
+            l_short = "col" if layout == "col_major" else "row"
+            key = f"{d_short}_{l_short}"
+            print(f"[run] {cfg['name']} {distribution}/{layout}")
+            cw, vc, sr, ts, ki = run_sim(cfg)
+            if key == canonical:
+                verify_mla_100k(cfg, cw, vc, sr, ts, ki)
+            payloads[key] = build_payload(cfg, cw, vc, sr, ts, ki)
+            print(f"  cores={cfg['num_cores']} timestamps={len(ts)} k_inj={ki}")
 
-    payload = build_payload(MLA_100K, cw, vc, sr, ts, ki)
-    payload_json = json.dumps(payload, separators=(",", ":"))
-    print(f"[payload] {len(payload_json):,} bytes")
+    envelope = {"default": canonical, "payloads": payloads}
+    payload_json = json.dumps(envelope, separators=(",", ":"))
+    print(f"[payload] {len(payload_json):,} bytes ({len(payloads)} variants)")
     out = here / "reverse_k_visualization.html"
     html = HTML_TEMPLATE.replace("__PAYLOAD_JSON__", payload_json)
     out.write_text(html)
