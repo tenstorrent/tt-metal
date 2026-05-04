@@ -25,6 +25,7 @@ Or invoke pytest directly (no stats):
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sub_device_load_clear_timing.py -k "no_sd"
 """
 
+import pathlib
 import re
 import sys
 
@@ -34,6 +35,11 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import profiler
+
+# Path the test writes its host-profiler samples to so the wrapper can include
+# them in the final stats summary alongside the tracy-derived numbers.
+HOST_PROFILER_FILE = pathlib.Path("/tmp/.tt_sub_device_host_profiler.txt")
 
 
 def _iters_from_argv():
@@ -150,6 +156,8 @@ def test_sub_device_load_clear_tracy(mesh_device, device_params, dispatch_sd_row
     # Case suffix tags every signpost so the perf report identifies which case
     # this capture belongs to (handy when comparing reports for no_sd vs with_sd).
     tag = "with_sd" if with_sd else "no_sd"
+    profiler_key = f"phase2_middle_{tag}"
+    profiler.clear()
 
     # 1 warmup iteration (no signposts -> not included in stats) + bench_iters measured.
     for i in range(1 + bench_iters):
@@ -164,6 +172,7 @@ def test_sub_device_load_clear_tracy(mesh_device, device_params, dispatch_sd_row
         if record:
             ttnn.synchronize_device(mesh_device)
             signpost(f"phase2_middle_start_{tag}")
+            profiler.start(profiler_key)
         if with_sd:
             mesh_device.load_sub_device_manager(sd_manager_id)
             out = _two_ops_subdevice(mesh_device, x, w, shared_sd_id, shared_grid, ckc)
@@ -174,6 +183,7 @@ def test_sub_device_load_clear_tracy(mesh_device, device_params, dispatch_sd_row
             ttnn.deallocate(out)
         if record:
             ttnn.synchronize_device(mesh_device)
+            profiler.end(profiler_key)
             signpost(f"phase2_middle_end_{tag}")
 
         if record:
@@ -182,6 +192,11 @@ def test_sub_device_load_clear_tracy(mesh_device, device_params, dispatch_sd_row
         ttnn.deallocate(out)
         if record:
             signpost(f"phase3_post_end_{tag}")
+
+    # Write per-iteration host-side durations (us) so the wrapper can build stats
+    # alongside the tracy-derived ones at the end.
+    samples_us = [d * 1e6 for d in profiler.times.get(profiler_key, [])]
+    HOST_PROFILER_FILE.write_text("\n".join(f"{v:.3f}" for v in samples_us))
 
 
 # -------------------------------------------------------------------------
@@ -233,28 +248,32 @@ def _parse_phase2_durations():
     return [(e - s) / 1000.0 for s, e in zip(starts, ends)]
 
 
-def _print_stats_for(case, durations_us):
+def _print_stats_block(label, durations_us):
     import statistics
 
     kept, dropped = _filter_outliers(durations_us)
+    print(f"  [{label}] samples={len(durations_us)} kept={len(kept)} dropped={len(dropped)}")
+    if dropped:
+        print(f"  [{label}] dropped (us): {[f'{d:.1f}' for d in dropped]}")
+    if len(kept) < 2:
+        print(f"  [{label}] (not enough samples after filtering for stats)")
+        return
+    print(
+        f"  [{label}] mean={statistics.mean(kept):.2f} median={statistics.median(kept):.2f} "
+        f"stdev={statistics.stdev(kept):.2f} min={min(kept):.2f} max={max(kept):.2f}"
+    )
+
+
+def _print_stats_for(case, tracy_durations_us, host_durations_us):
     print()
     print(f"=== phase2_middle stats ({case}) ===")
-    print(f"raw samples : {len(durations_us)} (kept {len(kept)}, dropped {len(dropped)} as outliers)")
-    print(f"per-iter (us): {[f'{d:.1f}' for d in durations_us]}")
-    if dropped:
-        print(f"dropped (us): {[f'{d:.1f}' for d in dropped]}")
-    if len(kept) < 2:
-        print("(not enough samples after filtering for stats)")
-        return
-    print(f"mean    = {statistics.mean(kept):.2f} us")
-    print(f"median  = {statistics.median(kept):.2f} us")
-    print(f"stdev   = {statistics.stdev(kept):.2f} us")
-    print(f"min     = {min(kept):.2f} us")
-    print(f"max     = {max(kept):.2f} us")
+    _print_stats_block("tracy", tracy_durations_us)
+    if host_durations_us:
+        _print_stats_block("host ", host_durations_us)
 
 
 def _run_case(case, iters):
-    """Run tracy+pytest for one case and return the list of phase2_middle durations (us)."""
+    """Run tracy+pytest for one case and return (tracy_durations_us, host_durations_us)."""
     import subprocess
 
     print(f"Running tracy capture for case={case}, iters={iters} ...")
@@ -274,10 +293,16 @@ def _run_case(case, iters):
         "-k",
         f'"{case} and iters_{iters}"',
     ]
+    HOST_PROFILER_FILE.unlink(missing_ok=True)
     rc = subprocess.run(cmd).returncode
     if rc != 0:
         raise SystemExit(rc)
-    return _parse_phase2_durations()
+    tracy_durations = _parse_phase2_durations()
+    host_durations = []
+    if HOST_PROFILER_FILE.exists():
+        host_durations = [float(x) for x in HOST_PROFILER_FILE.read_text().split() if x.strip()]
+        HOST_PROFILER_FILE.unlink(missing_ok=True)
+    return tracy_durations, host_durations
 
 
 if __name__ == "__main__":
@@ -294,4 +319,5 @@ if __name__ == "__main__":
     cases = ["no_sd", "with_sd"] if args.both else (["with_sd"] if args.with_sd else ["no_sd"])
     results = {case: _run_case(case, args.iters) for case in cases}
     for case in cases:
-        _print_stats_for(case, results[case])
+        tracy_d, host_d = results[case]
+        _print_stats_for(case, tracy_d, host_d)
