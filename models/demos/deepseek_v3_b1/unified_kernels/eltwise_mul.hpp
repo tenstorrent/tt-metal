@@ -17,7 +17,6 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/eltwise_mul_scalar.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 using namespace ckernel;
 #endif
 
@@ -161,15 +160,16 @@ struct EltwiseMul {
 
             if constexpr (CTArgs::enable_scalar) {
                 // ---- 3-way multiply: in0 * scalar -> dest, then dest * in1 -> dest ----
-                if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
-                    deepseek_compute_kernel_hw_startup<CTArgs::fp32_dest_acc_en>(
-                        CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
-                } else {
-                    reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_scalar);
-                    pack_reconfig_data_format<true>(CTArgs::cb_out);
-                }
+                reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_scalar);
+                pack_reconfig_data_format<true>(CTArgs::cb_out);
                 deepseek_mul_tiles_bcast_scalar_init_short(CTArgs::cb_in0, CTArgs::cb_scalar);
-
+                if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
+                    if constexpr (CTArgs::fp32_dest_acc_en) {
+                        enable_fp32_dest_acc();
+                    } else {
+                        disable_fp32_dest_acc();
+                    }
+                }
                 tile_regs_acquire();
 
                 // Step 1: cb_in0 * scalar -> dest (using scalar broadcast)
@@ -215,7 +215,11 @@ struct EltwiseMul {
             }
             // Reset FP32 accum mode if different from DST_ACCUM_MODE
             if constexpr (CTArgs::enable_scalar && CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
-                deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
+                if constexpr (CTArgs::fp32_dest_acc_en) {
+                    disable_fp32_dest_acc();
+                } else {
+                    enable_fp32_dest_acc();
+                }
             }
 #endif
         }
