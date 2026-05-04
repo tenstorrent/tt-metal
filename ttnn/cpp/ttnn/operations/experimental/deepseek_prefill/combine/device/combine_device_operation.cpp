@@ -103,8 +103,10 @@ CombineDeviceOperation::spec_return_value_t CombineDeviceOperation::compute_outp
     auto mem_config = operation_attributes.output_mem_config;
     auto layout = tt::tt_metal::Layout::ROW_MAJOR;
 
-    // FP8 combine uses UINT8 (1 byte/element) for DRAM allocation; actual content is Fp8_e4m3.
-    auto output_dtype = operation_attributes.use_fp8_combine ? DataType::UINT8 : DataType::BFLOAT16;
+    // FP8 combine emits Fp8_e4m3 (1 byte/element); DataType::FP8_E4M3 maps directly to
+    // tt::DataFormat::Fp8_e4m3 via datatype_to_dataformat_converter, so downstream CBs created
+    // with detail::create_tensor_cb(output_tensor, ...) will pick up the right dtype/page-size.
+    auto output_dtype = operation_attributes.use_fp8_combine ? DataType::FP8_E4M3 : DataType::BFLOAT16;
 
     auto output_spec = TensorSpec(
         Shape(output_shape), tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(layout), mem_config));

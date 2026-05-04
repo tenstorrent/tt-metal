@@ -15,6 +15,7 @@
 
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -247,6 +248,12 @@ template Tensor Tensor::from_span<uint32_t>(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint32_t pad_value);
+template Tensor Tensor::from_span<float8_e4m3>(
+    ttsl::Span<const float8_e4m3> buffer,
+    const TensorSpec& spec,
+    distributed::MeshDevice* device,
+    std::optional<tt::tt_metal::QueueId> cq_id,
+    float8_e4m3 pad_value);
 template Tensor Tensor::from_borrowed_data<float>(
     ttsl::Span<float> buffer,
     const tt::tt_metal::Shape& shape,
@@ -274,6 +281,11 @@ template Tensor Tensor::from_borrowed_data<uint16_t>(
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint32_t>(
     ttsl::Span<uint32_t> buffer,
+    const tt::tt_metal::Shape& shape,
+    tt::tt_metal::MemoryPin buffer_pin,
+    const std::optional<Tile>& tile);
+template Tensor Tensor::from_borrowed_data<float8_e4m3>(
+    ttsl::Span<float8_e4m3> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
@@ -313,6 +325,12 @@ template Tensor Tensor::from_vector<uint32_t>(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint32_t pad_value);
+template Tensor Tensor::from_vector<float8_e4m3>(
+    std::vector<float8_e4m3>&& buffer,
+    const TensorSpec& spec,
+    distributed::MeshDevice* device,
+    std::optional<tt::tt_metal::QueueId> cq_id,
+    float8_e4m3 pad_value);
 
 template std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<bfloat16> Tensor::to_vector<bfloat16>(std::optional<tt::tt_metal::QueueId> cq_id) const;
@@ -320,6 +338,7 @@ template std::vector<int32_t> Tensor::to_vector<int32_t>(std::optional<tt::tt_me
 template std::vector<uint8_t> Tensor::to_vector<uint8_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(std::optional<tt::tt_metal::QueueId> cq_id) const;
+template std::vector<float8_e4m3> Tensor::to_vector<float8_e4m3>(std::optional<tt::tt_metal::QueueId> cq_id) const;
 
 Tensor Tensor::to_device(
     distributed::MeshDevice* mesh_device,
@@ -374,7 +393,7 @@ uint32_t Tensor::element_size() const {
         case DataType::INT32: return sizeof(int32_t);
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
-        case DataType::FP8_E4M3:
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);

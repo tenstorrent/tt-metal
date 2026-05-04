@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/creation/creation.hpp"
+#include <tt-metalium/float8.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -564,6 +565,20 @@ template Tensor from_buffer<::bfloat16>(
     const std::optional<MemoryConfig>& memory_config);
 template Tensor from_buffer<::bfloat16>(
     const std::vector<::bfloat16>& buffer,
+    const Shape& shape,
+    const DataType dtype,
+    MeshDevice* device,
+    const std::optional<Layout>& layout,
+    const std::optional<MemoryConfig>& memory_config);
+template Tensor from_buffer<::float8_e4m3>(
+    std::vector<::float8_e4m3>&& buffer,
+    const Shape& shape,
+    const DataType dtype,
+    MeshDevice* device,
+    const std::optional<Layout>& layout,
+    const std::optional<MemoryConfig>& memory_config);
+template Tensor from_buffer<::float8_e4m3>(
+    const std::vector<::float8_e4m3>& buffer,
     const Shape& shape,
     const DataType dtype,
     MeshDevice* device,

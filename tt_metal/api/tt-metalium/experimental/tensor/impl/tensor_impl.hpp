@@ -103,9 +103,7 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
         case DataType::UINT8:
             return (std::forward<Func>(func)).template operator()<uint8_t>(std::forward<Args>(args)...);
         case DataType::FP8_E4M3:
-            // FP8_E4M3 is 1 byte/elem; on the host side we route through uint8_t storage,
-            // matching the workaround used by the deepseek_prefill dispatch/combine kernels.
-            return (std::forward<Func>(func)).template operator()<uint8_t>(std::forward<Args>(args)...);
+            return (std::forward<Func>(func)).template operator()<float8_e4m3>(std::forward<Args>(args)...);
         case DataType::BFLOAT8_B:
             return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
         case DataType::BFLOAT4_B:
