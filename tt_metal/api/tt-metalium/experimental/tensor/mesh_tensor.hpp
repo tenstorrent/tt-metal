@@ -43,8 +43,7 @@ class MeshDevice;
  *
  * Invariants of MeshTensor:
  * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
- *   move construction will be UB. This exists to allow for default constructed MeshTensor. Incompatible member function
- *   call to this state is checked by TT_ASSERT (enabled at debug build) in accessors. This is mirrors HostTensor.
+ *   move construction will be UB. This exists to allow for default constructed MeshTensor. This mirrors HostTensor.
  * - Allocated: The device memory is allocated and **solely owned** by MeshTensor, user is able to get non-null
  *   pointers to the underlying storage and associated MeshDevice. Please note that this invariant isn't guaranteed
  *   currently, see: #38375

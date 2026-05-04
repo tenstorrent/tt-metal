@@ -40,8 +40,7 @@ class HostTensorImpl;
  *
  * Invariants of HostTensor:
  * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
- *   move construction will be UB. This exists to allow for default constructed HostTensor. Incompatible member function
- *   call to this state is checked by TT_FATAL in accessors. This is mirrors MeshTensor.
+ *   move construction will be UB. This exists to allow for default constructed HostTensor. This is mirrors MeshTensor.
  * - Initialized: The HostTensor holds some tensor configurations and associated HostBuffer.
  */
 class HostTensor {
