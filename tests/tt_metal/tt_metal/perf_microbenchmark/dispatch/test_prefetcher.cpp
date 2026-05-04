@@ -3186,24 +3186,14 @@ public:
 
         auto& cluster = tt_metal::MetalContext::instance().get_cluster();
 
-        // Init FetchQ ring and rd_ptrs in prefetch_hd L1
-        // Clear the entire FetchQ ring to zero (kernel spins on non-zero entries).
-        {
-            std::vector<uint32_t> q_zeros(prefetch_q_size / sizeof(uint32_t), 0u);
-            cluster.write_core(q_zeros.data(), q_zeros.size() * sizeof(uint32_t), prefetch_cxy, prefetch_q_base);
-        }
         // prefetch_q_rd_ptr_addr: kernel writes its consumed position here so the host can poll.
         // Initialise to the ring base so the host-side fence logic sees the ring as empty.
-        {
-            const uint32_t init_rd_ptr = prefetch_q_base;
-            cluster.write_core(&init_rd_ptr, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr);
-        }
+        const uint32_t init_rd_ptr = prefetch_q_base;
+        cluster.write_core(&init_rd_ptr, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr);
         // pcie_rd_ptr_addr (prefetch_q_rd_ptr_addr + 4): initialise to 0.
-        {
-            const uint32_t init_pcie_rd = 0u;
-            cluster.write_core(
-                &init_pcie_rd, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr + sizeof(uint32_t));
-        }
+        // const uint32_t init_pcie_rd = 0u;
+        // cluster.write_core(
+        //     &init_pcie_rd, sizeof(uint32_t), prefetch_cxy, prefetch_q_rd_ptr_addr + sizeof(uint32_t));
 
         // TLB window for writing FetchQ entries
         tt::umd::TlbWindow* prefetch_q_tlb = cluster.get_static_tlb_window(prefetch_cxy);
@@ -3267,156 +3257,49 @@ public:
             }
         };
 
+        // Helper: align, pad, and enqueue any HostMemDeviceCommand to hugepage + FetchQ.
+        auto write_cmd = [&](const HostMemDeviceCommand& cmd, bool stall = false) {
+            const uint32_t size = tt::align(cmd.size_bytes(), host_align);
+            std::vector<uint8_t> padded(size, 0u);
+            std::memcpy(padded.data(), cmd.data(), cmd.size_bytes());
+            entry_t entry = static_cast<entry_t>(size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+            if (stall) {
+                entry |= static_cast<entry_t>(1u << 15);
+            }
+            write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(padded.data()), size, entry);
+        };
+
         if (this->use_exec_buf_) {
-            // exec_buf=true
-            // 1. Build DRAM exec_buf payload: commands x iterations + dispatch_wait + exec_buf_end.
-            std::vector<uint8_t> exec_buf_data;
-            for (uint32_t i = 0; i < num_iterations; ++i) {
-                for (const auto& cmd : commands_per_iteration) {
-                    const auto* p = reinterpret_cast<const uint8_t*>(cmd.data());
-                    exec_buf_data.insert(exec_buf_data.end(), p, p + cmd.size_bytes());
-                }
-            }
-            {
-                DeviceCommandCalculator wc;
-                wc.add_dispatch_wait();
-                HostMemDeviceCommand wait_cmd(wc.write_offset_bytes());
-                wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-                const auto* p = reinterpret_cast<const uint8_t*>(wait_cmd.data());
-                exec_buf_data.insert(exec_buf_data.end(), p, p + wait_cmd.size_bytes());
-            }
-            {
-                DeviceCommandCalculator ec;
-                ec.add_prefetch_exec_buf_end();
-                HostMemDeviceCommand end_cmd(ec.write_offset_bytes());
-                end_cmd.add_prefetch_exec_buf_end();
-                const auto* p = reinterpret_cast<const uint8_t*>(end_cmd.data());
-                exec_buf_data.insert(exec_buf_data.end(), p, p + end_cmd.size_bytes());
-            }
-            const uint32_t eb_page = 1u << FDFixture::DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE;
-            const size_t padded = tt::align(exec_buf_data.size(), eb_page);
-            exec_buf_data.resize(padded, 0u);
-            const uint32_t exec_buf_pages = static_cast<uint32_t>(padded) / eb_page;
-            log_info(tt::LogTest, "SD prefetch hd exec_buf: {} bytes ({} DRAM pages)", padded, exec_buf_pages);
-
-            // 2. Write exec_buf payload to DRAM.
-            for (uint32_t page_idx = 0; page_idx < exec_buf_pages; ++page_idx) {
-                const uint32_t bank_id = page_idx % this->num_banks_;
-                const uint32_t bank_offset = (page_idx / this->num_banks_) * eb_page;
-                const uint32_t addr = FDFixture::DRAM_EXEC_BUF_DEFAULT_BASE_ADDR + bank_offset;
-                std::vector<uint8_t> pg(
-                    exec_buf_data.begin() + page_idx * eb_page, exec_buf_data.begin() + page_idx * eb_page + eb_page);
-                detail::WriteToDeviceDRAMChannel(this->device_, bank_id, addr, pg);
-            }
-            tt_metal::MetalContext::instance().get_cluster().dram_barrier(this->device_->id());
-
-            // 3. Write CQ_PREFETCH_CMD_EXEC_BUF to hugepage with MSB stall flag.
-            {
-                DeviceCommandCalculator ec;
-                ec.add_prefetch_exec_buf();
-                HostMemDeviceCommand exec_cmd(ec.write_offset_bytes());
-                exec_cmd.add_prefetch_exec_buf(
-                    FDFixture::DRAM_EXEC_BUF_DEFAULT_BASE_ADDR,
-                    FDFixture::DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE,
-                    exec_buf_pages);
-                const uint32_t cmd_size_bytes = tt::align(exec_cmd.size_bytes(), host_align);
-                entry_t cmd_size_entry =
-                    static_cast<entry_t>(cmd_size_bytes >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-                // MSB stall flag: prefetcher stalls after fetching this command (exec_buf replays from DRAM).
-                cmd_size_entry |= static_cast<entry_t>(1u << (sizeof(entry_t) * 8u - 1u));
-                std::vector<uint8_t> exec_cmd_padded(cmd_size_bytes, 0u);
-                std::memcpy(exec_cmd_padded.data(), exec_cmd.data(), exec_cmd.size_bytes());
-                write_prefetcher_cmd(
-                    reinterpret_cast<const uint32_t*>(exec_cmd_padded.data()), cmd_size_bytes, cmd_size_entry);
-            }
-            // 4. Terminate: relay_inline(dispatch_wait), relay_inline(dispatch_terminate), prefetch_terminate.
-            // Each add_dispatch_*/add_prefetch_* already wraps the cmd in relay_inline internally.
-            {
-                DeviceCommandCalculator wc;
-                wc.add_dispatch_wait();
-                HostMemDeviceCommand wait_cmd(wc.write_offset_bytes());
-                wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-                const uint32_t wait_size = tt::align(wait_cmd.size_bytes(), host_align);
-                std::vector<uint8_t> wait_padded(wait_size, 0u);
-                std::memcpy(wait_padded.data(), wait_cmd.data(), wait_cmd.size_bytes());
-                entry_t wait_entry = static_cast<entry_t>(wait_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(wait_padded.data()), wait_size, wait_entry);
-            }
-            {
-                DeviceCommandCalculator dc;
-                dc.add_dispatch_terminate();
-                HostMemDeviceCommand disp_term(dc.write_offset_bytes());
-                disp_term.add_dispatch_terminate();
-                const uint32_t dterm_size = tt::align(disp_term.size_bytes(), host_align);
-                std::vector<uint8_t> dterm_padded(dterm_size, 0u);
-                std::memcpy(dterm_padded.data(), disp_term.data(), disp_term.size_bytes());
-                entry_t dterm_entry = static_cast<entry_t>(dterm_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(dterm_padded.data()), dterm_size, dterm_entry);
-            }
-            {
-                DeviceCommandCalculator pc;
-                pc.add_prefetch_terminate();
-                HostMemDeviceCommand pref_term(pc.write_offset_bytes());
-                pref_term.add_prefetch_terminate();
-                const uint32_t pterm_size = tt::align(pref_term.size_bytes(), host_align);
-                std::vector<uint8_t> pterm_padded(pterm_size, 0u);
-                std::memcpy(pterm_padded.data(), pref_term.data(), pref_term.size_bytes());
-                entry_t pterm_entry = static_cast<entry_t>(pterm_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(pterm_padded.data()), pterm_size, pterm_entry);
-            }
+            execute_generated_commands_exec_buf(commands_per_iteration, num_iterations, write_cmd);
         } else {
-            // exec_buf=false
-            // Write each command as a separate FetchQ entry.
             for (uint32_t i = 0; i < num_iterations; ++i) {
                 for (const auto& cmd : commands_per_iteration) {
-                    const uint32_t cmd_size = tt::align(cmd.size_bytes(), host_align);
-                    entry_t cmd_entry = static_cast<entry_t>(cmd_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
+                    const uint32_t size = tt::align(cmd.size_bytes(), host_align);
                     TT_FATAL(
-                        (cmd_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) == (uint32_t)cmd_entry,
+                        (size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) <=
+                            (uint32_t)std::numeric_limits<entry_t>::max() >> 1,
                         "SD prefetch: command size {} B overflows 15-bit FetchQ entry (max {} B)",
-                        cmd_size,
+                        size,
                         (uint32_t)0x7FFF << DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-                    std::vector<uint8_t> cmd_padded(cmd_size, 0u);
-                    std::memcpy(cmd_padded.data(), cmd.data(), cmd.size_bytes());
-                    write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(cmd_padded.data()), cmd_size, cmd_entry);
+                    write_cmd(cmd);
                 }
-            }
-            // Terminate: relay_inline(dispatch_wait), relay_inline(dispatch_terminate), prefetch_terminate.
-            // Each add_dispatch_*/add_prefetch_* already wraps the cmd in relay_inline internally.
-            {
-                DeviceCommandCalculator wc;
-                wc.add_dispatch_wait();
-                HostMemDeviceCommand wait_cmd(wc.write_offset_bytes());
-                wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-                const uint32_t wait_size = tt::align(wait_cmd.size_bytes(), host_align);
-                std::vector<uint8_t> wait_padded(wait_size, 0u);
-                std::memcpy(wait_padded.data(), wait_cmd.data(), wait_cmd.size_bytes());
-                entry_t wait_entry = static_cast<entry_t>(wait_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(wait_padded.data()), wait_size, wait_entry);
-            }
-            {
-                DeviceCommandCalculator dc;
-                dc.add_dispatch_terminate();
-                HostMemDeviceCommand disp_term(dc.write_offset_bytes());
-                disp_term.add_dispatch_terminate();
-                const uint32_t dterm_size = tt::align(disp_term.size_bytes(), host_align);
-                std::vector<uint8_t> dterm_padded(dterm_size, 0u);
-                std::memcpy(dterm_padded.data(), disp_term.data(), disp_term.size_bytes());
-                entry_t dterm_entry = static_cast<entry_t>(dterm_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(dterm_padded.data()), dterm_size, dterm_entry);
-            }
-            {
-                DeviceCommandCalculator pc;
-                pc.add_prefetch_terminate();
-                HostMemDeviceCommand pref_term(pc.write_offset_bytes());
-                pref_term.add_prefetch_terminate();
-                const uint32_t pterm_size = tt::align(pref_term.size_bytes(), host_align);
-                std::vector<uint8_t> pterm_padded(pterm_size, 0u);
-                std::memcpy(pterm_padded.data(), pref_term.data(), pref_term.size_bytes());
-                entry_t pterm_entry = static_cast<entry_t>(pterm_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
-                write_prefetcher_cmd(reinterpret_cast<const uint32_t*>(pterm_padded.data()), pterm_size, pterm_entry);
             }
         }
+
+        // Terminate: dispatch_wait + dispatch_terminate + prefetch_terminate (shared by both paths).
+        // SD mode has no dispatch_s kernel, so build the dispatch terminate manually rather than
+        // using CommandBuilder::build_dispatch_terminate() which conditionally appends a subordinate
+        // terminate that would hang the dispatcher with no downstream to receive it.
+        {
+            DeviceCommandCalculator calc;
+            calc.add_dispatch_wait();
+            calc.add_dispatch_terminate();
+            HostMemDeviceCommand disp_term(calc.write_offset_bytes());
+            disp_term.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+            disp_term.add_dispatch_terminate();
+            write_cmd(disp_term);
+        }
+        write_cmd(CommandBuilder::build_prefetch_terminate());
 
         // Semaphores
         tt_metal::Program program = tt_metal::CreateProgram();
@@ -3489,6 +3372,71 @@ public:
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
         EXPECT_TRUE(device_data.validate(this->device_)) << "SD prefetch test failed validation";
+    }
+
+private:
+    // Orchestrates exec_buf execution: builds DRAM payload, writes to DRAM, then issues the
+    // exec_buf command with the MSB stall flag so the prefetcher switches to DRAM mode.
+    // Mirrors BasePrefetcherTestFixture::execute_generated_commands_exec_buff for SD.
+    template <typename WriteCmd>
+    void execute_generated_commands_exec_buf(
+        const std::vector<HostMemDeviceCommand>& commands_per_iteration,
+        uint32_t num_iterations,
+        WriteCmd&& write_cmd) {
+        // 1. Concatenate all commands into a single exec_buf payload.
+        std::vector<uint8_t> exec_buf_data;
+        for (uint32_t i = 0; i < num_iterations; i++) {
+            for (const auto& cmd : commands_per_iteration) {
+                const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(cmd.data());
+                const uint8_t* end_ptr = src_ptr + cmd.size_bytes();
+                exec_buf_data.insert(exec_buf_data.end(), src_ptr, end_ptr);
+            }
+        }
+
+        // Append barrier wait to flush all commands before exec_buf_end.
+        DeviceCommandCalculator wait_calc;
+        wait_calc.add_dispatch_wait();
+        HostMemDeviceCommand wait_cmd(wait_calc.write_offset_bytes());
+        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
+        exec_buf_data.insert(exec_buf_data.end(), wptr, wptr + wait_cmd.size_bytes());
+
+        // 2. Append exec_buf_end (terminates DRAM execution and returns to issue queue).
+        DeviceCommandCalculator exec_buf_end_calc;
+        exec_buf_end_calc.add_prefetch_exec_buf_end();
+        HostMemDeviceCommand exec_terminate(exec_buf_end_calc.write_offset_bytes());
+        exec_terminate.add_prefetch_exec_buf_end();
+        const uint8_t* src_ptr = reinterpret_cast<const uint8_t*>(exec_terminate.data());
+        exec_buf_data.insert(exec_buf_data.end(), src_ptr, src_ptr + exec_terminate.size_bytes());
+
+        // 3. Write exec_buf data to DRAM, paged across banks.
+        const uint32_t page_size = 1u << this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE;
+        const uint32_t exec_buf_base_addr = this->DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
+
+        const size_t size_bytes = exec_buf_data.size();
+        const size_t padded_size_bytes = tt::align(size_bytes, page_size);
+        exec_buf_data.resize(padded_size_bytes, 0u);
+        const uint32_t num_pages = static_cast<uint32_t>(padded_size_bytes) / page_size;
+        log_info(tt::LogTest, "Total exec buf bytes: {} (padded: {})", size_bytes, padded_size_bytes);
+
+        uint32_t data_idx = 0;
+        for (uint32_t page_idx = 0; page_idx < num_pages; ++page_idx) {
+            const uint32_t bank_id = page_idx % this->num_banks_;
+            const uint32_t bank_offset = (page_idx / this->num_banks_) * page_size;
+            const uint32_t addr = exec_buf_base_addr + bank_offset;
+            std::vector<uint8_t> page_data(
+                exec_buf_data.begin() + data_idx, exec_buf_data.begin() + data_idx + page_size);
+            detail::WriteToDeviceDRAMChannel(this->device_, bank_id, addr, page_data);
+            data_idx += page_size;
+        }
+        tt_metal::MetalContext::instance().get_cluster().dram_barrier(this->device_->id());
+
+        // 4. Write exec_buf command with MSB stall flag so prefetcher switches to DRAM execution.
+        DeviceCommandCalculator exec_buf_calc;
+        exec_buf_calc.add_prefetch_exec_buf();
+        HostMemDeviceCommand exec_cmd(exec_buf_calc.write_offset_bytes());
+        exec_cmd.add_prefetch_exec_buf(exec_buf_base_addr, this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
+        write_cmd(exec_cmd, /*stall=*/true);
     }
 };
 
