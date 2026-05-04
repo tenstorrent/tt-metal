@@ -971,9 +971,7 @@ void Cluster::read_sysmem(
     this->driver_->read_from_sysmem(vec, addr, channel & HOST_MEM_CHANNELS_MASK, size_in_bytes, src_device_id);
 }
 
-void Cluster::yield(ChipId device_id) const {
-    this->driver_->yield(device_id);
-}
+void Cluster::advance_device_execution(ChipId device_id) const { this->driver_->advance_device_execution(device_id); }
 
 std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
     ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc) const {
