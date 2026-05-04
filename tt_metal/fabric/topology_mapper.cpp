@@ -20,7 +20,6 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include <fabric/topology_solver_sat_detail.hpp>
 #include <fmt/format.h>
 #include <set>
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -1671,23 +1670,23 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         const auto& physical_adj = physical_adjacency_matrix.at(mesh_id);
 
         // Build node_to_host_rank map - assume single mesh, all nodes on same host rank
-        std::map<FabricNodeId, MeshHostRankId> node_to_host_rank;
-        auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
-        const MeshHostRankId single_host_rank{0};
-        for (const auto& chip_id : chip_ids.values()) {
-            FabricNodeId fabric_node_id(mesh_id, chip_id);
-            node_to_host_rank[fabric_node_id] = single_host_rank;
-        }
+        // std::map<FabricNodeId, MeshHostRankId> node_to_host_rank;
+        // auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
+        // const MeshHostRankId single_host_rank{0};
+        // for (const auto& chip_id : chip_ids.values()) {
+        //    FabricNodeId fabric_node_id(mesh_id, chip_id);
+        //    node_to_host_rank[fabric_node_id] = single_host_rank;
+        //}
 
         // Extract asic_to_host_rank for this mesh_id
-        const auto& asic_to_host_rank = asic_id_to_mesh_rank.at(mesh_id);
+        // const auto& asic_to_host_rank = asic_id_to_mesh_rank.at(mesh_id);
 
         // Build constraints and solve directly
-        using namespace ::tt::tt_fabric;
+        // using namespace ::tt::tt_fabric;
         MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> constraints;
-        if (!constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank)) {
-            TT_THROW("Failed to add required trait constraint for mesh host rank in mesh {}", mesh_id.get());
-        }
+        // if (!constraints.add_required_trait_constraint(node_to_host_rank, asic_to_host_rank)) {
+        //     TT_THROW("Failed to add required trait constraint for mesh host rank in mesh {}", mesh_id.get());
+        // }
 
         auto solver_result =
             solve_topology_mapping(logical_adj, physical_adj, constraints, ConnectionValidationMode::RELAXED, true);

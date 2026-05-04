@@ -20,6 +20,7 @@ using detail::SatSearchEngine;
 using detail::topology_sat_decode_hard_solution;
 using detail::topology_sat_encode_hard_constraints;
 using detail::TopologySatHardEncoding;
+using detail::TopologySatSolver;
 
 using IntAdj = AdjacencyGraph<int>;
 using IntConstraints = MappingConstraints<int, int>;
@@ -31,12 +32,12 @@ TEST(TopologySatEncoderTest, EmptyTarget_NoVars_Sat) {
     IntConstraints constraints;
     GraphIndexData<int, int> graph_data(target, global);
     ConstraintIndexData<int, int> constraint_data(constraints, graph_data);
-    CaDiCaL::Solver solver;
+    TopologySatSolver solver;
     TopologySatHardEncoding enc;
     ASSERT_TRUE(topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc));
     ASSERT_FALSE(enc.trivial_unsat);
     ASSERT_TRUE(enc.allowed_global_idx.empty());
-    ASSERT_EQ(solver.solve(), CaDiCaL::SATISFIABLE);
+    ASSERT_EQ(solver.solve(), TopologySatSolver::kSat);
 }
 
 TEST(TopologySatEncoderTest, NoGlobalNodes_TrivialUnsat) {
@@ -45,7 +46,7 @@ TEST(TopologySatEncoderTest, NoGlobalNodes_TrivialUnsat) {
     IntConstraints constraints;
     GraphIndexData<int, int> graph_data(target, global);
     ConstraintIndexData<int, int> constraint_data(constraints, graph_data);
-    CaDiCaL::Solver solver;
+    TopologySatSolver solver;
     TopologySatHardEncoding enc;
     EXPECT_FALSE(topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc));
     EXPECT_TRUE(enc.trivial_unsat);
@@ -57,10 +58,10 @@ TEST(TopologySatEncoderTest, SingleIsolatedNode_MapsAndValidates) {
     IntConstraints constraints;
     GraphIndexData<int, int> graph_data(target, global);
     ConstraintIndexData<int, int> constraint_data(constraints, graph_data);
-    CaDiCaL::Solver solver;
+    TopologySatSolver solver;
     TopologySatHardEncoding enc;
     ASSERT_TRUE(topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc));
-    ASSERT_EQ(solver.solve(), CaDiCaL::SATISFIABLE);
+    ASSERT_EQ(solver.solve(), TopologySatSolver::kSat);
     std::vector<int> mapping;
     ASSERT_TRUE((topology_sat_decode_hard_solution<int, int>(solver, enc, mapping)));
     ASSERT_EQ(mapping.size(), 1u);
@@ -77,10 +78,10 @@ TEST(TopologySatEncoderTest, TwoNodeChain_EmbedsIntoPath_Validates) {
     IntConstraints constraints;
     GraphIndexData<int, int> graph_data(target, global);
     ConstraintIndexData<int, int> constraint_data(constraints, graph_data);
-    CaDiCaL::Solver solver;
+    TopologySatSolver solver;
     TopologySatHardEncoding enc;
     ASSERT_TRUE(topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc));
-    ASSERT_EQ(solver.solve(), CaDiCaL::SATISFIABLE);
+    ASSERT_EQ(solver.solve(), TopologySatSolver::kSat);
     std::vector<int> mapping;
     ASSERT_TRUE((topology_sat_decode_hard_solution<int, int>(solver, enc, mapping)));
     ASSERT_EQ(mapping.size(), 2u);
@@ -96,11 +97,11 @@ TEST(TopologySatEncoderTest, TriangleTarget_PathGlobal_Unsat) {
     IntConstraints constraints;
     GraphIndexData<int, int> graph_data(target, global);
     ConstraintIndexData<int, int> constraint_data(constraints, graph_data);
-    CaDiCaL::Solver solver;
+    TopologySatSolver solver;
     TopologySatHardEncoding enc;
     const bool encoded = topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc);
     if (encoded) {
-        EXPECT_EQ(solver.solve(), CaDiCaL::UNSATISFIABLE);
+        EXPECT_EQ(solver.solve(), TopologySatSolver::kUnsat);
     } else {
         EXPECT_TRUE(enc.trivial_unsat) << "Should be trivially UNSAT (arc consistency detects infeasibility)";
     }

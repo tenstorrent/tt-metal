@@ -416,36 +416,51 @@ CPMAddPackage(
 )
 
 ####################################################################################################################
-# CaDiCaL SAT solver (MIT): https://github.com/arminbiere/cadical — no external deps, used by topology_solver MaxSAT
-#
-# Pinned to upstream release tag rel-3.0.0 (latest rel-* on the repo as of this CMake; bump when a newer tag ships).
+# Kissat SAT solver (MIT): https://github.com/arminbiere/kissat — IPASIR C API, built via upstream configure+make.
+# Fetched with CPM; build uses ExternalProject + GNU Make (not Ninja) so it works when the main project uses Ninja.
 ####################################################################################################################
-CPMAddPackage(
-    NAME cadical
-    GITHUB_REPOSITORY arminbiere/cadical
-    GIT_TAG rel-3.0.0
-    DOWNLOAD_ONLY YES
-    PATCHES
-        "${CMAKE_CURRENT_SOURCE_DIR}/cadical_vivify_include_tuple.patch"
+CPMAddPackage(NAME kissat GITHUB_REPOSITORY arminbiere/kissat GIT_TAG sc2024 DOWNLOAD_ONLY YES)
+
+find_program(
+    KISSAT_GNU_MAKE
+    NAMES
+        gmake
+        make
+    REQUIRED
 )
 
-file(GLOB CADICAL_SRCS CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.cpp")
-list(FILTER CADICAL_SRCS EXCLUDE REGEX "/cadical\\.cpp$")
-list(FILTER CADICAL_SRCS EXCLUDE REGEX "/mobical\\.cpp$")
-
-# CaDiCaL 3.x links internal "kitten" proof checker (C translation unit).
-set(CADICAL_KITTEN_C "${cadical_SOURCE_DIR}/src/kitten.c")
-
-add_library(
-    cadical
-    STATIC
-    ${CADICAL_SRCS}
-    ${CADICAL_KITTEN_C}
+set(KISSAT_EXT_BUILD_DIR "${kissat_SOURCE_DIR}/build_tt_metal")
+include(ExternalProject)
+ExternalProject_Add(
+    kissat_external
+    SOURCE_DIR "${kissat_SOURCE_DIR}"
+    BINARY_DIR "${KISSAT_EXT_BUILD_DIR}"
+    DOWNLOAD_COMMAND
+        ""
+    UPDATE_COMMAND
+        ""
+    CONFIGURE_COMMAND
+        "${CMAKE_COMMAND}" -E chdir "${KISSAT_EXT_BUILD_DIR}" sh "${kissat_SOURCE_DIR}/configure" -fPIC
+    BUILD_COMMAND
+        "${CMAKE_COMMAND}" -E chdir "${KISSAT_EXT_BUILD_DIR}" ${KISSAT_GNU_MAKE} libkissat.a
+    INSTALL_COMMAND
+        ""
+    BUILD_BYPRODUCTS
+        "${KISSAT_EXT_BUILD_DIR}/libkissat.a"
+    USES_TERMINAL_BUILD YES
 )
-add_library(TT::ThirdParty::cadical ALIAS cadical)
-target_include_directories(cadical PUBLIC "${cadical_SOURCE_DIR}/src")
-target_compile_definitions(cadical PRIVATE NBUILD)
-target_compile_features(cadical PUBLIC cxx_std_11)
+
+add_library(kissat STATIC IMPORTED GLOBAL)
+add_library(TT::ThirdParty::kissat ALIAS kissat)
+set_target_properties(
+    kissat
+    PROPERTIES
+        IMPORTED_LOCATION
+            "${KISSAT_EXT_BUILD_DIR}/libkissat.a"
+        INTERFACE_INCLUDE_DIRECTORIES
+            "${kissat_SOURCE_DIR}/src"
+)
+add_dependencies(kissat kissat_external)
 
 ####################################################################################################################
 # Cap'n Proto : https://github.com/capnproto/capnproto

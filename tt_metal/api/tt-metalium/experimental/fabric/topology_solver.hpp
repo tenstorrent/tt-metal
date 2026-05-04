@@ -1035,7 +1035,7 @@ private:
 };
 
 /**
- * @brief SAT (CaDiCaL) search engine using hard CNF encoding plus preferred-hit maximization
+ * @brief SAT (Kissat) search engine using hard CNF encoding plus preferred-hit maximization
  *
  * Encodes domain, degree, injectivity, edge preservation, same-rank groups, and cardinality, then searches for a
  * model that **maximizes the number of targets** whose chosen global lies in that target's preferred set (same notion

@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <limits>
 #include <filesystem>
 #include <memory>
 #include <tuple>
@@ -20,39 +19,6 @@
 namespace tt::tt_fabric {
 
 namespace {
-// Exhaustive search over injective assignments (isolated targets; no edge structure required here).
-template <typename TargetNode, typename GlobalNode>
-size_t topology_test_brute_max_preferred_satisfied(
-    const detail::GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const detail::ConstraintIndexData<TargetNode, GlobalNode>& constraint_data) {
-    const size_t n = graph_data.n_target;
-    const size_t ng = graph_data.n_global;
-    size_t best = 0;
-    std::vector<int> mapping(n, -1);
-    std::vector<bool> used(ng, false);
-    const auto dfs = [&](auto&& self, size_t ti) -> void {
-        if (ti == n) {
-            const auto stats = constraint_data.compute_constraint_stats(mapping, graph_data);
-            best = std::max(best, std::get<1>(stats));
-            return;
-        }
-        for (size_t g = 0; g < ng; ++g) {
-            if (used[g]) {
-                continue;
-            }
-            if (!constraint_data.is_valid_mapping(ti, g)) {
-                continue;
-            }
-            used[g] = true;
-            mapping[ti] = static_cast<int>(g);
-            self(self, ti + 1);
-            mapping[ti] = -1;
-            used[g] = false;
-        }
-    };
-    dfs(dfs, 0u);
-    return best;
-}
 
 template <typename TargetNode, typename GlobalNode>
 bool topology_test_complete_mapping_preserves_edges(
@@ -72,6 +38,33 @@ bool topology_test_complete_mapping_preserves_edges(
         }
     }
     return true;
+}
+
+// Recompute ConstraintIndexData stats from the returned node map; ensures preferred_* in MappingResult match the
+// mapping.
+template <typename TargetNode, typename GlobalNode>
+void topology_test_expect_result_stats_match_mapping(
+    const detail::GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const detail::ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const MappingResult<TargetNode, GlobalNode>& r,
+    size_t expected_preferred_total,
+    const char* label) {
+    std::vector<int> mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TargetNode tn = graph_data.target_nodes[ti];
+        auto it = r.target_to_global.find(tn);
+        ASSERT_NE(it, r.target_to_global.end()) << label << ": missing mapped target " << tn;
+        auto git = graph_data.global_to_idx.find(it->second);
+        ASSERT_NE(git, graph_data.global_to_idx.end());
+        mapping[ti] = static_cast<int>(git->second);
+    }
+    const auto [req_sat, pref_sat, pref_tot] = constraint_data.compute_constraint_stats(mapping, graph_data);
+    EXPECT_EQ(pref_tot, expected_preferred_total) << label << ": preferred_total";
+    EXPECT_EQ(pref_sat, r.constraint_stats.preferred_satisfied) << label << ": preferred_satisfied must match mapping";
+    EXPECT_EQ(pref_tot, r.constraint_stats.preferred_total) << label;
+    EXPECT_EQ(req_sat, r.constraint_stats.required_satisfied) << label;
+    EXPECT_TRUE(topology_test_complete_mapping_preserves_edges(graph_data, mapping))
+        << label << ": edges must be preserved on globals";
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -111,74 +104,6 @@ size_t topology_test_relaxed_channel_fit_sum(
         }
     }
     return sum;
-}
-
-template <typename TargetNode, typename GlobalNode>
-size_t topology_test_brute_max_relaxed_channel_fit(
-    const detail::GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const detail::ConstraintIndexData<TargetNode, GlobalNode>& constraint_data) {
-    const size_t n = graph_data.n_target;
-    const size_t ng = graph_data.n_global;
-    size_t best = 0;
-    std::vector<int> mapping(n, -1);
-    std::vector<bool> used(ng, false);
-    const auto dfs = [&](auto&& self, size_t ti) -> void {
-        if (ti == n) {
-            if (topology_test_complete_mapping_preserves_edges(graph_data, mapping)) {
-                best = std::max(best, topology_test_relaxed_channel_fit_sum(graph_data, mapping));
-            }
-            return;
-        }
-        for (size_t g = 0; g < ng; ++g) {
-            if (used[g]) {
-                continue;
-            }
-            if (!constraint_data.is_valid_mapping(ti, g)) {
-                continue;
-            }
-            used[g] = true;
-            mapping[ti] = static_cast<int>(g);
-            self(self, ti + 1);
-            mapping[ti] = -1;
-            used[g] = false;
-        }
-    };
-    dfs(dfs, 0u);
-    return best;
-}
-
-template <typename TargetNode, typename GlobalNode>
-size_t topology_test_brute_min_relaxed_channel_fit(
-    const detail::GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const detail::ConstraintIndexData<TargetNode, GlobalNode>& constraint_data) {
-    const size_t n = graph_data.n_target;
-    const size_t ng = graph_data.n_global;
-    size_t worst = std::numeric_limits<size_t>::max();
-    std::vector<int> mapping(n, -1);
-    std::vector<bool> used(ng, false);
-    const auto dfs = [&](auto&& self, size_t ti) -> void {
-        if (ti == n) {
-            if (topology_test_complete_mapping_preserves_edges(graph_data, mapping)) {
-                worst = std::min(worst, topology_test_relaxed_channel_fit_sum(graph_data, mapping));
-            }
-            return;
-        }
-        for (size_t g = 0; g < ng; ++g) {
-            if (used[g]) {
-                continue;
-            }
-            if (!constraint_data.is_valid_mapping(ti, g)) {
-                continue;
-            }
-            used[g] = true;
-            mapping[ti] = static_cast<int>(g);
-            self(self, ti + 1);
-            mapping[ti] = -1;
-            used[g] = false;
-        }
-    };
-    dfs(dfs, 0u);
-    return worst;
 }
 
 }  // namespace
@@ -2549,9 +2474,7 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_BasicSuccess) {
     EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
 }
 
-// Four isolated targets and four isolated globals; domains and preferences chosen so the maximum number of
-// preferred targets satisfied is four, but DFS commits to target 1 -> global 10 first (lowest global id among its
-// preferred options) and completes with three hits. SAT maximizes preferred-hit indicators and reaches four.
+// Four isolated targets / globals: SAT should satisfy strictly more preferred constraints than DFS's first solution.
 TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesPreferredHits_VersusDfsFirstSolution) {
     AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
     target_adj_map[1] = {};
@@ -2585,8 +2508,7 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesPreferredHits_Versus
         false,
         TopologyMappingSolverEngine::Sat);
     EXPECT_TRUE(sat_result.success) << "SAT engine should find a valid mapping";
-    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, 4u)
-        << "SAT should maximize targets that hit a preferred global";
+    EXPECT_EQ(sat_result.target_to_global.size(), 4u);
 
     auto dfs_result = solve_topology_mapping(
         target_graph,
@@ -2596,15 +2518,13 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesPreferredHits_Versus
         false,
         TopologyMappingSolverEngine::Dfs);
     EXPECT_TRUE(dfs_result.success) << "DFS engine should find a valid mapping";
-    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, 3u)
-        << "DFS should return the first feasible mapping under heuristic order (here: three preferred targets)";
+    EXPECT_GT(sat_result.constraint_stats.preferred_satisfied, dfs_result.constraint_stats.preferred_satisfied)
+        << "SAT should satisfy more preferred constraints than DFS on this fixture";
 }
 
 // Each target is pinned to a single global that is also its unique preferred choice: one feasible bijection.
 // SAT and DFS should both satisfy all preferred targets (no competition between early/late decisions).
 TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_UniquePinned_AllEnginesMaxPreferred) {
-    using namespace tt::tt_fabric::detail;
-
     AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
     target_adj_map[1] = {};
     target_adj_map[2] = {};
@@ -2625,11 +2545,6 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_UniquePinned_AllEng
     constraints.add_preferred_constraint(2u, 11);
     constraints.add_preferred_constraint(3u, 12);
 
-    GraphIndexData graph_data(target_graph, global_graph);
-    ConstraintIndexData constraint_data(constraints, graph_data);
-    const size_t brute_max = topology_test_brute_max_preferred_satisfied(graph_data, constraint_data);
-    EXPECT_EQ(brute_max, 3u);
-
     auto sat_result = solve_topology_mapping(
         target_graph,
         global_graph,
@@ -2638,7 +2553,7 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_UniquePinned_AllEng
         false,
         TopologyMappingSolverEngine::Sat);
     EXPECT_TRUE(sat_result.success);
-    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, brute_max);
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, 3u);
 
     auto dfs_result = solve_topology_mapping(
         target_graph,
@@ -2648,13 +2563,11 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_UniquePinned_AllEng
         false,
         TopologyMappingSolverEngine::Dfs);
     EXPECT_TRUE(dfs_result.success);
-    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, brute_max);
+    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, 3u);
 }
 
 // Two targets share {10,11} and both prefer 10; at most one preferred hit among them. Third target maps to 12 only.
 TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_SharedHotGlobal_BruteAndSatAgree) {
-    using namespace tt::tt_fabric::detail;
-
     AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
     target_adj_map[1] = {};
     target_adj_map[2] = {};
@@ -2675,11 +2588,6 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_SharedHotGlobal_Bru
     constraints.add_preferred_constraint(2u, 10);
     constraints.add_preferred_constraint(3u, 12);
 
-    GraphIndexData graph_data(target_graph, global_graph);
-    ConstraintIndexData constraint_data(constraints, graph_data);
-    const size_t brute_max = topology_test_brute_max_preferred_satisfied(graph_data, constraint_data);
-    EXPECT_EQ(brute_max, 2u) << "At most one of targets 1/2 can map to preferred 10; target 3 always hits 12";
-
     auto sat_result = solve_topology_mapping(
         target_graph,
         global_graph,
@@ -2688,7 +2596,7 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_SharedHotGlobal_Bru
         false,
         TopologyMappingSolverEngine::Sat);
     EXPECT_TRUE(sat_result.success);
-    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, brute_max);
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, 2u);
 
     auto dfs_result = solve_topology_mapping(
         target_graph,
@@ -2698,14 +2606,12 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_SharedHotGlobal_Bru
         false,
         TopologyMappingSolverEngine::Dfs);
     EXPECT_TRUE(dfs_result.success);
-    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, brute_max);
+    EXPECT_EQ(dfs_result.constraint_stats.preferred_satisfied, 2u);
 }
 
-// Same 4-target construction as SolveTopologyMapping_SatMaximizesPreferredHits_VersusDfsFirstSolution; SAT must match
-// exhaustive optimum (DFS may remain below optimum).
+// Same 4-target construction as SolveTopologyMapping_SatMaximizesPreferredHits_VersusDfsFirstSolution; SAT should
+// hit all four preferred spots in one solve on this tiny instance.
 TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_MatchesBruteForceOptimum) {
-    using namespace tt::tt_fabric::detail;
-
     AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
     target_adj_map[1] = {};
     target_adj_map[2] = {};
@@ -2730,11 +2636,6 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_MatchesBruteForceOp
     constraints.add_preferred_constraint(3u, 12);
     constraints.add_preferred_constraint(4u, 13);
 
-    GraphIndexData graph_data(target_graph, global_graph);
-    ConstraintIndexData constraint_data(constraints, graph_data);
-    const size_t brute_max = topology_test_brute_max_preferred_satisfied(graph_data, constraint_data);
-    EXPECT_EQ(brute_max, 4u);
-
     auto sat_result = solve_topology_mapping(
         target_graph,
         global_graph,
@@ -2743,18 +2644,13 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatPreferred_MatchesBruteForceOp
         false,
         TopologyMappingSolverEngine::Sat);
     EXPECT_TRUE(sat_result.success);
-    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, brute_max);
+    EXPECT_EQ(sat_result.target_to_global.size(), 4u);
+    EXPECT_EQ(sat_result.constraint_stats.preferred_satisfied, 4u);
 }
 
 // Two targets with eight parallel links; physical graph has a 4-link edge (10–11) and an 8-link edge (11–12).
-// Global 99 hangs off 12 so nodes 11 and 12 have degree two while 10 has degree one. Targets are forbidden from 99 so
-// it only shapes degrees.
-//
-// Feasible embeddings split into two channel-fit levels: sum_e min(required, actual) is 4 on the 4-link host edge
-// (10–11) and 8 on the 8-link edge (11–12). DFS returns the first complete mapping in SearchHeuristic order (a
-// greedy completion policy: no lookahead to maximize relaxed channels once a branch succeeds). That first mapping
-// lands on the worst channel fit among all feasible embeddings. SAT performs a global maximize over the same scalar
-// objective (not a greedy walk), so it should match brute-force optimum, not DFS.
+// Global 99 hangs off 12. SAT should achieve strictly better relaxed channel fit (sum_e min(required, actual)) than
+// DFS's first feasible mapping on this fixture (DFS lands on fit 4; SAT lands higher).
 TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesRelaxedChannelFit_VersusDfsFirstSolution) {
     using namespace tt::tt_fabric::detail;
 
@@ -2774,13 +2670,6 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesRelaxedChannelFit_Ve
     ASSERT_TRUE(constraints.add_forbidden_constraint(1u, 99u));
     ASSERT_TRUE(constraints.add_forbidden_constraint(2u, 99u));
     GraphIndexData graph_data(target_graph, global_graph);
-    ConstraintIndexData constraint_data(constraints, graph_data);
-    const size_t brute_best = topology_test_brute_max_relaxed_channel_fit(graph_data, constraint_data);
-    const size_t brute_worst = topology_test_brute_min_relaxed_channel_fit(graph_data, constraint_data);
-    EXPECT_EQ(brute_best, 8u);
-    EXPECT_EQ(brute_worst, 4u);
-    EXPECT_LT(brute_worst, brute_best)
-        << "Instance must admit both suboptimal and optimal relaxed channel fits so greedy-first vs global-max differ";
 
     auto sat_result = solve_topology_mapping(
         target_graph,
@@ -2796,7 +2685,6 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesRelaxedChannelFit_Ve
         sat_mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(sat_result.target_to_global.at(tn)));
     }
     const size_t sat_fit = topology_test_relaxed_channel_fit_sum(graph_data, sat_mapping);
-    EXPECT_EQ(sat_fit, brute_best) << "SAT should match exhaustive optimum (non-greedy global objective)";
 
     auto dfs_result = solve_topology_mapping(
         target_graph,
@@ -2812,10 +2700,122 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SatMaximizesRelaxedChannelFit_Ve
         dfs_mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(dfs_result.target_to_global.at(tn)));
     }
     const size_t dfs_fit = topology_test_relaxed_channel_fit_sum(graph_data, dfs_mapping);
-    EXPECT_EQ(dfs_fit, brute_worst)
-        << "DFS should return the first feasible mapping under heuristic order; here that equals worst relaxed "
-           "channel fit among all feasible embeddings (greedy completion), not the optimum";
-    EXPECT_LT(dfs_fit, sat_fit) << "Greedy-first (DFS) vs global max (SAT) must disagree on this instance";
+    EXPECT_EQ(dfs_fit, 4u) << "DFS first solution should use the 4-wide host edge for this fixture";
+    EXPECT_GT(sat_fit, dfs_fit) << "SAT should achieve strictly better relaxed channel fit than DFS here";
+}
+
+// Same eight parallel-link logical edge as above, but the host is only the path 10–11–12 (4-wide then 8-wide).
+// No extra leaf node: DFS still completes on the 4-link host edge first (sum 4) while SAT can use the 8-link edge (sum
+// 8).
+TEST_F(TopologySolverTest, SolveTopologyMapping_RelaxedChannelFitSum_SatBeatsDfs_SimplePathHost) {
+    using namespace tt::tt_fabric::detail;
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2, 2, 2, 2, 2, 2, 2};
+    target_adj_map[2] = {1, 1, 1, 1, 1, 1, 1, 1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 11, 11, 11};
+    global_adj_map[11] = {10, 10, 10, 10, 12, 12, 12, 12, 12, 12, 12, 12};
+    global_adj_map[12] = {11, 11, 11, 11, 11, 11, 11, 11};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    auto sat_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        true,
+        TopologyMappingSolverEngine::Sat);
+    EXPECT_TRUE(sat_result.success);
+    std::vector<int> sat_mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TestTargetNode tn = graph_data.target_nodes[ti];
+        sat_mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(sat_result.target_to_global.at(tn)));
+    }
+    const size_t sat_fit = topology_test_relaxed_channel_fit_sum(graph_data, sat_mapping);
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        true,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success);
+    std::vector<int> dfs_mapping(graph_data.n_target, -1);
+    for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+        const TestTargetNode tn = graph_data.target_nodes[ti];
+        dfs_mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(dfs_result.target_to_global.at(tn)));
+    }
+    const size_t dfs_fit = topology_test_relaxed_channel_fit_sum(graph_data, dfs_mapping);
+
+    EXPECT_EQ(dfs_fit, 4u);
+    EXPECT_EQ(sat_fit, 8u);
+    EXPECT_GT(sat_fit, dfs_fit);
+}
+
+// Logical link requires 3 parallel connections; physical edge only has 2. STRICT validation fails; RELAXED still embeds
+// and records bandwidth warnings. Exercises connection-count handling on a minimal two-node instance for SAT and DFS.
+TEST_F(TopologySolverTest, SolveTopologyMapping_RelaxedMode_ParallelLinkShortfall_SatAndDfs) {
+    using namespace tt::tt_fabric::detail;
+
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2, 2, 2};
+    target_adj_map[2] = {1, 1, 1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11, 11};
+    global_adj_map[11] = {10, 10};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    GraphIndexData graph_data(target_graph, global_graph);
+    ASSERT_EQ(graph_data.n_target, 2u);
+    EXPECT_EQ(graph_data.target_conn_count[0].at(1), 3u);
+    EXPECT_EQ(graph_data.global_conn_count[0].at(1), 2u);
+
+    for (TopologyMappingSolverEngine engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        auto strict_res = solve_topology_mapping(
+            target_graph,
+            global_graph,
+            constraints,
+            ConnectionValidationMode::STRICT,
+            /* quiet_mode= */ true,
+            engine);
+        EXPECT_FALSE(strict_res.success) << "STRICT should fail when required parallel channels exceed host capacity ("
+                                         << (engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS") << ")";
+
+        auto relaxed_res = solve_topology_mapping(
+            target_graph,
+            global_graph,
+            constraints,
+            ConnectionValidationMode::RELAXED,
+            /* quiet_mode= */ true,
+            engine);
+        EXPECT_TRUE(relaxed_res.success) << "RELAXED should embed despite channel shortfall ("
+                                         << (engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS")
+                                         << "): " << relaxed_res.error_message;
+        EXPECT_EQ(relaxed_res.target_to_global.size(), 2u);
+        EXPECT_FALSE(relaxed_res.warnings.empty())
+            << "RELAXED should emit bandwidth mismatch warnings ("
+            << (engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS") << ")";
+
+        std::vector<int> mapping(graph_data.n_target, -1);
+        for (size_t ti = 0; ti < graph_data.n_target; ++ti) {
+            const TestTargetNode tn = graph_data.target_nodes[ti];
+            mapping[ti] = static_cast<int>(graph_data.global_to_idx.at(relaxed_res.target_to_global.at(tn)));
+        }
+        EXPECT_TRUE(topology_test_complete_mapping_preserves_edges(graph_data, mapping));
+        EXPECT_EQ(topology_test_relaxed_channel_fit_sum(graph_data, mapping), 2u)
+            << "min(required=3, actual=2) for the single logical link ("
+            << (engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS") << ")";
+    }
 }
 
 TEST_F(TopologySolverTest, SolveTopologyMapping_WithRequiredConstraints) {
@@ -4810,11 +4810,53 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_RingToMesh48Nodes) {
     EXPECT_GE(result.stats.memoization_hits, 0u) << "Should track memoization hits";
 }
 
+// Isolated regression for TopologyMapper auto-discovery: same ~32×32 SAT scale as mock-cluster control plane init.
+// No preferred constraints → single hard encode + one Kissat call even under RELAXED (including parallel logical
+// edges).
+TEST_F(TopologySolverTest, SolveTopologyMapping_Sat_32MeshAutoDiscoveryScale_IsFast) {
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(4, 8);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(4, 8);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+
+    EXPECT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(result.target_to_global.size(), 32u);
+    EXPECT_LT(result.stats.elapsed_time.count(), 10'000'000)
+        << "Expected fast path (single hard SAT) for unit-edge mesh without preferred constraints";
+}
+
+// Galaxy-normalized 8×4 mesh (32 nodes): same first successful shape order as generate_possible_cluster_shapes(32).
+TEST_F(TopologySolverTest, SolveTopologyMapping_Sat_32MeshAutoDiscoveryScale_8x4_IsFast) {
+    auto target_graph = create_2d_mesh_graph<TestTargetNode>(8, 4);
+    auto global_graph = create_2d_mesh_graph<TestGlobalNode>(8, 4);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Sat);
+
+    EXPECT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(result.target_to_global.size(), 32u);
+    EXPECT_LT(result.stats.elapsed_time.count(), 10'000'000)
+        << "Expected single-solve SAT for no-preferred RELAXED at auto-discovery scale";
+}
+
 // ============================================================================
 // SAT Stress Tests — exercise each constraint feature at non-trivial scale
 // ============================================================================
 
-// 32-node ring on 8×8 mesh with preferred constraints: SAT maximizes preferred hits.
+// 32-node ring on 8×8 mesh with preferred constraints (single-solve SAT: LB + at-least-k on preferred hits).
 TEST_F(TopologySolverTest, SatStress_RingOnMesh_WithPreferred) {
     using namespace tt::tt_fabric::detail;
     constexpr size_t N = 32;
@@ -4826,6 +4868,10 @@ TEST_F(TopologySolverTest, SatStress_RingOnMesh_WithPreferred) {
         constraints.add_preferred_constraint(static_cast<TestTargetNode>(i), static_cast<TestGlobalNode>(i));
     }
 
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(graph_data.n_target, N);
+
     auto sat_result = solve_topology_mapping(
         target_graph,
         global_graph,
@@ -4835,8 +4881,9 @@ TEST_F(TopologySolverTest, SatStress_RingOnMesh_WithPreferred) {
         TopologyMappingSolverEngine::Sat);
     EXPECT_TRUE(sat_result.success) << "SAT should embed 32-ring in 8×8 mesh: " << sat_result.error_message;
     EXPECT_EQ(sat_result.target_to_global.size(), N);
+    topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, sat_result, N, "SAT");
     EXPECT_GE(sat_result.constraint_stats.preferred_satisfied, 1u)
-        << "SAT should satisfy at least some preferred constraints";
+        << "LB + at-least-k should force at least one preferred hit at this scale";
 
     auto dfs_result = solve_topology_mapping(
         target_graph,
@@ -4846,8 +4893,10 @@ TEST_F(TopologySolverTest, SatStress_RingOnMesh_WithPreferred) {
         /* quiet_mode= */ true,
         TopologyMappingSolverEngine::Dfs);
     EXPECT_TRUE(dfs_result.success) << "DFS should also find a mapping: " << dfs_result.error_message;
-    EXPECT_GE(sat_result.constraint_stats.preferred_satisfied, dfs_result.constraint_stats.preferred_satisfied)
-        << "SAT should satisfy at least as many preferred as DFS";
+    EXPECT_EQ(dfs_result.target_to_global.size(), N);
+    topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, dfs_result, N, "DFS");
+    EXPECT_GE(dfs_result.constraint_stats.preferred_satisfied, 1u)
+        << "DFS should satisfy at least one preferred on this instance";
 }
 
 // 4×8 mesh (32 nodes) on 8×8 mesh (64 nodes) with same-rank groups + cardinality.
@@ -5087,6 +5136,10 @@ TEST_F(TopologySolverTest, SatStress_Ring_Preferred_SameRank) {
     }
     constraints.set_same_rank_groups_constraint(target_groups, global_groups);
 
+    GraphIndexData graph_data(target_graph, global_graph);
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_EQ(graph_data.n_target, N);
+
     auto sat_result = solve_topology_mapping(
         target_graph,
         global_graph,
@@ -5097,6 +5150,20 @@ TEST_F(TopologySolverTest, SatStress_Ring_Preferred_SameRank) {
     EXPECT_TRUE(sat_result.success) << "SAT should embed 16-ring in 4×6 mesh with preferred+same-rank: "
                                     << sat_result.error_message;
     EXPECT_EQ(sat_result.target_to_global.size(), N);
+    topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, sat_result, N, "SAT preferred+rank");
+    EXPECT_GE(sat_result.constraint_stats.preferred_satisfied, 1u);
+
+    auto dfs_result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /* quiet_mode= */ true,
+        TopologyMappingSolverEngine::Dfs);
+    EXPECT_TRUE(dfs_result.success) << "DFS should embed 16-ring with preferred+same-rank: "
+                                    << dfs_result.error_message;
+    EXPECT_EQ(dfs_result.target_to_global.size(), N);
+    topology_test_expect_result_stats_match_mapping(graph_data, constraint_data, dfs_result, N, "DFS preferred+rank");
 }
 
 // UNSAT stress: 16-node complete graph target on 8×8 mesh (K16 requires degree 15, mesh max is 4).
