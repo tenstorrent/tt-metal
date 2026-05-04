@@ -115,10 +115,7 @@ def _dbg_dump(label, model):
             continue
         param = params[name]
         try:
-            # NOTE: param is an autograd.Tensor; its to_numpy takes (new_type, composer=...).
-            # Calling .get_value().to_numpy(...) hits the raw ttnn Tensor binding which only
-            # accepts (mesh_composer=...) and would raise an arity error.
-            arr = param.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
+            arr = param.get_value().to_numpy(ttnn.DataType.FLOAT32, composer=composer)
             print(f"[DBG {label}] PARAM {name}: {_dbg_stats(arr)}", flush=True)
         except Exception as e:
             print(f"[DBG {label}] PARAM {name}: ERROR {e}", flush=True)
