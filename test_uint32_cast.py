@@ -1,7 +1,6 @@
 import pytest
 import torch
 import ttnn
-import ttml
 
 _AVAILABLE = True
 
@@ -15,7 +14,6 @@ def _src_uint32(device):
     )
 
 
-@pytest.mark.skipif(not _AVAILABLE, reason="ttml/ttnn not importable")
 def test_typecast_uint32_to_bf16_directly_is_broken(device):
     """Regression marker: direct uint32→bf16 typecast does NOT recover [0, 1].
     Currently observed to emit [0.0, 2^31]."""
@@ -30,7 +28,6 @@ def test_typecast_uint32_to_bf16_directly_is_broken(device):
         )
 
 
-@pytest.mark.skipif(not _AVAILABLE, reason="ttml/ttnn not importable")
 def test_typecast_uint32_via_fp32_to_bf16_is_correct(device):
     """Workaround: uint32 → float32 → bf16 round-trip recovers [0, 1]."""
     for i in range(2):
