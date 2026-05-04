@@ -50,9 +50,7 @@ def build_molmo2_prefill_mask(
         seq_len: sequence length S (must equal token_type_ids.shape[1])
         token_type_ids: [B, S] CPU tensor (non-zero = image/multimodal token)
         mesh_device: TTNN mesh device
-        dtype: dtype for ALL tensors (intermediates + output). Use bfloat4_b to
-            reduce memory 4× vs bfloat16 — critical for large S (e.g. S=32768
-            needs 512 MB vs 2 GB). bfloat4_b is exact for 0.0 and -inf values.
+        dtype: output dtype
         causal_cache: optional pre-built [1, 1, S, S] lower-triangular mask from
             build_causal_mask(). When provided, skips the 32 MB H2D ones upload
             and ttnn.tril call. Must match seq_len.
@@ -67,7 +65,7 @@ def build_molmo2_prefill_mask(
     def _upload(t):
         return ttnn.from_torch(
             t.to(torch.bfloat16),
-            dtype=dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -113,5 +111,8 @@ def build_molmo2_prefill_mask(
     ttnn.deallocate(condition)
     ttnn.deallocate(zeros)
     ttnn.deallocate(neg_inf)
+
+    if dtype != ttnn.bfloat16:
+        bias = ttnn.typecast(bias, dtype)
 
     return bias

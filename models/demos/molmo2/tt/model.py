@@ -29,10 +29,9 @@ import ttnn
 # (and optionally the same trace) can be reused across similar-length inputs.
 # Extended to 32768 to cover long video prompts (384 frames ≈ S~34k → pads to 65536,
 # but typical 105-test videos hit at most ~16k tokens).
-PREFILL_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 36864]
-# Last bucket = model max_seq_len (Molmo2Config.max_seq_len = 36864).
-# Without this, get_padded_prefill_len for S > 32768 falls back to 2^ceil(log2(S))
-# = 65536 which OOMs on T3K alongside model weights.
+PREFILL_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+# Stops at 32768: model max_seq_len=36864, so anything above pads to 65536
+# which is unreachable. 32768 covers all realistic video prompt lengths.
 # Trace-capture is capped at 4096: larger traces permanently reserve DRAM that
 # OOMs alongside the vision backbone weights.
 # JIT compilation (use_trace=False) has no such constraint.
@@ -901,8 +900,6 @@ class TtMolmo2Model(LightweightModule):
         else:
             _S_pad_early = ((S + 255) // 256) * 256
 
-        S_pad = _S_pad_early
-
         # ---- Embedding ----
         # Pad input_ids to _S_pad_early on CPU before H2D so ttnn.embedding produces
         # a bucket-aligned [B, _S_pad_early, H] tensor directly — no on-device concat.
@@ -988,23 +985,26 @@ class TtMolmo2Model(LightweightModule):
 
         # ---- Eager path ----
         # x_ttnn is already at _S_pad_early (embedding was padded on CPU before H2D).
-        # bfloat4_b: [S_pad,S_pad] × 0.5 B — 4× smaller than bfloat16, fits at S=32768.
+        # For S > 8192, _S_pad_early is chunk-multiple which may differ from padded_S
+        # (the bucket), so use _S_pad_early as S_pad throughout the eager path.
+        S_pad = _S_pad_early
+        # pad_len is always 0 — embedding is already at S_pad. No on-device concat.
+
         attn_mask = None
         if token_type_ids is not None:
+            # Always pad tti to S_pad so img_mm [S_pad,S_pad] matches causal [S_pad,S_pad].
+            # pad_len is 0 for vision inputs (x_ttnn already padded), but tti still needs
+            # padding to S_pad — otherwise ttnn.maximum(causal, img_mm) gets a shape mismatch.
             tti_pad_len = S_pad - S
             if tti_pad_len > 0:
                 tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, tti_pad_len, dtype=torch.long)], dim=1)
             else:
                 tti_padded = token_type_ids.long()
-            # For S_pad > 8192 there is no causal_cache (only cached up to 8192),
-            # so all ops are bfloat4_b — no mixed-dtype issue, saves ~4× DRAM.
-            # For S_pad ≤ 8192 causal_cache is bfloat16; keep bfloat16 to match.
-            _mask_dtype = ttnn.bfloat4_b if S_pad > 8192 else ttnn.bfloat16
             attn_mask = build_molmo2_prefill_mask(
                 S_pad,
                 tti_padded,
                 self.mesh_device,
-                dtype=_mask_dtype,
+                dtype=ttnn.bfloat16,
                 causal_cache=self._causal_masks.get(S_pad),
             )
 
