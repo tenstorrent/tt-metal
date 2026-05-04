@@ -4,18 +4,19 @@
 """
 Test RoPE format differences between official qwen_tts and TTNN.
 
-Official qwen_tts uses NON-INTERLEAVED format:
-    - rotate_half: split at middle, concat(-x2, x1)
-    - cos/sin shape: [seq, head_dim] with sequential frequencies
+Official qwen_tts uses non-interleaved pairing: rotate_half splits at head_dim/2
+and pairs dimension i with i + head_dim/2.
 
-TTNN rotary_embedding_llama uses INTERLEAVED format:
-    - Rotation applied to adjacent pairs
-    - cos/sin shape: [seq, head_dim] with interleaved frequencies [cos0, cos0, cos1, cos1, ...]
+TTNN rotary_embedding_llama rotates adjacent pairs (LLaMa layout). Bridge with
+``rearrange_to_interleaved`` on q and on cos/sin, then ``rearrange_to_noninterleaved``
+on the output. MROPE section-concatenated cos/sin already match ``get_mrope_tensors``;
+do not use a naive ``interleave_cos_sin`` on only the first half (it breaks MROPE).
 """
 
 import argparse
 from pathlib import Path
 
+import pytest
 import torch
 
 import ttnn
@@ -49,35 +50,6 @@ def apply_rotary_pos_emb_noninterleaved(q, cos, sin):
     return (q * cos) + (rotate_half(q) * sin)
 
 
-def interleave_cos_sin(cos_noninterleaved, sin_noninterleaved):
-    """
-    Convert non-interleaved cos/sin to interleaved format.
-
-    Non-interleaved: [cos_0, cos_1, ..., cos_63] with freq_i for dim i
-    Interleaved: [cos_0, cos_0, cos_1, cos_1, ...] with freq_i for dims 2i and 2i+1
-
-    But actually, the transformation is:
-    - In non-interleaved, freq[i] is applied to dims i and i+dim/2
-    - In interleaved, freq[i] is applied to dims 2i and 2i+1
-
-    To convert: rearrange so freq[i] goes to positions 2i and 2i+1
-    """
-    # cos_noninterleaved: [batch, seq, head_dim]
-    # Split into two halves
-    dim = cos_noninterleaved.shape[-1]
-    half_dim = dim // 2
-
-    # Non-interleaved has freqs for first half, need to duplicate for interleaved
-    cos_first_half = cos_noninterleaved[..., :half_dim]
-    sin_first_half = sin_noninterleaved[..., :half_dim]
-
-    # Interleave: [cos0, cos0, cos1, cos1, ...]
-    cos_interleaved = torch.stack([cos_first_half, cos_first_half], dim=-1).flatten(-2)
-    sin_interleaved = torch.stack([sin_first_half, sin_first_half], dim=-1).flatten(-2)
-
-    return cos_interleaved, sin_interleaved
-
-
 def test_rope_formats(device):
     """Test RoPE format differences."""
     print("=" * 80)
@@ -87,11 +59,10 @@ def test_rope_formats(device):
     # Load official MROPE data
     rotary_path = Path("/tmp/qwen_tts_tensors/rotary_data.pt")
     if not rotary_path.exists():
-        print(f"ERROR: {rotary_path} not found")
-        return
+        pytest.skip(f"Missing {rotary_path}; run models/demos/qwen3_tts/demo/extract_rope.py first")
 
     rotary_data = torch.load(rotary_path)
-    cos_official = rotary_data["cos"]  # [3, 1, 111, 128]
+    cos_official = rotary_data["cos"]  # [3, 1, seq, 128] — seq depends on extract_rope prompt
     sin_official = rotary_data["sin"]
 
     print(f"Official MROPE cos shape: {cos_official.shape}")
@@ -111,96 +82,98 @@ def test_rope_formats(device):
         sin_parts.append(sin_official[i, :, :, start : start + size])
         start += size
 
-    cos_noninterleaved = torch.cat(cos_parts, dim=-1)  # [1, 111, 128]
-    sin_noninterleaved = torch.cat(sin_parts, dim=-1)
+    # Same layout as get_mrope_tensors: per-section [cos_w, cos_w] pairs (TTNN-ready).
+    cos_mrope_layout = torch.cat(cos_parts, dim=-1)  # [1, seq, 128]
+    sin_mrope_layout = torch.cat(sin_parts, dim=-1)
 
-    print(f"\nNon-interleaved cos shape: {cos_noninterleaved.shape}")
+    seq_len = int(cos_mrope_layout.shape[1])
+    head_dim = int(cos_mrope_layout.shape[2])
+    pos_show = min(5, seq_len - 1) if seq_len > 0 else 0
+
+    print(f"\nMROPE-layout cos shape: {cos_mrope_layout.shape} (seq_len={seq_len})")
 
     # Show some values
-    print("\nPosition 5 (middle of sequence):")
-    print(f"  cos_noninterleaved[0,5,0:8]: {cos_noninterleaved[0,5,0:8]}")
-    print(f"  cos_noninterleaved[0,5,64:72]: {cos_noninterleaved[0,5,64:72]}")
+    print(f"\nPosition {pos_show} (capped for short sequences):")
+    print(f"  cos_mrope_layout[0,{pos_show},0:8]: {cos_mrope_layout[0, pos_show, 0:8]}")
+    print(f"  cos_mrope_layout[0,{pos_show},64:72]: {cos_mrope_layout[0, pos_show, 64:72]}")
 
-    # Create test query tensor
+    # Create test query tensor — seq_len must match rotary_data.pt (not a fixed 111)
     batch = 1
     num_heads = 16
-    seq_len = 111
-    head_dim = 128
 
     q = torch.randn(batch, num_heads, seq_len, head_dim)
 
-    # Apply non-interleaved RoPE (official style)
-    cos_broadcast = cos_noninterleaved.unsqueeze(1)  # [1, 1, 111, 128]
-    sin_broadcast = sin_noninterleaved.unsqueeze(1)
+    # Apply non-interleaved RoPE (official qwen style: pairs dim i with i + head_dim/2)
+    cos_broadcast = cos_mrope_layout.unsqueeze(1)  # [1, 1, seq, 128]
+    sin_broadcast = sin_mrope_layout.unsqueeze(1)
 
     q_rotated_official = apply_rotary_pos_emb_noninterleaved(q, cos_broadcast, sin_broadcast)
 
     print(f"\nOfficial RoPE output shape: {q_rotated_official.shape}")
 
-    # Now test TTNN rotary_embedding_llama
-    # First, we need to convert cos/sin to interleaved format
-    cos_interleaved, sin_interleaved = interleave_cos_sin(cos_noninterleaved, sin_noninterleaved)
+    # TTNN rotary_embedding_llama pairs adjacent dims; permute q and use MROPE cos/sin as in get_mrope_tensors.
+    from models.demos.qwen3_tts.tt.rope import (
+        get_transformation_mat,
+        rearrange_to_interleaved,
+        rearrange_to_noninterleaved,
+    )
 
-    print(f"Interleaved cos shape: {cos_interleaved.shape}")
+    q_llama_layout = rearrange_to_interleaved(q)
+    # cos/sin must use the same head_dim permutation as q for rotary_embedding_llama.
+    cos_llama_layout = rearrange_to_interleaved(cos_mrope_layout)
+    sin_llama_layout = rearrange_to_interleaved(sin_mrope_layout)
 
-    # For TTNN, we need [1, 1, seq, head_dim]
     pad_seq = ((seq_len + 31) // 32) * 32
     padding = pad_seq - seq_len
 
-    cos_padded = torch.nn.functional.pad(cos_interleaved.unsqueeze(0), (0, 0, 0, padding))  # [1, 1, pad_seq, 128]
-    sin_padded = torch.nn.functional.pad(sin_interleaved.unsqueeze(0), (0, 0, 0, padding))
+    cos_padded = torch.nn.functional.pad(cos_llama_layout.unsqueeze(0), (0, 0, 0, padding))  # [1, 1, pad_seq, 128]
+    sin_padded = torch.nn.functional.pad(sin_llama_layout.unsqueeze(0), (0, 0, 0, padding))
 
     cos_tt = ttnn.from_torch(cos_padded.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     sin_tt = ttnn.from_torch(sin_padded.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Get transformation matrix
-    from models.demos.qwen3_tts.tt.rope import get_transformation_mat
-
     trans_mat = get_transformation_mat(head_dim, device)
 
-    # Prepare q for TTNN: [batch, heads, seq, head_dim]
-    q_padded = torch.nn.functional.pad(q, (0, 0, 0, padding))  # [1, 16, pad_seq, 128]
+    q_padded = torch.nn.functional.pad(q_llama_layout, (0, 0, 0, padding))  # [1, 16, pad_seq, 128]
     q_tt = ttnn.from_torch(q_padded.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Apply TTNN RoPE
     q_rotated_tt = ttnn.experimental.rotary_embedding_llama(q_tt, cos_tt, sin_tt, trans_mat, is_decode_mode=False)
-    q_rotated_ttnn = ttnn.to_torch(q_rotated_tt)[:, :, :seq_len, :]
+    q_rotated_ttnn = rearrange_to_noninterleaved(ttnn.to_torch(q_rotated_tt)[:, :, :seq_len, :])
 
     # Compare
     pcc = compute_pcc(q_rotated_official, q_rotated_ttnn)
     print(f"\nPCC(official_rope, ttnn_rope): {pcc:.6f}")
 
     # Detailed comparison
-    print("\nHead 0, position 5, first 8 dims:")
-    print(f"  Official: {q_rotated_official[0, 0, 5, :8]}")
-    print(f"  TTNN:     {q_rotated_ttnn[0, 0, 5, :8]}")
+    print(f"\nHead 0, position {pos_show}, first 8 dims:")
+    print(f"  Official: {q_rotated_official[0, 0, pos_show, :8]}")
+    print(f"  TTNN:     {q_rotated_ttnn[0, 0, pos_show, :8]}")
 
     max_diff = (q_rotated_official - q_rotated_ttnn).abs().max()
     print(f"\nMax absolute difference: {max_diff:.6f}")
 
     if pcc > 0.99:
         print("\n*** TTNN RoPE matches official! ***")
-        return True
     else:
         print(f"\n*** MISMATCH: PCC={pcc:.4f}, need >0.99 ***")
-
-        # Debug: Try direct format comparison
         print("\n=== Debug: Understanding the format ===")
-
-        # Test with identity q to see the rotation pattern
         q_identity = torch.zeros(1, 1, 1, head_dim)
         q_identity[0, 0, 0, 0] = 1.0
         q_identity[0, 0, 0, 64] = 1.0
-
         q_rot_official = apply_rotary_pos_emb_noninterleaved(
-            q_identity, cos_broadcast[:, :, 5:6, :], sin_broadcast[:, :, 5:6, :]
+            q_identity,
+            cos_broadcast[:, :, pos_show : pos_show + 1, :],
+            sin_broadcast[:, :, pos_show : pos_show + 1, :],
         )
-        print("\nIdentity rotation test (pos 5):")
+        print(f"\nIdentity rotation test (pos {pos_show}):")
         print("  Input: [1, 0, ..., 0, 1, 0, ..., 0] (dim 0 and 64)")
         print(f"  Official output first 4: {q_rot_official[0, 0, 0, :4]}")
         print(f"  Official output dim 64-68: {q_rot_official[0, 0, 0, 64:68]}")
 
-        return False
+    assert pcc > 0.99, (
+        f"TTNN rotary_embedding_llama vs official non-interleaved RoPE PCC={pcc:.6f} "
+        "(need >0.99). Check rearrange_to_interleaved / cos layout vs get_mrope_tensors."
+    )
 
 
 def main():
