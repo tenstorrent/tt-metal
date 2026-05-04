@@ -11,6 +11,7 @@ import argparse
 import os
 import shlex
 import subprocess
+import sys
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -198,6 +199,8 @@ def main() -> int:
         if exclude_filenames:
             if model_filename in exclude_filenames:
                 continue
+        if "mgd" in model:
+            os.environ["TT_MESH_GRAPH_DESC_PATH"] = os.path.expandvars(model["mgd"])
 
         binary = os.path.expandvars(model["binary"])
         args = process_args(model["args"]) if model["args"] is not None else []
@@ -303,6 +306,9 @@ def main() -> int:
     if "GITHUB_STEP_SUMMARY" in os.environ:
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
             print(df_md, file=fh)
+
+    # Return error code 1 if any tests have failed
+    sys.exit(any([s["run status"] == "❌" for s in model_status]))
 
 
 if __name__ == "__main__":

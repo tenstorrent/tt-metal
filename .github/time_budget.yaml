@@ -227,3 +227,7 @@ models:
 umd:
   unit:
     wh_galaxy_perf_uf: 35
+
+train:
+  perf:
+    bh_galaxy: 160

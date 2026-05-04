@@ -1,0 +1,43 @@
+# This file defines the test matrix for the Galaxy perf tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   model: Model identifier for filtering (workflow_dispatch model selection).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+# Optional: arch
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# TT-Train Blackhole Galaxy model perf tests
+- name: Galaxy TinyLlama 1.1B DDP=32 train perf tests
+  cmd: python tt-train/scripts/run_models.py --filter "tinyllama_1_1b_ddp32_shakespeare"
+  model: tinyllama_1_1b_ddp32_shakespeare
+  skus:
+    bh_galaxy:
+      timeout: 75
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+
+- name: Galaxy Llama 8B TP=8 DDP=4 train perf tests
+  cmd: python tt-train/scripts/run_models.py --filter "llama_8b_tp8_ddp4_shakespeare"
+  model: llama_8b_tp8_ddp4_shakespeare
+  skus:
+    bh_galaxy:
+      timeout: 40
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+
+- name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
+  cmd: python tt-train/scripts/run_models.py --filter "llama_8b_tp4_ddp8_shakespeare"
+  model: llama_8b_tp4_ddp8_shakespeare
+  skus:
+    bh_galaxy:
+      timeout: 45
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
