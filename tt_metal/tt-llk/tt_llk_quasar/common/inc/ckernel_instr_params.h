@@ -337,18 +337,21 @@ struct p_sfpu
     struct sfpmem
     {
         // SFPLOAD/SFPSTORE InstrMod format-select codes (Tensix SFPU ISA, SFPLOAD/SFPSTORE table).
-        // Signed integers are sign-magnitude in HW; the ISA names them SMAG<N> — this enum uses
-        // INT<N> (INT32 = ISA SMAG32, INT16 = SMAG16, INT8 = SMAG8).
+        // Signed integers are sign-magnitude in HW; the ISA names them SMAG<N> — those are the
+        // primary names here, with INT<N> kept as legacy LLK aliases.
         constexpr static std::uint32_t DEFAULT =
             0b0000; // format is determined by combination of SrcB exponent width of ALU_FORMAT_SPEC_REG and also ACC_CTRL_SFPU_Fp32
         constexpr static std::uint32_t FP16A      = 0b0001; // fp16 (fp16_a)
         constexpr static std::uint32_t FP16B      = 0b0010; // bfloat (fp16_b)
         constexpr static std::uint32_t FP32       = 0b0011; // fp32 (MOD_FP32 in the register file)
-        constexpr static std::uint32_t INT32      = 0b0100; // signed int32, sign-magnitude (ISA SMAG32)
-        constexpr static std::uint32_t INT8       = 0b0101; // signed int8, sign-magnitude (ISA SMAG8)
+        constexpr static std::uint32_t SMAG32     = 0b0100; // signed int32, sign-magnitude (ISA SMAG32)
+        constexpr static std::uint32_t INT32      = SMAG32; // legacy LLK name for SMAG32
+        constexpr static std::uint32_t SMAG8      = 0b0101; // signed int8, sign-magnitude (ISA SMAG8)
+        constexpr static std::uint32_t INT8       = SMAG8;  // legacy LLK name for SMAG8
         constexpr static std::uint32_t UINT16     = 0b0110; // unsigned int16
         constexpr static std::uint32_t HI16       = 0b0111; // half-word access, value in the upper 16 bits
-        constexpr static std::uint32_t INT16      = 0b1000; // signed int16, sign-magnitude (ISA SMAG16)
+        constexpr static std::uint32_t SMAG16     = 0b1000; // signed int16, sign-magnitude (ISA SMAG16)
+        constexpr static std::uint32_t INT16      = SMAG16; // legacy LLK name for SMAG16
         constexpr static std::uint32_t LO16       = 0b1001; // half-word access, value in the lower 16 bits
         constexpr static std::uint32_t STACK_MODE = 0b1010; // SMAG32 via the SFPU stack pointer
         constexpr static std::uint32_t UINT8      = 0b1011; // unsigned int8

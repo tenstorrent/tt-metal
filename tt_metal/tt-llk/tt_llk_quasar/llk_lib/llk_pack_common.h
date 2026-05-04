@@ -266,6 +266,32 @@ inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = cker
  */
 
 /**
+ * @brief Initialize the packer's dest base to bank 0 for the semaphore sync scheme.
+ *
+ * `_llk_pack_dest_semaphore_section_done_` is the only path that writes the
+ * packer's SRC_ADDR_OFFSET, and it only runs AFTER the first pack completes. The
+ * Quasar simulator (and silicon CFG block) preserves CFG register state across
+ * kernel-binary launches on the same session, so if a previous kernel left the
+ * packer pointing at bank 1, this kernel's FIRST pack reads stale cells from
+ * bank 1 while math is writing to bank 0 — producing wrong-data output on the
+ * second-and-later variant of a pytest matrix run (a "reconfig escape"). Call
+ * this once at the top of the pack TRISC `run_kernel`, mirroring how
+ * `_llk_math_pack_sync_init_` initializes the dest base on the math TRISC.
+ *
+ * @tparam PACK_SEL: p_pacr::PACK0 or p_pacr::PACK1
+ * @tparam DST: DstSync::SyncHalf or DstSync::SyncFull
+ */
+template <std::uint32_t PACK_SEL, DstSync DST>
+inline void _llk_pack_dest_init_()
+{
+    static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
+    static_assert(DST == DstSync::SyncFull || DST == DstSync::SyncHalf, "Only Dest Sync Half and Full are supported");
+
+    ckernel::trisc::_reset_dest_register_offset_();
+    ckernel::trisc::_set_packer_dest_registers_<PACK_SEL, DST>();
+}
+
+/**
  * @brief Stalls the packer until the math thread has produced data to pack.
  */
 inline void _llk_packer_wait_for_math_done_()
