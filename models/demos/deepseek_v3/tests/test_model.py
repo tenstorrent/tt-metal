@@ -3,10 +3,12 @@
 
 import errno
 import hashlib
+import json
 import os
 import re
 import tempfile
 from pathlib import Path
+from time import perf_counter
 
 import pytest
 import torch
@@ -23,6 +25,7 @@ from models.demos.deepseek_v3.tests.pytest_utils import (
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -40,6 +43,7 @@ REFERENCE_OUTPUT_CACHE_LEGACY_FILENAME = f"{REFERENCE_OUTPUT_CACHE_FILE_PREFIX}.
 PCC_REQUIRED_PREFILL = 0.97
 PCC_REQUIRED_DECODE = 0.97
 REFERENCE_ENTRY_VERSION = 1
+_REFERENCE_MODEL_CACHE: dict[tuple[object, ...], DeepseekV3ForCausalLM] = {}
 
 
 def _default_reference_cache_dir(cache_path: Path) -> Path:
@@ -224,6 +228,53 @@ def _expected_reference_output_shape(token_count: int, hf_config: PretrainedConf
     return (1, token_count, hf_config.vocab_size)
 
 
+def _reference_model_cache_key(hf_config: PretrainedConfig, state_dict: dict[str, torch.Tensor]) -> tuple[object, ...]:
+    config_digest = hashlib.sha1(
+        json.dumps(hf_config.to_dict(), sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    if isinstance(state_dict, LazyStateDict):
+        state_dict_identity = (
+            "lazy",
+            str(state_dict._model_path),
+            state_dict._base_prefix,
+            state_dict._num_layers,
+        )
+    else:
+        state_dict_identity = ("mapping", id(state_dict))
+    return config_digest, state_dict_identity
+
+
+def _get_reference_model(
+    hf_config: PretrainedConfig,
+    state_dict: dict[str, torch.Tensor],
+) -> DeepseekV3ForCausalLM:
+    cache_key = _reference_model_cache_key(hf_config, state_dict)
+    cached_model = _REFERENCE_MODEL_CACHE.get(cache_key)
+    if cached_model is not None:
+        logger.info(
+            "Reusing cached reference model "
+            f"(layers={hf_config.num_hidden_layers}, max_seq_len={hf_config.max_seq_len})"
+        )
+        return cached_model
+
+    _REFERENCE_MODEL_CACHE.clear()
+    start_time = perf_counter()
+    with torch.device("meta"):
+        reference_model = DeepseekV3ForCausalLM(hf_config).eval()
+    reference_model = reference_model.to_empty(device=torch.device("cpu"))
+    reference_model.load_state_dict(state_dict)
+    if isinstance(state_dict, LazyStateDict):
+        state_dict.clear_cache()
+    reference_model = reference_model.to(torch.bfloat16)
+    _REFERENCE_MODEL_CACHE[cache_key] = reference_model
+    logger.info(
+        "Loaded reference model "
+        f"(layers={hf_config.num_hidden_layers}, max_seq_len={hf_config.max_seq_len}) "
+        f"in {perf_counter() - start_time:.1f}s"
+    )
+    return reference_model
+
+
 def _generate_reference_case_entry(
     *,
     mode: str,
@@ -235,11 +286,7 @@ def _generate_reference_case_entry(
     torch_input: torch.Tensor,
 ) -> dict:
     logger.info(f"Generating missing reference output (mode={mode}, seq_len={seq_len}, batch_size={batch_size})")
-    with torch.device("meta"):
-        reference_model = DeepseekV3ForCausalLM(hf_config).eval()
-    reference_model = reference_model.to_empty(device=torch.device("cpu"))
-    reference_model.load_state_dict(state_dict)
-    reference_model = reference_model.to(torch.bfloat16)
+    reference_model = _get_reference_model(hf_config, state_dict)
 
     decode_kv_caches = None
     if mode == "decode":
