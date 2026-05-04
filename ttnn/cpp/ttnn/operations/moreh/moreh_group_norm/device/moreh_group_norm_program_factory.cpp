@@ -235,7 +235,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = WRITER_KERNEL_PATH;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = std::move(all_cores);
+    writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_ct_args);
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.runtime_args.reserve(num_cores_to_be_used);
