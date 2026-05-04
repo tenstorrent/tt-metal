@@ -55,6 +55,8 @@ target_sources(
             bcast/bcast_types.hpp
             concat/concat.hpp
             copy/copy.hpp
+            copy_new/copy_new.hpp
+            copy_new/device/copy_new_device_operation.hpp
             copy/device/copy_device_operation.hpp
             copy/device/copy_same_memory_config_program_factory.hpp
             copy/device/copy_default_row_major_program_factory.hpp
@@ -369,6 +371,11 @@ target_sources(
         concat/device/concat_s2s_multi_program_factory.cpp
         concat/device/concat_s2i_program_factory.cpp
         copy/copy.cpp
+        copy_new/copy_new.cpp
+        copy_new/device/copy_new_device_operation.cpp
+        copy_new/device/copy_new_same_memory_descriptor.cpp
+        copy_new/device/copy_new_default_row_major_descriptor.cpp
+        copy_new/device/copy_new_default_tilized_descriptor.cpp
         copy/device/copy_device_operation.cpp
         copy/device/copy_same_memory_config_program_factory.cpp
         copy/device/copy_default_row_major_program_factory.cpp

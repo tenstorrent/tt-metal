@@ -37,6 +37,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_gelu_fw_ulp.cpp
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
+    test_copy_descriptor_benchmark.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES
