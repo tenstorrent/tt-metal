@@ -82,21 +82,23 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         core,
         tt_metal::experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1, .compile_args = {l1_input_dfb}});
+            .num_threads_per_cluster = 1, .compile_args = {l1_input_dfb, /*use_dfbs=*/true}});
 
     KernelHandle writer = tt_metal::experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         core,
         tt_metal::experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb}});
+            .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb, /*use_dfbs=*/true}});
 
     KernelHandle compute = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,
         tt_metal::experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1, .compile_args = {num_tiles}, .defines = {{"PACK_RELU", "1"}}});
+            .num_threads_per_cluster = 1,
+            .compile_args = {num_tiles, /*use_dfbs=*/true},
+            .defines = {{"PACK_RELU", "1"}}});
 
     tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
         program, l1_input_dfb, reader, compute);
@@ -107,8 +109,16 @@ static void run_pack_relu_test(IDevice* dev, uint32_t relu_config, const std::fu
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
     detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    SetRuntimeArgs(program, reader, core, {dram_buffer_src_addr, 0, num_tiles});
-    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, 0, num_tiles});
+    SetRuntimeArgs(
+        program,
+        reader,
+        core,
+        {dram_buffer_src_addr, 0, num_tiles, static_cast<uint32_t>(src_dram_buffer->aligned_page_size())});
+    SetRuntimeArgs(
+        program,
+        writer,
+        core,
+        {dram_buffer_dst_addr, 0, num_tiles, static_cast<uint32_t>(dst_dram_buffer->aligned_page_size())});
     SetRuntimeArgs(program, compute, core, {relu_config});
 
     detail::LaunchProgram(dev, program, true);

@@ -27,6 +27,8 @@ target_sources(
         device/update_cache_device_operation.cpp
         device/fill_cache_multi_core_program_factory.cpp
         device/update_cache_multi_core_program_factory.cpp
+        device/zero_cache_range_device_operation.cpp
+        device/zero_cache_range_program_factory.cpp
         kv_cache.cpp
 )
 

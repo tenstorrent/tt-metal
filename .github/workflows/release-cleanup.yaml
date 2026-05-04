@@ -5,13 +5,13 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 7 * * *"  # Runs daily at midnight UTC
+    - cron: "0 7 * * *" # Runs daily at midnight UTC
   workflow_dispatch:
     inputs:
       months_back:
         description: "Number of months back to check for pre-releases"
         required: false
-        default: "3"  # Default set to 3 months
+        default: "3" # Default set to 3 months
 
 jobs:
   cleanup:

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -338,7 +338,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             dram_slice_config_,
             conv_config.output_layout,
             device);
-        log_info(
+        log_debug(
             tt::LogOp,
             "DRAM Slice Config in Prepare Conv_Transpose2d Weights: {} for {}",
             dram_slice_config,

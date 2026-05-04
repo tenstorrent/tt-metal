@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,10 +33,7 @@
 #if !defined(WATCHER_DISABLE_CB_SANITIZE)
 #include "internal/circular_buffer_interface.h"
 #endif
-
-#if defined(ARCH_QUASAR)
-#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-#endif
+#include "risc_common.h"
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -230,7 +227,28 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     return DebugSanitizeOK;
 }
 
-#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_DRISC)
+inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) {
+    if (addr + len <= addr) {
+        return DebugSanitizeNocAddrZeroLength;
+    }
+    if (addr < MEM_DRISC_L1_BASE) {
+        return DebugSanitizeNocAddrUnderflow;
+    }
+    if (addr + len > MEM_DRISC_L1_BASE + MEM_DRISC_L1_SIZE) {
+        return DebugSanitizeNocAddrOverflow;
+    }
+#if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
+    if (write && (addr < MEM_DRISC_MAILBOX_END)) {
+        return DebugSanitizeNocAddrMailbox;
+    }
+#endif
+    return DebugSanitizeOK;
+}
+#endif
+
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
+    !defined(COMPILE_FOR_DRISC)
 // Check whether an L1 address range [l1_addr, l1_addr+len) that falls within a
 // circular buffer stays within that buffer's allocated region.  Only runs on
 // BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
@@ -258,13 +276,15 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
     // Address is not inside any known CB; other checks will validate it.
     return DebugSanitizeOK;
 }
-#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
+#endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC && !COMPILE_FOR_IDLE_ERISC && !COMPILE_FOR_DRISC
 
 // Note:
 //  - this isn't racy w/ the host so long as return_code is written last
 //  - this isn't racy between riscvs so long as each gets their own noc_index as is the case on WH/BH
-//  - for Quasar, multiple DMs share one NOC so CAS is used; address is remapped from uncached to
-//    cached L1 (LR/SC requires cache coherence), then flushed to make writes visible to host
+//  - for Quasar, multiple DMs share one NOC and may race to report errors; a static lock in the
+//    DM firmware's shared .bss is atomically claimed (amoswap) so only the first writer proceeds.
+//    A static suffices since TRISCs never reach this code, avoiding a mailbox struct size increase.
+//    Metadata is written to the cached L1 alias of the mailbox, then flushed to make it visible to host.
 void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint8_t noc_id,
     uint64_t noc_addr,
@@ -287,9 +307,9 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     if (addr >= MEM_L1_UNCACHED_BASE) {
         san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
     }
-    uint16_t expected = DebugSanitizeOK;
-    if (__atomic_compare_exchange_n(
-            &san->return_code, &expected, DebugSanitizeWriteInProgress, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
+    static volatile uint32_t s_sanitize_lock = 0;
+    uint32_t old = __atomic_exchange_n(&s_sanitize_lock, 0xDEADBEEFu, __ATOMIC_ACQ_REL);
+    if (!old)
 #else
     if (san->return_code == DebugSanitizeOK)
 #endif
@@ -302,12 +322,9 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
         san->is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
         san->is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
         san->return_code = return_code;
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
-        // TODO: Replace with flush_l2_cache_line() once available
-        volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
-        *flush_reg = reinterpret_cast<uintptr_t>(san);
-        asm volatile("fence" ::: "memory");
+        flush_l2_cache_line(reinterpret_cast<uintptr_t>(san));
 #endif
     }
 
@@ -515,9 +532,11 @@ void debug_sanitize_noc_and_worker_addr(
 
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
-        // Local addr needs to be checked depending on whether we're on eth or tensix.
+        // Local addr needs to be checked depending on core type.
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
         uint16_t return_code = debug_valid_eth_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+#elif defined(COMPILE_FOR_DRISC)
+        uint16_t return_code = debug_valid_drisc_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #else
         uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #endif
@@ -537,7 +556,8 @@ void debug_sanitize_noc_and_worker_addr(
         }
     }
 
-#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
+#if !defined(WATCHER_DISABLE_CB_SANITIZE) && !defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC) && \
+    !defined(COMPILE_FOR_DRISC)
     // Check local L1 address against CB bounds (both read and write directions).
     debug_sanitize_post_addr_and_hang(
         noc_id,
@@ -572,6 +592,8 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #if defined(COMPILE_FOR_ERISC)
     constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
+#elif defined(COMPILE_FOR_DRISC)
+    constexpr uint64_t l1_overflow_addr = MEM_DRISC_L1_SIZE;
 #else
     constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
 #endif
@@ -730,8 +752,12 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
     }
 #define DEBUG_INSERT_DELAY(transaction_type) debug_insert_delay(transaction_type)
 #define DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id, addr, l) debug_throw_on_dram_addr(noc_id, addr, l)
+#if defined(WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION)
 #define DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id, multicast) \
     debug_sanitize_check_linked_transactions(noc_id, 0, 0, 0, multicast, DEBUG_SANITIZE_NOC_WRITE);
+#else
+#define DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id, multicast)
+#endif
 #define DEBUG_SANITIZE_L1_ADDR(addr, l) debug_sanitize_l1_access(addr, l);
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l) debug_sanitize_eth(src_addr, dst_addr, l)
 

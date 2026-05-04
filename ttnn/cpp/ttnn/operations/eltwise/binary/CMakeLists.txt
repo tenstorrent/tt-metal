@@ -23,7 +23,6 @@ target_sources(
             binary_composite.hpp
             common/binary_op_types.hpp
             common/binary_op_utils.hpp
-            device/binary_composite_op.hpp
             device/binary_device_operation.hpp
         FILE_SET kernels
         TYPE HEADERS

@@ -9,78 +9,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: t3k_mixtral_tests
-  cmd: run_t3000_mixtral_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 45
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  model-name: mixtral
-
-- name: t3k_falcon40b_tests
-  cmd: run_t3000_falcon40b_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 25
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  team: models
-  model-name: falcon40b
-
-- name: t3k_llama3_tests
-  cmd: run_t3000_llama3_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 70
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  model-name: llama3
-
-- name: t3k_qwen25_tests
-  cmd: run_t3000_qwen25_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 78
-  owner_id: U03HY7MK4BT # Mark O'Connor
-  team: models
-  model-name: qwen25
-
-- name: t3k_llama3_vision_tests
-  cmd: run_t3000_llama3_vision_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 25
-  owner_id: U03FJB5TM5Y # Colman Glagovich
-  team: models
-  model-name: llama3_vision
-
-- name: t3k_llama3_90b_vision_tests
-  cmd: run_t3000_llama3_90b_vision_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 20
-  owner_id: U07RY6B5FLJ # Gongyu Wang
-  team: models
-  model-name: llama3_90b_vision
-
-- name: t3k_llama3_70b_tests
-  cmd: run_t3000_llama3_70b_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 30
-  owner_id: U03FJB5TM5Y # Colman Glagovich
-  team: models
-  model-name: llama3_70b
-
-- name: t3k_falcon7b_tests
-  cmd: run_t3000_falcon7b_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 10
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: falcon7b
-
 - name: t3k_resnet50_tests
   cmd: run_t3000_resnet50_tests
   skus:
@@ -135,51 +63,6 @@
   team: models
   model-name: qwenimage
 
-- name: t3k_mistral_tests
-  cmd: run_t3000_mistral_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 15
-  owner_id: U0896VBAKFC # Pratikkumar Prajapati
-  team: models
-  model-name: mistral
-
-- name: t3k_qwen3_tests
-  cmd: run_t3000_qwen3_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 40
-  owner_id: U03HY7MK4BT # Mark O'Connor
-  team: models
-  model-name: qwen3
-
-- name: t3k_qwen25_vl_tests
-  cmd: run_t3000_qwen25_vl_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 30
-  owner_id: U07RY6B5FLJ # Gongyu Wang
-  team: models
-  model-name: qwen25_vl
-
-- name: t3k_qwen3_vl_tests
-  cmd: run_t3000_qwen3_vl_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 10
-  owner_id: U08H31YMN4Q # Sanjay Sanjay
-  team: models
-  model-name: qwen3_vl
-
-- name: t3k_gemma3_tests
-  cmd: run_t3000_gemma3_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 25
-  owner_id: U08TJ70UFRT # Harry Andrews
-  team: models
-  model-name: gemma3
-
 - name: t3k_wan2.2_tests
   cmd: run_t3000_wan22_tests
   skus:
@@ -198,20 +81,11 @@
   team: models
   model-name: mochi
 
-- name: t3k_whisper_tests
-  cmd: run_t3000_whisper_tests
+- name: t3k_qwen3_vl_tests
+  cmd: run_t3000_qwen3_vl_tests
   skus:
     wh_llmbox_perf:
       timeout: 10
-  owner_id: U088413NP0Q # Ashai Reddy
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
   team: models
-  model-name: whisper
-
-- name: t3k_gpt_oss_tests
-  cmd: run_t3000_gpt_oss_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 40
-  owner_id: U08TJ70UFRT # Harry Andrews
-  team: models
-  model-name: gpt-oss
+  model-name: qwen3_vl

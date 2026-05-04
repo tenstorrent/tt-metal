@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ void kernel_main() {
 
     // Address of the output buffer
     constexpr auto out0_args = TensorAccessorArgs<0>();
-    const auto out0 = TensorAccessor(out0_args, c_addr, tile_size_bytes);
+    const auto out0 = TensorAccessor(out0_args, c_addr);
 
     // Create Device 2.0 experimental Noc and CircularBuffer objects
     experimental::Noc noc;

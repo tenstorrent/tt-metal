@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -239,11 +239,11 @@ void py_module(nb::module_& m) {
 
                 if (!mesh_shape_obj.is_none()) {
                     if (nb::isinstance<nb::list>(mesh_shape_obj) || nb::isinstance<nb::tuple>(mesh_shape_obj)) {
-                        const auto dims = nb::cast<std::vector<int>>(mesh_shape_obj);
-                        if (dims.size() != 2) {
-                            throw std::runtime_error("mesh_shape must be a list/tuple of 2 integers: [rows, cols]");
+                        const auto dims = nb::cast<std::vector<uint32_t>>(mesh_shape_obj);
+                        if (dims.empty()) {
+                            throw std::runtime_error("mesh_shape must be a non-empty list/tuple of integers");
                         }
-                        mesh_shape = tt::tt_metal::distributed::MeshShape(dims[0], dims[1]);
+                        mesh_shape = tt::tt_metal::distributed::MeshShape(dims);
                     } else {
                         mesh_shape = nb::cast<tt::tt_metal::distributed::MeshShape>(mesh_shape_obj);
                     }
@@ -291,7 +291,7 @@ void py_module(nb::module_& m) {
             },
             nb::rv_policy::reference,
             "Get distributed context");
-        py_auto_context.def("get_profiler", &AutoContext::get_profiler, "Get profiler");
+        py_auto_context.def("get_profiler", &AutoContext::get_profiler, nb::rv_policy::reference, "Get profiler");
         py_auto_context.def("close_profiler", &AutoContext::close_profiler, "Close profiler");
         py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources, "Get CCL resources");
 

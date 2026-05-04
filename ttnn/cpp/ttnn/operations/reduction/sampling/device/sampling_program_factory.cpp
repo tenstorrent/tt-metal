@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -87,15 +87,23 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
             .set_page_size(index_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_grid, index_input_intermed0_config);
 
-    // identity scale input
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
+    // Reduce scaler CBs — separate because MAX and SUM use different tile fill layouts
+    tt::DataFormat scalar_df =
+        (input_values_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scale_tiles = 1;
     uint32_t scalar_tile_size = tile_size(scalar_df);
-    uint32_t scale_cb_index = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig scale_cb_config =
-        tt::tt_metal::CircularBufferConfig(scale_tiles * scalar_tile_size, {{scale_cb_index, scalar_df}})
-            .set_page_size(scale_cb_index, scalar_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, scale_cb_config);
+
+    uint32_t scaler_max_cb_index = tt::CBIndex::c_3;
+    tt::tt_metal::CircularBufferConfig scaler_max_cb_config =
+        tt::tt_metal::CircularBufferConfig(scale_tiles * scalar_tile_size, {{scaler_max_cb_index, scalar_df}})
+            .set_page_size(scaler_max_cb_index, scalar_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_grid, scaler_max_cb_config);
+
+    uint32_t scaler_sum_cb_index = tt::CBIndex::c_17;
+    tt::tt_metal::CircularBufferConfig scaler_sum_cb_config =
+        tt::tt_metal::CircularBufferConfig(scale_tiles * scalar_tile_size, {{scaler_sum_cb_index, scalar_df}})
+            .set_page_size(scaler_sum_cb_index, scalar_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_grid, scaler_sum_cb_config);
 
     uint32_t topk_mask_cb_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig topk_mask_cb_config =
@@ -241,9 +249,6 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
             input_indices_buffer->address(),
         });
 
-    bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
-    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
-
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
 
@@ -263,8 +268,8 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
             {
                 output_cb_index,
                 topk_mask_cb_index,
-                scale_cb_index,
-                packed_identity_scalar,
+                scaler_max_cb_index,
+                scaler_sum_cb_index,
                 final_indices_rm_cb_index,
                 cb_local_vals_index,
                 output_ind_cb_index,
@@ -300,7 +305,8 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
             values_cb_index,
             output_ind_cb_index,
             topk_mask_cb_index,
-            scale_cb_index,
+            scaler_max_cb_index,
+            scaler_sum_cb_index,
             cb_cur_max_index,
             cb_cur_sum_index,
             Ht,

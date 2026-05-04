@@ -61,51 +61,51 @@ jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
-      needs: [check-harbor, parse-platform]
-      uses: ./.github/workflows/build-artifact.yaml
-      permissions:
-        packages: write
-      secrets: inherit
-      with:
-        harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-        build-wheel: true
-        tracy: false
-        fetch-depth: 0
-        skip-tt-train: false
-        enable-lto: false
+    needs: [check-harbor, parse-platform]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
+      tracy: false
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
 
   build-artifact-tracy:
-      name: "Build artifact with tracy (for testing)"
-      needs: [check-harbor, parse-platform]
-      uses: ./.github/workflows/build-artifact.yaml
-      permissions:
-        packages: write
-      secrets: inherit
-      with:
-        harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-        build-wheel: true
-        tracy: true
-        fetch-depth: 0
-        skip-tt-train: false
-        enable-lto: false
+    name: "Build artifact with tracy (for testing)"
+    needs: [check-harbor, parse-platform]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
+      tracy: true
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
 
   build-artifact-release:
-      name: "Build artifact for release (without tracy)"
-      needs: [check-harbor, parse-platform]
-      uses: ./.github/workflows/build-artifact.yaml
-      permissions:
-        packages: write
-      secrets: inherit
-      with:
-        harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-        build-wheel: true
-        tracy: false
-        fetch-depth: 0
-        skip-tt-train: false
-        enable-lto: false
+    name: "Build artifact for release (without tracy)"
+    needs: [check-harbor, parse-platform]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
+      tracy: false
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
 
   determine-test-skus:
     runs-on: ubuntu-latest
@@ -163,7 +163,7 @@ jobs:
     with:
       platform: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
       version: ${{ inputs.tag-version }}
-      tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
+      tag-latest: ${{ inputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
       image: ${{ matrix.image }}
@@ -185,13 +185,13 @@ jobs:
     needs: build-artifact-release
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Required for AWS OIDC
+      id-token: write # Required for AWS OIDC
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -204,7 +204,7 @@ jobs:
           pip install s3pypi
 
       - name: Download wheel artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
           path: ./wheels

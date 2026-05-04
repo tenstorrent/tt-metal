@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ void generate_bcast_scaler() {
     } u;
     u.u = scaler;
     // DPRINT << "basic Scaler = " << F32(u.f) << ENDL();
+    // DEVICE_PRINT("basic Scaler = {}\n", u.f);
     constexpr uint32_t onetile = 1;
 #ifdef ARCH_QUASAR
     dfb1.reserve_back(onetile);
@@ -66,7 +67,7 @@ void kernel_main() {
 #endif
 
     constexpr auto src_args = TensorAccessorArgs<0>();
-    const auto src_a = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto src_a = TensorAccessor(src_args, src_addr);
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
@@ -82,6 +83,7 @@ void kernel_main() {
     constexpr uint32_t tile_offset = 0;
 #endif
     // DPRINT << "Reader Tile offset=" << tile_offset << ENDL();
+    // DEVICE_PRINT("Reader Tile offset={}\n", tile_offset);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t i_tile = 0;

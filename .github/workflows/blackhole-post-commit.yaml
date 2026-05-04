@@ -9,7 +9,7 @@ on:
         type: string
         default: '["P150"]'
       enable-watcher:
-        description: 'Enable watcher in BH Post commit'
+        description: "Enable watcher in BH Post commit"
         default: false
         type: boolean
       platform:
@@ -106,7 +106,7 @@ on:
         type: string
         default: '["P150"]'
       enable-watcher:
-        description: 'Enable watcher in BH Post commit'
+        description: "Enable watcher in BH Post commit"
         default: false
         type: boolean
       platform:
@@ -118,7 +118,7 @@ on:
           - "Ubuntu 24.04"
         description: "Platform to build and test"
       build-type:
-        description: 'Build type for the workflow'
+        description: "Build type for the workflow"
         required: false
         default: Release
         type: choice
@@ -175,7 +175,7 @@ on:
         description: "Enable LLK asserts"
   schedule:
     - cron: "0 */4 * * *"
-    - cron: "0 7 * * *"  # Every day at 7:00 UTC
+    - cron: "0 7 * * *" # Every day at 7:00 UTC
   # Pause this since not enough runners to support every commit to main
   # push:
   #  branches: ["main"]
@@ -438,7 +438,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu"]
+        test-group: ["BH-LLMBox", "BH-LoudBox", "P300-viommu"]
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}

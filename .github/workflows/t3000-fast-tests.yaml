@@ -4,17 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       run-fabric-tests:
-        description: 'Run t3k fabric tests'
+        description: "Run t3k fabric tests"
         required: false
         default: true
         type: boolean
       run-multiprocess-tests:
-        description: 'Run t3k ttnn multiprocess tests'
+        description: "Run t3k ttnn multiprocess tests"
         required: false
         default: true
         type: boolean
       run-ccl-tests:
-        description: 'Run t3k ttnn ccl tests'
+        description: "Run t3k ttnn ccl tests"
         required: false
         default: true
         type: boolean

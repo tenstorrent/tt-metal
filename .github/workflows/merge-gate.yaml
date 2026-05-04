@@ -84,7 +84,6 @@ jobs:
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
 
-
   fail-fast:
     if: failure()
     runs-on: ubuntu-latest
@@ -111,11 +110,11 @@ jobs:
 
   build:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.docs-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.any-code-changed == 'true' ||
+      needs.find-changes.outputs.docs-changed == 'true' ||
+      needs.find-changes.outputs.build-workflows-changed == 'true'
+      }}
     needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -138,10 +137,10 @@ jobs:
 
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.any-code-changed == 'true' ||
+      needs.find-changes.outputs.build-workflows-changed == 'true'
+      }}
     needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -164,9 +163,9 @@ jobs:
 
   build-sweeps:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.any-code-changed == 'true'
+      }}
     needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-wrapper.yaml
     permissions:
@@ -185,17 +184,17 @@ jobs:
   metalium-smoke-tests:
     needs: [find-changes, build-tsan, check-harbor]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     strategy:
       fail-fast: false
       matrix:
         # run t3k tests on CIv1 for now in order to have dedicated machine
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu-prio"]')
-            || fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu"]') }}
+          && fromJSON('["N300-viommu","N300-llmbox-viommu-prio","P150b-viommu-prio"]')
+          || fromJSON('["N300-viommu","N300-llmbox-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-tsan.outputs.dev-docker-image) }}
@@ -207,18 +206,18 @@ jobs:
   ttnn-smoke-tests:
     needs: [find-changes, build-tsan, check-harbor]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     strategy:
       fail-fast: false
       matrix:
         # run t3k tests on CIv1 for now in order to have dedicated machine
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu-prio"]')
-            || fromJSON('["N300-viommu","in-service-dedicated-merge-gate","p150b-viommu"]') }}
+          && fromJSON('["N300-viommu","N300-llmbox-viommu-prio","P150b-viommu-prio"]')
+          || fromJSON('["N300-viommu","N300-llmbox-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-tsan.outputs.dev-docker-image) }}
@@ -229,10 +228,10 @@ jobs:
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.any-code-changed == 'true' ||
+      needs.find-changes.outputs.build-workflows-changed == 'true'
+      }}
     needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -255,18 +254,18 @@ jobs:
 
   metalium-basic-tests:
     if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changes.outputs.cmake-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      github.ref_name == 'main' ||
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
     needs: [build-asan, find-changes, check-harbor]
     strategy:
       fail-fast: false
       matrix:
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N150-viommu","p150b-viommu-prio"]')
-            || fromJSON('["N150-viommu","p150b-viommu"]') }}
+          && fromJSON('["N150-viommu","P150b-viommu-prio"]')
+          || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-asan.outputs.dev-docker-image) }}
@@ -278,17 +277,17 @@ jobs:
   ttnn-basic-tests:
     needs: [build-asan, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     strategy:
       fail-fast: false
       matrix:
         platform: ${{ github.event_name == 'merge_group'
-            && fromJSON('["N150-viommu","p150b-viommu-prio"]')
-            || fromJSON('["N150-viommu","p150b-viommu"]') }}
+          && fromJSON('["N150-viommu","P150b-viommu-prio"]')
+          || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-asan.outputs.dev-docker-image) }}
@@ -300,11 +299,11 @@ jobs:
   ttnn-merge-gate-tests:
     needs: [build, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     secrets: inherit
     with:
@@ -317,18 +316,16 @@ jobs:
   tt-cnn-unit-tests:
     needs: [build, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -339,18 +336,16 @@ jobs:
   fabric-unit-tests:
     needs: [build, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -362,15 +357,13 @@ jobs:
   fabric-cpu-only-unit-tests:
     needs: [build, find-changes, check-harbor]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
+      needs.find-changes.outputs.any-code-changed == 'true'
+      }}
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0 },
-        ]
+        test-group: [{ arch: wormhole_b0 }]
     uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -380,8 +373,8 @@ jobs:
 
   ttsim-unit-tests:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
+      needs.find-changes.outputs.any-code-changed == 'true'
+      }}
     needs: [build, find-changes, check-harbor]
     strategy:
       fail-fast: false
@@ -399,10 +392,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N150-viommu",
-          #"P150b-viommu-prio",   # p150b triage has been failing since latest p150b runner update; disable for now until we can investigate and stabilize
-        ]
+        platform: ${{ github.event_name == 'merge_group'
+          && fromJSON('["N150-viommu","P150b-viommu-prio"]')
+          || fromJSON('["N150-viommu","P150b-viommu"]') }}
     uses: ./.github/workflows/triage.yaml
     with:
       runner-label: ${{ matrix.platform }}
@@ -424,7 +416,26 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests]
+    needs:
+      [
+        static-checks,
+        docker-images,
+        code-analysis,
+        find-changes,
+        build,
+        build-tsan,
+        build-sweeps,
+        metalium-smoke-tests,
+        ttnn-smoke-tests,
+        ttnn-basic-tests,
+        metalium-basic-tests,
+        ttnn-merge-gate-tests,
+        tt-cnn-unit-tests,
+        ttsim-unit-tests,
+        triage-tests,
+        fabric-unit-tests,
+        fabric-cpu-only-unit-tests,
+      ]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
@@ -433,7 +444,7 @@ jobs:
           required-jobs: "static-checks, code-analysis, find-changes"
           optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests"
         env:
-          NEEDS_CONTEXT: '${{ toJSON(needs) }}'
+          NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
         with:

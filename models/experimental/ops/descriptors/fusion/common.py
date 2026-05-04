@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -75,9 +75,26 @@ class MultiBarrierSpec:
     compute_done_addr: int = 0
     writer_done_addr: int = 0
     reset_done_addr: int = 0
+    pack_drained_addr: int = 0
+    math_drained_addr: int = 0
     # Map: phase_transition_index -> (segment_index, call_index_within_segment)
     transition_map: Dict[int, Tuple[int, int]] = field(default_factory=dict)
     _sem_refs: List[Any] = field(default_factory=list)
+
+
+@dataclass
+class _SemaphoreSpec:
+    """Blueprint for allocating a barrier GlobalSemaphore at dispatch time.
+
+    Stored in ``_CacheEntry`` instead of live ``GlobalSemaphore`` objects so
+    that no L1 is pinned between dispatches.  At each dispatch, fresh
+    semaphores are allocated from these specs, their addresses are patched
+    into the cached ``ProgramDescriptor``'s runtime args, and they are freed
+    after dispatch completes (via command queue ordering).
+    """
+
+    core_ranges: Any  # CoreRangeSet
+    initial_value: int = 0
 
 
 class _BuildResult:
@@ -87,15 +104,48 @@ class _BuildResult:
     outermost ``build()`` call.
     """
 
-    __slots__ = ("descriptor", "input_tensors", "output_tensors", "semaphores", "kernel_labels", "kernel_phase_map")
+    __slots__ = (
+        "descriptor",
+        "input_tensors",
+        "output_tensors",
+        "semaphores",
+        "kernel_labels",
+        "kernel_phase_map",
+        "cb_source_map",
+        "rebind_source_map",
+        "global_cb_source_map",
+        "output_source_map",
+        "sem_specs",
+        "sem_addrs",
+    )
 
-    def __init__(self, descriptor, input_tensors, output_tensors, semaphores=(), kernel_labels=(), kernel_phase_map=()):
+    def __init__(
+        self,
+        descriptor,
+        input_tensors,
+        output_tensors,
+        semaphores=(),
+        kernel_labels=(),
+        kernel_phase_map=(),
+        cb_source_map=(),
+        rebind_source_map=(),
+        global_cb_source_map=(),
+        output_source_map=(),
+        sem_specs=(),
+        sem_addrs=(),
+    ):
         self.descriptor = descriptor
         self.input_tensors = input_tensors
         self.output_tensors = output_tensors
         self.semaphores = semaphores
         self.kernel_labels = kernel_labels
         self.kernel_phase_map = kernel_phase_map
+        self.cb_source_map = cb_source_map
+        self.rebind_source_map = rebind_source_map
+        self.global_cb_source_map = global_cb_source_map
+        self.output_source_map = output_source_map
+        self.sem_specs = sem_specs
+        self.sem_addrs = sem_addrs
 
 
 # =============================================================================
@@ -225,6 +275,7 @@ _NOOP_OP = OpDescriptor(
     input_tensors=[],
     output_tensors=[],
     name="noop",
+    program_cache_key=0,
 )
 
 
@@ -233,8 +284,8 @@ __all__ = [
     "BarrierSegment",
     "MultiBarrierSpec",
     "_BuildResult",
-    "_NoOpProgramDescriptor",
     "_NOOP_OP",
+    "_SemaphoreSpec",
     "_core_range_set_to_coords",
     "_core_ranges_key",
     "_coords_to_core_range_set",

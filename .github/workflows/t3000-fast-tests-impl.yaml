@@ -17,12 +17,12 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         required: false
         type: boolean
         default: false
@@ -33,17 +33,17 @@ on:
       run-fabric-tests:
         required: false
         type: string
-        default: 'true'
+        default: "true"
         description: "Run t3k fabric tests"
       run-multiprocess-tests:
         required: false
         type: string
-        default: 'true'
+        default: "true"
         description: "Run t3k ttnn multiprocess tests"
       run-ccl-tests:
         required: false
         type: string
-        default: 'true'
+        default: "true"
         description: "Run t3k ttnn ccl tests"
       ref:
         required: false

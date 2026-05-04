@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -88,6 +88,7 @@ class MeshWorkloadRuntimeEntry:
     runtimeId: int
     operationName: str = ""
     operationParameters: str = ""
+    traceId: int = 0xFFFFFFFF
 
 
 @dataclass
@@ -462,16 +463,19 @@ class InspectorLogsData:
                 info = entry["runtime_entry"]
                 wid = int(info.get("mesh_workload_id"))
                 rid = int(info.get("runtime_id"))
+                trace_id = int(info["trace_id"])
                 existing = entry_map.get((wid, rid))
                 if existing is not None:
                     existing.operationName = info.get("name", "")
                     existing.operationParameters = info.get("parameters", "")
+                    existing.traceId = trace_id
                 else:
                     re = MeshWorkloadRuntimeEntry(
                         workloadId=wid,
                         runtimeId=rid,
                         operationName=info.get("name", ""),
                         operationParameters=info.get("parameters", ""),
+                        traceId=trace_id,
                     )
                     runtime_entries.append(re)
                     entry_map[(wid, rid)] = re

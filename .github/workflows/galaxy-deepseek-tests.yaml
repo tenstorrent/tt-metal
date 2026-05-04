@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test-type:
-        description: 'Select which tests to run'
+        description: "Select which tests to run"
         required: false
         type: choice
         options:
@@ -13,7 +13,7 @@ on:
           - module
           - long-seq-module
           - final-op-unit
-        default: 'all'
+        default: "all"
       platform:
         required: false
         type: choice
@@ -39,7 +39,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
       recreate_weights_cache:
-        description: 'Recreate weights cache in a new directory'
+        description: "Recreate weights cache in a new directory"
         required: false
         type: choice
         default: "No"
@@ -47,10 +47,10 @@ on:
           - "No"
           - "Yes"
       new_cache_dir:
-        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache.'
+        description: "New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache."
         required: false
         type: string
-        default: ''
+        default: ""
       enable-tracy:
         required: false
         type: boolean
@@ -98,7 +98,7 @@ jobs:
         LOGURU_LEVEL: INFO
         ARCH_NAME: wormhole_b0
         MESH_DEVICE: T3K
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
       volumes:
         - ${{ github.workspace }}/docker-job:/work
@@ -152,7 +152,7 @@ jobs:
       - arch-wormhole_b0
       - topology-6u
       - bare-metal
-      - pipeline-functional
+      - pipeline-perf
       - in-service
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -163,7 +163,7 @@ jobs:
         LOGURU_LEVEL: INFO
         ARCH_NAME: wormhole_b0
         MESH_DEVICE: TG
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
       volumes:
         - ${{ github.workspace }}/docker-job:/work

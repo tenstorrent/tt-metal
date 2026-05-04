@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """Test for Mistral-24B End-to-End Vision-Text Pipeline"""
@@ -22,7 +22,7 @@ from models.experimental.mistral_24b.tt.model import MistralTransformer as Trans
 from models.tt_transformers.tt.generator import Generator
 
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
-from models.common.utility_functions import run_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 
 from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor, AutoModelForVision2Seq
@@ -394,8 +394,7 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 
 
 @torch.no_grad()
-@run_for_wormhole_b0()
-@skip_for_blackhole("Failing on DRAM harvested P100a, see #21419")
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

@@ -3,6 +3,19 @@
 ############################################################################################################################
 include(${CMAKE_CURRENT_LIST_DIR}/CPM.cmake)
 
+# Shadow clang-tidy for all CPM-fetched targets — mirrors third_party/CMakeLists.txt.
+# Placing a no-op .clang-tidy in the CPM cache root is insufficient (some packages
+# ship their own .clang-tidy). Blanking the cache variable disables it for every
+# target defined while it is blank.
+#
+# IMPORTANT: this file is include()d (not add_subdirectory()), so variable changes
+# leak into the caller's scope. Save and restore so that tt-train source targets
+# defined after this include() are still scanned by clang-tidy.
+set(_tt_train_saved_c_clang_tidy "${CMAKE_C_CLANG_TIDY}")
+set(_tt_train_saved_cxx_clang_tidy "${CMAKE_CXX_CLANG_TIDY}")
+set(CMAKE_C_CLANG_TIDY "")
+set(CMAKE_CXX_CLANG_TIDY "")
+
 ############################################################################################################################
 # Boost
 ############################################################################################################################
@@ -182,3 +195,7 @@ if(flatbuffers_ADDED)
             -Wno-deprecated-declarations
     )
 endif()
+
+# Restore clang-tidy so tt-train source targets defined after this include() are scanned.
+set(CMAKE_C_CLANG_TIDY "${_tt_train_saved_c_clang_tidy}")
+set(CMAKE_CXX_CLANG_TIDY "${_tt_train_saved_cxx_clang_tidy}")

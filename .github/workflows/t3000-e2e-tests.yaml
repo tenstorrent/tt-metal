@@ -28,7 +28,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
       model:
-        description: 'Filter tests by model name'
+        description: "Filter tests by model name"
         required: false
         default: "all"
         type: choice

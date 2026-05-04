@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -23,16 +24,26 @@ void kernel_main() {
 
 #ifdef DEBUG
     DPRINT << "dst_addr: " << dst_addr << ENDL();
+    DEVICE_PRINT("dst_addr: {}\n", dst_addr);
     DPRINT << "output_stick_size: " << output_stick_size << ENDL();
+    DEVICE_PRINT("output_stick_size: {}\n", output_stick_size);
     DPRINT << "input_stick_size: " << input_stick_size << ENDL();
+    DEVICE_PRINT("input_stick_size: {}\n", input_stick_size);
     DPRINT << "stick_size_offset: " << stick_size_offset << ENDL();
+    DEVICE_PRINT("stick_size_offset: {}\n", stick_size_offset);
     DPRINT << "num_dims: " << num_dims << ENDL();
+    DEVICE_PRINT("num_dims: {}\n", num_dims);
     DPRINT << "start_id: " << start_id << ENDL();
+    DEVICE_PRINT("start_id: {}\n", start_id);
     DPRINT << "num_sticks_per_core: " << num_sticks_per_core << ENDL();
+    DEVICE_PRINT("num_sticks_per_core: {}\n", num_sticks_per_core);
     DPRINT << "num_sticks_per_core_read: " << num_sticks_per_core_read << ENDL();
+    DEVICE_PRINT("num_sticks_per_core_read: {}\n", num_sticks_per_core_read);
     DPRINT << "num_read_per_barrier: " << num_read_per_barrier << ENDL();
+    DEVICE_PRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
 #ifdef UNPAD_INPUT_WIDTH
     DPRINT << "padding_width_ntiles: " << padding_width_ntiles << ENDL();
+    DEVICE_PRINT("padding_width_ntiles: {}\n", padding_width_ntiles);
 #endif
 
 #endif
@@ -43,34 +54,45 @@ void kernel_main() {
     constexpr uint32_t page_offset = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
+
+    experimental::Noc noc;
+    experimental::CB cb_out0(cb_id_out0);
+
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
-#ifdef DEBUG
-    uint32_t base_src_l1_addr = get_read_ptr(cb_id_out0);
-#endif
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
-        cb_wait_front(cb_id_out0, num_read_per_barrier);
-        uint32_t src_buffer_l1_addr = get_read_ptr(cb_id_out0);
+        cb_out0.wait_front(num_read_per_barrier);
+        uint32_t src_offset = 0;
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
 #ifdef UNPAD_INPUT_WIDTH
             if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0]) {
-                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s0);
-                noc_async_write(src_buffer_l1_addr, dst_noc_addr, noc_write_size);
+                noc.async_write(cb_out0, s0, noc_write_size, {.offset_bytes = src_offset}, {.page_id = dst_stick_id});
             }
 #else
-            uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s0);
-            noc_async_write(src_buffer_l1_addr + page_offset, dst_noc_addr, noc_write_size);
+            noc.async_write(
+                cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
 #endif
 #ifdef DEBUG
-            DPRINT << "SRC L1 : " << src_buffer_l1_addr - base_src_l1_addr << " Dst Stick ID " << dst_stick_id
-                   << " sticks_read: " << sticks_read << " Coord " << id_per_dim[0] << ", " << id_per_dim[1] << ", "
-                   << id_per_dim[2] << ", " << id_per_dim[3] << ENDL();
+            DPRINT << "SRC L1 : " << src_offset << " Dst Stick ID " << dst_stick_id << " sticks_read: " << sticks_read
+                   << " Coord " << id_per_dim[0] << ", " << id_per_dim[1] << ", " << id_per_dim[2] << ", "
+                   << id_per_dim[3] << ENDL();
+            DEVICE_PRINT(
+                "SRC L1 : {} Dst Stick ID {} sticks_read: {} Coord {}, {}, {}, {}\n",
+                src_offset,
+                dst_stick_id,
+                sticks_read,
+                id_per_dim[0],
+                id_per_dim[1],
+                id_per_dim[2],
+                id_per_dim[3]);
 #endif
-            src_buffer_l1_addr += stick_size_offset;
+            src_offset += stick_size_offset;
             dst_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
@@ -82,7 +104,7 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_read_per_barrier);
+        noc.async_write_barrier();
+        cb_out0.pop_front(num_read_per_barrier);
     }
 }

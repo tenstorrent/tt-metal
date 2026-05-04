@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_rsqrt.h"
-#include "sfpi_fp16.h"
 
 namespace ckernel::sfpu {
 
@@ -26,7 +25,7 @@ inline void calculate_add_rsqrt(uint32_t param0) {
         if constexpr (fp32_dest_acc_en) {
             sfpi::dst_reg[0] = y;
         } else {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(y, 0));
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(y, RoundMode::NearestEven));
         }
         sfpi::dst_reg++;
     }

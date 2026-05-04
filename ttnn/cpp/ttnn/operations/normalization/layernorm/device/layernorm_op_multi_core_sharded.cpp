@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -357,7 +357,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .is_post_all_gather = is_post_all_gather,
         .use_two_stage_reduce = grid.use_two_stage_reduce,
         .use_welford = use_welford,
-        .skip_write_back = skip_write_back};
+        .skip_write_back = skip_write_back,
+        .rms_norm = rms_norm};
     auto cb_sizes = cb_size_params.compute();
 
     // Build ProgramDescriptor

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -173,7 +173,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
 
     std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
+    compute_defines["REDUCE_OP"] = "PoolType::AVG";
     if (is_lastdim_layer_norm) {
         compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
     } else {

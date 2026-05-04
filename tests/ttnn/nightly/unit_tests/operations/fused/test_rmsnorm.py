@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,9 @@ from tt_lib.utils import (
     is_close,
 )
 from models.common.utility_functions import is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
+
+TEST_PADDING_VALUE = -42
 
 
 def rmsnorm(x, gamma, beta, eps):
@@ -102,8 +104,14 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
         # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
         ref_rmsnorm = rmsnorm(x, gamma.flatten(), beta.flatten(), epsf)
 
-        passing = is_close(tt_got_back, ref_rmsnorm)
-        assert passing
+        assert_numeric_metrics(
+            ref_rmsnorm,
+            tt_got_back,
+            pcc_threshold=0.999,
+            rtol=0.039,
+            atol=0.045,
+            frobenius_threshold=0.008,
+        )
 
 
 @pytest.mark.parametrize(
@@ -136,7 +144,7 @@ def test_rmsnorm_test(test_id, dtype, in0_mem_config, out_mem_config, device):
     run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device)
 
 
-@pytest.mark.parametrize("h", [128, 1024, 8192, 65536])
+@pytest.mark.parametrize("h", [24, 128, 1024, 8192, 65536])
 @pytest.mark.parametrize("w", [2048, 3072, 4096])
 def test_llama_4D_rms_norm(device, h, w):
     """
@@ -152,15 +160,23 @@ def test_llama_4D_rms_norm(device, h, w):
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
     weight = ttnn.from_torch(torch_weight.reshape(1, 1, w // 32, 32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    is_close(torch_output_tensor, output_tensor)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.095,
+        atol=0.138,
+        frobenius_threshold=0.048,
+    )
 
 
-@pytest.mark.parametrize("batch_size, w", [(1, 5120)])
+@pytest.mark.parametrize("batch_size, w", [(1, 5120), (1, 48)])
 def test_large_tensor_rms_norm(device, batch_size, w):
     torch.manual_seed(0)
 
@@ -180,6 +196,7 @@ def test_large_tensor_rms_norm(device, batch_size, w):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
         weight = ttnn.from_torch(
             torch_weight,
             device=device,
@@ -203,4 +220,11 @@ def test_large_tensor_rms_norm(device, batch_size, w):
         )
         output_tensor = ttnn.from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.009,
+            atol=0.009,
+            frobenius_threshold=0.004,
+        )

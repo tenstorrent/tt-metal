@@ -80,3 +80,4 @@ jobs:
                 )
             )
         }}
+      test-selection: all

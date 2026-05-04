@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,10 +24,14 @@ void kernel_main() {
     constexpr uint32_t rows_per_block = get_compile_time_arg_val(5);  // Input elems per block
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(6);
 
-    constexpr auto input_args = TensorAccessorArgs<7>();
+    constexpr uint32_t chunk_size = get_compile_time_arg_val(7);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(8);
+    constexpr uint32_t last_chunk_size = get_compile_time_arg_val(9);
+
+    constexpr auto input_args = TensorAccessorArgs<10>();
     constexpr auto weights_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input = TensorAccessor(input_args, input_buffer_src_addr, input_page_size);
-    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr, weight_stick_size);
+    const auto input = TensorAccessor(input_args, input_buffer_src_addr);
+    const auto weights = TensorAccessor(weights_args, weight_buffer_src_addr);
 
     prepare_local_cache(cb_id_in2, weights, weight_stick_size, /*pad_token_arg_idx=*/6);
 
@@ -48,13 +52,18 @@ void kernel_main() {
             noc_async_read_barrier();
             read_indices = false;
         }
-        cb_reserve_back(cb_id_in0, 1);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         input_token_t token = input_l1_ptr[index];
         uint64_t src_noc_addr = get_token_noc_addr(token, weights);
-        noc_async_read<weight_stick_size>(src_noc_addr, l1_write_addr, weight_stick_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, 1);
+
+        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+            cb_reserve_back(cb_id_in0, 1);
+            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+            uint32_t current_chunk_size = (chunk < num_chunks - 1) ? chunk_size : last_chunk_size;
+            uint32_t chunk_offset = chunk * chunk_size;
+            noc_async_read(src_noc_addr + chunk_offset, l1_write_addr, current_chunk_size);
+            noc_async_read_barrier();
+            cb_push_back(cb_id_in0, 1);
+        }
 
         index++;
         uint32_t total_bytes_into_page = offset + index * input_elem_size_bytes;

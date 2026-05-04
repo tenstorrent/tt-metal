@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <benchmark/benchmark.h>
@@ -21,8 +21,8 @@
 #include <vector>
 
 #include "core/compute_kernel_config.hpp"
-#include "core/random.hpp"
 #include "impl/context/metal_context.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -276,22 +276,14 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
         ttnn::Shape a_shape(matmul_shape.a_shape);
         ttnn::Shape b_shape(matmul_shape.b_shape);
 
-        std::vector<float> data_a(a_shape.volume());
-        ttml::core::parallel_generate(
-            std::span{data_a.data(), data_a.size()},
-            []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
-            seed);
+        auto data_a = ttml::test_utils::make_uniform_vector<float>(a_shape.volume(), -1.0F, 1.0F, seed);
         ttnn::Tensor input_tensor_a = ttnn::Tensor::from_vector(
             data_a,
             ttnn::TensorSpec(
                 a_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
             device.get());
 
-        std::vector<float> data_b(b_shape.volume());
-        ttml::core::parallel_generate(
-            std::span{data_b.data(), data_b.size()},
-            []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
-            seed + 1);
+        auto data_b = ttml::test_utils::make_uniform_vector<float>(b_shape.volume(), -1.0F, 1.0F, seed + 1);
         ttnn::Tensor input_tensor_b = ttnn::Tensor::from_vector(
             data_b,
             ttnn::TensorSpec(

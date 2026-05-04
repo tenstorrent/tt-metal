@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -86,9 +86,9 @@ struct ComputeKernelArg {
 };
 
 struct ComputeKernelConfig {
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
-    std::vector<UnpackToDestMode> unpack_to_dest_mode;
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
     bool math_approx_mode = false;
     std::map<std::string, std::string> defines;
 };
@@ -98,20 +98,20 @@ struct ComputeKernelConfig {
     const std::string& file_name,
     const std::vector<ComputeKernelArg>& args,
     const std::map<std::string, std::string>& defines = {},
-    MathFidelity math_fidelity = MathFidelity::HiFi4,
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    const std::vector<UnpackToDestMode>& unpack_to_dest_mode = {});
+    const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode = {});
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
     Program& program,
     const std::string& file_name,
     ComputeKernelArg arg,
     std::map<std::string, std::string> defines = {},
-    MathFidelity math_fidelity = MathFidelity::HiFi4,
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    std::vector<UnpackToDestMode> unpack_to_dest_mode = {});
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode = {});
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program& program,

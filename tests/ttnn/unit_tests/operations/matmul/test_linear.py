@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,16 @@ import ttnn
 from ttnn.operations.activations import get_golden_function_for_activation
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import (
+    torch_random,
+    is_blackhole,
+    skip_for_blackhole,
+    is_llk_assert_enabled,
+    skip_for_slow_dispatch,
+)
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
+from tests.ttnn.unit_tests.operations.matmul.test_matmul import is_tiny_tile_combo_supported
+
 
 pytestmark = pytest.mark.use_module_device
 
@@ -28,6 +36,7 @@ def test_linear(
     *,
     device,
 ):
+    torch.manual_seed(0)
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
 
@@ -70,7 +79,15 @@ def test_linear(
     )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.001 * k_size,
+        rtol=0.016 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -91,6 +108,7 @@ def test_linear_with_core_grid(
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6984: Compute Grid size too small")
+    torch.manual_seed(0)
     input_shape_a = (batch_size, 1, m_size, k_size)
     input_shape_b = (k_size, n_size)
 
@@ -135,7 +153,15 @@ def test_linear_with_core_grid(
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.001 * k_size,
+        rtol=0.055 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -161,7 +187,15 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, core_grid=device.core_grid, activation=activation)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.005 * k_size,
+        rtol=3.125 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -200,7 +234,15 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
     # We supply no program config or core grid, so this uses the unfused path.
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, activation=activation)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.003 * k_size,
+        rtol=1.321 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -228,7 +270,15 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.005 * k_size,
+        rtol=2.266 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("m_size", [32, 512])
@@ -260,10 +310,19 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.063 * k_size,
+        rtol=0.115 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+        check_ulp=False,
+    )
 
 
 def test_bloom_ff2_linear(device):
+    torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 384, 4096), -0.1, 0.1, dtype=torch.float32)
     torch_weight = torch_random((4096, 1024), -0.1, 0.1, dtype=torch.float32)
     torch_bias = torch_random((1024,), -0.01, 0.01, dtype=torch.float32)
@@ -297,7 +356,16 @@ def test_bloom_ff2_linear(device):
         dtype=ttnn.bfloat16,
     )
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9992
+    output_torch = ttnn.to_torch(output)
+    assert_numeric_metrics(
+        torch_output,
+        output_torch,
+        atol=0.001 * 4096,
+        rtol=0.02 * 4096,
+        frobenius_threshold=0.001 * 4096,
+        pcc_threshold=0.9992,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -343,7 +411,14 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
 
     assert len(output_tensor.shape) == len(torch_output_tensor.shape) == len(optional_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape == optional_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0059 * k_size,
+        rtol=7.9688 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.997,
+    )
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.997)
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
@@ -376,7 +451,15 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
         transpose_b=True,
     )
     output_tensor = ttnn.to_torch(output1)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.002 * 384,
+        rtol=0.001 * 384,
+        frobenius_threshold=0.001 * 384,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
 
 
 def test_resnet50_linear(device):
@@ -446,7 +529,15 @@ def test_resnet50_linear(device):
     )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
+    assert_numeric_metrics(
+        torch_out_golden_tensor,
+        torch_output_tensor[0, 0, :, :],
+        atol=0.003 * 2048,
+        rtol=0.258 * 2048,
+        frobenius_threshold=0.001 * 2048,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize(
@@ -474,6 +565,7 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     tensor shapes.
     Checks for the exactness of shape, values, and dtype of the output tensors.
     """
+    torch.manual_seed(0)
     # Create random tensors with appropriate dimensions
     torch_a = torch.randn(*shape_a, dtype=torch.bfloat16)
     torch_b = torch.randn(*shape_b, dtype=torch.bfloat16)
@@ -532,8 +624,16 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     if ttnn_result_torch.shape != torch_result.shape:
         assert False, f"mismatch in shape: torch: {torch_result.shape}, ttnn: {ttnn_result_torch.shape}"
 
-    # Check values with PCC
-    assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
+    # Check values with numeric metrics
+    k_value = shape_a[-1] if len(shape_a) > 0 else 1
+    assert_numeric_metrics(
+        torch_result,
+        ttnn_result_torch,
+        atol=0.0157 * k_value,
+        rtol=0.1954 * k_value,
+        frobenius_threshold=0.0047 * k_value,
+        pcc_threshold=0.99,
+    )
 
     # Allow some tolerance for numeric differences
     atol = rtol = 0.1
@@ -654,7 +754,15 @@ def test_linear_yolov7(
     )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
+    assert_numeric_metrics(
+        torch_out_golden_tensor,
+        torch_output_tensor[0, 0, :, :],
+        atol=0.014 * 512,
+        rtol=24.25 * 512,
+        frobenius_threshold=0.001 * 512,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
 
 
 # ============================================================================
@@ -688,7 +796,7 @@ def _setup_subdevice(device, skip_rows=1):
     device.set_sub_device_stall_group([dummy_sub_device_id, worker_sub_device_id])
 
     worker_core_grid = ttnn.CoreGrid(x=cols, y=rows - skip_rows)
-    return sub_device_manager, worker_sub_device_id, worker_core_grid
+    return sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs
 
 
 def _teardown_subdevice(device, sub_device_manager):
@@ -698,6 +806,7 @@ def _teardown_subdevice(device, sub_device_manager):
     device.remove_sub_device_manager(sub_device_manager)
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize("m_size", [128, 384])
 @pytest.mark.parametrize("k_size", [512])
 @pytest.mark.parametrize("n_size", [512])
@@ -713,7 +822,7 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
     if grid.y < 2:
         pytest.skip("Need at least 2 rows for sub-device test")
 
-    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device)
+    sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs = _setup_subdevice(device)
     try:
         torch.manual_seed(0)
         torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
@@ -726,13 +835,16 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
         if torch_bias is not None:
             torch_output = torch_output + torch_bias
 
-        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        bias = (
-            ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-            if use_bias
-            else None
-        )
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device)
+        # Use to_layout outside of ttnn.from_torch to avoid introducing new arguments (subdevice_id / sub_core_grids) for ttnn.from_torch.
+        # There is ongoing activity to unify the interface for subdevices; once complete, to_layout can be removed from here.
+        input_a = ttnn.to_layout(input_a, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device)
+        input_b = ttnn.to_layout(input_b, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
+        bias = None
+        if use_bias:
+            bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat16, device=device)
+            bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
 
         output = ttnn.linear(
             input_a,
@@ -743,11 +855,20 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
             sub_device_id=worker_sub_device_id,
         )
         output = ttnn.to_torch(output)
-        assert_with_pcc(torch_output, output, 0.999)
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.007 * k_size,
+            rtol=7.313 * k_size,
+            frobenius_threshold=0.001 * k_size,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
     finally:
         _teardown_subdevice(device, sub_device_manager)
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize("m_size", [128])
 @pytest.mark.parametrize("k_size", [512])
 @pytest.mark.parametrize("n_size", [512])
@@ -760,16 +881,19 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
     if grid.y <= skip_rows:
         pytest.skip(f"Need at least {skip_rows + 1} rows for this sub-device test")
 
-    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device, skip_rows=skip_rows)
+    sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs = _setup_subdevice(
+        device, skip_rows=skip_rows
+    )
     try:
         torch.manual_seed(0)
         torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
         torch_input_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
         torch_output = torch_input_a @ torch_input_b
 
-        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device)
+        input_a = ttnn.to_layout(input_a, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device)
+        input_b = ttnn.to_layout(input_b, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
         output = ttnn.linear(
             input_a,
             input_b,
@@ -777,7 +901,15 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
             sub_device_id=worker_sub_device_id,
         )
         output = ttnn.to_torch(output)
-        assert_with_pcc(torch_output, output, 0.999)
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.005 * k_size,
+            rtol=4.188 * k_size,
+            frobenius_threshold=0.001 * k_size,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
     finally:
         _teardown_subdevice(device, sub_device_manager)
 
@@ -828,4 +960,353 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
         compute_kernel_config=compute_kernel_config,
     )
     output = ttnn.to_torch(output)
-    assert_with_pcc(torch_output, output, 0.99)
+    assert_numeric_metrics(
+        torch_output,
+        output,
+        atol=0.004 * k_size,
+        rtol=4.334 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
+
+
+def run_linear_bias_broadcast(device, a, b, bias=None, optional_output=None):
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    bias_tt = None
+    if bias is not None:
+        bias_tt = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    optional_tt = None
+    if optional_output is not None:
+        optional_tt = ttnn.from_torch(optional_output, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.linear(a_tt, b_tt, bias=bias_tt, optional_output_tensor=optional_tt)
+    return ttnn.to_torch(result)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, bias_shape",
+    [
+        ((256, 1024), (1024, 512), (1, 1, 512)),
+        ((1, 1024), (1024, 512), (1, 512, 512)),
+        ((2, 16, 32), (2, 32, 8), None),
+        ((32, 64), (64, 16), (1, 17, 16)),  # Broadcast error: Invalid dimension"
+    ],
+)
+def test_linear_bias_broadcast(device, a_shape, b_shape, bias_shape):
+    torch.manual_seed(0)
+
+    a = torch.randn(*a_shape, dtype=torch.bfloat16)
+    b = torch.randn(*b_shape, dtype=torch.bfloat16)
+
+    if bias_shape is not None:
+        bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
+    else:
+        bias = None
+
+    torch_failed = False
+    try:
+        if bias_shape is None:
+            expected = torch.matmul(a, b)
+        else:
+            expected = torch.matmul(a, b) + bias
+
+    except Exception:
+        torch_failed = True
+
+    if torch_failed:
+        with pytest.raises(Exception):
+            run_linear_bias_broadcast(device, a, b, bias)
+    else:
+        result = run_linear_bias_broadcast(device, a, b, bias)
+        assert result.shape == expected.shape
+        assert_numeric_metrics(
+            expected, result, pcc_threshold=0.999, check_ulp=False, check_frobenius=False, check_allclose=False
+        )
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, bias_shape, optional_shape",
+    [
+        ((8, 64), (64, 4), (1, 1, 4), (1, 1, 1, 8, 4)),
+        ((8, 64), (64, 4), (1, 1, 4), (1, 3, 8)),  # Invalid optional output tensor
+    ],
+)
+def test_linear_bias_broadcast_with_optional_shape(device, a_shape, b_shape, bias_shape, optional_shape):
+    torch.manual_seed(0)
+
+    a = torch.randn(*a_shape, dtype=torch.bfloat16)
+    b = torch.randn(*b_shape, dtype=torch.bfloat16)
+    bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
+
+    optional = None
+    if optional_shape is not None:
+        optional = torch.empty(*optional_shape, dtype=torch.bfloat16)
+
+    torch_failed = False
+    try:
+        expected = torch.matmul(a, b) + bias
+    except Exception:
+        torch_failed = True
+
+    if torch_failed:
+        with pytest.raises(Exception):
+            run_linear_bias_broadcast(device, a, b, bias, optional)
+    else:
+        if expected.numel() != optional.numel():
+            with pytest.raises(Exception):
+                run_linear_bias_broadcast(device, a, b, bias, optional)
+        else:
+            result = run_linear_bias_broadcast(device, a, b, bias, optional)
+
+            if optional_shape is not None:
+                assert result.shape == optional_shape
+            else:
+                assert result.shape == expected.shape
+
+
+@pytest.mark.parametrize("bias_rank", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("m,k,n", [(32, 32, 32)])
+def test_linear_broadcast_bias_ranks(device, m, k, n, bias_rank):
+    """
+    ``ttnn.linear`` with broadcastable bias shapes (logical rank 0-4) vs torch ``matmul + bias``.
+    """
+
+    if bias_rank == 0:
+        pytest.skip(f"Rank-0 bias linear not supported")
+
+    torch.manual_seed(0)
+    torch_input = torch.randn((m, k), dtype=torch.bfloat16)
+    torch_weight = torch.randn((n, k), dtype=torch.bfloat16)
+    if bias_rank == 1:
+        torch_bias = torch.randn((n,), dtype=torch.bfloat16)
+    elif bias_rank == 2:
+        torch_bias = torch.randn((1, n), dtype=torch.bfloat16)
+    elif bias_rank == 3:
+        torch_bias = torch.randn((1, 1, n), dtype=torch.bfloat16)
+    else:
+        torch_bias = torch.randn((1, 1, 1, n), dtype=torch.bfloat16)
+
+    torch_mat = torch.matmul(torch_input, torch_weight.T)
+    torch_output = torch_mat + torch_bias
+
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    weight_tensor = ttnn.from_torch(
+        torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bias_tensor = ttnn.from_torch(
+        torch_bias, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.linear(input_tensor, weight_tensor, bias=bias_tensor, transpose_b=True)
+
+    output = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output, output, pcc=0.99)
+
+
+def _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h):
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, True) and is_llk_assert_enabled():
+        pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
+
+
+def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
+    remainder = num % lcm
+    if remainder == 0:
+        return num
+    padding_needed = lcm - remainder
+    padded_number = num + padding_needed
+    return padded_number
+
+
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
+@pytest.mark.parametrize("k_dram", [128, 256])
+@pytest.mark.parametrize(
+    "m,n,tile_h,tile_w,transpose_tile",
+    [
+        (32, 32, 32, 32, False),
+        (16, 32, 16, 32, False),
+    ],
+)
+def test_linear_fused_non_broadcast_bias_dram_sharded_in1(device, k_dram, m, n, tile_h, tile_w, transpose_tile):
+    """Fused bias [1,1,M,N] with MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig (grid 1x1)."""
+    _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h)
+    torch.manual_seed(0)
+    in1_dtype = ttnn.bfloat16
+    num_banks = device.dram_grid_size().x if is_blackhole() else 12
+    n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
+    in0_shape = [1, 1, m, k_dram]
+    in1_shape = [1, 1, k_dram, n]
+    in1_shard_shape = [k_dram, n_padded // num_banks]
+    num_cores = 1
+    in0_block_w = k_dram // num_cores // 32
+    out_block_h = m // tile_h
+    out_block_w = n // num_cores // tile_w
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (1, 1, m, k_dram),
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, 32)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+    bias_dram = torch.randn([1, 1, m, n]).bfloat16().float()
+    bias_shard_shape = [tile_h, n_padded // num_banks]
+    bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
+    bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    bias_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec)
+    bias_t = ttnn.from_torch(
+        bias_dram,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=bias_mem_config,
+    )
+    dram_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=in0_block_w // 4,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fused_activation=None,
+    )
+    dram_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    output_dram = ttnn.linear(
+        in0_t,
+        in1_t,
+        bias=bias_t,
+        program_config=dram_program_config,
+        memory_config=sharded_mem_config,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=dram_compute_kernel_config,
+        output_tile=ttnn.Tile([tile_h, tile_w]),
+    )
+    pt_dram = in0 @ in1 + bias_dram
+    for o in ttnn.get_device_tensors(output_dram):
+        assert_numeric_metrics(
+            pt_dram,
+            ttnn.to_torch(o),
+            atol=0.004 * k_dram,
+            rtol=0.227 * k_dram,
+            frobenius_threshold=0.001 * k_dram,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
+
+
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
+@pytest.mark.parametrize("m,k,n", [(32, 32, 32), (32, 64, 32)])
+def test_linear_fused_non_broadcast_bias_width_sharded_in0_in1(device, m, k, n):
+    """Fused bias [1,1,M,N] with width-sharded activations/weights/bias and 1D mcast program config."""
+    _skip_unless_fused_full_mn_tiny_tile_supported(False, 32, 32)
+    torch.manual_seed(0)
+    num_act = num_mm = 1
+    core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    mem_config_weights = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_range, [k, n // num_mm], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    mem_config_bias = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_range, [32, n // num_mm], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    mem_config_input = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_range, [m, k // num_act], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    sharded_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    input_tensor = torch.randn([1, 1, m, k], dtype=torch.bfloat16)
+    tt_input = ttnn.as_tensor(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config_input,
+    )
+    weights_tensor = torch.randn([1, 1, k, n], dtype=torch.bfloat16)
+    weight_tt = ttnn.as_tensor(
+        weights_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config_weights,
+    )
+    bias_tensor = torch.randn([1, 1, m, n], dtype=torch.bfloat16) * 2.0
+    bias_tt = ttnn.as_tensor(
+        bias_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config_bias,
+    )
+    sharded_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=k // num_mm // 32,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+        mcast_in0=True,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    tt_out = ttnn.linear(
+        tt_input,
+        weight_tt,
+        bias=bias_tt,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        program_config=sharded_program_config,
+        compute_kernel_config=sharded_compute_kernel_config,
+    )
+    matmul_ref = torch.matmul(input_tensor, weights_tensor) + bias_tensor
+    tt_mm_out = ttnn.to_torch(ttnn.from_device(tt_out))
+    assert_numeric_metrics(
+        matmul_ref,
+        tt_mm_out,
+        atol=0.018 * k,
+        rtol=2.57 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.993,
+    )

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ SGDComposite::SGDComposite(ttml::serialization::NamedParameters parameters, cons
             m_theta.emplace(
                 name,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                     /* requires_grad */ false));
         }
     }
@@ -41,7 +41,7 @@ void SGDComposite::step() {
     }
 
     for (auto& [name, theta_ptr] : m_theta) {
-        auto theta = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
+        auto theta = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
         const auto& tensor_ptr = m_parameters.at(name);
         if (!tensor_ptr->is_grad_initialized()) {
             continue;
@@ -52,7 +52,7 @@ void SGDComposite::step() {
         if (m_config.weight_decay != 0.0F) {
             gradients = ttnn::add(
                 ttnn::multiply(
-                    tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
+                    tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
                     m_config.weight_decay,
                     /* fast_and_approximate_mode*/ true),
                 gradients);
@@ -93,7 +93,7 @@ void SGDComposite::step() {
         }
         theta_ptr->set_value(theta);
         tensor_ptr->set_value(ttnn::subtract(
-            tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
+            tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
             ttnn::multiply(
                 gradients,
                 m_config.lr,

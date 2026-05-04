@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -24,6 +25,8 @@
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "dispatch_test_utils.hpp"
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
@@ -1044,6 +1047,139 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
     for (const distributed::MeshTraceId trace_id : trace_ids) {
         this->device_->release_mesh_trace(trace_id);
     }
+}
+
+// Creates a program whose kernels read DFB config properties from L1 and write
+// them to an output address (passed as an RTA).  No actual DFB data movement
+// happens — the test only checks that the dispatched config values are correct.
+//
+// Returns {program, producer_kernel_handle, consumer_kernel_handle, dfb_id}.
+struct DFBConfigReaderProgram {
+    Program program;
+    KernelHandle producer;
+    KernelHandle consumer;
+    uint32_t dfb_id;
+};
+
+DFBConfigReaderProgram create_dfb_config_reader_program(uint32_t entry_size, uint32_t num_entries) {
+    Program program = CreateProgram();
+    CoreCoord worker = {0, 0};
+    CoreRange core_range({0, 0});
+
+    const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_config_reader.cpp";
+
+    auto producer_kernel =
+        CreateKernel(program, kernel_path, worker, DataMovementConfig{.processor = DataMovementProcessor::RISCV_0});
+
+    auto consumer_kernel =
+        CreateKernel(program, kernel_path, worker, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1});
+
+    experimental::dfb::DataflowBufferConfig dfb_config{
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false};
+
+    auto dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range, dfb_config);
+    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dfb_id, producer_kernel, consumer_kernel);
+
+    return {std::move(program), producer_kernel, consumer_kernel, dfb_id};
+}
+
+// Enqueues the same DFB program twice inside a single trace with different DFB
+// configs between the two uses.  After replay, reads the config values each
+// execution wrote to L1 and verifies they match the configs that were active at
+// capture time.
+TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "DFBs not yet supported through Fast Dispatch on Quasar";
+    }
+
+    constexpr uint32_t entry_size_a = 1024;
+    constexpr uint32_t num_entries_a = 16;
+    constexpr uint32_t entry_size_b = 512;
+    constexpr uint32_t num_entries_b = 32;
+    static_assert(entry_size_a * num_entries_a == entry_size_b * num_entries_b, "total DFB size must be equal");
+    constexpr uint32_t dfb_total_size = entry_size_a * num_entries_a;
+
+    CreateDevice(dfb_total_size * 4);
+
+    IDevice* device = this->device_->get_devices()[0];
+    CoreCoord worker = {0, 0};
+
+    // Each execution writes 1 uint32 (entry_size).  Pick addresses after the
+    // DFB's L1 region to avoid overlap.
+    const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t output_addr_a = l1_base + dfb_total_size;
+    const uint32_t output_addr_b = output_addr_a + 64;
+
+    // Create the program with config A.
+    auto [program, producer_kernel, consumer_kernel, dfb_id] =
+        create_dfb_config_reader_program(entry_size_a, num_entries_a);
+    auto dfb = program.impl().get_dataflow_buffer(dfb_id);
+
+    // Set RTAs so the first execution writes to output_addr_a.
+    SetRuntimeArgs(program, producer_kernel, worker, {output_addr_a, dfb_id});
+    SetRuntimeArgs(program, consumer_kernel, worker, {output_addr_a, dfb_id});
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, std::move(program));
+
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
+
+    // Run eager with config A so the program gets compiled and cached.
+    distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
+
+    // Verify config A was dispatched correctly in eager mode.
+    {
+        vector<uint32_t> l1_data;
+        detail::ReadFromDeviceL1(device, worker, output_addr_a, sizeof(uint32_t), l1_data);
+        EXPECT_EQ(l1_data[0], entry_size_a) << "eager: entry_size mismatch";
+    }
+
+    // --- Trace capture: enqueue twice with different DFB configs ---
+
+    auto tid = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+
+    // First enqueue: config A, output to output_addr_a.
+    distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
+
+    // Modify the DFB config to B between enqueues.
+    dfb->config.entry_size = entry_size_b;
+    dfb->config.num_entries = num_entries_b;
+
+    // Update RTAs so the second execution writes to output_addr_b.
+    auto& program_ref = workload.get_programs().at(device_range_);
+    SetRuntimeArgs(program_ref, producer_kernel, worker, {output_addr_b, dfb_id});
+    SetRuntimeArgs(program_ref, consumer_kernel, worker, {output_addr_b, dfb_id});
+
+    // Second enqueue: config B, output to output_addr_b.
+    distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
+
+    this->device_->end_mesh_trace(mesh_command_queue.id(), tid);
+
+    // --- Replay and verify ---
+
+    // Clear L1 output locations before replay.
+    vector<uint32_t> zeros(16, 0);
+    detail::WriteToDeviceL1(device, worker, output_addr_a, zeros);
+    detail::WriteToDeviceL1(device, worker, output_addr_b, zeros);
+
+    this->device_->replay_mesh_trace(mesh_command_queue.id(), tid, true);
+
+    // Read back entry_size written by each execution.
+    vector<uint32_t> result_a, result_b;
+    detail::ReadFromDeviceL1(device, worker, output_addr_a, sizeof(uint32_t), result_a);
+    detail::ReadFromDeviceL1(device, worker, output_addr_b, sizeof(uint32_t), result_b);
+
+    EXPECT_EQ(result_a[0], entry_size_a) << "trace execution 1: entry_size mismatch";
+    EXPECT_EQ(result_b[0], entry_size_b) << "trace execution 2: entry_size mismatch";
+
+    distributed::Finish(mesh_command_queue);
+    this->device_->release_mesh_trace(tid);
 }
 
 }  // namespace tt::tt_metal

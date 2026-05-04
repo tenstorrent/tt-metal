@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional
@@ -7,7 +7,7 @@ import ttnn
 
 # NOTE: This file is forked from models/common/modules/tt_ccl.py
 #       This is done to include logic for divifing the grid of cores for ring attention
-#       One row is taken for the CCL communication of the op
+#       One col is taken for the CCL communication of the op
 
 # =============================================================================
 # CCL tuning defaults - shared across all TTTv2 modules
@@ -74,7 +74,7 @@ class TT_CCL:
             }
         )
 
-        self.ring_attention_ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+        self.ring_attention_ccl_core_grid_offset = (full_compute_grid.x - 1, 0)
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
         )

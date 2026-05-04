@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from torch import nn
@@ -60,7 +60,7 @@ class RMSNorm(nn.Module):
             tt_gathered_stats = ttnn.all_gather(
                 tt_stats,
                 dim=3,
-                num_links=1,
+                num_links=4,
                 cluster_axis=1,
                 mesh_device=self.mesh_device,
                 memory_config=tt_gathered_stats_memory_config,

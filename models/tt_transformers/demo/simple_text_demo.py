@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.sampling import SamplingParams
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
@@ -352,6 +353,13 @@ def prepare_generator_args(
 # mode (str): Mode to run the demo in (full, prefill, decode), full will run both prefill and decode
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
+_trace_region_size = (
+    100000000
+    if (is_blackhole() and os.environ.get("HF_MODEL", "").endswith(("Qwen2.5-72B-Instruct", "Qwen2.5-32B-Instruct")))
+    else 50000000
+)
+
+
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace, num_layers, mode",
     [
@@ -829,7 +837,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": _trace_region_size, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -917,7 +925,8 @@ def test_demo_text(
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
     arg_enable_trace = request.config.getoption("--enable_trace")
-    enable_trace = arg_enable_trace if arg_enable_trace is not None else enable_trace
+    if arg_enable_trace is not None:
+        enable_trace = arg_enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
@@ -1153,6 +1162,7 @@ def test_demo_text(
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
                 warmup_prefill=not is_device_perf_test,
+                enable_trace=enable_trace,
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
@@ -1166,6 +1176,7 @@ def test_demo_text(
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
                 warmup_prefill=not is_device_perf_test,
+                enable_trace=enable_trace,
             )
             if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
                 prefilled_token, prefill_log_probs = prefill_out
@@ -1581,9 +1592,10 @@ def test_demo_text(
             )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
+            run_type="demo",
             ml_model_name=model_name,
             ml_model_type="llm",
+            device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},

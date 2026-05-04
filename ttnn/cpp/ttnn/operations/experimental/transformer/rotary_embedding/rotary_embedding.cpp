@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,9 +21,11 @@ ttnn::Tensor rotary_embedding(
 
     using tt::tt_metal::PadValue;
     TT_FATAL(
-        input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
-        "Input X dimension ({}) must be divisible by {} for tiling.",
+        input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
+        "Input X dimension ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint "
+        "must align with a tile boundary).",
         input_tensor.padded_shape()[-1],
+        TILE_WIDTH,
         TILE_WIDTH * 2);
 
     uint32_t seq_len = input_tensor.padded_shape()[-2];
@@ -64,7 +66,7 @@ ttnn::Tensor rotary_embedding(
 
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
     tt::tt_metal::MemoryConfig default_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (input_tensor.storage_type() == StorageType::DEVICE) {

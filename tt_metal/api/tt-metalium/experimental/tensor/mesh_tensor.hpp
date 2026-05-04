@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -59,6 +59,12 @@ public:
      * Construct a tensor that does not own any device memory.
      */
     MeshTensor();
+
+    /**
+     * Allocate a MeshTensor on the given device with the given spec and topology.
+     */
+    static MeshTensor allocate_on_device(
+        distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology);
 
     // Internal Constructor for transition.
     explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
@@ -131,6 +137,11 @@ public:
     distributed::MeshDevice& device() const;
 
     // Getters:
+
+    /**
+     * Returns true if MeshTensor owns device memory (not default-constructed or moved-from).
+     */
+    bool is_initialized() const;
 
     const TensorSpec& tensor_spec() const;
 

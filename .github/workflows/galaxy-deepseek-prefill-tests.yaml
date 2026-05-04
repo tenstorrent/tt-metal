@@ -1,17 +1,16 @@
 name: "(Galaxy) DeepSeek Prefill tests"
 
 on:
-
   workflow_dispatch:
     inputs:
       test-type:
-        description: 'Select which tests to run'
+        description: "Select which tests to run"
         required: true
         type: choice
         options:
           - all
           - module
-        default: 'all'
+        default: "all"
       platform:
         required: false
         type: choice

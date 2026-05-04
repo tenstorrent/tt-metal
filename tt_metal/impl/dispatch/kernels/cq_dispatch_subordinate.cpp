@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,7 @@ constexpr uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
 constexpr uint32_t cb_size = CB_SIZE;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
 constexpr uint32_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
@@ -325,9 +326,56 @@ void set_go_signal_noc_data() {
     cmd_ptr = round_up_pow2((uint32_t)data_ptr, L1_ALIGNMENT);
 }
 
+// When dispatch_d runs on the same core, it issues transactions on dispatch_s's dedicated NOC
+// that we never count locally. This function will wait for dispatch_d to publish its NOC 1 deltas into dispatch_d's
+// normal counter slots, then merge any non-zero deltas into our local counters before the barrier.
+FORCE_INLINE
+void merge_dispatch_d_noc_counter_deltas() {
+    if constexpr (distributed_dispatcher) {
+        DEVICE_PRINT("merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core");
+        ASSERT(0);
+        return;
+    }
+
+    constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
+
+    volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
+    noc_semaphore_wait(shutdown_sem_addr, 1);
+
+    invalidate_l1_cache();
+    const uint32_t reads_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::READS_NUM_ISSUED>(my_noc_index);
+    const uint32_t nonposted_writes_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(my_noc_index);
+    const uint32_t nonposted_writes_acked_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(my_noc_index);
+    const uint32_t nonposted_atomics_acked_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(my_noc_index);
+    const uint32_t posted_writes_delta =
+        get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(my_noc_index);
+
+    if (reads_delta != 0) {
+        noc_reads_num_issued[my_noc_index] += reads_delta;
+    }
+    if (nonposted_writes_delta != 0) {
+        noc_nonposted_writes_num_issued[my_noc_index] += nonposted_writes_delta;
+    }
+    if (nonposted_writes_acked_delta != 0) {
+        noc_nonposted_writes_acked[my_noc_index] += nonposted_writes_acked_delta;
+    }
+    if (nonposted_atomics_acked_delta != 0) {
+        noc_nonposted_atomics_acked[my_noc_index] += nonposted_atomics_acked_delta;
+    }
+    if (posted_writes_delta != 0) {
+        noc_posted_writes_num_issued[my_noc_index] += posted_writes_delta;
+    }
+}
+
 void kernel_main() {
     set_l1_data_cache<true>();
     DPRINT << "dispatch_s : start" << ENDL();
+    DEVICE_PRINT("dispatch_s : start\n");
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
@@ -358,7 +406,10 @@ void kernel_main() {
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
             case CQ_DISPATCH_CMD_TERMINATE: done = true; break;
-            default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
+            default:
+                DPRINT << "dispatcher_s invalid command" << ENDL();
+                DEVICE_PRINT("dispatcher_s invalid command\n");
+                ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
         ASSERT(cmd_ptr <= ((uint32_t)cmd + cb_page_size));
@@ -373,15 +424,14 @@ void kernel_main() {
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
-#ifdef COMPILE_FOR_IDLE_ERISC
-    // Wait for all transactions to complete, to avoid hitting the asserts in
-    // idle_erisck.cc if there are outstanding transactions. These barriers
-    // don't work on worker cores, because there cq_dispatch is on the same core
-    // and shares use of this noc, but doesn't update this risc's transaction
-    // counts. However, we don't have the barrier checks in brisck.cc, so we can
-    // skip this for now.
+
+    if constexpr (!distributed_dispatcher) {
+        merge_dispatch_d_noc_counter_deltas();
+    }
+
     noc_async_full_barrier();
-#endif
+
     DPRINT << "dispatch_s : done" << ENDL();
+    DEVICE_PRINT("dispatch_s : done\n");
     set_l1_data_cache<false>();
 }

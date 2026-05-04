@@ -10,7 +10,7 @@ on:
         description: "Harbor pull-through prefix from org vars when healthy; empty to pull GHCR directly"
         value: ${{ jobs.check.outputs.harbor-prefix }}
   schedule:
-    - cron: '0 * * * *'
+    - cron: "0 * * * *"
 
 jobs:
   check:

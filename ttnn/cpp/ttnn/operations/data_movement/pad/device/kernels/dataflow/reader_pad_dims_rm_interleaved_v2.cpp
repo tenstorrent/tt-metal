@@ -1,14 +1,16 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    experimental::CircularBuffer cb(cb_id);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes / 2; ++i) {
         ptr[i] = val;
@@ -86,16 +88,19 @@ void kernel_main() {
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_pad = tt::CBIndex::c_1;
     constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_in0_exp(cb_in0);
+    experimental::CircularBuffer cb_pad_exp(cb_pad);
+    experimental::CircularBuffer cb_pad_align_exp(cb_pad_align);
 
     const auto s = TensorAccessor(src_args, src_addr);
 
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
 
-    uint64_t pad_val_addr = get_read_ptr(cb_pad);
+    uint64_t pad_val_addr = cb_pad_exp.get_read_ptr();
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
 
-    uint64_t pad_align_addr = get_read_ptr(cb_pad_align);
-    uint64_t pad_align_write_addr = get_write_ptr(cb_pad_align);
+    uint64_t pad_align_addr = cb_pad_align_exp.get_read_ptr();
+    uint64_t pad_align_write_addr = cb_pad_align_exp.get_write_ptr();
     uint64_t pad_align_noc_addr = get_noc_addr(pad_align_addr);
 
     fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);
@@ -103,8 +108,8 @@ void kernel_main() {
     uint32_t i_page = start_page_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {
-        cb_reserve_back(cb_in0, num_sticks_per_barrier);
-        uint32_t l1_write_addr = get_write_ptr(cb_in0);
+        cb_in0_exp.reserve_back(num_sticks_per_barrier);
+        uint32_t l1_write_addr = cb_in0_exp.get_write_ptr();
 
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
@@ -113,7 +118,7 @@ void kernel_main() {
             noc_async_read_barrier();
             if (read_stick) {
                 if constexpr (front_padding) {  // Read noc into cb_pad_align l1
-                    uint32_t temp_addr = get_write_ptr(cb_pad_align);
+                    uint32_t temp_addr = cb_pad_align_exp.get_write_ptr();
                     read_input_pages_into_l1(
                         s,
                         i_page,
@@ -124,10 +129,10 @@ void kernel_main() {
                     noc_async_read_barrier();
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
-                        (void*)(get_read_ptr(cb_pad_align)),
+                        (void*)(cb_pad_align_exp.get_read_ptr()),
                         (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
-                    uint32_t temp_addr = get_write_ptr(cb_pad_align);
+                    uint32_t temp_addr = cb_pad_align_exp.get_write_ptr();
                     read_input_pages_into_l1(
                         s,
                         i_page,
@@ -159,6 +164,6 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-        cb_push_back(cb_in0, num_sticks_per_barrier);
+        cb_in0_exp.push_back(num_sticks_per_barrier);
     }
 }

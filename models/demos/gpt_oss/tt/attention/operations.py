@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -17,8 +17,7 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights):
     Returns:
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
-    xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16)
-    ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    xqkv_fused = ttnn.linear(hidden_states, weights.wqkv, bias=weights.wqkv_bias, dtype=ttnn.bfloat16)
     return xqkv_fused
 
 

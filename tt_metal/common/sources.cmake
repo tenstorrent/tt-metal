@@ -6,9 +6,9 @@ set(COMMON_SOURCES
     shape.cpp
     shape2d.cpp
     shape_base.cpp
+    stable_hash.cpp
     tt_backend_api_types.cpp
     work_split.cpp
-    thread_pool.cpp
     host_buffer.cpp
     memory_pin.cpp
 )

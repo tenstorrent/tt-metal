@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
 }
 
 void ReduceDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to reduce need to be on device! Got storage type: {}",
@@ -36,6 +36,7 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32,
         "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction - got {}",
         tensor_args.dtype());
+    validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");
 }
 
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
@@ -50,33 +51,12 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             break;
     }
 
-    TensorSpec tensor_spec(
+    return build_reduce_output_tensor_spec(
         output_shape,
-        tt::tt_metal::TensorLayout(
-            operation_attributes.output_dtype,
-            tt::tt_metal::PageConfig(Layout::TILE),
-            MemoryConfig(operation_attributes.output_mem_config.buffer_type())));
-
-    if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            const auto& nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
-            return tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
-        }
-
-        auto nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
-        if (operation_attributes.dim == tt::tt_metal::ReduceOpDim::W ||
-            operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) {
-            nd_shard_spec.shard_shape[-1] = 1;
-        }
-        if ((operation_attributes.dim == tt::tt_metal::ReduceOpDim::H ||
-             operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) &&
-            nd_shard_spec.shard_shape.rank() > 1) {
-            nd_shard_spec.shard_shape[-2] = tt::div_up(nd_shard_spec.shard_shape[-2], tensor_args.logical_shape()[-2]);
-        }
-        return tensor_spec.sharded(std::move(nd_shard_spec), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
-    }
-
-    return tensor_spec;
+        operation_attributes.output_dtype,
+        operation_attributes.output_mem_config,
+        tensor_args.memory_config(),
+        operation_attributes.dim);
 }
 
 ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_output_tensors(
@@ -97,10 +77,12 @@ ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         operation_attributes.compute_kernel_config,
         operation_attributes.sub_core_grids,
         operation_attributes.negate,
+        operation_attributes.post_mul_scaler,
         program_factory.index(),
         tensor_args.dtype(),
         tensor_args.memory_config(),
-        tensor_args.padded_shape());
+        tensor_args.padded_shape(),
+        tensor_args.tensor_spec().tile());
 }
 
 ttnn::Tensor reduce(
@@ -112,7 +94,8 @@ ttnn::Tensor reduce(
     const std::optional<DataType>& output_dtype,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool negate) {
+    bool negate,
+    float post_mul_scaler) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -122,7 +105,8 @@ ttnn::Tensor reduce(
             output_dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             sub_core_grids,
-            negate},
+            negate,
+            post_mul_scaler},
         input_tensor);
 }
 

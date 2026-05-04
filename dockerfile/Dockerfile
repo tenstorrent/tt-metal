@@ -184,7 +184,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     uuid-runtime \
     wget \
     zstd \
-    libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 #############################################################

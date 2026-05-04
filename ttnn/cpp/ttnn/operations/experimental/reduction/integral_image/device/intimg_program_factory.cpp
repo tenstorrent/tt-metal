@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -131,7 +131,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(dataflow_compile_time_args);
     const ReaderDataMovementConfig reader_config{dataflow_compile_time_args};
     const ComputeConfig compute_config{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = false,
         .compile_args = compute_compile_time_args,

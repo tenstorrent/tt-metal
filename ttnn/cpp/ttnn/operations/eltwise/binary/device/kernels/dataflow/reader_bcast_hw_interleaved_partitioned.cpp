@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,13 +41,13 @@ void kernel_main() {
     experimental::CircularBuffer cb1(cb_id_in1);
 
 #ifndef IN0_SHARDED
-    const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
 #else
     cb0.reserve_back(num_tiles);
     cb0.push_back(num_tiles);
 #endif
 
-    const auto s1 = TensorAccessor(src1_args, src1_addr, in1_tile_bytes);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
 #ifdef BCAST_SCALAR
     cb1.reserve_back(onetile);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
@@ -160,6 +161,28 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     H2DMode: The transfer mode (HOST_PUSH or DEVICE_PULL).
+            )doc")
+        .def(
+            "export_descriptor",
+            &tt::tt_metal::distributed::H2DSocket::export_descriptor,
+            nb::arg("socket_id"),
+            R"doc(
+                Exports a descriptor file for cross-process socket attachment.
+
+                Args:
+                    socket_id (str): A user-provided identifier used in the descriptor filename.
+
+                Returns:
+                    str: Full filesystem path to the exported descriptor file, typically
+                    ``/dev/shm/tt_h2d_<socket_id>.bin``.
+            )doc")
+        .def_static(
+            "connect",
+            &tt::tt_metal::distributed::H2DSocket::connect,
+            nb::arg("socket_id"),
+            nb::arg("timeout_ms") = nb::none(),
+            R"doc(
+                Connects to an existing H2DSocket from another process.
             )doc");
 
     nb::class_<tt::tt_metal::distributed::D2HSocket>(mod, "D2HSocket")
@@ -281,6 +304,28 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     MeshDevice: The mesh device this socket is bound to.
+            )doc")
+        .def(
+            "export_descriptor",
+            &tt::tt_metal::distributed::D2HSocket::export_descriptor,
+            nb::arg("socket_id"),
+            R"doc(
+                Exports a descriptor file for cross-process socket attachment.
+
+                Args:
+                    socket_id (str): Identifier used to name the exported descriptor.
+
+                Returns:
+                    str: Full filesystem path to the exported descriptor file, typically
+                    ``/dev/shm/tt_d2h_<socket_id>.bin``.
+            )doc")
+        .def_static(
+            "connect",
+            &tt::tt_metal::distributed::D2HSocket::connect,
+            nb::arg("socket_id"),
+            nb::arg("timeout_ms") = nb::none(),
+            R"doc(
+                Connects to an existing D2HSocket from another process.
             )doc");
 }
 

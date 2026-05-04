@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
 
@@ -24,7 +25,8 @@ void kernel_main() {
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
     uint32_t args_idx = 0;
 
-    uint32_t l1_read_addr = get_read_ptr(shard_cb_id) + read_offset;
+    experimental::CircularBuffer shard_cb(shard_cb_id);
+    uint32_t l1_read_addr = shard_cb.get_read_ptr() + read_offset;
     for (uint32_t i = 0; i < num_writes; ++i) {
         uint32_t bank_id = args[args_idx++];
         uint32_t addr = dst_addr + args[args_idx++];

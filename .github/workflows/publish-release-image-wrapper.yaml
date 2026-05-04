@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag-latest:
-        description: 'Tag the image as latest (WARNING: Affects production!)'
+        description: "Tag the image as latest (WARNING: Affects production!)"
         required: true
         type: boolean
         default: false

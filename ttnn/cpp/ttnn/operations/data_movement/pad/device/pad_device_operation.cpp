@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,9 @@ using ttnn::operations::data_movement::common_tm_bw_model;
 namespace {
 bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, const Tensor& input_tensor) {
     if (!input_tensor.shard_spec().has_value()) {
+        return false;
+    }
+    if (!input_tensor.memory_config().is_l1()) {
         return false;
     }
     if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {

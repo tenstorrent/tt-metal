@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -236,10 +236,16 @@ using DramBuffer = std::shared_ptr<distributed::MeshBuffer>;
 
 // Generates the runtime arguments for the DRAM kernel
 static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer& dram_buffer, size_t num_tiles) {
+    // create_dram_mesh_buffer() configures page_size = byte_size (whole-buffer
+    // single page), so page_size/aligned_page_size would over-return the
+    // stride. Derive per-tile stride from total size / num_tiles instead.
+    const uint32_t per_tile_stride =
+        num_tiles == 0 ? 0 : static_cast<uint32_t>(dram_buffer->device_local_size() / num_tiles);
     return {
         static_cast<uint32_t>(dram_buffer->address()),
         static_cast<uint32_t>(0),
         static_cast<uint32_t>(num_tiles),
+        per_tile_stride,
     };
 }
 
@@ -290,7 +296,7 @@ static DramBuffer prepare_reader(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = {DEFAULT_INPUT_CB_INDEX}});
+            .compile_args = {DEFAULT_INPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the reader kernel
     tt_metal::SetRuntimeArgs(
@@ -322,7 +328,7 @@ static DramBuffer prepare_writer(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {DEFAULT_OUTPUT_CB_INDEX}});
+            .compile_args = {DEFAULT_OUTPUT_CB_INDEX, /*use_dfbs=*/false}});
 
     // Set runtime arguments for the writer kernel
     tt_metal::SetRuntimeArgs(

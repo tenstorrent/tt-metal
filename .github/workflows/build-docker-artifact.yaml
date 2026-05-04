@@ -26,8 +26,8 @@ on:
       platform:
         required: false
         type: string
-        default: ""
-        description: "Platform string for legacy callers (e.g. Ubuntu 22.04)"
+        default: "Ubuntu 22.04"
+        description: "Platform to build Docker images for"
       architecture:
         required: false
         type: string
@@ -83,6 +83,22 @@ on:
         # MIGRATION STAGING: requires tt_llk submodule; simplify when LLK moves in-tree
         description: "Docker tag for the LLK CI Docker image (Ubuntu 22.04); requires tt_llk submodule checkout"
         value: ${{ jobs.metadata.outputs.llk-ci-tag }}
+  workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build Docker images for"
+      architecture:
+        required: false
+        type: choice
+        default: "amd64"
+        options:
+          - "amd64"
 
 jobs:
   metadata:
@@ -188,9 +204,9 @@ jobs:
         id: llk-images
         run: |
           set -euo pipefail
-          LLK="tt_metal/third_party/tt_llk"
+          LLK="tt_metal/tt-llk"
           if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
-            echo "::error::tt_llk submodule is missing or not checked out (expected $LLK with .github/Dockerfile.base). Initialize submodules in CI checkout or fix .gitmodules."
+            echo "::error::LLK source missing (expected $LLK with .github/Dockerfile.base). Ensure the repository is fully checked out."
             exit 1
           fi
           DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
@@ -203,7 +219,6 @@ jobs:
             echo "LLK CI image missing: $TAG"
             echo "llk-ci-exists=false" >> "$GITHUB_OUTPUT"
           fi
-
 
   # Build missing tool images before any bake step tries to pull them.
   # Skipped when tool-tags input was provided (caller already ran build-docker-tools)
@@ -455,7 +470,6 @@ jobs:
           # Use Google Mirror for Docker Hub (Harbor doesn't proxy docker.io)
           LLK_UBUNTU_BASE_IMAGE: mirror.gcr.io/ubuntu:22.04
         run: .github/scripts/llk-build-docker-images.sh
-
 
   # Update 'latest' tags on main branch pushes
   tag-latest:

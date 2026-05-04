@@ -3,19 +3,19 @@ name: (triage) Grouping CI Failures
 on:
   schedule:
     # Run every hour at minute 0
-    - cron: '0 * * * *'
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       update_mode:
-        description: 'Mode: update (sync new errors) or rebuild (recreate all issues)'
+        description: "Mode: update (sync new errors) or rebuild (recreate all issues)"
         required: false
-        default: 'update'
+        default: "update"
         type: choice
         options:
           - update
           - rebuild
       start_date:
-        description: 'Start date for fetching Slack messages (format: January 1, 2026). Defaults to 3 days ago if empty.'
+        description: "Start date for fetching Slack messages (format: January 1, 2026). Defaults to 3 days ago if empty."
         required: false
         type: string
       end_date:
@@ -68,7 +68,7 @@ jobs:
           github_repo_name: "tt-auto-triage"
           project_owner: "tenstorrent"
           project_name: "issue dump"
-          workflow_file: '.github/workflows/grouping-ci-failures.yaml'
+          workflow_file: ".github/workflows/grouping-ci-failures.yaml"
 
       - name: Install infra dependencies
         if: ${{ !cancelled() }}

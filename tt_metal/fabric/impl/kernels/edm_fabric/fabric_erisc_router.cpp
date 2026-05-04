@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -2238,6 +2238,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     static ActualSpeedySenderState<true> persistent_speedy_sender_state_vc2;
     static ActualSpeedyReceiverState<true, 2> persistent_speedy_receiver_state_vc2;
 #endif
+
+    uint16_t fabric_heartbeat_counter = 0;
+#if defined(ARCH_BLACKHOLE)
+    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
+#else
+    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x1F80;
+#endif
+    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
+
     auto execute_main_loop = [&]() {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
         ActualSpeedyReceiverState<super_speedy_mode, 0> local_speedy_receiver_state;
@@ -2583,6 +2592,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     rx_progress,
                     local_fabric_telemetry,
                     fabric_telemetry);
+            }
+
+            if ((++fabric_heartbeat_counter & 0x3F) == 0) {
+                *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
             }
 
             if constexpr (enable_context_switch) {

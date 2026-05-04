@@ -15,11 +15,24 @@ on:
       build-artifact-name:
         required: true
         type: string
+      wheel-artifact-name:
+        required: true
+        type: string
       timeout:
         required: false
         type: number
         default: 45
       enable-watcher:
+        required: false
+        type: boolean
+        default: false
+      enable-lightweight-kernel-asserts:
+        description: "Enable lightweight kernel asserts"
+        required: false
+        type: boolean
+        default: false
+      enable-llk-asserts:
+        description: "Enable LLK asserts"
         required: false
         type: boolean
         default: false
@@ -41,9 +54,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [
-          {name: tt-train, cmd: python tt-train/scripts/run_models.py; ls -l},
-        ]
+        test-group: [{ name: tt-train, cmd: python tt-train/scripts/run_models.py; ls -l }]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
@@ -57,6 +68,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
+        CI_RUNNER_LABEL: ${{ inputs.runner-label }}
+        CI_ARCH_NAME: ${{ inputs.arch }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -65,6 +78,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: ${{ inputs.timeout }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
@@ -81,11 +95,21 @@ jobs:
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
           auto-triage: ${{ !inputs.enable-watcher }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+      - name: Install ttml module
+        timeout-minutes: 1
+        run: |
+          # Create .pth files the same way as create_venv.sh script
+          SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
+          if [[ -z "$SITE_PACKAGES" ]]; then
+            echo "ERROR: Could not determine site-packages from ttnn. Is the wheel installed?"
+            exit 1
+          fi
+          TTML_SRC_DIR="$TT_METAL_RUNTIME_ROOT/tt-train/sources/ttml"
+          TTML_BUILD_DIR="$TT_METAL_RUNTIME_ROOT/build/tt-train/sources/ttml"
+          echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
+          echo "$TTML_BUILD_DIR" > "$SITE_PACKAGES/_ttml.pth"
 
       - name: Install Python dependencies
         run: |

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 
+import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
@@ -56,19 +57,16 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 "DEEPSEEK_V3_HF_MODEL is not set. Set the environment variable or initialize via the demo "
                 "entrypoint with an explicit --model-path."
             )
-        if not cache_dir:
-            raise ValueError(
-                "DEEPSEEK_V3_CACHE is not set. Set the environment variable or initialize via the demo "
-                "entrypoint with an explicit --cache-dir."
-            )
         tokenizer = load_tokenizer(model_path)
 
         model = cls(
             hf_config=hf_config,
             mesh_device=mesh_device,
             model_path=Path(model_path),
-            cache_dir=Path(cache_dir),
+            cache_dir=Path(cache_dir) if cache_dir else None,
             tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
+            vllm_context=True,
         )
 
         return model
@@ -190,7 +188,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         decode_step_output = super().decode_forward(
             tokens=tokens_step,
             start_pos=kwargs["start_pos"],
-            batch_size_per_row=USERS_PER_ROW,
             enable_trace=enable_trace,
             page_table=page_tables,
             sample_on_device=sample_on_device,
@@ -204,12 +201,39 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 )
         else:
             assert isinstance(decode_step_output, torch.Tensor), "decode_step_output should be a torch.Tensor on host"
+            # Normalize host decode logits to [B, V], then expose [B, 1, V] for vLLM.
+            if decode_step_output.dim() == 4:
+                # Non-trace path from base generator returns [1, 1, B, V].
+                decode_step_output = decode_step_output.squeeze(0).squeeze(0)
+            elif decode_step_output.dim() == 3 and decode_step_output.shape[1] == 1:
+                # Already [B, 1, V].
+                decode_step_output = decode_step_output.squeeze(1)
+            elif decode_step_output.dim() != 2:
+                raise RuntimeError(
+                    f"Unexpected decode logits rank for host sampling: {tuple(decode_step_output.shape)}"
+                )
             decode_output = decode_step_output.unsqueeze(1)
 
         # decode_output semantics:
         # - sample_on_device=True  -> sampled token ids
         # - sample_on_device=False -> logits [B, 1, V] for host sampling
         return decode_output
+
+    def read_decode_output(self, tt_out, async_read=False):
+        # If decode already returned host tensors, pass through.
+        if isinstance(tt_out, torch.Tensor):
+            return (tt_out, []) if async_read else tt_out
+
+        # Device-sampling decode output: TT tensor -> host torch token ids.
+        if isinstance(tt_out, ttnn.Tensor):
+            host_tokens = self._tokens_from_device(
+                tt_out,
+                self.mesh_device,
+                batch_size_per_row=self.batch_size_per_row,
+            )
+            return (host_tokens, []) if async_read else host_tokens
+
+        raise TypeError(f"Unsupported decode output type from DeepseekV3ForCausalLM: {type(tt_out)}")
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         assert (

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ from diffusers import DiffusionPipeline
 from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 import ttnn
-from conftest import is_galaxy
+from models.demos.stable_diffusion_xl_base.conftest import is_galaxy
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
     MAX_SEQUENCE_LENGTH,

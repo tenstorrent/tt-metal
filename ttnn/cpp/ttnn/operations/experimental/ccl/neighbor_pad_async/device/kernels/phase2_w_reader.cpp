@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -59,7 +59,7 @@ void kernel_main() {
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
-    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
+    const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
 
     // Wait for Phase 1 to complete.
     if (barrier_count > 0) {
@@ -83,7 +83,7 @@ void kernel_main() {
                 }
                 cb_reserve_back(cb_output_id, 1);
                 uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
                 noc_async_read_barrier();
                 cb_push_back(cb_output_id, 1);
             } else {
@@ -107,7 +107,7 @@ void kernel_main() {
                 }
                 cb_reserve_back(cb_output_id, 1);
                 uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
-                noc_async_read(get_noc_addr(row_base + col, dst_accessor), dst_l1_addr, stick_size);
+                noc_async_read(dst_accessor.get_noc_addr(row_base + col), dst_l1_addr, stick_size);
                 noc_async_read_barrier();
                 cb_push_back(cb_output_id, 1);
             }
