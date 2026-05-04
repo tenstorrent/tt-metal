@@ -74,9 +74,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     constexpr const char* DM_KERNEL_NAME = "pause_dm";
 
     if (is_quasar) {
-        // Metal 2.0 path: build a complete program with the DM kernel on TENSIX cores.
-        // TODO: Watcher features for ERISCs and TRISCs are temporarily skipped on Quasar
-        //       until basic runtime bring-up. Quasar deployments don't currently use ETH cores.
+        // TODO: Watcher features for ERISCs and TRISCs are temporarily skipped on Quasar until basic runtime bring-up.
         experimental::metal2_host_api::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
             .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
@@ -107,7 +105,6 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         experimental::metal2_host_api::SetProgramRunParameters(program, params);
         workload.add_program(device_range, std::move(program));
     } else {
-        // Legacy path for BH/WH plus ETH (Metal 2.0 doesn't support ETH yet).
         auto brisc_kid = CreateKernel(
             program,
             path,
