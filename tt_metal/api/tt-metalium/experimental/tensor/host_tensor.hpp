@@ -45,16 +45,6 @@ class HostTensorImpl;
  * - Initialized: The HostTensor holds some tensor configurations and associated HostBuffer.
  */
 class HostTensor {
-    /*
-     * Refactoring Notes:
-     * To avoid disruption to existing users, HostTensor will deviate very little from the existing (host) Tensor
-     * semantics. The only significant changes are:
-     * - Eliminating implicit data movement APIs.
-     * - Remove transformation methods like to_layout and pad from the class methods. These seem better as free
-     *   functions that operate on a HostTensor than as methods of HostTensor. (Separation of data storage and data
-     *   manipulation.) In the existing Tensor, these are already duplicated as both methods and free functions.
-     */
-
 public:
     using volume_type = std::uint64_t;
 
@@ -203,8 +193,6 @@ public:
     std::size_t element_size() const;
 
     Strides strides() const;
-
-    // Questionables:
 
     // Applies a transformation function to each host buffer across devices in parallel, returning a new HostTensor.
     HostTensor transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
