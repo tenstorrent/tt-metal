@@ -909,8 +909,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::XIELU, {0.8f, 0.8f});  // alpha_p=0.8, alpha_n=0.8
     }
     if (name == "selu") {
-        return UnaryWithParam(
-            UnaryOpType::SELU, {1.67326f, 1.05070f});  // alpha=1.67326, lambda=1.05070 (default values)
+        float alpha = 1.67326319217681884765625f;
+        float lambda = 1.05070102214813232421875f;
+        return UnaryWithParam(UnaryOpType::SELU, {alpha, lambda});
     }
     if (name == "alt_complex_rotate90") {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
