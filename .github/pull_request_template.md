@@ -1,4 +1,4 @@
-### PR Categories
+### PR Category
 <!-- What kind of PR is this? Clean category helps keep PR small and review high quality.
      Available options: Feature, Performance, Bug fix, Cleanup, Test Only -->
 
