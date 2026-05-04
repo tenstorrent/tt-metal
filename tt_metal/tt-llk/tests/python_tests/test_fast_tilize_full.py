@@ -267,10 +267,6 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
         const_value_A=0.5,
     )
 
-    # Golden for the data tiles
-    generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
-
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
@@ -296,8 +292,7 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
-    tile_size = TILE_R * TILE_C
+    configuration.run().result
 
     # Skip accuracy check here — test_fast_tilize_full already covers that.
     # This test only checks for L1 overflow via sentinel guard.
