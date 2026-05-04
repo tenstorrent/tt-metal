@@ -49,6 +49,11 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
 
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
+    // For min/max with non-unity scalar, the GMPOOL hardware path only respects the scaler's
+    // exponent, so the device reduces with scaler=1.0 and the user scalar is applied after the
+    // reduction via SFPU mul_unary_tile inside the compute kernel.
+    const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
+
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
     uint32_t num_cores;
@@ -128,6 +133,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::KernelHandle reader_kernel_id;
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
+    // Packed fp32 scalar passed to the compute kernel for mul_unary_tile post-reduction scaling.
+    uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
     if (operation_attributes.negate) {
         // The reduce_h_neg kernel pushes ntiles tiles per inner-loop iteration
@@ -179,6 +186,9 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::H);
+    if (use_post_mul) {
+        reduce_defines["REDUCE_POST_MUL"] = "1";
+    }
 
     if (use_width_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index, scaler_bits};
@@ -240,9 +250,10 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     uint32_t compute_Wt = use_width_sharding ? (num_cols_per_core_group_1 / NC) : num_cols_per_core_group_1;
     uint32_t compute_NC = use_width_sharding ? NC : 1;
     std::vector<uint32_t> compute_kernel_args_group_1 = {
-        Ht,          // Ht
-        compute_Wt,  // Wt
-        compute_NC,  // NC
+        Ht,                    // Ht
+        compute_Wt,            // Wt
+        compute_NC,            // NC
+        post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
     };
 
     const std::string compute_kernel =
@@ -264,9 +275,10 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         uint32_t compute_Wt_group_2 = use_width_sharding ? (num_cols_per_core_group_2 / NC) : num_cols_per_core_group_2;
         uint32_t compute_NC_group_2 = use_width_sharding ? NC : 1;
         std::vector<uint32_t> compute_kernel_args_group_2 = {
-            Ht,                  // Ht
-            compute_Wt_group_2,  // Wt
-            compute_NC_group_2,  // NC
+            Ht,                    // Ht
+            compute_Wt_group_2,    // Wt
+            compute_NC_group_2,    // NC
+            post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
         };
 
         tt_metal::CreateKernel(

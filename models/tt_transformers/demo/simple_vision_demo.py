@@ -601,7 +601,7 @@ def test_multimodal_demo_text(
         run_config = (tt_device_name, base_model_name, max_batch_size)
         targets_prefill_tok_s = {
             ("N300", "Llama-3.2-11B", 16): 19.3,
-            ("T3K", "Llama-3.2-90B", 1): 13.3,
+            ("T3K", "Llama-3.2-90B", 1): 11.7,
         }
         targets_decode_tok_s_u = {
             ("N300", "Llama-3.2-11B", 16): (15.9, None),  # None to default to tolerance percentage (1.15)
@@ -609,7 +609,7 @@ def test_multimodal_demo_text(
             # For T3K Llama-3.2-90B, the decode_t/s/u target used to be set to 3 with a wide tolerance (4.3, i.e. 330% increase) due to high variance observed across CI machines.
             # Empirical data from CI runs (see https://github.com/tenstorrent/tt-metal/pull/31605) shows that decode performance can vary significantly, sometimes falling well below the nominal target.
             # The slow CI machine seems to be out of circulation for now, so we can use a high target to avoid spurious test failures.
-            ("T3K", "Llama-3.2-90B", 1): (10.3, None),
+            ("T3K", "Llama-3.2-90B", 1): (9.5, None),
         }
 
         perf_targets = {}
@@ -631,9 +631,10 @@ def test_multimodal_demo_text(
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, perf_targets)
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=f"{base_model_name}-Vision",
+            run_type="demo",
+            ml_model_name=f"{base_model_name}-vision",
             ml_model_type="vlm",
+            device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=max_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},

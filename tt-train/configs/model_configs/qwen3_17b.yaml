@@ -1,0 +1,15 @@
+transformer_config:
+  model_type: "qwen3"
+  num_heads: 16
+  num_groups: 8
+  embedding_dim: 2048
+  head_dim: 128
+  intermediate_dim: 6144
+  num_blocks: 28
+  vocab_size: 151936
+  max_sequence_length: 2048
+  dropout_prob: 0.0
+  theta: 1000000.0
+  attention_bias: false
+  runner_type: memory_efficient
+  weight_tying: "enabled"

@@ -189,10 +189,10 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
-        # Pipeline semaphores: mcast (4) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) = 27
+        # Pipeline semaphores: mcast (4) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) + risc_sync (1)= 28
         # Post-SDPA fused (10): gather2 noc0/noc1 (2) + mcast3 receiver (1) + gather3 noc0/noc1 (2)
         #                       + scatter_arrival (1) + sdpa fwd r1/r2 (2) + sdpa bwd r1/r2 (2)
-        pipeline_num_semaphores = 27
+        pipeline_num_semaphores = 28
         allreduce_num_semaphores = DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links_allreduce)
         bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links_bcast)
         allgather_num_semaphores = 2  # handoff_sem + recv_sem
@@ -627,6 +627,8 @@ class AttentionBlock:
         sdpa_forwarder_grid = sdpa_forwarder_scratch_sample.memory_config().shard_spec.grid
         sdpa_forwarder_cores = list(ttnn.corerange_to_cores(sdpa_forwarder_grid, row_wise=True))
         num_sdpa_forwarder_cores = len(sdpa_forwarder_cores)
+        assert num_sdpa_forwarder_cores == 2, "num_sdpa_forwarder_cores must be 2"
+        sdpa_forwarder_noc_coords = [device.worker_core_from_logical_core(core) for core in sdpa_forwarder_cores]
 
         # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
         full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
@@ -737,6 +739,8 @@ class AttentionBlock:
         # ========================================================================
 
         # Semaphore IDs for mcast synchronization
+        risc_sync_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
         mcast_data_sender_semaphore_addr = ttnn.get_global_semaphore_address(
             attention_block_semaphores[semaphore_index]
         )
@@ -1861,9 +1865,14 @@ class AttentionBlock:
                 ("input_noc_coord_y", input_noc_coord.y),
                 ("ccl_sender_noc_x", ccl_sender_noc_core.x),
                 ("ccl_sender_noc_y", ccl_sender_noc_core.y),
+                ("sdpa_forwarder0_noc_x", sdpa_forwarder_noc_coords[0].x),
+                ("sdpa_forwarder0_noc_y", sdpa_forwarder_noc_coords[0].y),
+                ("sdpa_forwarder1_noc_x", sdpa_forwarder_noc_coords[1].x),
+                ("sdpa_forwarder1_noc_y", sdpa_forwarder_noc_coords[1].y),
                 # CCL sync semaphore
                 ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
                 ("ccl_sync_semaphore2_addr", ccl_sync_semaphore2_addr),
+                ("risc_sync_semaphore_addr", risc_sync_semaphore_addr),
             ]
         )
 
@@ -1900,6 +1909,7 @@ class AttentionBlock:
             # CCL sync semaphore
             ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
             ("ccl_sync_semaphore2_addr", ccl_sync_semaphore2_addr),
+            ("risc_sync_semaphore_addr", risc_sync_semaphore_addr),
         ]
 
         # Append AllReduceConfig BRISC CT args (writer on sender core)
@@ -1961,6 +1971,7 @@ class AttentionBlock:
             # CCL sync semaphore
             ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
             ("ccl_sync_semaphore2_addr", ccl_sync_semaphore2_addr),
+            ("risc_sync_semaphore_addr", risc_sync_semaphore_addr),
         ]
 
         # Append AllReduceConfig TRISC CT args (compute on receiver core)
@@ -2044,9 +2055,12 @@ class AttentionBlock:
         # contiguously. We pad the backing buffer to fit metadata after the activation
         # data, but the CB format (what RMSNorm reads) remains activation-only.
         activation_size = num_tiles * cb_page_size
-
         in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            input_cb, ref_input_tensor, core_ranges=full_device_grid
+            input_cb,
+            ref_input_tensor,
+            address_offset=0,
+            total_size=activation_size,
+            core_ranges=full_device_grid,
         )
         in_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2056,7 +2070,6 @@ class AttentionBlock:
                 tile=tile_descriptor,
             )
         ]
-        in_cb_descriptor.total_size = activation_size
 
         # Keep broadcast writer backing address explicit for this fused path.
         input_cb_l1_addr = ttnn.get_cb_address(in_cb_descriptor)

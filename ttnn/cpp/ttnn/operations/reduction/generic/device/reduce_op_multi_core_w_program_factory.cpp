@@ -76,6 +76,12 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
+    // For min/max with non-unity scalar, the GMPOOL hardware path only respects the scaler's
+    // exponent, so the device reduces with scaler=1.0 and the user scalar is applied after the
+    // reduction via SFPU mul_unary_tile inside the compute kernel.
+    const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
+    uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
+
     tt_metal::Buffer* src_buffer = a.buffer();
     std::vector<uint32_t> reader_compile_time_args = {std::bit_cast<uint32_t>(operation_attributes.scaler)};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
@@ -101,6 +107,9 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, ReduceOpDim::W);
+    if (use_post_mul) {
+        reduce_defines["REDUCE_POST_MUL"] = "1";
+    }
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -119,6 +128,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
         num_rows_per_core_group_1,  // Ht
         Wt,                         // Wt
         1,                          // NC
+        post_mul_scaler_bits,       // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
     };
 
     const std::string compute_kernel =
@@ -140,6 +150,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             num_rows_per_core_group_2,  // Ht
             Wt,                         // Wt
             1,                          // NC
+            post_mul_scaler_bits,       // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
         };
 
         tt_metal::CreateKernel(
