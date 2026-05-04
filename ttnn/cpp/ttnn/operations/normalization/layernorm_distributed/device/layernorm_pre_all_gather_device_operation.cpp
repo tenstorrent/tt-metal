@@ -49,10 +49,10 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
         const auto& b = tensor_args.residual_input_tensor.value();
         TT_FATAL(b.layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.layout());
         TT_FATAL(
-            input.padded_shape() == b.padded_shape(),
-            "Input and residual shapes must match, got input: {} vs residual: {}",
-            input.padded_shape(),
-            b.padded_shape());
+            input.logical_shape() == b.logical_shape(),
+            "Input and residual logical shapes must match, got input: {} vs residual: {}",
+            input.logical_shape(),
+            b.logical_shape());
         TT_FATAL(
             b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Residual tensor must be interleaved.");

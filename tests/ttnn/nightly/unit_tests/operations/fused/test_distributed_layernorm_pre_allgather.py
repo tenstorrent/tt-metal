@@ -556,6 +556,68 @@ def test_layernorm_pre_all_gather_residual_padding_isolated_from_stats(device, i
     )
 
 
+@pytest.mark.parametrize(
+    "inp_shape, res_shape",
+    [
+        # Both shapes have different logical W but the same tile-aligned padded W.
+        # Validation should compare logical shapes rather than padded, and reject mismatched shapes.
+        #
+        # Residual wider than the input.
+        ((1, 1, 32, 38), (1, 1, 32, 62)),  # W=38 and W=62 both pad to W=64
+        ((1, 1, 32, 1), (1, 1, 32, 31)),  # W=1  and W=31 both pad to W=32
+        #
+        # Residual narrower than the input.
+        ((1, 1, 32, 62), (1, 1, 32, 38)),  # W=62 and W=38 both pad to W=64
+        ((1, 1, 32, 31), (1, 1, 32, 1)),  # W=31 and W=1  both pad to W=32
+    ],
+    ids=["wider_res_2tile", "wider_res_1tile", "narrower_res_2tile", "narrower_res_1tile"],
+)
+@pytest.mark.parametrize(
+    "op_name",
+    ["layer_norm_pre_all_gather", "layer_norm"],
+)
+def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, res_shape):
+    """Residual with a different logical shape from the input must be rejected.
+
+    If validation compares padded_shape, which is tile-aligned and can therefore
+    be identical for some logical shapes that are different, the mismatch would pass silently.
+    Depending on which tensor is wider, the consequences differ:
+    - Residual wider than input: residual's real elements beyond input's logical
+      width get added to input's zero-padding, inflating sum(x^2) and sum(x) with
+      values that have no counterpart in the input; likely not what the caller intended.
+    - Residual narrower than input: input's real elements beyond residual's logical
+      width get added to residual's zero-padding (equivalent to silently zero-extending
+      the residual). The stats are internally self-consistent, but semantically wrong:
+      the caller passed a residual of width W_res intending to add it to an input of
+      width W_inp > W_res. The op should reject this rather than silently zero-fill.
+    """
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    torch.manual_seed(2)
+
+    tt_inp = torch2tt_tensor(
+        torch.randn(inp_shape, dtype=torch.bfloat16),
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+    tt_res = torch2tt_tensor(
+        torch.randn(res_shape, dtype=torch.bfloat16),
+        tt_dtype=ttnn.bfloat16,
+        tt_device=device,
+        tt_layout=ttnn.TILE_LAYOUT,
+        tt_memory_config=dram_memcfg,
+    )
+
+    with pytest.raises(RuntimeError):
+        if op_name == "layer_norm_pre_all_gather":
+            ttnn.layer_norm_pre_all_gather(
+                tt_inp, residual_input_tensor=tt_res, dtype=ttnn.bfloat16, memory_config=dram_memcfg
+            )
+        else:
+            ttnn.layer_norm(tt_inp, epsilon=1e-5, residual_input_tensor=tt_res, memory_config=dram_memcfg)
+
+
 def _create_recip_tensor(device, w):
     grid = device.compute_with_storage_grid_size()
     core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})

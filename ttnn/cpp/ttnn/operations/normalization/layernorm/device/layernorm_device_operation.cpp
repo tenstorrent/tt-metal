@@ -56,10 +56,10 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             b.value().layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.value().layout());
         TT_FATAL(
-            a.padded_shape() == b.value().padded_shape(),
-            "Input and residual shapes must match, got input: {} vs residual: {}",
-            a.padded_shape(),
-            b.value().padded_shape());
+            a.logical_shape() == b.value().logical_shape(),
+            "Input and residual logical shapes must match, got input: {} vs residual: {}",
+            a.logical_shape(),
+            b.value().logical_shape());
         TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "Input and residual tensors must be on same device");
     }
