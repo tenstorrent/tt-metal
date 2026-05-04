@@ -1068,7 +1068,10 @@ def test_moe(device, tensor_shape, dtype, layout):
 
         return
 
-    atol = rtol = 0.02
+    if tensor_shape == (2, 2, 32, 64):
+        atol = rtol = 0.02
+    else:
+        atol = rtol = 0.01
     # Looser PCC tolerance than typical single-op tests because MOE chains
     # topk -> softmax -> multiply -> sum, and each step accumulates
     # bfloat16 rounding error.
