@@ -5,8 +5,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import os
 import sys
 import time
 from pathlib import Path
@@ -16,59 +14,10 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
-from conftest import bh_2d_mesh_device_context
+from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
 from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
-from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
-
-
-def _fabric_config_for_num_procs(num_procs: int):
-    """Infer fabric config from process count: 4 → FABRIC_2D, 16 → FABRIC_2D_TORUS_Y."""
-    if num_procs == 4:
-        return ttnn.FabricConfig.FABRIC_2D
-    if num_procs == 16:
-        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-    if num_procs == 64:
-        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
-
-
-def _needs_extended_worker_l1(num_procs: int) -> bool:
-    """True for the one host that required extra L1 (``TT_MESH_ID`` from tt-run, or legacy global rank).
-
-    For 4×16 pod layouts, tt-run sets ``TT_MESH_ID=3`` on the mesh that replaced global rank 62.
-    With only mesh id, single-mesh 16-proc cannot be identified via env (all ranks share the same id),
-    so the rank fallback is used for 16 procs.
-    """
-    mid = os.environ.get("TT_MESH_ID")
-    if num_procs == 64:
-        return int(mid) == 62
-    if num_procs == 16:
-        return int(mid) == 14
-    return False
-
-
-@contextlib.contextmanager
-def open_mesh_device():
-    """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
-    num_procs = int(ttnn.distributed_context_get_size())
-    worker_l1_size = 1499000 if _needs_extended_worker_l1(num_procs) else 1431568
-    if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
-        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
-    device_params = {
-        "fabric_config": _fabric_config_for_num_procs(num_procs),
-        "fabric_router_config": create_fabric_router_config(15232),
-        "worker_l1_size": worker_l1_size,
-    }
-    logger.info("Opening mesh device...")
-    with bh_2d_mesh_device_context(device_params) as mesh_device:
-        logger.info(
-            "Mesh device opened (id={}, shape={})",
-            mesh_device.get_system_mesh_id(),
-            mesh_device.shape,
-        )
-        yield mesh_device
 
 
 def create_parser() -> argparse.ArgumentParser:
