@@ -3207,11 +3207,13 @@ public:
         const uint64_t hugepage_issue_end =
             static_cast<uint64_t>(dev_hugepage_base) + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
 
+        const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
+
         // nt_memcpy: non-temporal store of n bytes (n must be a multiple of 64).
-        auto nt_memcpy_local = [](uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
-            TT_FATAL(n % 64 == 0, "nt_memcpy: size {} not a multiple of 64", n);
-            for (size_t i = 0; i < n; i += 64) {
-                for (size_t j = 0; j < 64; j += sizeof(__m128i)) {
+        auto nt_memcpy_local = [&host_align](uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
+            TT_FATAL(n % host_align == 0, "nt_memcpy: size {} not a multiple of {}", n, host_align);
+            for (size_t i = 0; i < n; i += host_align) {
+                for (size_t j = 0; j < host_align; j += sizeof(__m128i)) {
                     __m128i blk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i + j));
                     _mm_stream_si128(reinterpret_cast<__m128i*>(dst + i + j), blk);
                 }
@@ -3222,7 +3224,6 @@ public:
         // write_prefetcher_cmd: nt_memcpy cmd to hugepage + write one FetchQ entry via TLB.
         // cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
         // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
-        const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
         auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, entry_t cmd_size_entry) {
             TT_FATAL(
                 cmd_size_bytes % host_align == 0,
