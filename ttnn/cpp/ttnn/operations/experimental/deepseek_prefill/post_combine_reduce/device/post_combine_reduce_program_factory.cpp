@@ -74,6 +74,7 @@ CreatedProgram create_at(
         emb_dim_cb_tiles);
 
     constexpr uint32_t TOKENS_PER_CHUNK = 32;
+    TT_FATAL(num_tokens > 0, "post_combine_reduce: num_tokens must be > 0, got {}", num_tokens);
     TT_FATAL(
         num_tokens % TOKENS_PER_CHUNK == 0,
         "Number of tokens {} must be divisible by {} for hardware tilization",
@@ -86,7 +87,6 @@ CreatedProgram create_at(
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     const uint32_t total_chunks = num_tokens / TOKENS_PER_CHUNK;
-    TT_FATAL(total_chunks > 0, "post_combine_reduce: num_tokens must be > 0, got {}", num_tokens);
     const uint32_t num_cores = std::min(total_chunks, num_cores_total);
     const uint32_t base_chunks_per_core = total_chunks / num_cores;
     const uint32_t extra_chunks = total_chunks % num_cores;
@@ -149,8 +149,7 @@ CreatedProgram create_at(
         // Sized for the maximum any core will handle: base+1 chunks when extra_chunks > 0.
         indices_page_size_val = get_page_size(indices);
         indices_aligned_page_size = get_aligned_page_size(indices);
-        uint32_t max_chunks_per_core = base_chunks_per_core + (extra_chunks > 0 ? 1 : 0);
-        indices_pages_per_core = max_chunks_per_core * TOKENS_PER_CHUNK;
+        indices_pages_per_core = (base_chunks_per_core + (extra_chunks > 0 ? 1 : 0)) * TOKENS_PER_CHUNK;
         uint32_t indices_cb_size = indices_pages_per_core * indices_aligned_page_size;
         tt::tt_metal::CircularBufferConfig cb_indices_config =
             tt::tt_metal::CircularBufferConfig(indices_cb_size, {{tt::CBIndex::c_3, indices_cb_data_format}})
