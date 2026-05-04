@@ -151,10 +151,6 @@ void kernel_main() {
 
             cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
         }
-
-            noc_async_read_barrier();
-            cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
-        }
         tiles_read = input_tile_id_start;
         tiles_to_read = input_tile_id_end;
         output_tile_id_start += input_tensor_Wt * input_tensor_Ht;
