@@ -295,17 +295,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto token_segment_buffer_size_bytes =
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
 
-    // slightly awkward. we want the token dimension but the underlying shape might not represent the data layout.
-    //  This is in line with the assumption that tokens are split across the entirety of the shard, regardless of
-    //  number of tokens
+    const auto expert_token_segment_buffer_block_size_bytes =
+        token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
     constexpr auto double_buffer = 2;
-
-    const auto input_shards = input_tensor.memory_config().shard_spec()->grid.num_cores();
-    const auto token_expert_row_offset = input_tensor.logical_shape().volume() / input_shards /
-                                         (hidden_size / num_data_parallel_cores / double_buffer) /
-                                         num_token_parallel_cores;
-
-    const auto expert_token_segment_buffer_block_size_bytes = token_segment_buffer_size_bytes * token_expert_row_offset;
     const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * double_buffer;
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
@@ -405,7 +397,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"noc_y_start", start_coord.y},
         {"noc_x_end", end_coord.x},
         {"noc_y_end", end_coord.y},
-        {"worker_bounding_box_size", needed_worker_core_bounding_box.size()},
     };
 
     std::vector<uint32_t> reader_compile_time_args;
