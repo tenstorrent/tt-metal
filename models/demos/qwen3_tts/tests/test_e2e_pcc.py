@@ -152,7 +152,7 @@ def test_full_model_pcc(device, data):
 
     if "inference" not in data:
         print("ERROR: inference tensors not found. Run demo_voice_clone.py first.")
-        return None
+        return
 
     inference = data["inference"]
     weights = data.get("weights", {})
@@ -171,7 +171,7 @@ def test_full_model_pcc(device, data):
 
     if not weights:
         print("\nWeights not loaded. Cannot run TTNN comparison.")
-        return None
+        return
 
     # For full comparison, we'd need to:
     # 1. Construct the same input (ref_code + text tokens)

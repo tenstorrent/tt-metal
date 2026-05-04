@@ -21,6 +21,19 @@ def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a * b).sum() / (a.norm() * b.norm() + 1e-8))
 
 
+def _alias_numeric_decoder_keys(weights: dict) -> dict:
+    """Add `decoder.{k}` for keys like `0.conv.weight` (matches tt/speech_tokenizer.py).
+
+    Checkpoints store `decoder.0.conv.*`; one `decoder.` strip yields `0.conv.*`.
+    Reference code paths often expect `decoder.0.conv.*` as after `decoder.decoder.0.*`.
+    """
+    out = dict(weights)
+    for k, v in weights.items():
+        if k and k[0].isdigit() and not k.startswith("decoder."):
+            out.setdefault(f"decoder.{k}", v)
+    return out
+
+
 def main():
     print("=" * 80)
     print("Debug Conv Decoder Stages")
@@ -48,16 +61,22 @@ def main():
 
     speech_path = model_path / "speech_tokenizer" / "model.safetensors"
     speech_dict = load_file(speech_path)
-    decoder_weights = {k[8:]: v.float() for k, v in speech_dict.items() if k.startswith("decoder.")}
+    from models.demos.qwen3_tts.reference.functional import extract_speech_tokenizer_decoder_weights, upsample_block
 
-    # Create test input at pre_transformer output stage
+    # One `decoder.` strip: either `decoder.0.*` (from `decoder.decoder.0.*`) or `0.*` (from `decoder.0.*`).
+    decoder_weights = {k: v.float() for k, v in extract_speech_tokenizer_decoder_weights(speech_dict).items()}
+    decoder_weights = _alias_numeric_decoder_keys(decoder_weights)
+
+    # Test input at the start of `upsample`: after pre_transformer + permute(0,2,1) in the
+    # official decoder — [batch, latent_dim, seq] with latent_dim == config.latent_dim (1024).
+    # (512 channels is the RVQ sum *before* pre_transformer; do not use that here.)
     print("\n[3] Creating test input...")
     torch.manual_seed(42)
 
-    # Shape matches pre_transformer output: [batch, seq_len, hidden_size]
-    # But we need channels-first for conv: [batch, channels, seq_len]
-    hidden = torch.randn(1, 512, 20)  # [batch, 512, seq_len]
-    print(f"  Input shape: {hidden.shape}")
+    cfg = official_decoder.config
+    latent_dim = cfg.latent_dim
+    hidden = torch.randn(1, latent_dim, 20)
+    print(f"  Input shape: {hidden.shape} (latent_dim={latent_dim})")
 
     # Run official upsampler
     print("\n[4] Testing upsampler...")
@@ -70,8 +89,6 @@ def main():
             print(f"  Official upsample block {i}: {official_upsample.shape}")
 
     # Reference upsampler
-    from models.demos.qwen3_tts.reference.functional import upsample_block
-
     ref_upsample = hidden.clone()
     for i in range(2):  # 2 upsample blocks
         prefix = f"upsample.{i}."
@@ -108,13 +125,12 @@ def main():
 
     config = SpeechTokenizerDecoderConfig()
     upsample_rates = config.upsample_rates  # [8, 5, 4, 3]
-    channels = [512, 256, 128, 64, 32]
 
     ref_dec = ref_upsample.clone()
 
-    # First conv (initial)
-    init_conv_weight = decoder_weights["0.conv.weight"]
-    init_conv_bias = decoder_weights.get("0.conv.bias")
+    # First conv (initial) — keys mirror reference functional.py (decoder.0 = first ModuleList entry)
+    init_conv_weight = decoder_weights["decoder.0.conv.weight"]
+    init_conv_bias = decoder_weights.get("decoder.0.conv.bias")
     kernel_size = init_conv_weight.shape[-1]
     ref_dec = F.pad(ref_dec, (kernel_size - 1, 0), mode="constant", value=0)
     ref_dec = F.conv1d(ref_dec, init_conv_weight, init_conv_bias)
@@ -126,24 +142,26 @@ def main():
     pcc_first = compute_pcc(ref_dec, off_first)
     print(f"  PCC after first conv: {pcc_first:.6f}")
 
-    # Upsample blocks
-    for i, (rate, in_ch, out_ch) in enumerate(zip(upsample_rates, channels[:-1], channels[1:])):
-        prefix = f"{i + 1}."
-        block_weights = {k[len(prefix) :]: v for k, v in decoder_weights.items() if k.startswith(prefix)}
+    # Decoder blocks (same prefixes as speech_tokenizer_decoder_forward)
+    for i, rate in enumerate(upsample_rates):
+        block_prefix = f"decoder.{i + 1}."
+        block_weights = {
+            k.replace(block_prefix, ""): v for k, v in decoder_weights.items() if k.startswith(block_prefix)
+        }
 
         if not block_weights:
-            print(f"  No weights for decoder.{i + 1}")
+            print(f"  No weights for {block_prefix}")
             continue
 
         ref_dec = conv_decoder_block(ref_dec, block_weights, upsample_rate=rate)
         print(f"  Reference decoder block {i + 1}: {ref_dec.shape}")
 
     # Final snake + conv (keys match speech_tokenizer_decoder_forward in functional.py)
-    if "5.alpha" in decoder_weights and "5.beta" in decoder_weights:
-        ref_dec = snake_activation(ref_dec, decoder_weights["5.alpha"], decoder_weights["5.beta"])
+    if "decoder.5.alpha" in decoder_weights and "decoder.5.beta" in decoder_weights:
+        ref_dec = snake_activation(ref_dec, decoder_weights["decoder.5.alpha"], decoder_weights["decoder.5.beta"])
 
-    final_conv_weight = decoder_weights.get("6.conv.weight")
-    final_conv_bias = decoder_weights.get("6.conv.bias")
+    final_conv_weight = decoder_weights.get("decoder.6.conv.weight")
+    final_conv_bias = decoder_weights.get("decoder.6.conv.bias")
     if final_conv_weight is not None:
         kernel_size = final_conv_weight.shape[-1]
         ref_dec = F.pad(ref_dec, (kernel_size - 1, 0), mode="constant", value=0)

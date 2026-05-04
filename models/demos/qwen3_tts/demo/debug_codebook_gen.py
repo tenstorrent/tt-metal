@@ -11,6 +11,34 @@ import torch
 import torch.nn.functional as F
 
 
+def _patch_qwen3_tts_generation_model_kwargs() -> None:
+    """Make talker.generate() work with qwen-tts + transformers 4.57+.
+
+    Qwen3TTSTalkerForConditionalGeneration.forward is wrapped with @can_return_tuple;
+    strict _validate_model_kwargs then rejects real kwargs (trailing_text_hidden, etc.).
+    Setting __signature__ on the wrapper is not always enough for bound methods, so this
+    script always disables that validation (debug-only; OK for this tool).
+    """
+    import inspect
+
+    import transformers.generation.utils as gen_utils
+
+    try:
+        from qwen_tts.core.models.modeling_qwen3_tts import Qwen3TTSTalkerForConditionalGeneration
+
+        forward_fn = Qwen3TTSTalkerForConditionalGeneration.forward
+        unwrapped = getattr(forward_fn, "__wrapped__", None)
+        if unwrapped is not None:
+            forward_fn.__signature__ = inspect.signature(unwrapped)
+    except ImportError:
+        pass
+
+    def _validate_model_kwargs_noop(self, model_kwargs):
+        return
+
+    gen_utils.GenerationMixin._validate_model_kwargs = _validate_model_kwargs_noop
+
+
 def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     a = a.flatten().float()
     b = b.flatten().float()
@@ -27,6 +55,8 @@ def main():
     # Load official model
     print("\n[1] Loading official model...")
     from qwen_tts import Qwen3TTSModel
+
+    _patch_qwen3_tts_generation_model_kwargs()
 
     model = Qwen3TTSModel.from_pretrained(
         "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
@@ -85,15 +115,14 @@ def main():
 
     def capture_talker_forward(*args, **kwargs):
         result = original_talker_forward(*args, **kwargs)
-        if hasattr(result, "past_hidden") and result.past_hidden is not None:
-            if "past_hidden" not in captured:
-                captured["past_hidden"] = result.past_hidden.clone().detach()
-                captured["codec_ids"] = (
-                    result.hidden_states[1].clone().detach() if result.hidden_states is not None else None
-                )
-                print(f"    Captured past_hidden: {result.past_hidden.shape}")
-                if captured["codec_ids"] is not None:
-                    print(f"    Captured codec_ids: {captured['codec_ids']}")
+        hs = getattr(result, "hidden_states", None)
+        # past_hidden and codec sequence (hidden_states[1]) may appear on different decode steps
+        if hasattr(result, "past_hidden") and result.past_hidden is not None and "past_hidden" not in captured:
+            captured["past_hidden"] = result.past_hidden.clone().detach()
+            print(f"    Captured past_hidden: {result.past_hidden.shape}")
+        if hs is not None and len(hs) > 1 and hs[1] is not None and captured.get("codec_ids") is None:
+            captured["codec_ids"] = hs[1].clone().detach()
+            print(f"    Captured codec_ids shape: {captured['codec_ids'].shape}")
         return result
 
     talker.forward = capture_talker_forward
@@ -130,7 +159,7 @@ def main():
     # Now reproduce with reference
     print("\n[4] Reproducing with reference...")
 
-    if "past_hidden" in captured and len(cp_calls) > 0:
+    if "past_hidden" in captured and captured.get("codec_ids") is not None and len(cp_calls) > 0:
         past_hidden = captured["past_hidden"]
         codec_ids = captured["codec_ids"]
         token_0 = codec_ids[0, 0].item()
@@ -176,6 +205,9 @@ def main():
         print(f"  Official token: {official_token}")
         print(f"  Reference token: {ref_token}")
         print(f"  Match: {official_token == ref_token}")
+
+    elif "past_hidden" in captured and captured.get("codec_ids") is None:
+        print("\n  Skipping reference PCC: codec_ids (talker hidden_states[1]) never became non-None during capture.")
 
     print("=" * 80)
 

@@ -19,13 +19,16 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
+_L1_SMALL_SIZE = 64 * 1024
+
 
 @pytest.fixture
 def device():
     if is_blackhole():
         d = ttnn.open_device(device_id=0, l1_small_size=32 * 1024)
     else:
-        d = ttnn.open_device(device_id=0)
+        # d = ttnn.open_device(device_id=0)
+        d = ttnn.open_device(device_id=0, l1_small_size=_L1_SMALL_SIZE)
     yield d
     ttnn.close_device(d)
 

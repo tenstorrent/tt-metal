@@ -20,6 +20,15 @@ def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a * b).sum() / (a.norm() * b.norm() + 1e-8))
 
 
+def _alias_numeric_decoder_keys(weights: dict) -> dict:
+    """Add decoder.{k} for keys like 6.conv.weight (checkpoint uses decoder.6.* → strip → 6.*)."""
+    out = dict(weights)
+    for k, v in weights.items():
+        if k and k[0].isdigit() and not k.startswith("decoder."):
+            out.setdefault(f"decoder.{k}", v)
+    return out
+
+
 def main():
     print("=" * 80)
     print("Debug Decoder PCC - Reference vs Official")
@@ -48,6 +57,7 @@ def main():
     speech_path = model_path / "speech_tokenizer" / "model.safetensors"
     speech_dict = load_file(speech_path)
     decoder_weights = {k[8:]: v.float() for k, v in speech_dict.items() if k.startswith("decoder.")}
+    decoder_weights = _alias_numeric_decoder_keys(decoder_weights)
     print(f"  Loaded {len(decoder_weights)} decoder weights")
 
     # Generate some codes using official model
@@ -91,7 +101,7 @@ def main():
     # Now decode with reference and compare at each stage
     print("\n[4] Comparing decoder stages...")
 
-    from models.demos.qwen3_tts.reference.functional import SpeechTokenizerDecoderConfig
+    from models.demos.qwen3_tts.reference.functional import SpeechTokenizerDecoderConfig, codebook_lookup_rvq
 
     config = SpeechTokenizerDecoderConfig()
 
@@ -104,48 +114,26 @@ def main():
         official_emb = official_decoder.quantizer.decode(codes)
         print(f"    Official embedding: {official_emb.shape}")
 
-    # Reference codebook lookup
-    # RVQ first (semantic)
-    rvq_first_emb = decoder_weights["quantizer.rvq_first.vq.layers.0._codebook.embedding_sum"]
+    # Reference: use shared RVQ path (output_proj is Conv1d k=1, not Linear — 3D weight)
+    rvq_first_codebook = decoder_weights["quantizer.rvq_first.vq.layers.0._codebook.embedding_sum"]
     rvq_first_usage = decoder_weights["quantizer.rvq_first.vq.layers.0._codebook.cluster_usage"]
-    rvq_first_codebook = rvq_first_emb / rvq_first_usage.clamp(min=1e-6).unsqueeze(-1)
-
-    # RVQ rest (acoustic) - 15 codebooks
     rvq_rest_codebooks = []
+    rvq_rest_cluster_usages = []
     for i in range(15):
-        emb_key = f"quantizer.rvq_rest.vq.layers.{i}._codebook.embedding_sum"
-        usage_key = f"quantizer.rvq_rest.vq.layers.{i}._codebook.cluster_usage"
-        emb = decoder_weights[emb_key]
-        usage = decoder_weights[usage_key]
-        codebook = emb / usage.clamp(min=1e-6).unsqueeze(-1)
-        rvq_rest_codebooks.append(codebook)
-
-    # Lookup
-    codes_np = codes[0].numpy()  # [16, seq_len]
-    seq_len = codes_np.shape[1]
-
-    # First codebook
-    first_codes = codes_np[0]  # [seq_len]
-    ref_first_emb = rvq_first_codebook[first_codes]  # [seq_len, 256]
-
-    # Rest codebooks - sum them
-    rest_emb_sum = torch.zeros(seq_len, 256)
-    for i in range(15):
-        cb_codes = codes_np[i + 1]
-        cb_emb = rvq_rest_codebooks[i][cb_codes]
-        rest_emb_sum += cb_emb
-
-    # Output projections
+        rvq_rest_codebooks.append(decoder_weights[f"quantizer.rvq_rest.vq.layers.{i}._codebook.embedding_sum"])
+        rvq_rest_cluster_usages.append(decoder_weights[f"quantizer.rvq_rest.vq.layers.{i}._codebook.cluster_usage"])
     rvq_first_proj = decoder_weights["quantizer.rvq_first.output_proj.weight"]
     rvq_rest_proj = decoder_weights["quantizer.rvq_rest.output_proj.weight"]
 
-    ref_first_proj = F.linear(ref_first_emb, rvq_first_proj)  # [seq_len, 512]
-    ref_rest_proj = F.linear(rest_emb_sum, rvq_rest_proj)  # [seq_len, 512]
-
-    # Concatenate
-    ref_emb = torch.cat([ref_first_proj, ref_rest_proj], dim=-1)  # [seq_len, 1024]
-    ref_emb = ref_emb.unsqueeze(0)  # [1, seq_len, 1024]
-
+    ref_emb = codebook_lookup_rvq(
+        codes,
+        rvq_first_codebook,
+        rvq_rest_codebooks,
+        rvq_first_proj,
+        rvq_rest_proj,
+        rvq_first_usage,
+        rvq_rest_cluster_usages,
+    )
     print(f"    Reference embedding: {ref_emb.shape}")
 
     pcc_emb = compute_pcc(ref_emb, official_emb)
@@ -160,15 +148,15 @@ def main():
     print("\n  [Stage 2] Pre-conv...")
 
     with torch.no_grad():
-        # Official pre_conv
-        official_preconv = official_decoder.pre_conv(official_emb.transpose(1, 2))
+        # Same as modeling_qwen3_tts_tokenizer_v2: pre_conv(quantizer.decode(codes)), channels-first [B, C, L]
+        official_preconv = official_decoder.pre_conv(official_emb)
         print(f"    Official pre_conv: {official_preconv.shape}")
 
     # Reference pre_conv
     pre_conv_weight = decoder_weights["pre_conv.conv.weight"]
     pre_conv_bias = decoder_weights["pre_conv.conv.bias"]
 
-    ref_preconv_input = ref_emb.transpose(1, 2)  # [1, 1024, seq_len]
+    ref_preconv_input = ref_emb  # [B, 512, seq_len], matches codebook_lookup_rvq output
     # Causal padding
     kernel_size = pre_conv_weight.shape[2]
     pad_left = kernel_size - 1
@@ -187,18 +175,26 @@ def main():
     print("\n  [Stage 3] Pre-transformer...")
 
     with torch.no_grad():
-        # Need to run through official pre_transformer
-        official_pretrans_input = official_preconv.transpose(1, 2)  # [1, seq_len, 512]
-        official_pretrans = official_decoder.pre_transformer(official_pretrans_input)
+        # Pre-transformer only accepts inputs_embeds (positional arg would bind to input_ids → ValueError)
+        official_pretrans_input = official_preconv.transpose(1, 2)  # [1, seq_len, latent_dim]
+        official_pretrans = official_decoder.pre_transformer(inputs_embeds=official_pretrans_input)
         if hasattr(official_pretrans, "last_hidden_state"):
             official_pretrans = official_pretrans.last_hidden_state
         print(f"    Official pre_transformer: {official_pretrans.shape}")
 
-    # Reference pre_transformer - this is complex, let's just run it
+    # Reference pre_transformer (same sub-key layout as speech_tokenizer_decoder_forward)
     from models.demos.qwen3_tts.reference.functional import pre_transformer_forward
 
-    ref_pretrans_input = ref_preconv.transpose(1, 2)  # [1, seq_len, 512]
-    ref_pretrans = pre_transformer_forward(ref_pretrans_input, decoder_weights, config)
+    pre_transformer_weights = {
+        k.replace("pre_transformer.", "", 1): v for k, v in decoder_weights.items() if k.startswith("pre_transformer.")
+    }
+    if not pre_transformer_weights:
+        raise KeyError(
+            "No pre_transformer.* keys in decoder weights — check speech_tokenizer/model.safetensors / decoder. prefix"
+        )
+
+    ref_pretrans_input = ref_preconv.transpose(1, 2)  # [1, seq_len, latent_dim]
+    ref_pretrans = pre_transformer_forward(ref_pretrans_input, pre_transformer_weights, config)
 
     print(f"    Reference pre_transformer: {ref_pretrans.shape}")
 
@@ -214,7 +210,12 @@ def main():
     print("\n  [Stage 4] Upsampler...")
 
     with torch.no_grad():
-        official_upsample = official_decoder.upsample(official_pretrans.transpose(1, 2))
+        # upsample is nn.ModuleList (not callable); match modeling forward: permute then nested loops
+        hidden = official_pretrans.transpose(1, 2)
+        for blocks in official_decoder.upsample:
+            for block in blocks:
+                hidden = block(hidden)
+        official_upsample = hidden
         print(f"    Official upsample: {official_upsample.shape}")
 
     # Reference upsampler
@@ -244,7 +245,10 @@ def main():
     print("\n  [Stage 5] Conv Decoder...")
 
     with torch.no_grad():
-        official_audio = official_decoder.decoder(official_upsample)
+        wav = official_upsample
+        for block in official_decoder.decoder:
+            wav = block(wav)
+        official_audio = wav
         print(f"    Official audio: {official_audio.shape}")
 
     # Reference conv decoder
@@ -252,21 +256,29 @@ def main():
 
     ref_decoder_input = ref_upsample
 
-    # Conv decoder has multiple blocks with different upsample rates
+    # Conv decoder (matches speech_tokenizer_decoder_forward / official_decoder.decoder)
     upsample_rates = [8, 5, 4, 3]
-    channels = [512, 256, 128, 64, 32]
 
-    for i, (rate, in_ch, out_ch) in enumerate(zip(upsample_rates, channels[:-1], channels[1:])):
-        prefix = f"{i + 1}."
-        block_weights = {k[len(prefix) :]: v for k, v in decoder_weights.items() if k.startswith(prefix)}
-        ref_decoder_input = conv_decoder_block(ref_decoder_input, block_weights, upsample_rate=rate)
+    if "decoder.0.conv.weight" in decoder_weights:
+        cw0 = decoder_weights["decoder.0.conv.weight"]
+        k0 = cw0.shape[-1]
+        ref_decoder_input = F.pad(ref_decoder_input, (k0 - 1, 0), mode="constant", value=0)
+        ref_decoder_input = F.conv1d(ref_decoder_input, cw0, decoder_weights.get("decoder.0.conv.bias"))
+
+    for i, rate in enumerate(upsample_rates):
+        block_prefix = f"decoder.{i + 1}."
+        block_weights = {
+            k.replace(block_prefix, ""): v for k, v in decoder_weights.items() if k.startswith(block_prefix)
+        }
+        if block_weights:
+            ref_decoder_input = conv_decoder_block(ref_decoder_input, block_weights, upsample_rate=rate)
 
     # Final snake + conv (aligned with speech_tokenizer_decoder_forward)
-    final_conv_weight = decoder_weights["6.conv.weight"]
-    final_conv_bias = decoder_weights.get("6.conv.bias")
+    final_conv_weight = decoder_weights["decoder.6.conv.weight"]
+    final_conv_bias = decoder_weights.get("decoder.6.conv.bias")
 
-    snake_alpha = decoder_weights["5.alpha"]
-    snake_beta = decoder_weights["5.beta"]
+    snake_alpha = decoder_weights["decoder.5.alpha"]
+    snake_beta = decoder_weights["decoder.5.beta"]
     ref_decoder_input = snake_activation(ref_decoder_input, snake_alpha, snake_beta)
 
     # Final conv (no padding needed for kernel_size=7)
