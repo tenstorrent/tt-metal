@@ -996,15 +996,15 @@ class TtMolmo2Model(LightweightModule):
                 tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, tti_pad_len, dtype=torch.long)], dim=1)
             else:
                 tti_padded = token_type_ids.long()
-            # For S_pad > 8192 there is no causal_cache (only cached up to 8192),
-            # so all ops are bfloat4_b — no mixed-dtype issue.
-            # For S_pad ≤ 8192 causal_cache is bfloat16; keep bfloat16 to match.
-            _mask_dtype = ttnn.bfloat4_b if S_pad > 8192 else ttnn.bfloat16
+            # bfloat4_b for all S: 4× smaller than bfloat16, preserves 0 and -inf.
+            # causal_cache (bfloat16) is typecast inside build_molmo2_prefill_mask
+            # to avoid mixed-dtype ops. 105-video tests (S≤8192) run in bfloat4_b
+            # so regression is verified against the same dtype as large-S vision.
             attn_mask = build_molmo2_prefill_mask(
                 S_pad,
                 tti_padded,
                 self.mesh_device,
-                dtype=_mask_dtype,
+                dtype=ttnn.bfloat4_b,
                 causal_cache=self._causal_masks.get(S_pad),
             )
 
