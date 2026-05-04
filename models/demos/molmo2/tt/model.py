@@ -526,6 +526,23 @@ class TtMolmo2Model(LightweightModule):
 
         print("[vision warmup] done", flush=True)
 
+    def warmup_decode_trace(self, prefill_seq_len: int = None) -> None:
+        """Pre-capture the decode trace so first inference has no stall.
+
+        Captures once at any valid position (position doesn't bake into trace —
+        _execute_decode_trace updates stable buffers before each call).
+        """
+        if self._decode_trace_id is not None:
+            return  # already captured
+        if prefill_seq_len is None:
+            prefill_seq_len = PREFILL_BUCKETS[-1]
+        print(f"[decode warmup] capturing decode trace at pos={prefill_seq_len}...", flush=True)
+        self._decode_trace_tensors = self._allocate_decode_trace_tensors()
+        self._decode_trace_id, self._decode_trace_output = self._capture_decode_trace(
+            self._decode_trace_tensors, prefill_seq_len
+        )
+        print("[decode warmup] decode trace ready", flush=True)
+
     # ------------------------------------------------------------------ #
     # Decode trace helpers
     # ------------------------------------------------------------------ #
