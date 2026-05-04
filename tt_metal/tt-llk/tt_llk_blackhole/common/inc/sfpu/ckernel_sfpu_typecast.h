@@ -857,6 +857,8 @@ template <bool APPROXIMATION_MODE>
 inline void _init_typecast_uint32_to_fp16b_()
 {
 #ifndef DISABLE_SFPLOADMACRO
+    sfpi::vConstIntPrgm0 = -31;
+
     // InstructionTemplate[0]
     TTI_SFPCAST(0, 12, 0);
 
