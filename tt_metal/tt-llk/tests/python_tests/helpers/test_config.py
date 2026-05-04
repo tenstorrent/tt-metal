@@ -44,7 +44,6 @@ from .device import (
     handle_if_assert_hit,
     reset_mailboxes,
     set_tensix_soft_reset,
-    wait_brisc_boot_ready,
 )
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -176,6 +175,8 @@ class TestConfig:
     SPEED_OF_LIGHT: ClassVar[bool] = (
         False  # Should everything be converted to compile-time arguments?
     )
+
+    TEST_TARGET: ClassVar[TestTargetConfig] = None
 
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"
@@ -416,6 +417,7 @@ class TestConfig:
 
     @staticmethod
     def setup_mode(
+        test_target: TestTargetConfig,
         worker_id: str,
         compile_consumer: bool,
         compile_producer: bool,
@@ -423,6 +425,7 @@ class TestConfig:
         use_stimuli: str = None,
     ):
 
+        TestConfig.TEST_TARGET = test_target
         TestConfig.WORKER_ID = worker_id
 
         if worker_id != "master":
@@ -839,6 +842,7 @@ class TestConfig:
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
+                    f'{"-DARCH_BLACKHOLE_SIMULATOR " if TestConfig.TEST_TARGET.run_simulator and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE else ""}'
                     f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
                     f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
@@ -1234,8 +1238,27 @@ class TestConfig:
                 commit_tensix_soft_reset(
                     0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
                 )
-                wait_brisc_boot_ready(TestConfig.TENSIX_LOCATION)
-            if TestConfig.ARCH != ChipArchitecture.QUASAR:
+
+                # Start BRISC firmware only if we're using real device
+                if not TestConfig.TEST_TARGET.run_simulator:
+                    set_tensix_soft_reset(
+                        0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
+                    )
+
+            # if we're using simulator, we need to put all cores to reset every time
+            if TestConfig.TEST_TARGET.run_simulator:
+                set_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+
+                # Reset profiler barrier, 3 zeros for 3 TRISCs
+                write_words_to_device(
+                    TestConfig.TENSIX_LOCATION,
+                    TestConfig.TRISC_PROFILER_BARRIER_ADDRESS,
+                    3 * [0],
+                )
+
+                reset_mailboxes(TestConfig.TENSIX_LOCATION)
+            else:
+                # otherwise just command BRISC firmware to put T[0-2] to reset
                 commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.RESET_TRISCS)
         else:
             set_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
@@ -1292,7 +1315,17 @@ class TestConfig:
 
         match boot_mode:
             case BootMode.BRISC:
-                commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.START_TRISCS)
+                if TestConfig.TEST_TARGET.run_simulator:
+                    # if we're in a simulator, just release BRSIC from reset, it will release other cores automatically
+                    set_tensix_soft_reset(
+                        0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
+                    )
+                else:
+                    # otherwise just command BRISC firmware to release T[0-2] from reset
+                    commit_brisc_command(
+                        TestConfig.TENSIX_LOCATION, BriscCmd.START_TRISCS
+                    )
+
             case BootMode.TRISC:
                 reset_mailboxes(TestConfig.TENSIX_LOCATION)
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], TestConfig.TENSIX_LOCATION)
@@ -1319,8 +1352,7 @@ class TestConfig:
                 device_module.Mailboxes.BriscBread0,
                 device_module.Mailboxes.BriscBread1,
             }
-        test_target = TestTargetConfig()
-        timeout = 600 if test_target.run_simulator else timeout
+        timeout = 600 if TestConfig.TEST_TARGET.run_simulator else timeout
 
         completed = set()
         end_time = time.time() + timeout
@@ -1334,6 +1366,11 @@ class TestConfig:
 
             if completed == mailboxes:
                 return
+
+            if TestConfig.TEST_TARGET.run_simulator:
+                time.sleep(
+                    0.01
+                )  # Poll every 10ms in simulator, because it takes a lot longer to execute the kernel
 
         handle_if_assert_hit(
             self.temp_elfs,

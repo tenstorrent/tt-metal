@@ -6,7 +6,8 @@
 
 #include "boot.h"
 
-#ifdef LLK_BOOT_MODE_BRISC
+// BRISC firmware
+#if defined(LLK_BOOT_MODE_BRISC) && !defined(ARCH_BLACKHOLE_SIMULATOR)
 
 // Mailbox addresses
 #ifdef COVERAGE
@@ -54,6 +55,7 @@ constexpr std::uint32_t BRISC_BOOT_READY_SENTINEL = 0xB001CAFEU;
 void reset_state(std::uint32_t& counter)
 {
     counter++;
+    // Clear current buffer to zero: First if counter is even; Second buffer if counter is odd.
     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
     commit_store(brisc_counter, counter);
 }
@@ -83,6 +85,7 @@ int main()
     {
         ckernel::invalidate_data_cache();
 
+        // Poll current command buffer: First if counter is even; Second buffer if counter is odd.
         switch (static_cast<BriscCommandState>(ckernel::load_blocking(brisc_command_buffer + (counter & 1))))
         {
             // Wormhole specific, on Blackhole this command has same behaviour as BriscCommandState::START_TRISCS
@@ -139,9 +142,27 @@ int main()
     }
 }
 
-#else
+// end of LLK_BOOT_MODE_BRISC and not ARCH_BLACKHOLE_SIMULATOR
+#elif defined(ARCH_BLACKHOLE_SIMULATOR)
 
-int main()
+// We have different BRISC firmware version for simulator because we don't have to work around UMD issue
+// https://github.com/tenstorrent/tt-umd/issues/1265
+// We can just have BRISC release TRISC[0-2] from reset, and that's it, host does all the rest.
+
+int main(void)
+{
+    device_setup();
+
+    // Clear reset without polling, because simulator doesn't require it,
+    // and it only degrades simulation performance
+    std::uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
+    soft_reset &= ~TRISC_SOFT_RESET_MASK;
+    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
+}
+
+#else // ARCH_BLACKHOLE_SIMULATOR
+
+int main(void)
 {
 }
 

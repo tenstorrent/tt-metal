@@ -238,7 +238,6 @@ def pytest_configure(config):
         config.option.log_cli = True
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
-
     TestConfig.setup_build(
         Path(os.environ["LLK_HOME"]),
         config.getoption("--coverage", default=False),
@@ -247,7 +246,10 @@ def pytest_configure(config):
         config.getoption("--speed-of-light", default=False),
     )
 
+    initialize_test_target_from_pytest(config)
+
     TestConfig.setup_mode(
+        TestTargetConfig(),
         # Pass worker id here, so TestConfig can calculate Tensix tile it will run on
         getattr(config, "workerinput", {}).get("workerid", "master"),
         config.getoption("--compile-consumer", default=False),
@@ -273,11 +275,9 @@ def pytest_configure(config):
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
 
-    if (
-        TestConfig.ARCH != ChipArchitecture.QUASAR
-        and not TestConfig.BUILD_MODE == BuildMode.PRODUCE
-    ):
-        override_gprs_used_by_tensix_dump()
+    # We don't need to override tensix dump on simulator
+    if not TestConfig.TEST_TARGET.run_simulator:
+        overrirde_gprs_used_by_tensix_dump()
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
@@ -296,12 +296,11 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    initialize_test_target_from_pytest(config)
-    test_target = TestTargetConfig()
-
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        if test_target.run_simulator:
-            if _SIMULATOR_PATH is None:
+        if TestConfig.TEST_TARGET.run_simulator:
+            simulator_path = os.environ.get("TT_UMD_SIMULATOR_PATH")
+
+            if simulator_path is None:
                 pytest.exit(
                     "ERROR: --run-simulator requires TT_METAL_SIMULATOR "
                     "(or TT_UMD_SIMULATOR_PATH) environment variable to be set.",
@@ -323,8 +322,8 @@ def pytest_configure(config):
                 # just connect to the already-running instance.
                 global _exalens_server
                 _exalens_server = ExalensServer(
-                    simulator_path=_SIMULATOR_PATH,
-                    port=test_target.simulator_port,
+                    simulator_path=simulator_path,
+                    port=TestConfig.TEST_TARGET.simulator_port,
                 )
         else:
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
