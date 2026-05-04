@@ -1030,9 +1030,12 @@ class TtMolmo2Model(LightweightModule):
 
         attn_mask = None
         if token_type_ids is not None:
-            # Build mask for S_pad; padding columns/rows are −∞ (attend to nothing)
-            if pad_len > 0:
-                tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, pad_len, dtype=torch.long)], dim=1)
+            # Always pad tti to S_pad so img_mm [S_pad,S_pad] matches causal [S_pad,S_pad].
+            # pad_len is 0 for vision inputs (x_ttnn already padded), but tti still needs
+            # padding to S_pad — otherwise ttnn.maximum(causal, img_mm) gets a shape mismatch.
+            tti_pad_len = S_pad - S
+            if tti_pad_len > 0:
+                tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, tti_pad_len, dtype=torch.long)], dim=1)
             else:
                 tti_padded = token_type_ids.long()
             attn_mask = build_molmo2_prefill_mask(
