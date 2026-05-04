@@ -5,21 +5,8 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-
-#include "ttnn/operation.hpp"
-
-namespace tt::tt_metal {
-
-enum class PoolType { AVG };
-
-Tensor global_avg_pool2d(
-    const Tensor& input,
-    const MemoryConfig& memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<DataType>& output_dtype = std::nullopt);
-
-}  // namespace tt::tt_metal
-
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
