@@ -1187,6 +1187,11 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
             // 0xDEADB07E before the launch message is sent — so this session can detect the gap.
             static constexpr uint32_t kHostPreLaunchCanary =
                 static_cast<uint32_t>(EthDiagSentinel::HOST_PRE_LAUNCH_CANARY);
+            // ROM BOOT POSTCODE: written by BRISC hardware reset ROM to L1 0x18070 (edm_status_address)
+            // during power-on init.  Means the ERISC was reset (by assert_risc_reset_at_core or by a
+            // PCIe hard reset) and is mid-boot — NOT corrupt L1 garbage.  FIX AQ handles this for MMIO
+            // channels in risc_firmware_initializer.cpp; FIX RP (below) handles the non-MMIO gap.
+            static constexpr uint32_t kRomPostcode = 0x49705180u;
             const bool is_base_umd = (status_buf[0] == kBaseUmdFirmwareSentinel);
             const bool is_canary = (status_buf[0] == kFabricKernelMainCanary);
             const bool is_host_canary = (status_buf[0] == kHostPreLaunchCanary);
@@ -1244,6 +1249,99 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                     dev->id(),
                     eth_chan_id,
                     status_buf[0]);
+            } else if (status_buf[0] == kRomPostcode) {
+                // FIX RP (#42429): ROM boot postcode mid-transition — poll for base-UMD relay.
+                //
+                // Root cause of the session-N→N+1 cascade observed 2026-05-04:
+                //   Session N teardown fires assert_risc_reset_at_core on non-MMIO channels →
+                //   ERISCs reset → BRISC ROM writes 0x49705180 to edm_status_address as a
+                //   power-on init postcode → before the ERISC finishes booting to UMD relay
+                //   firmware (which would overwrite with 0x49706550), close_device() is called
+                //   with relay already marked broken → UMD relay never completes the write.
+                //   Session N+1: terminate_stale_erisc_routers reads 0x49705180, the old else-
+                //   branch (FIX O) classified it as corrupt → probe_dead_channels=4 → FIX E2
+                //   marks Device 4 dead-relay → ALL tests skip via FIX QE.
+                //
+                // Fix: FIX AQ in risc_firmware_initializer.cpp already handles this exact race
+                // for MMIO channels (polls until 0x49705180 is gone after PCIe hard reset).
+                // This fix closes the same gap for NON-MMIO channels.
+                //
+                // Strategy: poll up to kRomPostcodePollTotalMs for the value to transition to
+                // kBaseUmdFirmwareSentinel (0x49706550 = base-UMD relay ready).
+                //   - Transition seen → treat as base-UMD: add to base_umd_channels, continue.
+                //   - Timeout or value changes to something else → fall through to probe_dead.
+                //
+                // Do NOT zero edm_status_address — 0x49705180 is a valid ROM postcode, not
+                // garbage; zeroing it mid-boot could interfere with the ROM init sequence.
+                // Do NOT send TERMINATE — there is no firmware to receive it during ROM boot.
+                constexpr uint32_t kRomPostcodePollIntervalMs = 5;
+                constexpr uint32_t kRomPostcodePollTotalMs = 500;
+                constexpr uint32_t kRomPostcodePollIters =
+                    kRomPostcodePollTotalMs / kRomPostcodePollIntervalMs;
+                const bool is_non_mmio =
+                    cluster_.get_associated_mmio_device(dev->id()) != dev->id();
+                bool rom_postcode_transitioned = false;
+                for (uint32_t poll_i = 0; poll_i < kRomPostcodePollIters; poll_i++) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(kRomPostcodePollIntervalMs));
+                    std::vector<uint32_t> poll_buf(1, 0);
+                    try {
+                        detail::ReadFromDeviceL1(
+                            dev, eth_logical_core, router_sync_address, 4, poll_buf, CoreType::ETH);
+                    } catch (...) {
+                        // channel became unresponsive during poll — stop, treat as dead
+                        break;
+                    }
+                    if (poll_buf[0] == kBaseUmdFirmwareSentinel) {
+                        // ERISC finished booting and relay firmware wrote its sentinel.
+                        base_umd_channels.insert(eth_chan_id);
+                        log_info(
+                            tt::LogMetal,
+                            "terminate_stale_erisc_routers: FIX RP Device {} chan={} ROM postcode "
+                            "0x{:08x} transitioned to base-UMD sentinel 0x{:08x} after ~{}ms — "
+                            "ERISC booted to relay firmware. Added to base_umd_channels. "
+                            "(is_non_mmio={})",
+                            dev->id(),
+                            eth_chan_id,
+                            kRomPostcode,
+                            kBaseUmdFirmwareSentinel,
+                            (poll_i + 1) * kRomPostcodePollIntervalMs,
+                            is_non_mmio);
+                        rom_postcode_transitioned = true;
+                        break;
+                    } else if (poll_buf[0] != kRomPostcode) {
+                        // Transitioned to something unexpected — stop polling and let
+                        // the value fall through to probe_dead_channels below.
+                        log_warning(
+                            tt::LogMetal,
+                            "terminate_stale_erisc_routers: FIX RP Device {} chan={} ROM postcode "
+                            "0x{:08x} transitioned to unexpected value 0x{:08x} after ~{}ms — "
+                            "stopping poll, treating as dead. (is_non_mmio={})",
+                            dev->id(),
+                            eth_chan_id,
+                            kRomPostcode,
+                            poll_buf[0],
+                            (poll_i + 1) * kRomPostcodePollIntervalMs,
+                            is_non_mmio);
+                        break;
+                    }
+                    // still 0x49705180 — keep polling
+                }
+                if (rom_postcode_transitioned) {
+                    continue;  // channel is live, nothing more to do
+                }
+                log_warning(
+                    tt::LogMetal,
+                    "terminate_stale_erisc_routers: FIX RP Device {} chan={} ROM postcode "
+                    "0x{:08x} did NOT transition to base-UMD sentinel within {}ms. "
+                    "Adding to probe_dead_channels (degraded mode). (is_non_mmio={})",
+                    dev->id(),
+                    eth_chan_id,
+                    kRomPostcode,
+                    kRomPostcodePollTotalMs,
+                    is_non_mmio);
+                probe_dead_channels.insert(eth_chan_id);
+                corrupt_count++;
             } else {
                 // Truly corrupt / unknown value — no TERMINATE (unknown firmware), but zero
                 // edm_status_address to prevent cascade into the next session.
@@ -1277,10 +1375,12 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 //
                 // While the probe L1 read SUCCEEDED (relay functional), deassert_risc_reset requires
                 // an operational NOC — which may be dead if a previous session left this channel in
-                // assert_risc_reset state (the FIX M crash pattern, status 0x49705180).
-                // Marking it pre-known dead lets configure_fabric run in degraded mode (skip those
-                // channels with a warning) rather than throwing "newly-dead ETH channel(s)".
-                // The zero-write above ensures the NEXT session sees a clean 0.
+                // assert_risc_reset state.  Marking it pre-known dead lets configure_fabric run in
+                // degraded mode (skip those channels with a warning) rather than throwing
+                // "newly-dead ETH channel(s)".  The zero-write above ensures the NEXT session sees
+                // a clean 0.
+                // NOTE: base-UMD (0x49706550) and ROM postcode (0x49705180) values are handled by
+                // is_base_umd and FIX RP branches above — they do NOT reach this else-clause.
                 // NOTE: base-UMD channels (is_base_umd == true) are intentionally excluded here —
                 // they are normal fresh-boot state and must NOT be treated as dead-relay.
                 probe_dead_channels.insert(eth_chan_id);
