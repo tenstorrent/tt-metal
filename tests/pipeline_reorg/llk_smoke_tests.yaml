@@ -1,5 +1,5 @@
 # LLK smoke — PR-gate python_tests (no coverage, 2-way split, markers not perf and not nightly and not quasar).
-# PYTEST_MARKERS is set by llk-smoke.yaml / workflow_call inputs.
+# PYTEST_MARKERS is set by llk-smoke-impl.yaml / workflow_call inputs.
 
 - name: llk_smoke_wormhole group 1/2
   split_group: 1

@@ -1,4 +1,4 @@
-name: "LLK Nightly Tests"
+name: "LLK e2e Tests"
 
 on:
   schedule:
@@ -22,10 +22,10 @@ jobs:
     name: "Docker setup"
     uses: ./.github/workflows/build-docker-artifact.yaml
 
-  nightly-test-wormhole:
-    name: "LLK Nightly Tests (Wormhole)"
+  e2e-test-wormhole:
+    name: "LLK e2e (Wormhole)"
     needs: build-images
-    uses: ./.github/workflows/llk-nightly-tests-impl.yaml
+    uses: ./.github/workflows/llk-e2e-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
@@ -34,10 +34,10 @@ jobs:
       runs-on-for-coverage: tt-ubuntu-2204-n150-stable
       coverage: true
 
-  nightly-test-blackhole:
-    name: "LLK Nightly Tests (Blackhole)"
+  e2e-test-blackhole:
+    name: "LLK e2e (Blackhole)"
     needs: build-images
-    uses: ./.github/workflows/llk-nightly-tests-impl.yaml
+    uses: ./.github/workflows/llk-e2e-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
@@ -46,15 +46,15 @@ jobs:
       runs-on-for-coverage: tt-ubuntu-2204-p150b-stable
       coverage: true
 
-  nightly-summary:
-    name: "Nightly summary"
+  e2e-summary:
+    name: "LLK e2e summary"
     if: always()
     needs:
-      - nightly-test-wormhole
-      - nightly-test-blackhole
+      - e2e-test-wormhole
+      - e2e-test-blackhole
     runs-on: ubuntu-latest
     steps:
-      - name: Check nightly test results
+      - name: Check e2e test results
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
@@ -63,7 +63,7 @@ jobs:
     name: "Report status"
     runs-on: ubuntu-latest
     if: always()
-    needs: nightly-summary
+    needs: e2e-summary
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -72,7 +72,7 @@ jobs:
       - name: Report status
         uses: ./.github/actions/report-failure
         with:
-          test_name: "Nightly Tests"
+          test_name: "LLK e2e Tests"
           slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.nightly-summary.result }}
+          status: ${{ needs.e2e-summary.result }}

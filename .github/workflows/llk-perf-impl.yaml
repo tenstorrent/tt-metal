@@ -1,5 +1,5 @@
-name: "LLK Run Performance Tests"
-# Entry points: workflow_call only. Schedule / workflow_dispatch live in llk-perf-tests.yaml.
+name: "LLK perf impl"
+# Entry points: workflow_call only. Schedule / workflow_dispatch live in llk-perf.yaml.
 
 on:
   workflow_call:

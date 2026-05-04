@@ -1,4 +1,4 @@
-name: "[internal] LLK nightly tests impl"
+name: "LLK Smoke impl"
 
 on:
   workflow_call:
@@ -15,16 +15,16 @@ on:
         description: "Pytest mark expression for LLK python_tests"
         required: false
         type: string
-        default: "not perf and not quasar"
+        default: "not perf and not nightly and not quasar"
       runs-on-for-coverage:
-        description: "Runner label for merge-coverage CHIP_ARCH detection (match matrix runner)"
+        description: "Runner label for merge-coverage CHIP_ARCH when coverage is enabled"
         required: true
         type: string
       coverage:
         description: "Enable coverage collection and merge job"
         required: false
         type: boolean
-        default: true
+        default: false
 
 permissions:
   checks: write
@@ -39,7 +39,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_nightly_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_smoke_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
@@ -56,7 +56,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "nightly"
+            "smoke"
       - name: Build test matrix
         id: build-matrix
         run: |
@@ -65,7 +65,7 @@ jobs:
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
 
-  llk-nightly-exec:
+  llk-smoke-exec:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
@@ -162,7 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.docker-image }}
-    needs: llk-nightly-exec
+    needs: llk-smoke-exec
     if: ${{ inputs.coverage == true }}
     permissions:
       contents: read

@@ -1,4 +1,4 @@
-# LLK perf — matrix for llk-perf-tests (scheduled/dispatch → impl); speed-of-light, -n 15 consumer, perf marker.
+# LLK perf — matrix for llk-perf / llk-perf-impl; speed-of-light, -n 15 consumer, perf marker.
 # One matrix row per --group, like tests/pipeline_reorg/ttnn-tests.yaml.
 
 - name: llk_perf_wormhole group 1/5

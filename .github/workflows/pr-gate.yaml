@@ -523,7 +523,7 @@ jobs:
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    uses: ./.github/workflows/llk-smoke.yaml
+    uses: ./.github/workflows/llk-smoke-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
@@ -545,7 +545,7 @@ jobs:
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
-    uses: ./.github/workflows/llk-smoke.yaml
+    uses: ./.github/workflows/llk-smoke-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}

@@ -1,4 +1,4 @@
-name: "LLK Nightly Performance Tests"
+name: "LLK perf"
 
 on:
   schedule:
@@ -19,8 +19,8 @@ concurrency:
 
 jobs:
   perf-tests:
-    name: "LLK Performance tests"
-    uses: ./.github/workflows/llk-perf-tests-impl.yaml
+    name: "LLK perf tests"
+    uses: ./.github/workflows/llk-perf-impl.yaml
     secrets: inherit
 
   report-status:
@@ -40,7 +40,7 @@ jobs:
       - name: Report status
         uses: ./.github/actions/report-failure
         with:
-          test_name: "Nightly Performance Tests"
+          test_name: "LLK perf"
           slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
           status: ${{ needs.perf-tests.result }}
