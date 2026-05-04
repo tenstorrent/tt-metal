@@ -45,16 +45,6 @@ on:
         required: false
         type: boolean
         default: false
-      gtest-shard-total:
-        required: false
-        default: 1
-        type: number
-        description: "Total number of gtest shards (>=1). Sets GTEST_TOTAL_SHARDS."
-      gtest-shard-index:
-        required: false
-        default: 0
-        type: number
-        description: "0-based gtest shard index (must be < gtest-shard-total). Sets GTEST_SHARD_INDEX."
 jobs:
   define-cpp-tests:
     runs-on: ubuntu-latest
@@ -98,10 +88,7 @@ jobs:
       matrix:
         os: ["ubuntu-22.04"]
         test-group: ${{ fromJSON(needs.define-cpp-tests.outputs.cpp-tests) }}
-    name: >-
-      ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}${{
-        inputs.gtest-shard-total > 1 && format(' shard {0}/{1}', inputs.gtest-shard-index, inputs.gtest-shard-total) || ''
-      }}
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -111,10 +98,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
-        # gtest's built-in sharding: each shard runs ~1/N of the test cases.
-        # When gtest-shard-total <= 1 these have no effect (gtest treats the run as unsharded).
-        GTEST_TOTAL_SHARDS: ${{ inputs.gtest-shard-total }}
-        GTEST_SHARD_INDEX: ${{ inputs.gtest-shard-index }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

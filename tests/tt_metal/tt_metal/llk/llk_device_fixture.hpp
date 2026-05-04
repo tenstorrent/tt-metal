@@ -227,14 +227,15 @@ protected:
     // Skip suite-level device init on non-Blackhole hosts; every test will be
     // skipped in SetUp() anyway, so there's no point opening devices.
     static void SetUpTestSuite() {
-        if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
+        const auto arch = detail::detect_arch();
+        if (arch != tt::ARCH::BLACKHOLE) {
             return;
         }
         LLKMeshDeviceSingleCardFixture::SetUpTestSuite();
     }
 
     void SetUp() override {
-        if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
+        if (!shared_state().initialized) {
             GTEST_SKIP() << "This test can only be run on Blackhole cards";
         }
         LLKMeshDeviceSingleCardFixture::SetUp();
@@ -244,14 +245,15 @@ protected:
 class LLKQuasarMeshDeviceSingleCardFixture : public LLKMeshDeviceSingleCardFixture {
 protected:
     static void SetUpTestSuite() {
-        if (detail::detect_arch() != tt::ARCH::QUASAR) {
+        const auto arch = detail::detect_arch();
+        if (arch != tt::ARCH::QUASAR) {
             return;
         }
         LLKMeshDeviceSingleCardFixture::SetUpTestSuite();
     }
 
     void SetUp() override {
-        if (detail::detect_arch() != tt::ARCH::QUASAR) {
+        if (!shared_state().initialized) {
             GTEST_SKIP() << "Not a Quasar device";
         }
         LLKMeshDeviceSingleCardFixture::SetUp();

@@ -123,6 +123,11 @@ so per-test setup is bounded to copying a few handles.
 > **When in doubt, start with `LLKMeshDeviceFixture`.** Only switch to a more
 > restrictive fixture if you discover the test legitimately can't run under one
 > of the modes — and add a code comment explaining why.
+>
+> The table describes fixture capability. CI can still schedule a capable fixture
+> in only one dispatch mode to keep coverage balanced. Today merge gate excludes
+> `LLKBlackholeSingleCardFixture` suites from the Blackhole FD shards and runs
+> them in the Blackhole SD slice instead.
 
 ---
 

@@ -479,10 +479,10 @@ jobs:
       gtest-shard-index: ${{ matrix.shard }}
 
   # LLK Slow Dispatch Unit Tests — runs ONLY the LLK tests that the FD jobs above skip:
-  # the LLKMeshDeviceFixtureSlowDispatchOnly.* set (FD-incompatible test bodies) plus all
-  # Quasar-* tests (which arch-skip on N150/p150b today, but are wired in so they'll run
-  # automatically once Quasar runners exist in the merge-gate pool). Together with the FD
-  # jobs above this gives the merge gate full LLK coverage.
+  # the LLKMeshDeviceFixtureSlowDispatchOnly.* set (FD-incompatible test bodies), Blackhole-only
+  # tests on BH, plus all Quasar-* tests (which arch-skip on N150/p150b today, but are wired
+  # in so they'll run automatically once Quasar runners exist in the merge-gate pool).
+  # Together with the FD jobs above this gives the merge gate full LLK coverage.
   llk-sd-unit-tests-wormhole:
     needs: [ build, find-changes ]
     if: ${{
@@ -504,7 +504,7 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: sd
       enable-llk-asserts: true
-      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
 
   llk-sd-unit-tests-blackhole:
     needs: [ build, find-changes ]
@@ -527,7 +527,7 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: sd
       enable-llk-asserts: true
-      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
