@@ -1,5 +1,11 @@
 # Molmo2-8B Bringup Log
 
+## Current Status
+
+**Status**: COMPLETE — Docker server verified 105/105 tests, 97.1% accuracy vs HF
+**Branch**: `ssinghal/molmo2_new` — commit `0f36262bf08`
+**Docker image**: `molmo2-pr-dev:latest` (overlay on `0.12.0-735b65d-7a07a97`)
+
 ## Session 1 — 2026-04-29
 
 **Status**: Architecture phase complete (image + video)
@@ -327,3 +333,48 @@ Timing breakdown (direct TTNN):
 - Text gen (prefill+decode): 3.30s
 
 Server overhead vs direct TTNN: +0.42s only (HTTP + vLLM scheduler)
+
+## Session 10 — 2026-05-04
+
+**Status**: Docker server COMPLETE — 105/105 success, 97.1% accuracy
+**Accuracy**: 97/105 vs HF (102/105 = 97.1% excluding 3 empty HF responses)
+
+### Work Done
+
+#### Critical Bug Fix: tti_padded Shape Mismatch in Vision Prefill Mask
+Commit: `0f36262bf08 molmo2: fix tti_padded shape mismatch in vision prefill mask`
+
+**Root Cause**: In `forward_prefill`, the `_S_pad_early` fix (session 9) set `pad_len = 0` for
+vision inputs (since x_ttnn is already padded to `_S_pad_early` in the vision block). But the
+`token_type_ids` for the prefill mask still had shape `[B, S]` (actual sequence length), while
+the causal mask cache had shape `[1, 1, S_pad, S_pad]`. `ttnn.maximum(causal[8192,8192],
+img_mm[4233,4233])` failed with "Invalid subtile broadcast type".
+
+**Fix**: Use `tti_pad_len = S_pad - S` (always correct) instead of `pad_len` when building
+the padded token_type_ids for mask construction. This correctly pads tti to [B, S_pad] so
+img_mm and causal have matching shapes.
+
+#### Docker 105-Video Test Results (T3K, Docker, GCS videos)
+| Metric | Value |
+|---|---|
+| Total tests | **105/105 success** |
+| Accuracy vs HF | **97/105 = 92.4% (97.1% excl. empty HF)** |
+| End-to-end latency (avg) | **10.4s** (includes GCS download ~5-8s) |
+| End-to-end latency (median) | **10.6s** |
+| Server prefill avg (excl. test 0) | **8.4s** |
+| Server prefill median | **7.3s** |
+| Decode step 1 avg | **0.225s** |
+| JIT during inference | **0 events** |
+
+#### Warmup Sequence (Docker, all JIT at bringup)
+1. `warmup_all_buckets(PREFILL_BUCKETS)` — 9 text-only buckets [128..32768] JIT'd
+2. `forward_decode_step(0, PREFILL_BUCKETS[-1])` — decode kernel JIT'd
+3. `warmup_vision_compile()` — ViT+pooling+projector JIT'd
+4. Vision-integrated prefill for all 9 buckets — vision path + ttnn.add JIT'd for each bucket
+
+Total warmup: ~15 minutes (dominated by weight loading from volume)
+
+### Notes
+- Prefill times vary 1-20s depending on sequence length (S ranges ~1K to ~4.2K for 51-frame videos)
+- End-to-end latency higher than local because GCS video downloads take 5-10s
+- No JIT stalls during inference: all shapes pre-compiled at bringup
