@@ -6,7 +6,7 @@
 Download PI0 pretrained weights from Google Drive.
 
 This script downloads the pi0_base checkpoint folder from Google Drive
-to the models/experimental/pi0/weights directory.
+to the models/experimental/pi0_5/weights directory.
 
 Usage:
     python download_pretrained_weights.py
@@ -109,22 +109,22 @@ def print_manual_download_instructions(folder_id: str, output_dir: Path):
     print("Option 1: Command line with gdown (requires public folder)")
     print("-" * 40)
     print(f"  pip install gdown")
-    print(f"  gdown --folder {url} -O $TT_METAL_HOME/models/experimental/pi0/weights/")
+    print(f"  gdown --folder {url} -O $TT_METAL_HOME/models/experimental/pi0_5/weights/")
     print()
     print("Option 2: Command line with rclone (works with private folders)")
     print("-" * 40)
     print("  # Install: https://rclone.org/install/")
     print("  rclone config  # Setup Google Drive remote named 'gdrive'")
-    print(f"  rclone copy gdrive:pi0_base $TT_METAL_HOME/models/experimental/pi0/weights/pi0_base")
+    print(f"  rclone copy gdrive:pi0_base $TT_METAL_HOME/models/experimental/pi0_5/weights/pi0_base")
     print()
     print("Option 3: Manual browser download")
     print("-" * 40)
     print(f"  1. Open: {url}")
     print("  2. Download the folder (right-click → Download)")
-    print("  3. Extract to: $TT_METAL_HOME/models/experimental/pi0/weights/")
+    print("  3. Extract to: $TT_METAL_HOME/models/experimental/pi0_5/weights/")
     print()
     print("After download, your directory should look like:")
-    print("  $TT_METAL_HOME/models/experimental/pi0/weights/")
+    print("  $TT_METAL_HOME/models/experimental/pi0_5/weights/")
     print("    └── pi0_base/")
     print("        ├── model.safetensors (or .bin files)")
     print("        └── config.json")

@@ -164,7 +164,7 @@ def test_siglip(device, use_pretrained: bool) -> float:
         tt_metal_home = os.environ.get("TT_METAL_HOME")
         if not tt_metal_home:
             raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-        checkpoint_path = os.path.join(tt_metal_home, "models/experimental/pi0/weights/pi0_base")
+        checkpoint_path = os.path.join(tt_metal_home, "models/experimental/pi0_5/weights/pi0_base")
         weight_loader = PI0WeightLoader(checkpoint_path)
         weights = weight_loader.get_vlm_vision_weights()
     else:

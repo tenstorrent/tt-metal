@@ -64,77 +64,6 @@ def rms_norm_ttnn(
     )
 
 
-def adarms_norm_ttnn(
-    x: ttnn.Tensor,
-    dense_weight: ttnn.Tensor,
-    dense_bias: ttnn.Tensor,
-    cond: ttnn.Tensor,
-    eps: float = 1e-6,
-    device: ttnn.Device = None,
-    ones_weight: Optional[ttnn.Tensor] = None,  # deprecated, kept for API compat
-    use_fused: bool = True,
-) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    # Use fused C++ op if available (source build custom op)
-    if use_fused and hasattr(ttnn.experimental, "fused_adarms"):
-        return ttnn.experimental.fused_adarms(x, dense_weight, dense_bias, cond, eps)
-    """
-    Adaptive RMSNorm (Pi0.5) using TTNN operations.
-
-    Projects conditioning vector to (scale, shift, gate) and applies:
-        normed = x / RMS(x) * (1 + scale) + shift
-    Returns (normed, gate) where gate is used for gated residual.
-
-    Args:
-        x: TTNN tensor (batch_size, seq_len, hidden_dim)
-        dense_weight: Projection weight (cond_dim, hidden_dim * 3) — transposed for TTNN
-        dense_bias: Projection bias (1, hidden_dim * 3)
-        cond: Conditioning vector (batch_size, cond_dim)
-        eps: Epsilon for numerical stability
-        device: TTNN device
-
-    Returns:
-        Tuple of (normed output, gate tensor)
-    """
-    batch_size = x.shape[0]
-    seq_len = x.shape[1]
-    hidden_dim = x.shape[2]
-
-    # Project conditioning: cond (B, cond_dim) -> modulation (B, hidden_dim * 3)
-    cond_2d = ttnn.reshape(cond, (batch_size, 1, -1)) if len(cond.shape) == 2 else cond
-    modulation = ttnn.linear(
-        cond_2d,
-        dense_weight,
-        bias=dense_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-    # Split into scale, shift, gate — each (B, 1, hidden_dim)
-    # Single chunk op replaces 3 separate slices
-    scale, shift, gate = ttnn.chunk(modulation, 3, dim=-1)
-    ttnn.deallocate(modulation)
-
-    # FUSED: rms_norm with dynamic weight=scale and bias=shift
-    # The +1 offset is pre-baked into the dense bias during initialization
-    # so scale already contains (1 + learned_scale)
-    normed = ttnn.rms_norm(x, weight=scale, bias=shift, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
-    ttnn.deallocate(scale)
-    ttnn.deallocate(shift)
-
-    return normed, gate
-
-
-def gated_residual_ttnn(
-    x: ttnn.Tensor,
-    y: ttnn.Tensor,
-    gate: Optional[ttnn.Tensor],
-) -> ttnn.Tensor:
-    """Gated residual: x + y * gate (Pi0.5) or x + y (Pi0)."""
-    if gate is None:
-        return ttnn.add(x, y)
-    # FUSED: mac(gate, y, x) = gate * y + x — single op instead of mul + add
-    return ttnn.mac(gate, y, x)
-
-
 # ============================================================================
 # Rotary Position Embeddings (TTNN Meta Format)
 # ============================================================================
@@ -246,7 +175,6 @@ class GemmaAttentionTTNN:
         device: ttnn.Device,
         cos_meta: Optional[ttnn.Tensor] = None,
         sin_meta: Optional[ttnn.Tensor] = None,
-        expected_seq_len: Optional[int] = None,
     ):
         """
         Initialize attention layer with TTNN weights.
@@ -258,7 +186,6 @@ class GemmaAttentionTTNN:
             device: TTNN device
             cos_meta: Precomputed cos for native TTNN RoPE [1, 1, max_seq, head_dim]
             sin_meta: Precomputed sin for native TTNN RoPE [1, 1, max_seq, head_dim]
-            expected_seq_len: If set, pre-slice RoPE cos/sin for this seq_len (saves 2 slice ops per forward)
         """
         self.config = config
         self.layer_idx = layer_idx
@@ -278,34 +205,21 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        self._sdpa_config = None
-
-        # WormholeComputeKernelConfig for Blackhole — LoFi for large matmuls (faster)
-        self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+        # Compute kernel config for attention (HiFi4 for precision-critical ops)
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+        # HiFi2 config for projections (faster, less precision needed)
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-
-        # OPTIMIZATION: Pre-slice RoPE for known sequence length (saves 2 slice ops per forward)
-        self._presliced_seq_len = expected_seq_len
-        if expected_seq_len is not None and cos_meta is not None:
-            self._cos_presliced = ttnn.slice(cos_meta, [0, 0, 0, 0], [1, 1, expected_seq_len, self.head_dim])
-            self._sin_presliced = ttnn.slice(sin_meta, [0, 0, 0, 0], [1, 1, expected_seq_len, self.head_dim])
-        else:
-            self._cos_presliced = None
-            self._sin_presliced = None
-
-        # OPTIMIZATION: Lazy-allocated output buffers for KV concat (source build supports output_tensor)
-        self._kv_concat_k = None
-        self._kv_concat_v = None
 
     def forward(
         self,
@@ -316,7 +230,6 @@ class GemmaAttentionTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
-        prefix_offset: int = 0,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         OPTIMIZED forward pass using fused QKV and native TTNN operations.
@@ -334,10 +247,6 @@ class GemmaAttentionTTNN:
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
-            prefix_offset: RoPE phase shift — index of the first row of cos/sin to
-                use for Q and K rotation. For the expert path, this should equal
-                the non-pad prefix length so suffix tokens are rotated starting at
-                the correct global position. Default 0 preserves VLM behavior.
 
         Returns:
             Tuple of (output, optional_cache)
@@ -352,14 +261,17 @@ class GemmaAttentionTTNN:
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
 
-        # QKV linear — L1 interleaved directly (avoids to_memory_config op)
+        # Use WIDTH_SHARDED L1 memory config
         xqkv = ttnn.linear(
             hidden_states,
             self.wqkv,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
+
+        # Convert back to interleaved for nlp_create_qkv_heads
+        xqkv = ttnn.to_memory_config(xqkv, ttnn.L1_MEMORY_CONFIG)
 
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
         # This splits the fused QKV into separate Q, K, V with proper head layout
@@ -373,114 +285,45 @@ class GemmaAttentionTTNN:
         )
 
         # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern)
-        # Use pre-sliced cos/sin when available (saves 2 slice ops per forward).
-        # Pre-sliced path is only valid when prefix_offset == 0 (i.e. rotating
-        # from position 0). Expert path with a non-zero prefix_offset must take
-        # the shifted slow path so both Q and K are rotated starting at the
-        # correct global position.
-        if self._cos_presliced is not None and prefix_offset == 0 and seq_len == self._presliced_seq_len:
-            cos_sliced = self._cos_presliced
-            sin_sliced = self._sin_presliced
-            needs_dealloc = False
-        else:
-            # Slow path: non-zero prefix_offset → slice cos/sin starting at
-            # that row. `ttnn.slice` on TILE_LAYOUT tensors handles non-tile-
-            # aligned bounds correctly (verified empirically — numbers are
-            # identical with or without a row-major detour), so slice the
-            # tile-layout tensor directly and avoid the extra layout churn.
-            cos_sliced = ttnn.slice(
-                self.cos_meta,
-                [0, 0, prefix_offset, 0],
-                [1, 1, prefix_offset + seq_len, self.head_dim],
-            )
-            sin_sliced = ttnn.slice(
-                self.sin_meta,
-                [0, 0, prefix_offset, 0],
-                [1, 1, prefix_offset + seq_len, self.head_dim],
-            )
-            needs_dealloc = True
+        # Slice cos/sin to match actual sequence length
+        cos_sliced = ttnn.slice(
+            self.cos_meta,
+            [0, 0, 0, 0],
+            [1, 1, seq_len, self.head_dim],
+        )
+        sin_sliced = ttnn.slice(
+            self.sin_meta,
+            [0, 0, 0, 0],
+            [1, 1, seq_len, self.head_dim],
+        )
 
-        # Q: normal rotary_embedding (output used immediately for SDPA)
+        # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma
         q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_sliced, sin_sliced)
+        k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
+
+        ttnn.deallocate(cos_sliced)
+        ttnn.deallocate(sin_sliced)
+
         # rotary_embedding pads output to tile boundary, slice back to original seq_len
         q_rope = ttnn.slice(q_rope_padded, [0, 0, 0, 0], [batch_size, self.num_heads, seq_len, self.head_dim])
+        k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
 
-        # Handle KV cache via FUSED rotary_embedding_to_cache + V fill_cache
+        # Handle KV cache
         if past_key_value is not None:
             past_k, past_v = past_key_value
-            prefix_len = past_k.shape[2]
-            suffix_len = k.shape[2]
-            if self._kv_concat_k is None:
-                # First call: pre-allocate with logical shape (prefix_len + suffix_len)
-                full_seq = prefix_len + suffix_len
-                cache_dtype = past_k.dtype
-                self._kv_concat_k = ttnn.zeros(
-                    [1, self.num_kv_heads, full_seq, self.head_dim],
-                    dtype=cache_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                self._kv_concat_v = ttnn.zeros(
-                    [1, self.num_kv_heads, full_seq, self.head_dim],
-                    dtype=cache_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-            # Refill the prefix portion from the incoming `past_key_value` on
-            # every call. Across rollout replans, `past_k`/`past_v` are the
-            # fresh VLM output for a new observation, so the cached prefix
-            # must be refreshed — failing to do so leaves every expert layer
-            # cross-attending to the stale first-call prefix and silently
-            # collapses the policy (gripper saturates and per-replan PCC drops
-            # from 0.999 to negative within a few replans).
-            #
-            # This refill is idempotent across the 10 denoise steps within a
-            # single `sample_actions` call (same `past_kv_cache` object each
-            # iteration), so it runs more often than strictly necessary. An
-            # optimization that skips redundant fills based on tensor identity
-            # is possible but silently breaks the trace path: `setup_trace`
-            # runs the denoise loop twice (compile pass + capture pass) with
-            # the same Python object, so any Python-level de-dup causes the
-            # `fill_cache` op to never get captured into the trace, which in
-            # turn means `execute_trace` never refreshes the cache even after
-            # `ttnn.copy` of a new prefix KV. Keep the refill unconditional.
-            ttnn.fill_cache(self._kv_concat_k, past_k, 0, update_idx=0)
-            ttnn.fill_cache(self._kv_concat_v, past_v, 0, update_idx=0)
-            # Ensure dtype match for cache write
-            if k.dtype != self._kv_concat_k.dtype:
-                k = ttnn.typecast(k, self._kv_concat_k.dtype)
-            if v.dtype != self._kv_concat_v.dtype:
-                v = ttnn.typecast(v, self._kv_concat_v.dtype)
-            # FUSED: rotate K and write directly to cache at prefix_len offset
-            ttnn.experimental.rotary_embedding_to_cache(k, cos_sliced, sin_sliced, self._kv_concat_k, prefix_len)
-            # V: no rotation, regular fill_cache
-            ttnn.fill_cache(self._kv_concat_v, v, 0, update_idx=prefix_len)
-            k_rope = self._kv_concat_k
-            v = self._kv_concat_v
-            if needs_dealloc:
-                ttnn.deallocate(cos_sliced)
-                ttnn.deallocate(sin_sliced)
-        else:
-            # VLM path: rotate K normally (no cache update)
-            k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_sliced, sin_sliced)
-            k_rope = ttnn.slice(k_rope_padded, [0, 0, 0, 0], [batch_size, self.num_kv_heads, seq_len, self.head_dim])
-            if needs_dealloc:
-                ttnn.deallocate(cos_sliced)
-                ttnn.deallocate(sin_sliced)
+            k_rope = ttnn.concat([past_k, k_rope], dim=2)
+            v = ttnn.concat([past_v, v], dim=2)
 
         new_cache = (k_rope, v) if use_cache else None
 
-        # Use TTNN scaled dot product attention with tuned program config
+        # Use TTNN scaled dot product attention
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_rope,
             k_rope,
             v,
             attn_mask=attention_mask,
-            is_causal=False,
+            is_causal=False,  # Mask handles causality
             scale=self.scale,
-            program_config=self._sdpa_config,
         )
 
         # OPTIMIZATION 4: Native TTNN head concatenation (no PyTorch transfers!)
@@ -490,13 +333,13 @@ class GemmaAttentionTTNN:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        # Output projection with HiFi4 for precision-critical residual path
+        # Output projection - use bfloat16 for residual add compatibility
         output = ttnn.linear(
             attn_concat,
             self.o_proj,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
@@ -541,90 +384,36 @@ class GemmaMLPTTNN:
         self.config = config
         self.device = device
 
-        # WormholeComputeKernelConfig for MLP — LoFi is 18% faster than HiFi2 for large matmuls
-        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-
         # Convert weights to TTNN if they're PyTorch tensors
-        # Use bfloat8_b for all MLP weights — reduces bandwidth for VLM too
-        mlp_dtype = ttnn.bfloat8_b
-
         def to_ttnn(w):
             if isinstance(w, torch.Tensor):
                 return ttnn.from_torch(
                     w.T.contiguous(),  # Transpose for linear
-                    dtype=mlp_dtype,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                 )
             return w
 
-        # Fuse gate+up weights for single matmul: [hidden, 2*mlp_dim]
-        gate_w = weights["mlp.gate_proj.weight"]
-        up_w = weights["mlp.up_proj.weight"]
-        if isinstance(gate_w, torch.Tensor) and isinstance(up_w, torch.Tensor):
-            fused = torch.cat([gate_w, up_w], dim=0)  # [2*mlp_dim, hidden]
-            self.fused_gate_up = ttnn.from_torch(
-                fused.T.contiguous(),  # [hidden, 2*mlp_dim]
-                dtype=mlp_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-            )
-        else:
-            self.fused_gate_up = None
-        self.gate_proj = to_ttnn(gate_w)
-        self.up_proj = to_ttnn(up_w)
+        self.gate_proj = to_ttnn(weights["mlp.gate_proj.weight"])
+        self.up_proj = to_ttnn(weights["mlp.up_proj.weight"])
         self.down_proj = to_ttnn(weights["mlp.down_proj.weight"])
-        self.mlp_dim = config.mlp_dim
 
         # Chunk size must be tile-aligned (multiple of 32)
-        # 256 is optimal: smaller chunks have lower per-op time but the slice/concat
-        # overhead from more chunks dominates
+        # 256 = 32 × 8, optimal for 64-core auto-sharding (4 tokens/core)
+        # 256 tokens × 16384 mlp_dim × 1 byte = ~4MB total
+        # With auto-sharding across 64 cores = ~64KB per core (fits L1)
         self.chunk_size = 256
-
-    def forward_pre_down(self, x) -> ttnn.Tensor:
-        """Fast path only: return hidden_out (pre-down-projection) for external fusion."""
-        mlp_ckc = self.compute_kernel_config_hifi2
-        if self.fused_gate_up is not None:
-            gate_up = ttnn.linear(
-                x,
-                self.fused_gate_up,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=mlp_ckc,
-            )
-            gate = ttnn.slice(gate_up, [0, 0, 0], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim])
-            up = ttnn.slice(gate_up, [0, 0, self.mlp_dim], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim * 2])
-            ttnn.deallocate(gate_up)
-        else:
-            gate = ttnn.linear(
-                x,
-                self.gate_proj,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=mlp_ckc,
-            )
-            up = ttnn.linear(
-                x,
-                self.up_proj,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=mlp_ckc,
-            )
-        gate_activated = ttnn.gelu(gate)
-        ttnn.deallocate(gate)
-        hidden_out = ttnn.multiply(gate_activated, up)
-        ttnn.deallocate(gate_activated)
-        ttnn.deallocate(up)
-        return hidden_out
 
     def forward(self, x) -> ttnn.Tensor:
         """
-        Forward pass with fast path for small sequences and chunked for large.
+        Forward pass using chunked processing with auto L1 sharding.
+
+        Strategy:
+        1. Chunk input along sequence dimension (e.g., 544 → 3 chunks of 256)
+        2. Let matmul auto-compute sharding (typically WIDTH or BLOCK in L1)
+        3. Subsequent ops inherit sharding from matmul output
+        4. Accumulate results in L1, concatenate at end
 
         Args:
             x: Input tensor [batch, seq, hidden] or [batch, 1, seq, hidden] (PyTorch or TTNN)
@@ -645,54 +434,6 @@ class GemmaMLPTTNN:
         batch_size = x.shape[0]
         was_3d = len(x.shape) == 3
 
-        # Fast path: small sequences (e.g., expert with ~50 tokens) — no chunking
-        seq_dim = x.shape[1] if was_3d else x.shape[2]
-        if seq_dim <= self.chunk_size:
-            mlp_ckc = self.compute_kernel_config_hifi2
-            if self.fused_gate_up is not None:
-                gate_up = ttnn.linear(
-                    x,
-                    self.fused_gate_up,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=mlp_ckc,
-                )
-                gate = ttnn.slice(gate_up, [0, 0, 0], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim])
-                up = ttnn.slice(gate_up, [0, 0, self.mlp_dim], [gate_up.shape[0], gate_up.shape[1], self.mlp_dim * 2])
-                ttnn.deallocate(gate_up)
-            else:
-                gate = ttnn.linear(
-                    x,
-                    self.gate_proj,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=mlp_ckc,
-                )
-                up = ttnn.linear(
-                    x,
-                    self.up_proj,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=mlp_ckc,
-                )
-            gate_activated = ttnn.gelu(gate)
-            ttnn.deallocate(gate)
-            hidden_out = ttnn.multiply(gate_activated, up)
-            ttnn.deallocate(gate_activated)
-            ttnn.deallocate(up)
-            output = ttnn.linear(
-                hidden_out,
-                self.down_proj,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=mlp_ckc,
-            )
-            ttnn.deallocate(hidden_out)
-            if was_torch:
-                output = ttnn.to_torch(output)
-            return output
-
-        # Chunked path for large sequences (VLM with 544 tokens)
         # Always work with 4D tensors (ttnn.slice requires 4D coordinates)
         if was_3d:
             x = ttnn.reshape(x, [batch_size, 1, x.shape[1], x.shape[2]])
@@ -709,10 +450,9 @@ class GemmaMLPTTNN:
             chunk_end = min(chunk_start + self.chunk_size, seq_len)
             actual_chunk_size = chunk_end - chunk_start
 
-            # Pad last chunk to tile alignment (32) if needed — NOT to full chunk_size
-            tile_aligned_size = ((actual_chunk_size + 31) // 32) * 32
-            needs_chunk_padding = actual_chunk_size != tile_aligned_size
-            padded_chunk_size = tile_aligned_size
+            # Pad last chunk to tile alignment if needed
+            needs_chunk_padding = actual_chunk_size < self.chunk_size
+            padded_chunk_size = self.chunk_size if needs_chunk_padding else actual_chunk_size
 
             # Slice input chunk (always 4D)
             x_chunk = ttnn.slice(x, [0, 0, chunk_start, 0], [batch_size, 1, chunk_end, hidden])
@@ -724,59 +464,24 @@ class GemmaMLPTTNN:
                 x_chunk = ttnn.to_memory_config(x_chunk, ttnn.DRAM_MEMORY_CONFIG)
                 x_chunk = ttnn.pad(x_chunk, padding=((0, 0), (0, 0), (0, pad_amount), (0, 0)), value=0.0)
 
-            # Fused gate+up projection — single matmul instead of 2 separate
-            mlp_ckc = self.compute_kernel_config_hifi2
-            if self.fused_gate_up is not None:
-                gate_up = ttnn.linear(
-                    x_chunk,
-                    self.fused_gate_up,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=mlp_ckc,
-                )
-                ttnn.deallocate(x_chunk)
-                gate = ttnn.slice(
-                    gate_up, [0, 0, 0, 0], [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], self.mlp_dim]
-                )
-                up = ttnn.slice(
-                    gate_up,
-                    [0, 0, 0, self.mlp_dim],
-                    [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], self.mlp_dim * 2],
-                )
-                ttnn.deallocate(gate_up)
-            else:
-                gate = ttnn.linear(
-                    x_chunk,
-                    self.gate_proj,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=mlp_ckc,
-                )
-                up = ttnn.linear(
-                    x_chunk,
-                    self.up_proj,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=mlp_ckc,
-                )
-                ttnn.deallocate(x_chunk)
+            # Gate and up projections - use bfloat8_b for 2x memory savings
+            # Use L1 interleaved (WIDTH_SHARDED incompatible with MLP dimensions)
+            gate = ttnn.linear(x_chunk, self.gate_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+            up = ttnn.linear(x_chunk, self.up_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_chunk)
 
-            # GELU activation
+            # GELU activation - inherits sharding and dtype
             gate_activated = ttnn.gelu(gate)
             ttnn.deallocate(gate)
 
-            # Element-wise multiply
+            # Element-wise multiply - inherits sharding from inputs
             hidden_out = ttnn.multiply(gate_activated, up)
             ttnn.deallocate(gate_activated)
             ttnn.deallocate(up)
 
-            # Down projection
+            # Down projection - keep in L1 interleaved (simpler, avoids conversion overhead)
             output_chunk = ttnn.linear(
-                hidden_out,
-                self.down_proj,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=mlp_ckc,
+                hidden_out, self.down_proj, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG
             )
             ttnn.deallocate(hidden_out)
 
@@ -831,7 +536,6 @@ class GemmaBlockTTNN:
         device: ttnn.Device,
         cos_meta: Optional[ttnn.Tensor] = None,
         sin_meta: Optional[ttnn.Tensor] = None,
-        expected_seq_len: Optional[int] = None,
     ):
         """
         Initialize transformer block with TTNN weights.
@@ -843,27 +547,15 @@ class GemmaBlockTTNN:
             device: TTNN device
             cos_meta: Precomputed cos for native TTNN RoPE [1, 1, max_seq, head_dim]
             sin_meta: Precomputed sin for native TTNN RoPE [1, 1, max_seq, head_dim]
-            expected_seq_len: If set, pre-slice RoPE for this seq_len in attention
         """
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
-        self.use_adarms = config.use_adarms
 
-        if self.use_adarms:
-            # Pi0.5: adaRMS dense projection weights
-            self.input_ln_dense_weight = weights["input_layernorm.dense.weight"]
-            self.input_ln_dense_bias = weights["input_layernorm.dense.bias"]
-            self.post_attn_ln_dense_weight = weights["post_attention_layernorm.dense.weight"]
-            self.post_attn_ln_dense_bias = weights["post_attention_layernorm.dense.bias"]
-            # Pre-allocate ones weight for adaRMS (avoids allocation per call)
-            self._adarms_ones = ttnn.ones((1, config.width), device=device, dtype=ttnn.bfloat16)
-            self._adarms_ones = ttnn.to_layout(self._adarms_ones, ttnn.TILE_LAYOUT)
-        else:
-            self.input_layernorm_weight = weights["input_layernorm.weight"]
-            self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
+        self.input_layernorm_weight = weights["input_layernorm.weight"]
+        self.post_attention_layernorm_weight = weights["post_attention_layernorm.weight"]
 
-        self.attention = GemmaAttentionTTNN(config, weights, layer_idx, device, cos_meta, sin_meta, expected_seq_len)
+        self.attention = GemmaAttentionTTNN(config, weights, layer_idx, device, cos_meta, sin_meta)
         self.mlp = GemmaMLPTTNN(config, weights, device)
 
     def forward(
@@ -875,8 +567,6 @@ class GemmaBlockTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
-        adarms_cond: Optional[ttnn.Tensor] = None,
-        prefix_offset: int = 0,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass using TTNN operations.
@@ -888,35 +578,18 @@ class GemmaBlockTTNN:
             position_ids: Position indices
             past_key_value: Cached KV
             use_cache: Whether to return cache
-            adarms_cond: Pi0.5 time conditioning vector (TTNN tensor)
-            prefix_offset: RoPE phase shift to apply when rotating Q and K.
-                Passed through to the attention layer. Default 0 preserves VLM
-                behavior; the action expert path sets this to the non-pad prefix
-                length.
 
         Returns:
             Tuple of (output, optional_cache)
         """
         # Pre-attention norm
-        if self.use_adarms and adarms_cond is not None:
-            normed, attn_gate = adarms_norm_ttnn(
-                hidden_states,
-                self.input_ln_dense_weight,
-                self.input_ln_dense_bias,
-                adarms_cond,
-                self.config.rms_norm_eps,
-                self.device,
-                ones_weight=self._adarms_ones,
-            )
-        else:
-            normed = rms_norm_ttnn(
-                hidden_states,
-                self.input_layernorm_weight,
-                self.config.rms_norm_eps,
-            )
-            attn_gate = None
+        normed = rms_norm_ttnn(
+            hidden_states,
+            self.input_layernorm_weight,
+            self.config.rms_norm_eps,
+        )
 
-        # Attention with gated residual
+        # Attention with residual
         attn_output, new_cache = self.attention.forward(
             normed,
             cos,
@@ -925,59 +598,28 @@ class GemmaBlockTTNN:
             position_ids,
             past_key_value,
             use_cache,
-            prefix_offset=prefix_offset,
         )
-        hidden_states = gated_residual_ttnn(hidden_states, attn_output, attn_gate)
+        hidden_states = ttnn.add(hidden_states, attn_output)
         ttnn.deallocate(attn_output)
-        if attn_gate is not None:
-            ttnn.deallocate(attn_gate)
+        ttnn.ReadDeviceProfiler(
+            self.device
+        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Pre-MLP norm
-        if self.use_adarms and adarms_cond is not None:
-            normed, mlp_gate = adarms_norm_ttnn(
-                hidden_states,
-                self.post_attn_ln_dense_weight,
-                self.post_attn_ln_dense_bias,
-                adarms_cond,
-                self.config.rms_norm_eps,
-                self.device,
-                ones_weight=self._adarms_ones,
-            )
-        else:
-            normed = rms_norm_ttnn(
-                hidden_states,
-                self.post_attention_layernorm_weight,
-                self.config.rms_norm_eps,
-            )
-            mlp_gate = None
+        normed = rms_norm_ttnn(
+            hidden_states,
+            self.post_attention_layernorm_weight,
+            self.config.rms_norm_eps,
+        )
 
-        # MLP with gated residual — fuse down_proj + gated residual when gate is present
-        if mlp_gate is not None:
-            # Fused: hidden_states = hidden_states + 1.0 * linear(hidden_out, down_proj) * gate
-            # All tensors must match weight dtype (bfloat8_b) for the fused kernel
-            hidden_out = self.mlp.forward_pre_down(normed)
-            ttnn.deallocate(normed)
-            hs_8b = ttnn.typecast(hidden_states, ttnn.bfloat8_b)
-            gate_8b = ttnn.typecast(mlp_gate, ttnn.bfloat8_b)
-            hidden_states = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
-                matmul_input_tensor=hidden_out,
-                matmul_weight_tensor=self.mlp.down_proj,
-                scalar=1.0,
-                addcmul_input_tensor1=hs_8b,
-                addcmul_input_tensor2=gate_8b,
-            )
-            ttnn.deallocate(hidden_out)
-            ttnn.deallocate(hs_8b)
-            ttnn.deallocate(gate_8b)
-            ttnn.deallocate(mlp_gate)
-            # Cast back to bfloat16 for subsequent layers
-            hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
-        else:
-            mlp_output = self.mlp.forward(normed)
-            ttnn.deallocate(normed)
-            hidden_states = ttnn.add(hidden_states, mlp_output)
-            ttnn.deallocate(mlp_output)
-        # ReadDeviceProfiler removed for performance
+        # MLP with residual
+        mlp_output = self.mlp.forward(normed)
+        ttnn.deallocate(normed)
+        hidden_states = ttnn.add(hidden_states, mlp_output)
+        ttnn.deallocate(mlp_output)
+        ttnn.ReadDeviceProfiler(
+            self.device
+        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return hidden_states, new_cache
 

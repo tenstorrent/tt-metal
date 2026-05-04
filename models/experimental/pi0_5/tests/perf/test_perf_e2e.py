@@ -24,7 +24,7 @@ from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_confi
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi0_base")
+CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights/pi0_base")
 
 
 def create_pi0_pipeline_model(ttnn_model, device, inputs):

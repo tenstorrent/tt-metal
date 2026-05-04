@@ -7,7 +7,7 @@ PI0 Performance Test - TTNN (tt/)
 This test benchmarks the TTNN implementation from tt/ directory.
 
 Config:
-    - Checkpoint: $TT_METAL_HOME/models/experimental/pi0/weights/pi0_base
+    - Checkpoint: $TT_METAL_HOME/models/experimental/pi0_5/weights/pi0_base
     - Full denoising: 10 steps
     - Batch size: 1
     - Warmup iterations: 2
@@ -44,7 +44,7 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi0_base")
+CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights/pi0_base")
 BATCH_SIZE = 1
 SEED = 42
 NUM_INFERENCE_ITERATIONS = 50

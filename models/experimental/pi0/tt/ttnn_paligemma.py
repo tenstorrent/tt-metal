@@ -30,7 +30,6 @@ from .ttnn_common import tensor_1d_to_2d_ttnn
 from .ttnn_gemma import (
     GemmaBlockTTNN,
     rms_norm_ttnn,
-    adarms_norm_ttnn,
     precompute_freqs_cis_meta_format,
 )
 from .ttnn_siglip import (
@@ -80,31 +79,9 @@ class PaliGemmaBackboneTTNN:
         self.vlm_norm = tensor_1d_to_2d_ttnn(
             weights["vlm_language"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16
         )
-
-        self.use_expert_adarms = config.expert_config.use_adarms
-        if self.use_expert_adarms:
-            # Pi0.5: adaRMS for final expert norm - dense projection
-            norm_dense_w = weights["action_expert"]["model.norm.dense.weight"]
-            norm_dense_b = weights["action_expert"]["model.norm.dense.bias"].clone()
-            # Pre-add +1 to scale portion of bias (first expert_width elements)
-            expert_width = config.expert_config.width
-            norm_dense_b[:expert_width] += 1.0
-            self.expert_norm_dense_weight = ttnn.from_torch(
-                norm_dense_w.T.contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            self.expert_norm_dense_bias = tensor_1d_to_2d_ttnn(norm_dense_b, device, dtype=ttnn.bfloat16)
-            # Pre-allocate ones weight for adaRMS (needed for trace compatibility)
-            self._expert_norm_ones = ttnn.ones((1, config.expert_config.width), device=device, dtype=ttnn.bfloat16)
-            self._expert_norm_ones = ttnn.to_layout(self._expert_norm_ones, ttnn.TILE_LAYOUT)
-            self.expert_norm = None
-        else:
-            self.expert_norm = tensor_1d_to_2d_ttnn(
-                weights["action_expert"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16
-            )
+        self.expert_norm = tensor_1d_to_2d_ttnn(
+            weights["action_expert"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16
+        )
 
         # Initialize vision tower
         self.vision_tower = SigLIPVisionTowerTTNN(
@@ -135,8 +112,7 @@ class PaliGemmaBackboneTTNN:
         )
 
         # Initialize VLM transformer blocks (18 layers for Gemma 2B)
-        # Pre-slice RoPE for known prefix_len: 2 images × 256 patches + 32 lang = 544 tokens
-        vlm_seq_len = 2 * config.siglip_config.num_patches + 32  # 544
+        # Pass meta cos/sin for native TTNN RoPE (split-half pattern)
         self.vlm_blocks = []
         for i in range(config.vlm_config.depth):
             block_weights = self._get_vlm_block_weights_ttnn(weights["vlm_language"], i)
@@ -148,14 +124,10 @@ class PaliGemmaBackboneTTNN:
                     device,
                     self.cos_meta,
                     self.sin_meta,
-                    expected_seq_len=vlm_seq_len,
                 )
             )
 
         # Initialize Expert transformer blocks (18 layers for Gemma 300M)
-        # Expert always processes suffix_len = action_horizon (50 for Pi0.5)
-        # Pre-slice RoPE for this known length to save 2 slice ops per layer per step
-        expert_seq_len = 50  # action_horizon for Pi0.5
         self.expert_blocks = []
         for i in range(config.expert_config.depth):
             block_weights = self._get_expert_block_weights_ttnn(weights["action_expert"], i)
@@ -167,7 +139,6 @@ class PaliGemmaBackboneTTNN:
                     device,
                     self.expert_cos_meta,
                     self.expert_sin_meta,
-                    expected_seq_len=expert_seq_len,
                 )
             )
 
@@ -187,23 +158,21 @@ class PaliGemmaBackboneTTNN:
 
         if q_key in weights and k_key in weights and v_key in weights:
             # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN
-            # Use bfloat8_b for VLM weights too — reduces bandwidth
-            vlm_weight_dtype = ttnn.bfloat8_b
             wq_ttnn = ttnn.from_torch(
-                weights[q_key].T.contiguous(),
-                dtype=vlm_weight_dtype,
+                weights[q_key].T.contiguous(),  # [hidden, num_heads * head_dim]
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wk_ttnn = ttnn.from_torch(
-                weights[k_key].T.contiguous(),
-                dtype=vlm_weight_dtype,
+                weights[k_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wv_ttnn = ttnn.from_torch(
-                weights[v_key].T.contiguous(),
-                dtype=vlm_weight_dtype,
+                weights[v_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
@@ -238,18 +207,12 @@ class PaliGemmaBackboneTTNN:
                     layout = ttnn.TILE_LAYOUT
 
                 # Handle 1D tensors (biases, norms) using tensor_1d_to_2d_ttnn (no torch.unsqueeze)
-                # Use bfloat8_b for weight matrices, bfloat16 for norms/biases
                 if len(value.shape) == 1:
                     block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
                 else:
-                    w_dtype = (
-                        vlm_weight_dtype
-                        if ("weight" in new_key and "norm" not in new_key and "layernorm" not in new_key)
-                        else ttnn.bfloat16
-                    )
                     block_weights[new_key] = ttnn.from_torch(
                         value,
-                        dtype=w_dtype,
+                        dtype=ttnn.bfloat16,
                         layout=layout,
                         device=self.device,
                     )
@@ -264,9 +227,6 @@ class PaliGemmaBackboneTTNN:
         prefix = f"model.layers.{layer_idx}."
         block_weights = {}
 
-        # Use bfloat8_b for expert weights to reduce memory bandwidth
-        expert_weight_dtype = ttnn.bfloat8_b
-
         # OPTIMIZATION: Create fused QKV weight for single linear call
         q_key = f"{prefix}self_attn.q_proj.weight"
         k_key = f"{prefix}self_attn.k_proj.weight"
@@ -276,19 +236,19 @@ class PaliGemmaBackboneTTNN:
             # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN
             wq_ttnn = ttnn.from_torch(
                 weights[q_key].T.contiguous(),
-                dtype=expert_weight_dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wk_ttnn = ttnn.from_torch(
                 weights[k_key].T.contiguous(),
-                dtype=expert_weight_dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wv_ttnn = ttnn.from_torch(
                 weights[v_key].T.contiguous(),
-                dtype=expert_weight_dtype,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
@@ -311,59 +271,27 @@ class PaliGemmaBackboneTTNN:
                 if new_key in ["self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"]:
                     continue
 
-                is_adarms_dense = "layernorm.dense" in new_key
-                is_norm_scalar = ("layernorm" in new_key or "norm" in new_key) and not is_adarms_dense
+                # Transpose weight matrices for TTNN linear
+                if "weight" in new_key and "layernorm" not in new_key and "norm" not in new_key:
+                    value = value.T
+                    layout = ttnn.TILE_LAYOUT
+                elif "layernorm" in new_key or "norm" in new_key:
+                    # OPTIMIZATION: Pre-add Gemma-style +1 offset to norm weights
+                    value = value + 1.0
+                    layout = ttnn.TILE_LAYOUT
+                else:
+                    layout = ttnn.TILE_LAYOUT
 
-                if is_adarms_dense:
-                    # Pi0.5: adaRMS dense projection weights
-                    if "weight" in new_key:
-                        # Transpose for TTNN linear: [out, in] -> [in, out]
-                        block_weights[new_key] = ttnn.from_torch(
-                            value.T.contiguous(),
-                            dtype=ttnn.bfloat16,
-                            layout=ttnn.TILE_LAYOUT,
-                            device=self.device,
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        )
-                    else:
-                        # Bias: 1D -> 2D
-                        # Pre-add +1 to scale portion of bias (first hidden_dim elements)
-                        # This avoids a runtime add(scale, 1.0) op in adarms_norm_ttnn
-                        hidden_dim = self.config.expert_config.width
-                        value = value.clone()
-                        value[:hidden_dim] += 1.0
-                        block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
-                elif "weight" in new_key and not is_norm_scalar:
-                    # Regular weight matrices: transpose for TTNN linear
-                    # Use bfloat8_b for expert weights (output projection, etc.)
+                # Handle 1D tensors (biases, norms) using tensor_1d_to_2d_ttnn (no torch.unsqueeze)
+                if len(value.shape) == 1:
+                    block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
+                else:
                     block_weights[new_key] = ttnn.from_torch(
-                        value.T.contiguous(),
-                        dtype=expert_weight_dtype,
-                        layout=ttnn.TILE_LAYOUT,
+                        value,
+                        dtype=ttnn.bfloat16,
+                        layout=layout,
                         device=self.device,
                     )
-                elif is_norm_scalar:
-                    # Standard RMSNorm: Pre-add Gemma-style +1 offset
-                    if len(value.shape) == 1:
-                        block_weights[new_key] = tensor_1d_to_2d_ttnn(value + 1.0, self.device, dtype=ttnn.bfloat16)
-                    else:
-                        block_weights[new_key] = ttnn.from_torch(
-                            value + 1.0,
-                            dtype=ttnn.bfloat16,
-                            layout=ttnn.TILE_LAYOUT,
-                            device=self.device,
-                        )
-                else:
-                    # Other tensors
-                    if len(value.shape) == 1:
-                        block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
-                    else:
-                        block_weights[new_key] = ttnn.from_torch(
-                            value,
-                            dtype=ttnn.bfloat16,
-                            layout=ttnn.TILE_LAYOUT,
-                            device=self.device,
-                        )
         return block_weights
 
     def embed_image(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
@@ -427,6 +355,9 @@ class PaliGemmaBackboneTTNN:
             )
             if use_cache:
                 new_cache.append(new_kv)
+            ttnn.ReadDeviceProfiler(
+                self.device
+            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Final norm using TTNN
         hidden_states = rms_norm_ttnn(
@@ -444,8 +375,6 @@ class PaliGemmaBackboneTTNN:
         position_ids: Optional[ttnn.Tensor] = None,
         past_key_values: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         use_cache: bool = False,
-        adarms_cond: Optional[ttnn.Tensor] = None,
-        prefix_offset: int = 0,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through action expert using TTNN.
@@ -456,19 +385,11 @@ class PaliGemmaBackboneTTNN:
             position_ids: Position indices (TTNN tensor)
             past_key_values: Cached KV from VLM prefix (for cross-attention)
             use_cache: Whether to return updated cache
-            adarms_cond: Pi0.5 time conditioning vector (TTNN tensor)
-            prefix_offset: RoPE phase shift — non-pad prefix length. Suffix Q and
-                K are rotated starting at this global position to match lerobot's
-                `prefix_offset + cumsum(suffix_mask) - 1` scheme.
 
         Returns:
             Tuple of (output, optional_new_cache)
         """
         new_cache = [] if use_cache else None
-
-        # Pre-reshape adaRMS conditioning to 3D once (avoids 37 reshapes inside adarms_norm_ttnn)
-        if adarms_cond is not None and len(adarms_cond.shape) == 2:
-            adarms_cond = ttnn.reshape(adarms_cond, (adarms_cond.shape[0], 1, -1))
 
         for i, block in enumerate(self.expert_blocks):
             past_kv = past_key_values[i] if past_key_values else None
@@ -480,30 +401,19 @@ class PaliGemmaBackboneTTNN:
                 position_ids,
                 past_kv,
                 use_cache,
-                adarms_cond=adarms_cond,
-                prefix_offset=prefix_offset,
             )
             if use_cache:
                 new_cache.append(new_kv)
-            pass  # ReadDeviceProfiler removed for performance
+            ttnn.ReadDeviceProfiler(
+                self.device
+            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Final norm using TTNN
-        if self.use_expert_adarms and adarms_cond is not None:
-            hidden_states, _ = adarms_norm_ttnn(
-                hidden_states,
-                self.expert_norm_dense_weight,
-                self.expert_norm_dense_bias,
-                adarms_cond,
-                self.config.expert_config.rms_norm_eps,
-                self.device,
-                ones_weight=self._expert_norm_ones,
-            )
-        else:
-            hidden_states = rms_norm_ttnn(
-                hidden_states,
-                self.expert_norm,
-                self.config.expert_config.rms_norm_eps,
-            )
+        hidden_states = rms_norm_ttnn(
+            hidden_states,
+            self.expert_norm,
+            self.config.expert_config.rms_norm_eps,
+        )
 
         return hidden_states, new_cache
 
@@ -545,7 +455,6 @@ class PaliGemmaBackboneTTNN:
             suffix_position_ids,
             past_key_values=None,
             use_cache=False,
-            prefix_offset=0,
         )
 
         return vlm_output, expert_output

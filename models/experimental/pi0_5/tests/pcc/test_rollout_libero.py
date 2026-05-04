@@ -55,8 +55,8 @@ if _RENDER:
 else:
     os.environ.setdefault("MUJOCO_GL", "egl")
 
-from models.experimental.pi0.common.configs import PI0ModelConfig, SigLIPConfig
-from models.experimental.pi0.common.weight_loader import PI0WeightLoader
+from models.experimental.pi0_5.common.configs import PI0ModelConfig, SigLIPConfig
+from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 
 
 # ---------- constants ----------
@@ -64,7 +64,7 @@ from models.experimental.pi0.common.weight_loader import PI0WeightLoader
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]  # .../pcc/.../models/../tt-metal
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(_REPO_ROOT))
-WEIGHTS_DIR = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights")
+WEIGHTS_DIR = os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights")
 IMAGE_SIZE = 224
 DEFAULT_CHUNK = 10  # matches pi05_libero config.n_action_steps
 DEFAULT_MAX_STEPS = 400
@@ -268,7 +268,7 @@ class TorchBackend:
         # plumbing that used to live here as a monkey-patch is now baked into
         # torch_pi0_model.PI0Model.forward_inference / _denoise_forward.
 
-        from models.experimental.pi0.reference.torch_pi0_model import PI0Model as PI0ModelTorch
+        from models.experimental.pi0_5.reference.torch_pi0_model import PI0Model as PI0ModelTorch
 
         self.model = PI0ModelTorch(create_pi05_config(), weight_loader)
 
@@ -296,7 +296,7 @@ class TTNNBackend:
     def __init__(self, weight_loader):
         import ttnn
 
-        from models.experimental.pi0.tt.ttnn_pi0_model import PI0ModelTTNN
+        from models.experimental.pi0_5.tt.ttnn_pi0_model import PI0ModelTTNN
 
         self.ttnn = ttnn
         self.device = ttnn.open_device(device_id=0, l1_small_size=24576)
@@ -415,7 +415,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["torch", "ttnn"], required=True)
     parser.add_argument(
-        "--weights", default="pi05_libero", help="weights dir name under models/experimental/pi0/weights/"
+        "--weights", default="pi05_libero", help="weights dir name under models/experimental/pi0_5/weights/"
     )
     parser.add_argument("--suite", default="libero_10")
     parser.add_argument("--tasks", type=int, nargs="+", default=None, help="task indices (default: all)")

@@ -22,8 +22,6 @@ class GemmaConfig:
     head_dim: int = 256
     rms_norm_eps: float = 1e-6
     rope_base: float = 10000.0
-    use_adarms: bool = False  # Pi0.5: adaptive RMSNorm conditioned on time embedding
-    adarms_cond_dim: int = 1024  # Conditioning dimension for adaRMS (expert_width)
 
     @classmethod
     def gemma_2b(cls) -> "GemmaConfig":
@@ -38,7 +36,7 @@ class GemmaConfig:
         )
 
     @classmethod
-    def gemma_300m(cls, use_adarms: bool = False) -> "GemmaConfig":
+    def gemma_300m(cls) -> "GemmaConfig":
         """Gemma 300M configuration (action expert)."""
         return cls(
             width=1024,
@@ -47,8 +45,6 @@ class GemmaConfig:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
-            use_adarms=use_adarms,
-            adarms_cond_dim=1024,
         )
 
 
@@ -83,7 +79,7 @@ class SuffixConfig:
     expert_width: int = 1024
     state_dim: int = 32  # Robot state dimension
     time_emb_dim: int = 1024  # Time embedding dimension
-    pi05: bool = False  # PI05 uses adaRMS instead of fused action-time MLP
+    pi05: bool = False  # PI05 uses different time handling
 
 
 @dataclass
@@ -151,5 +147,5 @@ class PI0ModelConfig:
 
     def __post_init__(self):
         self.vlm_config = GemmaConfig.gemma_2b()
-        self.expert_config = GemmaConfig.gemma_300m(use_adarms=self.pi05)
+        self.expert_config = GemmaConfig.gemma_300m()
         self.siglip_config = SigLIPConfig()

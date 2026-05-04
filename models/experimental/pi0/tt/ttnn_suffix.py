@@ -23,11 +23,7 @@ import torch
 import ttnn
 
 from models.experimental.pi0.common.configs import SuffixConfig
-from .ttnn_common import (
-    create_sinusoidal_pos_embedding_ttnn,
-    precompute_sinusoidal_scaling_factor,
-    tensor_1d_to_2d_ttnn,
-)
+from .ttnn_common import create_sinusoidal_pos_embedding_ttnn, tensor_1d_to_2d_ttnn
 
 
 class SuffixEmbeddingTTNN:
@@ -90,12 +86,6 @@ class SuffixEmbeddingTTNN:
         self._att_mask_suffix_len = suffix_len
 
         self.indices = ttnn.arange(0, 512, 1, device=device, dtype=ttnn.float32)
-        self.indices = ttnn.to_layout(self.indices, ttnn.TILE_LAYOUT)  # Pre-convert for trace compatibility
-
-        # Pre-compute sinusoidal scaling factor (constant across timesteps, saves ~8 ops per call)
-        self._sin_scaling_factor = precompute_sinusoidal_scaling_factor(
-            config.expert_width, min_period=4e-3, max_period=4.0, device=device, indices=self.indices
-        )
 
     def embed_actions(self, noisy_actions: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -143,20 +133,11 @@ class SuffixEmbeddingTTNN:
         Create timestep embedding.
 
         Args:
-            timestep: TTNN tensor — either (batch_size,) scalar or a
-                pre-computed embedding (batch_size, expert_width). When the
-                caller passes a pre-computed embedding (shape rank ≥ 2 and
-                last dim == expert_width) it is returned as-is, avoiding the
-                bf16 precision loss that results from multiplying large
-                sinusoidal scaling factors on device.
+            timestep: TTNN tensor (batch_size,)
 
         Returns:
             TTNN tensor (batch_size, expert_width)
         """
-        # Fast path: pre-computed embedding already supplied by PI0ModelTTNN.
-        if len(timestep.shape) >= 2 and timestep.shape[-1] == self.config.expert_width:
-            return timestep
-
         return create_sinusoidal_pos_embedding_ttnn(
             timestep,
             self.config.expert_width,
@@ -164,7 +145,6 @@ class SuffixEmbeddingTTNN:
             max_period=4.0,
             device=self.device,
             indices=self.indices,
-            precomputed_scaling_factor=self._sin_scaling_factor,
         )
 
     def fuse_action_time(
@@ -183,23 +163,7 @@ class SuffixEmbeddingTTNN:
             Tuple of (fused_emb, adarms_cond)
         """
         if self.config.pi05:
-            # Pi0.5: compute adaRMS conditioning via time MLP
-            time_2d = ttnn.reshape(time_emb, (time_emb.shape[0], 1, -1)) if len(time_emb.shape) == 2 else time_emb
-            adarms_cond = ttnn.linear(
-                time_2d,
-                self.weights["time_mlp_in.weight"],
-                bias=self.weights["time_mlp_in.bias"],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            adarms_cond = ttnn.silu(adarms_cond)
-            adarms_cond = ttnn.linear(
-                adarms_cond,
-                self.weights["time_mlp_out.weight"],
-                bias=self.weights["time_mlp_out.bias"],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            adarms_cond = ttnn.silu(adarms_cond)
-            return action_emb, adarms_cond
+            return action_emb, time_emb
 
         # Get shapes
         batch_size = action_emb.shape[0]
@@ -226,7 +190,9 @@ class SuffixEmbeddingTTNN:
             bias=self.weights["action_time_mlp_out.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        # ReadDeviceProfiler removed for performance
+        ttnn.ReadDeviceProfiler(
+            self.device
+        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return x, None
 
@@ -306,7 +272,9 @@ class SuffixEmbeddingTTNN:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # ReadDeviceProfiler removed for performance
+        ttnn.ReadDeviceProfiler(
+            self.device
+        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond
 
@@ -339,25 +307,13 @@ def convert_suffix_weights_to_ttnn(
     Args:
         torch_weights: Dictionary of PyTorch weight tensors
         device: TTNN device
-        dtype: TTNN data type (default: bfloat16 for both weights and bias)
+        dtype: TTNN data type (default: bfloat8_b for weights, bfloat16 for bias)
 
     Returns:
         Dictionary of TTNN weight tensors
-
-    Note:
-        Suffix weights (action_in_proj, action_out_proj, state_proj,
-        action_time_mlp) are tiny (<1 MB total) and only run once per
-        denoise step (and once at the end for action_out_proj). They have
-        no speed impact on the hot loop. Previously stored as bfloat8_b,
-        which catastrophically quantized `action_out_proj.weight` (32×1024)
-        and destroyed the gripper dim's tight near-constant output: on the
-        LIBERO frozen input, torch gripper ∈ [0.974, 0.998] but TTNN gripper
-        ∈ [-0.516, 0.969], giving a per-dim PCC of only 0.36 and breaking
-        closed-loop task success. Storing them in bfloat16 recovers the
-        precision with no measurable speed cost.
     """
     if dtype is None:
-        weight_dtype = ttnn.bfloat16
+        weight_dtype = ttnn.bfloat8_b
         bias_dtype = ttnn.bfloat16
     else:
         weight_dtype = dtype

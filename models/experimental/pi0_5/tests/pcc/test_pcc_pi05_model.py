@@ -7,7 +7,7 @@ PI0.5 PCC Test - TTNN (tt/) vs PyTorch (reference/)
 Tests Pi0.5 model with adaRMS conditioning.
 
 Config:
-    - Checkpoint: $TT_METAL_HOME/models/experimental/pi0/weights/pi05_base
+    - Checkpoint: $TT_METAL_HOME/models/experimental/pi0_5/weights/pi05_base
     - Full denoising: 10 steps
     - Batch size: 1
 
@@ -38,7 +38,7 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 
 
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", "/home/ttuser/experiments/pi0_5/tt-metal")
-CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi05_base")
+CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights/pi05_base")
 BATCH_SIZE = 1
 SEED = 42
 PCC_THRESHOLD = 0.93

@@ -27,7 +27,7 @@ from models.experimental.pi0_5.tt.ttnn_pi0_model import PI0ModelTTNN
 
 CHECKPOINT_PATH = os.path.join(
     os.environ.get("TT_METAL_HOME", "/home/ttuser/experiments/pi0_5/tt-metal"),
-    "models/experimental/pi0/weights/pi05_base",
+    "models/experimental/pi0_5/weights/pi05_base",
 )
 
 

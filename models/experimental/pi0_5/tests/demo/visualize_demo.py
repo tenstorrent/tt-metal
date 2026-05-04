@@ -41,7 +41,7 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
 if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
-CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0/weights/pi0_base")
+CHECKPOINT_PATH = os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights/pi0_base")
 LIBERO_IMAGES_DIR = DEMO_DIR / "sample_images" / "libero"
 ALOHA_IMAGES_DIR = DEMO_DIR / "sample_images" / "aloha_sim"
 OUTPUT_PATH = DEMO_DIR / "visualization.png"

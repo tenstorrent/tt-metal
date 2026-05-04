@@ -30,15 +30,6 @@ from models.experimental.pi0.common.configs import SigLIPConfig
 from models.experimental.pi0.tt.ttnn_common import tensor_1d_to_2d_ttnn
 
 
-# Shared compute kernel config for all SigLIP ops
-_SIGLIP_CKC = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
-    math_approx_mode=True,
-    fp32_dest_acc_en=False,
-    packer_l1_acc=True,
-)
-
-
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -136,6 +127,14 @@ class PatchEmbeddingTTNN:
         else:
             self._linear_bias = None
 
+        # Compute kernel config
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     def _unfold_conv2d(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Unfold using TTNN 6D permute with MultiCoreTileInvariant optimization.
@@ -207,7 +206,7 @@ class PatchEmbeddingTTNN:
             bias=self._linear_bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=_SIGLIP_CKC,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         ttnn.deallocate(x)
@@ -304,11 +303,9 @@ class SigLIPAttentionTTNN:
         wv_padded = pad_head_dim_weight_ttnn(weights["self_attn.v_proj.weight"])
 
         # Concatenate Q, K, V weights on device: [hidden, 3 * num_heads * padded_head_dim]
-        # Use bfloat8_b for weight matrices — reduces bandwidth
-        _siglip_w_dtype = ttnn.bfloat8_b
-        wq_ttnn = ttnn.from_torch(wq_padded.T.contiguous(), dtype=_siglip_w_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        wk_ttnn = ttnn.from_torch(wk_padded.T.contiguous(), dtype=_siglip_w_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        wv_ttnn = ttnn.from_torch(wv_padded.T.contiguous(), dtype=_siglip_w_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        wq_ttnn = ttnn.from_torch(wq_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        wk_ttnn = ttnn.from_torch(wk_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        wv_ttnn = ttnn.from_torch(wv_padded.T.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         self.wqkv = ttnn.concat([wq_ttnn, wk_ttnn, wv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Fused QKV biases
@@ -329,7 +326,7 @@ class SigLIPAttentionTTNN:
         wo_padded = pad_head_dim_weight_ttnn(weights["self_attn.out_proj.weight"], heads_out=False)
         self.wo = ttnn.from_torch(
             wo_padded.T.contiguous(),
-            dtype=_siglip_w_dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -339,6 +336,20 @@ class SigLIPAttentionTTNN:
             self.bo = tensor_1d_to_2d_ttnn(weights["self_attn.out_proj.bias"], device, dtype=ttnn.bfloat16)
         else:
             self.bo = None
+
+        # Compute kernel configs
+        self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,  # SDPA needs this off
+        )
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -368,10 +379,10 @@ class SigLIPAttentionTTNN:
         xqkv_fused = ttnn.linear(
             hidden_states,
             self.wqkv,
-            compute_kernel_config=_SIGLIP_CKC,
             bias=self.bqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
         )
 
         # OPTIMIZATION 2: Native TTNN head splitting
@@ -405,6 +416,7 @@ class SigLIPAttentionTTNN:
             is_causal=False,
             scale=self.scale,
             program_config=sdpa_cfg,
+            compute_kernel_config=self.compute_kernel_config_sdpa,
         )
 
         ttnn.deallocate(q_heads)
@@ -423,9 +435,9 @@ class SigLIPAttentionTTNN:
         output = ttnn.linear(
             attn_concat,
             self.wo,
-            compute_kernel_config=_SIGLIP_CKC,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
         )
         ttnn.deallocate(attn_concat)
 
@@ -461,12 +473,11 @@ class SigLIPMLPTTNN:
         self.config = config
         self.device = device
 
-        # FC1 (input -> intermediate) — bfloat8_b for reduced bandwidth
-        _siglip_w_dtype = ttnn.bfloat8_b
+        # FC1 (input -> intermediate)
         fc1_weight = weights["mlp.fc1.weight"].T.contiguous()
         self.fc1_weight = ttnn.from_torch(
             fc1_weight,
-            dtype=_siglip_w_dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -481,7 +492,7 @@ class SigLIPMLPTTNN:
         fc2_weight = weights["mlp.fc2.weight"].T.contiguous()
         self.fc2_weight = ttnn.from_torch(
             fc2_weight,
-            dtype=_siglip_w_dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -491,6 +502,14 @@ class SigLIPMLPTTNN:
             self.fc2_bias = tensor_1d_to_2d_ttnn(weights["mlp.fc2.bias"], device, dtype=ttnn.bfloat16)
         else:
             self.fc2_bias = None
+
+        # Compute kernel config
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -509,8 +528,8 @@ class SigLIPMLPTTNN:
             bias=self.fc1_bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
             activation="gelu",
-            compute_kernel_config=_SIGLIP_CKC,
         )
 
         # FC2 - use L1 for intermediate computation
@@ -519,7 +538,7 @@ class SigLIPMLPTTNN:
             self.fc2_weight,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=_SIGLIP_CKC,
+            compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(x)
 
@@ -833,6 +852,9 @@ class SigLIPVisionTowerTTNN:
         # Run through TTNN transformer blocks
         for block in self.blocks:
             hidden_states = block.forward(hidden_states)
+            ttnn.ReadDeviceProfiler(
+                self.device
+            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Final layer norm (on device)
         if self.post_ln_weight is not None:
@@ -900,7 +922,6 @@ class MultiModalProjectorTTNN:
             self.weight,
             bias=self.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=_SIGLIP_CKC,
         )
 
 
