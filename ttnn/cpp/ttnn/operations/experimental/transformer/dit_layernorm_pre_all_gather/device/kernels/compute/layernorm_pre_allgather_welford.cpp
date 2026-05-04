@@ -48,7 +48,7 @@ void kernel_main() {
         tile_regs_acquire();
         uint32_t start_N = 0;
         transpose_wh_init(cb_inp, cb_x2);
-        welford_init();
+        welford_init(cb_inp);
 
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_wait_front(cb_inp, block_size);

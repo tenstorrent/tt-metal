@@ -78,7 +78,7 @@ void kernel_main() {
         uint32_t start_N = 0;
 
         // Programs SFPU replay buffer + clears LREG4/5
-        welford_init();
+        welford_init(cb_in);
 
         // Process one tile-column along H while keeping a single running Welford state.
         // Welford's running accumulators (mean in LREG4, M2 in LREG5)

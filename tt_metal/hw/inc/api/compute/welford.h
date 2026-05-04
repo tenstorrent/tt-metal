@@ -21,11 +21,13 @@ namespace ckernel {
  * @brief Initializes the Welford's algorithm.
  * Programs the address mod and replay buffers for the Welford's algorithm.
  * Clears the previous mean and m2 values stored in the registers.
+ * Also calls transpose_wh_init_short to set state properly.
  * This call is blocking and is only available on the compute engine.
  */
-ALWI void welford_init() {
+ALWI void welford_init(uint32_t cbid = 0, uint32_t call_line = __builtin_LINE()) {
     MATH((llk_math_welfords_sfpu_init()));
     MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
+    transpose_wh_init_short(cbid, call_line);
 }
 
 /**

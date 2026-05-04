@@ -138,7 +138,7 @@ void kernel_main() {
         reconfig_data_format_srca(cb_x);
         transpose_wh_init_short(cb_x);
         tile_regs_acquire();
-        welford_init();
+        welford_init(cb_in);
         // Process all but the last tile
         for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
             cb_x_obj.wait_front(wt + 1);

@@ -234,7 +234,7 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_batches; ++b) {
         cb_ex_partial.reserve_back(2);
         tile_regs_acquire();
-        welford_init();
+        welford_init(cb_in0_id);
 
         uint32_t block_xy_coord = 0;
 

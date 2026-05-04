@@ -99,7 +99,7 @@ void kernel_main() {
         uint32_t start_N = 0;
 
         // Programs SFPU replay buffer + clears LREG4/5
-        welford_init();
+        welford_init(cb_in);
 
         // When scaling, DST must be acquired/released per tile because
         // the FPU mul is incompatible with SFPU Welford. The scaled

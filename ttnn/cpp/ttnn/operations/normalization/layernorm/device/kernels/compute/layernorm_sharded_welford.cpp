@@ -270,7 +270,7 @@ void kernel_main() {
     reconfig_data_format_srca(cb_in);
     cb_ex_partial_obj.reserve_back(num_block_ht_result_tiles);
     transpose_wh_init_short(cb_in);
-    welford_init();
+    welford_init(cb_in0);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_ht; i++) {
         tile_regs_acquire();
