@@ -1,5 +1,5 @@
 """Updated splitter that also regenerates generation_manifest.json per axis."""
-import json, os, re, sys
+import json, re
 from pathlib import Path
 
 _Y9 = re.compile(r"""['"]y['"]\s*:\s*9(?!\d)""")
@@ -119,16 +119,32 @@ _DST_COL = _SWEEP_FRAMEWORK / "vectors_export_col"
 _DST_ROW = _SWEEP_FRAMEWORK / "vectors_export_row"
 
 
+def _assert_under_sweep_framework(p: Path) -> Path:
+    """Resolve `p` and assert it stays under the sweep framework directory.
+
+    All paths in this script are derived from `Path(__file__).resolve().parent`
+    (no argv, no env), so this should always succeed; the explicit check is a
+    defense-in-depth guard against future refactors that might accidentally
+    point this utility at an attacker-controlled path. Returns the resolved
+    path so callers can use it directly.
+    """
+    base = _SWEEP_FRAMEWORK.resolve()
+    resolved = p.resolve()
+    if not resolved.is_relative_to(base):
+        raise ValueError(f"Refusing to operate on path outside sweep framework: {resolved}")
+    return resolved
+
+
 def main():
-    src = _SRC_DIR
-    dst_col = _DST_COL
-    dst_row = _DST_ROW
+    src = _assert_under_sweep_framework(_SRC_DIR)
+    dst_col = _assert_under_sweep_framework(_DST_COL)
+    dst_row = _assert_under_sweep_framework(_DST_ROW)
 
     # Clean dst dirs to avoid stale files from prior runs.
     for d in (dst_col, dst_row):
         if d.exists():
             for f in d.iterdir():
-                f.unlink()
+                _assert_under_sweep_framework(f).unlink()
             d.rmdir()
 
     files_in_col = []
@@ -147,7 +163,7 @@ def main():
 
     # Regenerate per-axis generation_manifest.json so the loader only references
     # files that actually exist in that axis directory.
-    src_manifest_path = src / "generation_manifest.json"
+    src_manifest_path = _assert_under_sweep_framework(src / "generation_manifest.json")
     if src_manifest_path.exists():
         with src_manifest_path.open() as f:
             base_manifest = json.load(f)
@@ -156,7 +172,8 @@ def main():
     for dst, files in [(dst_col, files_in_col), (dst_row, files_in_row)]:
         m = dict(base_manifest)
         m["vector_files"] = sorted(files)
-        with (dst / "generation_manifest.json").open("w") as f:
+        out_manifest = _assert_under_sweep_framework(dst / "generation_manifest.json")
+        with out_manifest.open("w") as f:
             json.dump(m, f, indent=2)
 
     print(f"col: {len(files_in_col)} files, {total_col} vectors")
