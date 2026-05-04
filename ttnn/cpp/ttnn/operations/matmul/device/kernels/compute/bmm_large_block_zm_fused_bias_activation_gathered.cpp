@@ -133,13 +133,6 @@ FORCE_INLINE void update_rd_ptr_to_ring_index(
     }
 }
 
-struct ActivationContext {
-    uint32_t type;
-    uint32_t param0;
-    uint32_t param1;
-    uint32_t param2;
-}
-
 // Named CB arg lookup tables for batch-indexed output and partials CBs.
 // The factory emits "cb_mm_out_0" .. "cb_mm_out_N" and "cb_mm_partials_0" .. "cb_mm_partials_N"
 // as named compile-time args. These tables let fill_named_cb_array resolve them by index.
