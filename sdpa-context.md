@@ -1,26 +1,62 @@
-# Ring Joint SDPA: Developer Reference
+# Ring Joint SDPA — Mechanics & Developer Reference
 
-Essential context for developing and extending the SDPA kernel.
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `ring_joint_sdpa_program_factory.cpp` | Host setup, chain construction, work distribution |
-| `ring_joint_sdpa_device_operation.cpp` | Parameter validation, constraints enforcement |
-| `kernels/compute/ring_joint_sdpa.cpp` | Compute kernel entry point |
-| `kernels/compute/compute_common.hpp` | Core attention loop (`sdpa_inner_loop`) |
-| `kernels/dataflow/ring_joint_reader.cpp` | KV data movement, chaining protocol |
-| `kernels/dataflow/ring_joint_writer.cpp` | Output write, mask generation |
-| `kernels/q_chunk_remapping.hpp` | Zigzag index remapping |
+How `ring_joint_scaled_dot_product_attention` distributes work across a 2D mesh,
+what each layer of remapping does, and the implementation surface for extending
+the kernel. Use this for "I need to map an output position back to a compute
+unit," "I need to reason about what a core actually runs in a given ring
+iteration," or "I'm changing the chain / skip / mcast behavior and need to know
+the moving parts."
 
 ---
 
-## Core Concepts
+## File map
 
-### Two-Level Data Distribution
+| File | Role |
+|---|---|
+| `models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py` | Top-level test, sharding setup, host-side reorder branch |
+| `models/demos/deepseek_v3_d_p/tt/mla/utils.py` | `create_balanced_chunk_order`, `reorder_tensor_chunks` |
+| `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp` | Host: chain construction, position→core distribution, gates |
+| `…/sdpa/device/ring_joint_sdpa_device_operation.cpp` | Parameter validation, constraints |
+| `…/sdpa/device/kernels/compute/ring_joint_sdpa.cpp` | Compute kernel entry point |
+| `…/sdpa/device/kernels/compute/compute_common.hpp` | Core attention loop (`sdpa_inner_loop`) |
+| `…/sdpa/device/kernels/dataflow/ring_joint_reader.cpp` | KV data movement, chain receive, CB reservations |
+| `…/sdpa/device/kernels/dataflow/ring_joint_writer.cpp` | Output write, mask generation |
+| `…/sdpa/device/kernels/dataflow/ring_utils.hpp` | `RingIdSequencer`, `KCausalStraddleInfo` |
+| `…/sdpa/device/kernels/dataflow/fused_op_receiver.hpp` | Sequencer init |
+| `…/sdpa/device/kernels/q_chunk_remapping.hpp` | `linear_to_zigzag`, `remap_q_index` |
+| `context/context.py`, `context/first.py` | Python mirrors of host/kernel logic — use these for offline reasoning instead of redoing math by hand |
 
-**Level 1 (Host → Device):** Before sharding, host reorders Q/K/V so each device gets one "light" chunk (early sequence, less causal work) + one "heavy" chunk (late sequence, more work).
+---
+
+## Two-axis sharding model
+
+The mesh has two axes used together:
+
+- `rp_axis`: ring-parallel along **sequence**. The ring exchange runs along this axis only.
+- `up_axis`: head-parallel. Independent rings, one per up column. Small (typically 2).
+
+Per device:
+- **Q, V** are sharded on **both** seq (rp) and heads (up).
+- **K** is sharded on seq (rp). When `nhk == 1`, K is **replicated across `up_axis`**
+  (the single K head feeds all Q-head subsets) ⇒ devices in the same rp row but
+  different up columns hold *identical* K. Anything pinned to a "local head index"
+  therefore presents as **two symmetric global heads**, one per up column.
+
+---
+
+## Three layers of redistribution (in order)
+
+These compose. Skipping or reordering any of them invalidates the "where does this
+output come from" mapping.
+
+### 1. Host: chunk reorder across rp devices  (gated by `is_balanced`)
+
+The seq is split into `2·RP` chunks (so chunk_size = full_seq / (2·RP), e.g. 2048
+when seq=16384, RP=4). `create_balanced_chunk_order` permutes them, e.g.
+`[0, 7, 1, 6, 2, 5, 3, 4]` for RP=4. Each rp row gets one EARLY + one LATE chunk so
+causal workload across rows is ~50% / 50% / 50% / 50% instead of 12.5 / 37.5 / 62.5 /
+87.5%. Without balancing, each device gets one contiguous seq slab and the row index
+== the rp ring_index.
 
 ```
 4 devices, 8 sequence chunks:
@@ -28,16 +64,8 @@ Essential context for developing and extending the SDPA kernel.
   Device 0: orig [0,7], Device 1: orig [1,6], Device 2: orig [2,5], Device 3: orig [3,4]
 ```
 
-**Level 2 (Kernel, within device):** Zigzag remapping interleaves light/heavy Q chunks across cores.
-
-```cpp
-// Even positions → forward from start, Odd positions → backward from end
-q_chunk = (pos % 2 == 0) ? pos/2 : num_q_chunks - 1 - pos/2;
-```
-
-### Local Memory Layout
-
-Each device's local sequence: first half = light (orig early), second half = heavy (orig late).
+Per-device local layout under balancing: positions `[0, chunk_size)` are the early
+("light") chunk; `[chunk_size, 2·chunk_size)` are the late ("heavy") chunk.
 
 ```
 Local tiles:  [0 ─── N/2-1]  [N/2 ─── N-1]
@@ -47,9 +75,119 @@ Local tiles:  [0 ─── N/2-1]  [N/2 ─── N-1]
 
 `half_sequence = num_q_chunks / 2` is the boundary.
 
+### 2. Host: position → core distribution  (`program_factory.cpp` ~830–895)
+
+Treat `total_q_chunks = batch · per_device_nh · num_q_chunks_per_head` as a flat list
+of *positions*. Split across `NUM_CORES`. The unit of split depends on zigzag:
+
+- **No zigzag**: unit = single chunk. `extra=1`,
+  `cores_with_extra = total_q_chunks % NUM_CORES`,
+  `base = total_q_chunks // NUM_CORES`.
+- **Zigzag** (paired): unit = pair of positions. `extra=2`,
+  `total_pairs = total_q_chunks / 2`,
+  `cores_with_extra = total_pairs % NUM_CORES`,
+  `base = (total_pairs // NUM_CORES) * 2`. Each core therefore owns whole
+  light/heavy pairs.
+
+```cpp
+if (enable_zigzag_balancing) {
+    const uint32_t total_pairs = total_q_chunks / 2;
+    cores_doing_extra_work = total_pairs % num_cores;
+    base_chunks_per_core = (total_pairs / num_cores) * 2;
+    extra_chunks_per_core = 2;  // Always add pairs, not singles
+}
+```
+
+In both cases: first `cores_with_extra` cores get `base + extra` chunks; the rest
+get `base`. Position layout: `pos = local_head * num_q_chunks_per_head + pos_in_head`,
+so a core typically owns a contiguous position run within one head (possibly
+straddling one head boundary).
+
+### 3. Kernel: position → q_chunk  (`q_chunk_remapping.hpp::remap_q_index`)
+
+`use_zigzag = false` ⇒ identity. Cores process q_chunks in linear order ⇒ a core near
+position 0 gets all-light q_chunks, a core near the end gets all-heavy. Causal
+workload imbalance is exposed at the per-core level.
+
+`use_zigzag = true` (gated on `is_balanced && is_causal && num_q_chunks % 2 == 0`)
+⇒ each core's runtime order is *light, heavy, light, heavy, …*  Each pair is
+one-light-plus-one-heavy and total work per core is roughly equal.
+
+Concrete formulas (`N = num_q_chunks`):
+
+- **forward** `pos → q_chunk`:
+  `pos % 2 == 0` ⇒ `q_chunk = pos / 2`;
+  `pos % 2 == 1` ⇒ `q_chunk = N - 1 - pos / 2`.
+- **inverse** `q_chunk → pos` (use when starting from a tensor diff):
+  `q_chunk < N/2` ⇒ `pos = q_chunk * 2`;
+  `q_chunk >= N/2` ⇒ `pos = (N - 1 - q_chunk) * 2 + 1`.
+
+The **causal frontier** of a core's work is its *last* zigzag pair, which contains
+its largest q_chunk index — that's where most masking and skip behaviour lives.
+
 ---
 
-## Balanced Mode: Skip Rules
+## Ring exchange: `RingIdSequencer` (Linear topology)
+
+NOT a simple rotation. Behaviour depends on a device's position in the line:
+
+- `ring_index = 0` (start of line): all "backward" — sees `ring_ids = [0, 1, 2, 3, …]`
+- `ring_index = ring_size-1` (end of line): all "forward" — sees `[N-1, …, 1, 0]`
+- middle devices: **alternate directions**.
+
+Per-device write counts (Linear topology — note the swap):
+
+```
+num_targets_forward      = ring_size - 1 - ring_index
+num_targets_backward     = ring_index
+forward_writes_expected  = num_targets_backward     # ← swap
+backward_writes_expected = num_targets_forward      # ← swap
+```
+
+Direction-switch rule on each iteration:
+
+- transfer 0: emit `ring_index`. If `expected[curr_dir] == 0`, flip direction.
+- transfer k>0: increment `received[curr_dir]`; emit `(ring_index ± received) %
+  ring_size` depending on direction; then **switch to the other direction iff
+  `received[other] < expected[other]`** (otherwise stay).
+
+For RP=4, the iteration sequences are:
+
+| ring_index | iteration sequence (ring_ids seen) |
+|---|---|
+| 0 | [0, 1, 2, 3] |
+| 1 | [1, 2, 0, 3] |
+| 2 | [2, 3, 1, 0] |
+| 3 | [3, 2, 1, 0] |
+
+⇒ Never assume "iteration N gets neighbour-N." Use the sequencer (kernel) or its
+python mirror in `context/context.py:get_ring_id_sequence` /
+`first.py:get_ring_id_sequence_for_device`.
+
+### What a `ring_id` *carries*
+
+- **balanced**: each ring_id is a **pair** (early chunk, late chunk). One iteration
+  can therefore deliver two K/V slices with *different* causal statuses ⇒
+  partial-and-skip or full-and-partial mixes can appear off the diagonal.
+  `KCausalStraddleInfo` (`ring_utils.hpp:162-171`) is what handles per-iteration
+  straddle.
+- **no_balancing**: each ring_id is one contiguous K block of `seq/RP` tokens. The
+  causal status of the whole iteration is exactly:
+  - `rid < my ring_index` ⇒ **full**
+  - `rid == my ring_index` ⇒ **partial** (diagonal)
+  - `rid > my ring_index` ⇒ **skip**
+
+### Inner granularity
+
+Even when an iteration's coarse status is "full" or "partial", masking actually runs
+at **k_chunk_size** (e.g. 128) granularity. A 4096-token K block is 32 inner
+k-chunks. For a Q chunk on the diagonal, only inner k-chunks up to the q chunk's end
+position are non-fully-masked; the rest of the block is skipped. Helpers:
+`first.py:num_valid_k_chunks_for_q`.
+
+---
+
+## Balanced mode: skip rules
 
 Three rules determine which work is skipped:
 
@@ -70,7 +208,7 @@ Dev3  Q[3] light      ✓ half      ✓ half     ✓ half     ✓ causal
 
 ---
 
-## Critical Constraint: q_chunk_size
+## Critical constraint: q_chunk_size
 
 ```cpp
 // ring_joint_sdpa_device_operation.cpp:115-117
@@ -86,6 +224,32 @@ N_local = 64 tiles, Light: 0-31, Heavy: 32-63
 ✓ q_chunk_size=4: half_sequence=8, chunks 0-7=light, 8-15=heavy (clean)
 ✗ q_chunk_size=6: half_sequence=5, chunk 5 spans 30-35 (crosses boundary)
 ```
+
+---
+
+## Mapping `(head_id, seq_pos)` → `(device, core)`
+
+The recipe (balanced; for no_balancing skip steps 2–3 and use linear seq slabs):
+
+1. **up column** = `head_id // per_device_nh`.
+2. **original chunk** = `seq_pos // chunk_size`.
+3. **reordered position** = `chunk_order.index(original_chunk)`.
+4. **rp row** = `reordered_pos // 2` (each row owns two reorder positions).
+5. **local seq pos** = `(reordered_pos % 2) * chunk_size + (seq_pos % chunk_size)`.
+6. **local q_chunk** = `local_seq_pos // q_chunk_size`.
+7. **linear position** = `local_head * num_q_chunks_per_head + zigzag_inverse(local_q_chunk)`.
+8. **core** = position-split using `(cores_with_extra, base, extra)`.
+
+Don't open-code this. Use:
+
+- `context/context.py:find_device_and_core_for_q(head_id, seq_pos)`
+- `find_core_for_local_q(local_head, local_q_chunk)`
+- `q_chunk_to_linear_pos`, `linear_pos_to_q_chunk` (zigzag and inverse)
+- `analyze_q_chunk_ring_iterations(device, local_q_chunk)` — what every iteration
+  delivers and its causal status
+
+The python mirror is the authoritative offline source of truth; it's been verified
+against `RingIdSequencer` traces and `program_factory.cpp` distribution.
 
 ---
 
@@ -107,7 +271,7 @@ Injector:                    Receiver:
 4. Set receiver_sem
 ```
 
-### Two-Chain Architecture (MLA Mode)
+### Two-chain architecture (MLA mode)
 
 When `NHK < NH` (K is shared across heads), the system uses **two separate chains**:
 
@@ -142,7 +306,7 @@ struct CoreKChainInfo {
 3. Find injector: first core with single head segment (not last core)
 4. Build linear chain from injector forward to last core
 
-### Chain Forwarding Logic
+### Chain forwarding logic
 
 Both chains use `q_iter`-based forwarding (work completed count, not remapped chunk index):
 
@@ -163,19 +327,7 @@ This is critical because:
 - The remapped q_chunk index jumps around (zigzag pattern)
 - Chain forwarding must be based on sequential progress, not logical chunk position
 
-### Pair-based Work Distribution
-
-When zigzag balancing is enabled, work is distributed in pairs of (light, heavy) Q chunks:
-```cpp
-if (enable_zigzag_balancing) {
-    const uint32_t total_pairs = total_q_chunks / 2;
-    cores_doing_extra_work = total_pairs % num_cores;
-    base_chunks_per_core = (total_pairs / num_cores) * 2;
-    extra_chunks_per_core = 2;  // Always add pairs, not singles
-}
-```
-
-### Current Constraints
+### Current constraints
 
 | Constraint | Location | Reason |
 |------------|----------|--------|
@@ -185,7 +337,7 @@ if (enable_zigzag_balancing) {
 | Injector = single-head core | `work.head_work.size() == 1` | Avoid head boundary issues |
 | Linear only, no wrap | Comment at line 817 | Prevents deadlock |
 
-### Multicast Variants
+### Multicast variants
 
 **V chain (1D multicast):** When all V chain cores are on the same row with uniform work, the injector broadcasts to all receivers simultaneously via `noc_async_write_multicast`.
 
@@ -201,7 +353,7 @@ K chain mode: mcast
 K chain mode: unicast (B > 1 (multi-batch not supported))
 ```
 
-### Known Issue: Non-MLA K Chaining Regression
+### Known issue: non-MLA K chaining regression
 
 **Problem:** When `NHK >= NH` (non-MLA case), K is no longer chained.
 
@@ -232,7 +384,34 @@ const bool should_forward_k = k_is_chain_participant
 
 ---
 
-## Debug Visualization
+## Reasoning rules of thumb
+
+1. **Three-layer composition is real.** Output → seq → rp shard (with reorder) →
+   local seq → local q_chunk → position (with zigzag) → core. Skip a step and your
+   answer is wrong. Use the helpers.
+2. **Run ring iteration math through the sequencer.** "Iteration 1 = neighbour 1"
+   only holds for `ring_index=0`. For middle devices it's wrong.
+3. **Output location ≠ error origin.** The q_chunk where a diff *appears* is just
+   where the accumulator was finalised; the value flows from every iteration's
+   compute. To attribute by iteration, dump per-iteration accumulators
+   (running max, running sum, output) before the final softmax norm.
+4. **`nhk == 1` replicates K across up_axis.** Anything that depends on a local head
+   index will surface as two symmetric global heads (one per up column). Don't look
+   for a per-up-column root cause.
+5. **balanced and zigzag are coupled.** Both are gated by `is_balanced`; you cannot
+   exercise one without the other from pytest. Code that's only live in this regime
+   is the pair-based ring path + `KCausalStraddleInfo` + zigzag-aware core
+   distribution.
+6. **The causal frontier is at a core's *last* position.** Especially under zigzag,
+   the heaviest q_chunk a core processes is the last one it sees, and any
+   end-of-work cleanup or boundary handling lives there.
+7. **Watch CB reservation sizes in padded iterations.** A reader iteration that
+   handles two slices (own + chained) needs the CB reserved for both before either
+   producer fires; otherwise you race.
+
+---
+
+## Debug visualization
 
 Debug logging helpers in `ring_joint_sdpa_program_factory.cpp` (enabled with `TT_METAL_LOGGER_LEVEL=Debug`):
 
@@ -254,14 +433,14 @@ K-Chain(batch=0: (0,0)[4:INJ]->(1,0)[4:RCV]->(2,0)[4:SNK], dram_ratio=0.33)
 
 ---
 
-## Build & Test
+## Build & test
 
 ### Building
 ```bash
 ./build_metal.sh
 ```
 
-### Performance Testing
+### Performance testing
 
 **Primary unit test (MLA performance):**
 ```bash
@@ -292,7 +471,7 @@ python -m tracy -p -r -v -m pytest \
 tar -czvf YY-MM-DD-bhlb-<branch>-<commit_short>.tar.gz generated/profiler/reports/*/
 ```
 
-### Performance Baseline: DRAM Bound
+### Performance baseline: DRAM bound
 
 Measurements from `mla_100k` test show the kernel is **DRAM access bound**, not compute or CCL bound:
 
@@ -306,9 +485,20 @@ Disabling DRAM access improves Math Util from 46.9% → 59.3%. CCL has no impact
 
 ---
 
-## Development Targets
+## Pytest knobs
 
-### 1. K Chaining for MLA
+The test parametrizes `is_balanced`, `is_causal`, `n_iters` (with `n_iters>1` +
+`pcc_check` enabling determinism comparison), `trace_enabled`, `num_links`,
+`skip_check`, `q_dtype`/`kv_dtype`, mesh shape, and topology. Filter with `-k` to
+pin a single combination. Dump-output hooks live near the end of `run_ring_joint_sdpa`
+in the test (commented by default) and serialise expected/actual/diff tensors to
+`sdpa_determinism_debug/` for offline analysis with `context/determinism.py`.
+
+---
+
+## Development targets
+
+### 1. K chaining for MLA
 
 **Motivation:** In MLA, K is shared across all heads with shape `(1, 1, <token_count>, 576)`. Chains are already enabled, but each chain has its own injector — meaning multiple injector cores read the same K from DRAM. Since DRAM is the bottleneck, we want a single K read shared across all cores.
 
@@ -344,7 +534,7 @@ Disabling DRAM access improves Math Util from 46.9% → 59.3%. CCL has no impact
 - Current limitation: K mcast only works for single batch (`B == 1`)
 - Options: multiple injectors (one per batch), sequential mcast per batch, or hybrid approach
 
-### 2. Improving Tests (existing target)
+### 2. Improving tests
 
 **Key invariants to test:**
 - Host reorder + kernel zigzag produce correct attention output
@@ -360,7 +550,7 @@ Disabling DRAM access improves Math Util from 46.9% → 59.3%. CCL has no impact
 - Joint tensors present vs absent
 - Chaining with balanced mode enabled
 
-### 3. Enabling Arbitrary q_chunk_size (existing target)
+### 3. Enabling arbitrary q_chunk_size
 
 **Current blocker:** `ring_joint_sdpa_device_operation.cpp:115-117`
 ```cpp
@@ -395,9 +585,9 @@ TT_FATAL(!(args.is_balanced && (N_local / 2) % q_chunk_size != 0), ...);
 
 ---
 
-## Quick Reference: Loop Structure
+## Quick reference: loop structure
 
-### Compute Kernel Loop
+### Compute kernel loop
 ```cpp
 // Outer: ring iterations (device-to-device)
 for (ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
@@ -423,7 +613,7 @@ for (ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
 }
 ```
 
-### Reader Kernel KV Flow (with K chain)
+### Reader kernel KV flow (with K chain)
 ```cpp
 // Loop padded to max_q_per_core for K mcast sync
 for (q_iter = 0; q_iter < loop_q_count; ++q_iter) {
@@ -479,8 +669,10 @@ for (q_iter = 0; q_iter < loop_q_count; ++q_iter) {
 
 | Term | Definition |
 |------|------------|
+| `rp_axis` | Ring-parallel axis along sequence; ring exchange runs along this |
+| `up_axis` | Head-parallel axis; independent rings, one per up column |
 | `ring_index` | This device's position (0 to ring_size-1) |
-| `ring_id` | Source device for current KV |
+| `ring_id` | Source device for current KV in a ring iteration |
 | `half_sequence` | `num_q_chunks / 2`, light/heavy boundary |
 | Light Q | `q_chunk < half_sequence`, early original sequence |
 | Heavy Q | `q_chunk >= half_sequence`, late original sequence |
@@ -490,7 +682,7 @@ for (q_iter = 0; q_iter < loop_q_count; ++q_iter) {
 
 ---
 
-## Appendix A: Ring Iter 0 Execution Trace (mla_100k, Galaxy)
+## Appendix A: Ring iter 0 execution trace (mla_100k, Galaxy)
 
 ### Grid and work distribution
 
@@ -605,9 +797,9 @@ Compute fraction:   ~30%             ~75%             52.5%
 
 ---
 
-## Appendix B: Reverse-K Algorithm (Proposed Optimization)
+## Appendix B: Reverse-K algorithm (proposed optimization)
 
-### The Real Problem: Mcast Barrier Synchronization
+### The real problem: mcast barrier synchronization
 
 The issue with discards is **not primarily DRAM bandwidth** — it's the **synchronization overhead** of K mcast.
 
@@ -629,7 +821,7 @@ Cores processing light Q (e.g., Q0 needing only K0) must:
 
 The discards aren't just wasted bandwidth — they're **forced idle time** at synchronization barriers.
 
-### The Solution: Reverse-K for Heavy Q
+### The solution: reverse-K for heavy Q
 
 Process K in **opposite directions** for light vs heavy Q:
 - **Light Q** (Q0, Q1, ...): K **forward** (K0 → K1 → K2 → ...)
@@ -640,7 +832,7 @@ With zigzag pairing (light + heavy together), at any timestamp:
 - Other cores process heavy Q, moving backward through K
 - **All cores have useful work** — no one is waiting-and-discarding
 
-### Execution Pattern
+### Execution pattern
 
 The pattern has three phases per 21-timestamp cycle:
 
@@ -677,7 +869,7 @@ t21:  K0  (fwd) ...    ← next cycle starts
 
 The total compute work (63 ops/core) is unchanged, but it now happens in **63 synchronized steps** instead of 120. The mcast barrier still exists, but every barrier cycle has all cores doing real work.
 
-### Visualization Script
+### Visualization script
 
 `ring_iter0_trace.py` generates CSV files showing:
 - Per-core operation sequence with reverse-K ordering
@@ -686,9 +878,9 @@ The total compute work (63 ops/core) is unchanged, but it now happens in **63 sy
 
 Run: `python3 ring_iter0_trace.py`
 
-### Implementation Considerations
+### Implementation considerations
 
-**K Mcast Changes:**
+**K mcast changes:**
 - Injector reads K chunks per timestamp: K_fwd and/or K_rev
 - Three phases per 21-cycle:
   - **t=0**: K0 only (fwd starts, rev not yet active) — 1 read
@@ -696,7 +888,7 @@ Run: `python3 ring_iter0_trace.py`
   - **t=11 to t=20**: K_rev only (fwd cores finished, light Q has small causal boundary) — 1 read
 - Net: ~11 timestamps need 2 K reads, ~10 timestamps need 1 K read per cycle
 
-**Cost/Benefit Analysis (Double-Buffering Model):**
+**Cost/benefit analysis (double-buffering model):**
 
 Compute (Tc) and data transfer (Td) happen in parallel. Cycle time = max(Tc, Td).
 
@@ -716,7 +908,7 @@ When this holds, data transfer is hidden behind compute → cycle time = Tc.
 - But Tc = 0 for discards (no useful compute)
 - Cycle time = Td for discards → pure overhead
 
-**Reverse-K algorithm during Phase 2 (t=1 to t=10):**
+**Reverse-K algorithm during phase 2 (t=1 to t=10):**
 ```
 Td_phase2 = 2*Tk_mcast + Tk_sem + 2*Tk_dram + 2*Tv_dram + 2*Tv_fwd
 ```
@@ -738,7 +930,7 @@ Tc > 2*Tk_mcast + Tk_sem + 2*Tk_dram + 2*Tv_dram + 2*Tv_fwd
 | Reverse-K (phase 1 & 3) | 11 per 21 | 1x | Tc | max(Tc, Td) |
 | Reverse-K (phase 2) | 10 per 21 | **2x** | Tc | max(Tc, 2×Td) |
 
-**SRAM Constraints:**
+**SRAM constraints:**
 - Need space for 2 K chunks simultaneously
 - Options:
   - Reduce K chunk size to fit both (e.g., 160 → 80 tiles)
@@ -746,19 +938,19 @@ Tc > 2*Tk_mcast + Tk_sem + 2*Tk_dram + 2*Tv_dram + 2*Tv_fwd
   - Disable Q double buffering to free SRAM for second K slot
 - CB sizing for K needs adjustment
 
-**V Chain Changes:**
+**V chain changes:**
 - V also processed in reverse order for heavy Q
 - V chain may need to:
   - Read 2 V chunks per timestamp (fwd + rev)
   - Forward 2x data down the chain
 - Alternative: separate V chains for fwd/rev paths
 
-**Numerical Considerations:**
+**Numerical considerations:**
 - Online softmax accumulates scores incrementally
 - Reverse K order changes accumulation sequence
 - Should be mathematically equivalent (addition is commutative), but verify numerical stability
 
-**Open Questions:**
+**Open questions:**
 1. **Injector selection**: Currently injector = core with max work. With 2 K reads, does selection criteria change?
 2. **Ring iterations > 0**: Reverse-K designed for ring_iter=0 (local causal). How does it interact with KV from other devices?
 3. **Q reuse**: Q loaded once per q_iter, unchanged. But if K chunk size shrinks, more K iterations per Q — does this affect Q CB?
