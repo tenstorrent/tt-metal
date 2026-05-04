@@ -891,43 +891,47 @@ class TtMolmo2Model(LightweightModule):
         """Prefill forward pass. Returns logits [B, S, vocab_size] on CPU."""
         B, S = input_ids.shape
 
+        # Compute S_pad first — used for input_ids padding and all subsequent ops.
+        # S <= 8192: next PREFILL_BUCKET (power-of-2 aligned, always matches padded_S).
+        # S > 8192:  chunk-multiple (×256) — avoids OOM from a full power-of-2 bucket
+        #            (e.g. S=34395 → S_pad=34560 vs 65536 for power-of-2).
+        if S <= 8192:
+            _S_pad_early = get_padded_prefill_len(S)  # == next bucket, equals padded_S
+        else:
+            _S_pad_early = ((S + 255) // 256) * 256
+
         # ---- Embedding ----
-        # Dual embedding via ttnn.embedding
+        # Pad input_ids to _S_pad_early on CPU before H2D so ttnn.embedding produces
+        # a bucket-aligned [B, _S_pad_early, H] tensor directly — no on-device concat.
+        # ttnn.embedding([B, _S_pad_early]) was JIT-compiled during warmup (S=bucket),
+        # so there is no per-S JIT stall at inference time.
+        if _S_pad_early > S:
+            ids_padded = input_ids.new_zeros(B, _S_pad_early)
+            ids_padded[:, :S] = input_ids
+        else:
+            ids_padded = input_ids
         input_ids_ttnn = ttnn.from_torch(
-            input_ids.unsqueeze(0),
+            ids_padded.unsqueeze(0),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        x_ttnn = ttnn.embedding(input_ids_ttnn, self.embedding)  # [B, S, 4096]
+        x_ttnn = ttnn.embedding(input_ids_ttnn, self.embedding)  # [B, _S_pad_early, 4096]
         ttnn.deallocate(input_ids_ttnn)
 
         # ---- Vision backbone + image feature injection ----
-        # Pre-compute S_pad (power-of-2) so vision path uses the same padded size as
-        # the eager path below — ensures ttnn.add and concat use bucket-aligned shapes
-        # and don't trigger per-S JIT recompilation at inference time.
-        if S <= 8192:
-            _S_pad_early = max(256, 1 << math.ceil(math.log2(S)) if S > 1 else 256)
-        else:
-            _S_pad_early = ((S + 255) // 256) * 256
-
         if pixel_values is not None:
             image_features = self.run_vision_backbone(pixel_values, pooled_patches_idx)
 
-            # Additive injection via dense delta + ttnn.add — no D2H of embedding.
-            # Build a zero tensor, write image features at patch positions (CPU, cheap
-            # since we write into zeros not read the embedding), H2D, then add on device.
-            # Use _S_pad_early (padded to power-of-2 bucket) so all TTNN ops see the same
-            # tensor shape regardless of actual S, avoiding per-S JIT recompilation.
+            # Additive injection: build delta on CPU (zeros except at patch positions),
+            # H2D, then ttnn.add on device. Both delta and x_ttnn are already at
+            # _S_pad_early — no on-device concat or per-S JIT stall.
             H = self.configuration.dim
             is_patch_flat = input_ids.view(-1) == self.configuration.image_patch_id
-            # Keep delta in float32 to match original precision: old code did
-            # float32 add (embedding promoted to f32, features in f32) then
-            # truncated to bf16. ttnn.add(bf16, f32) performs in f32 → bf16.
             delta = torch.zeros(1, 1, _S_pad_early, H, dtype=torch.float32)
-            delta.view(-1, H)[:S][is_patch_flat] = image_features  # float32, no conversion
+            delta.view(-1, H)[:S][is_patch_flat] = image_features
             delta_ttnn = ttnn.from_torch(
                 delta,
                 dtype=ttnn.float32,
@@ -937,24 +941,12 @@ class TtMolmo2Model(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             x_ttnn = ttnn.to_layout(x_ttnn, ttnn.TILE_LAYOUT)
-            x_ttnn = ttnn.reshape(x_ttnn, [1, 1, S, H])
-            if _S_pad_early > S:
-                x_pad = ttnn.from_torch(
-                    torch.zeros(1, 1, _S_pad_early - S, H, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-                x_ttnn = ttnn.concat([x_ttnn, x_pad], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(x_pad)
+            x_ttnn = ttnn.reshape(x_ttnn, [1, 1, _S_pad_early, H])
             x_ttnn = ttnn.add(x_ttnn, delta_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(delta_ttnn)
         else:
-            # Text-only: layout + reshape here (vision path already did both above)
             x_ttnn = ttnn.to_layout(x_ttnn, ttnn.TILE_LAYOUT)
-            x_ttnn = ttnn.reshape(x_ttnn, [1, 1, S, self.configuration.dim])
+            x_ttnn = ttnn.reshape(x_ttnn, [1, 1, _S_pad_early, self.configuration.dim])
 
         # ---- Route to trace or eager ----
         padded_S = get_padded_prefill_len(S)
@@ -967,20 +959,8 @@ class TtMolmo2Model(LightweightModule):
             trace_id, trace_tt, trace_x_norm = self._prefill_traces[padded_S]
 
             # ---- Update stable hidden and execute ----
-            if padded_S > S:
-                pad_t = ttnn.from_torch(
-                    torch.zeros(1, 1, padded_S - S, self.configuration.dim, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-                x_padded = ttnn.concat([x_ttnn, pad_t], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(pad_t)
-                ttnn.deallocate(x_ttnn)
-            else:
-                x_padded = x_ttnn
+            # x_ttnn is already at _S_pad_early == padded_S — no on-device concat needed.
+            x_padded = x_ttnn
             ttnn.copy(x_padded, trace_tt["hidden"])
             ttnn.deallocate(x_padded)
             ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
@@ -1003,30 +983,12 @@ class TtMolmo2Model(LightweightModule):
             ttnn.deallocate(logits)
             return logits_cpu  # [1, 1, vocab_size]
 
-        # ---- Eager path: pad S to eliminate SDPA partial-tile hangs ----
-        # Strategy:
-        #   S ≤ 8192: power-of-2 padding → Q-tiles ∈ {8,16,32} — all confirmed safe.
-        #   S > 8192: chunk-multiple (×256) padding → minimal DRAM footprint.
-        #             Power-of-2 would require S_pad=65536 for S=34395, making the
-        #             embedding tensor 536 MB/device which OOMs alongside 12 GB weights.
-        #             chunk-multiple gives S_pad=34560 (283 MB/device, fits).
-        # In both cases S_pad % 256 == 0 → no partial Q-tiles.
-        # Vision path already padded x_ttnn to _S_pad_early (same formula), so skip here.
+        # ---- Eager path ----
+        # x_ttnn is already at _S_pad_early (embedding was padded on CPU before H2D).
+        # For S > 8192, _S_pad_early is chunk-multiple which may differ from padded_S
+        # (the bucket), so use _S_pad_early as S_pad throughout the eager path.
         S_pad = _S_pad_early
-        pad_len = 0 if pixel_values is not None else S_pad - S
-
-        if pad_len > 0:
-            # Pad embedding output: [1,1,S,dim] → [1,1,S_pad,dim]
-            x_pad = ttnn.from_torch(
-                torch.zeros(1, 1, pad_len, self.configuration.dim, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            x_ttnn = ttnn.concat([x_ttnn, x_pad], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(x_pad)
+        # pad_len is always 0 — embedding is already at S_pad. No on-device concat.
 
         attn_mask = None
         if token_type_ids is not None:
