@@ -104,7 +104,9 @@ jobs:
       llk-wormhole-changed: ${{ steps.find-changes.outputs.llk-wormhole-changed }}
       llk-blackhole-changed: ${{ steps.find-changes.outputs.llk-blackhole-changed }}
       llk-common-changed: ${{ steps.find-changes.outputs.llk-common-changed }}
+      llk-sfpi-changed: ${{ steps.find-changes.outputs.llk-sfpi-changed }}
       llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
+      llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
       # Use the in-tree action (same as pr-gate.yaml) so the llk-* outputs above are
       # available; the previously-pinned @v0.63.0 predates the llk-unit-tests-changed flag.
@@ -426,7 +428,9 @@ jobs:
         (github.ref_name == 'main' ||
          needs.find-changes.outputs.llk-wormhole-changed == 'true' ||
          needs.find-changes.outputs.llk-common-changed == 'true' ||
-         needs.find-changes.outputs.llk-unit-tests-changed == 'true')
+         needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true')
       }}
     secrets: inherit
     strategy:
@@ -452,7 +456,9 @@ jobs:
         (github.ref_name == 'main' ||
          needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
          needs.find-changes.outputs.llk-common-changed == 'true' ||
-         needs.find-changes.outputs.llk-unit-tests-changed == 'true')
+         needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true')
       }}
     secrets: inherit
     strategy:
@@ -484,7 +490,9 @@ jobs:
         (github.ref_name == 'main' ||
          needs.find-changes.outputs.llk-wormhole-changed == 'true' ||
          needs.find-changes.outputs.llk-common-changed == 'true' ||
-         needs.find-changes.outputs.llk-unit-tests-changed == 'true')
+         needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true')
       }}
     secrets: inherit
     uses: ./.github/workflows/llk-unit-tests.yaml
@@ -505,7 +513,9 @@ jobs:
         (github.ref_name == 'main' ||
          needs.find-changes.outputs.llk-blackhole-changed == 'true' ||
          needs.find-changes.outputs.llk-common-changed == 'true' ||
-         needs.find-changes.outputs.llk-unit-tests-changed == 'true')
+         needs.find-changes.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changes.outputs.llk-unit-tests-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true')
       }}
     secrets: inherit
     uses: ./.github/workflows/llk-unit-tests.yaml
