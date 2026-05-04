@@ -903,27 +903,6 @@ class TtMolmo2Model(LightweightModule):
 
         S_pad = _S_pad_early
 
-        # ---- Attention mask (built BEFORE embedding) ----
-        # Building the mask early — before embedding and vision backbone are on device —
-        # maximises free DRAM. The mask only depends on token_type_ids, not embeddings.
-        # bfloat4_b: [S_pad, S_pad] × 0.5 B = 0.68 GB at S=36864 vs 2.72 GB in bfloat16.
-        # Combined with early build (6+ GB free vs 0.25 GB after embedding), this lets
-        # vision prefill at S=36864 (384 frames + 5k text) fit on T3K.
-        attn_mask = None
-        if token_type_ids is not None:
-            tti_pad_len = S_pad - S
-            if tti_pad_len > 0:
-                tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, tti_pad_len, dtype=torch.long)], dim=1)
-            else:
-                tti_padded = token_type_ids.long()
-            attn_mask = build_molmo2_prefill_mask(
-                S_pad,
-                tti_padded,
-                self.mesh_device,
-                dtype=ttnn.bfloat4_b,
-                causal_cache=self._causal_masks.get(S_pad),
-            )
-
         # ---- Embedding ----
         # Pad input_ids to _S_pad_early on CPU before H2D so ttnn.embedding produces
         # a bucket-aligned [B, _S_pad_early, H] tensor directly — no on-device concat.
@@ -1009,7 +988,21 @@ class TtMolmo2Model(LightweightModule):
 
         # ---- Eager path ----
         # x_ttnn is already at _S_pad_early (embedding was padded on CPU before H2D).
-        # attn_mask was built before embedding — see above.
+        # bfloat4_b: [S_pad,S_pad] × 0.5 B — 4× smaller than bfloat16, fits at S=32768.
+        attn_mask = None
+        if token_type_ids is not None:
+            tti_pad_len = S_pad - S
+            if tti_pad_len > 0:
+                tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, tti_pad_len, dtype=torch.long)], dim=1)
+            else:
+                tti_padded = token_type_ids.long()
+            attn_mask = build_molmo2_prefill_mask(
+                S_pad,
+                tti_padded,
+                self.mesh_device,
+                dtype=ttnn.bfloat16,
+                causal_cache=self._causal_masks.get(S_pad),
+            )
 
         rot_mats = self._get_rot_mats_prefill(S_pad)
 
