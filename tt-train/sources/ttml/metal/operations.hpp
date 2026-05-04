@@ -18,5 +18,6 @@
 #include "ops/softmax/softmax.hpp"
 #include "ops/softmax_backward/softmax_backward.hpp"
 #include "ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
+#include "ops/frobenius_normalize/frobenius_normalize.hpp"
 #include "optimizers/adamw/adamw.hpp"
 #include "optimizers/sgd/sgd.hpp"
