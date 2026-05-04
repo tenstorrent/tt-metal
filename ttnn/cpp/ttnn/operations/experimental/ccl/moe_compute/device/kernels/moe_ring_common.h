@@ -22,7 +22,8 @@ constexpr uint32_t div_up() {
 
 namespace moe_ring {
 
-constexpr uint32_t NUM_CORES = 12;  // Total number of cores in the ring
+// DEPRECATED: use get_named_compile_time_arg_val("num_cores") in kernels instead.
+static constexpr uint32_t NUM_CORES = 12;
 
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W0_W1_TILES_PER_TXN = 14;
@@ -43,6 +44,41 @@ constexpr uint32_t W2_TILES_PER_A2A_ITER_H =
     (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN) / W2_TILES_PER_A2A_ITER_W;  // = (2 * 14) / 4 = 7
 
 static constexpr uint32_t OUTPUT_HEIGHT_SHARD_DIM = 4;
+
+//-----------------------------------------------------------------------------
+// Generalized shard distribution functions (hardware-agnostic).
+// These replace DeepSeekRingConfig / GptRingConfig. The formulas are identical
+// to the Python equivalents in ttnn/ttnn/_experimental/moe_compute_utils.py.
+// All take n_cores as an explicit argument — no NUM_CORES constant needed.
+//-----------------------------------------------------------------------------
+
+constexpr bool is_big_w0w1(uint32_t core_id, uint32_t n_big, uint32_t n_cores) {
+    return n_big > 0 && (core_id * n_big) % n_cores < n_big;
+}
+
+constexpr uint32_t shard_tiles(uint32_t n_tiles, uint32_t core_id, uint32_t n_cores) {
+    const uint32_t n_big = n_tiles % n_cores;
+    const uint32_t small = n_tiles / n_cores;
+    return small + (is_big_w0w1(core_id, n_big, n_cores) ? 1u : 0u);
+}
+
+constexpr uint32_t w2_shard_tiles(uint32_t Ht, uint32_t core_id, uint32_t Nt, uint32_t n_cores) {
+    const uint32_t n_big_nt = Nt % n_cores;
+    const uint32_t n_big_ht = Ht % n_cores;
+    const uint32_t small_ht = Ht / n_cores;
+    if (n_big_nt + n_big_ht == n_cores) {
+        return is_big_w0w1(core_id, n_big_nt, n_cores) ? small_ht : small_ht + 1u;
+    }
+    return shard_tiles(Ht, core_id, n_cores);
+}
+
+inline uint32_t compute_w2_tile_offset(uint32_t core_id, uint32_t Ht, uint32_t Nt, uint32_t n_cores) {
+    uint32_t offset = 0;
+    for (uint32_t i = 0; i < core_id; ++i) {
+        offset += w2_shard_tiles(Ht, i, Nt, n_cores);
+    }
+    return offset;
+}
 
 //-----------------------------------------------------------------------------
 // Precomputed lookup tables (generated at compile time)
@@ -69,6 +105,7 @@ constexpr std::array<uint32_t, NUM_CORES> compute_combine_w_offset_per_core(cons
 
 }  // namespace detail
 
+// DEPRECATED: use shard_tiles() / w2_shard_tiles() instead. Kept for transition.
 template <bool HasBias>
 struct DeepSeekRingConfig {
     static constexpr uint32_t NUM_W0_W1_TILES_H = 224;     // Height of W0/W1 weight matrix in tiles (7168 / 32 = 224)
@@ -145,6 +182,7 @@ struct DeepSeekRingConfig {
         W2_TILES_PER_CORE);  // Cumulative offsets: [0, 18, 37, 56, 74, 93, 112, 130, 149, 168, 186, 205]
 };
 
+// DEPRECATED: use shard_tiles() / w2_shard_tiles() instead. Kept for transition.
 // For GPT-OSS: K = N = 2880, so both W0/W1 and W2 have 90x90 tile dimensions
 template <bool HasBias>
 struct GptRingConfig {

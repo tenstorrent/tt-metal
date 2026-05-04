@@ -314,17 +314,14 @@ MoEComputeMeshWorkloadFactory::create_at(
     const auto combine_token_parallel_cores = args.combine_params.num_token_parallel_cores;
     const auto combine_data_parallel_cores = args.combine_params.num_data_parallel_cores;
 
-    // Determine config type based on hidden size. Bias does not matter for these values
-    uint32_t config_type, a2a_cb_pages;
-    if (hidden_size == 7168) {
-        config_type = static_cast<uint32_t>(detail::MoEConfigType::DEEPSEEK);
-        a2a_cb_pages = moe_ring::DeepSeekRingConfig</*HasBias=*/false>::IN2_TILES_PER_STEP;
-    } else if (hidden_size == 2880) {
-        config_type = static_cast<uint32_t>(detail::MoEConfigType::GPT);
-        a2a_cb_pages = moe_ring::GptRingConfig</*HasBias=*/false>::IN2_TILES_PER_STEP;
-    } else {
-        TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
-    }
+    const uint32_t intermediate_size = args.intermediate_size;
+    TT_FATAL(
+        intermediate_size > 0 && intermediate_size % 32 == 0,
+        "intermediate_size ({}) must be a positive multiple of 32 (TILE_SIZE)",
+        intermediate_size);
+
+    const uint32_t hidden_tiles = hidden_size / 32;
+    const uint32_t intermediate_tiles = intermediate_size / 32;
 
     // Cores
     const auto
@@ -343,6 +340,9 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
+
+    // IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores)
+    const uint32_t a2a_cb_pages = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
@@ -701,7 +701,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"cb_r2c_w0", tt::CBIndex::c_3, tt::DataFormat::Bfp4_b, true, 14 * 6},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * 12},
+        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * matmul_num_cores},
         {"cb_w2c_md", tt::CBIndex::c_7, tt::DataFormat::UInt32, false, 2},
     };
     if (args.has_bias) {
@@ -1093,7 +1093,9 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"token_expert_row_offset", token_expert_row_offset},
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", combine_data_parallel_cores},
-        {"moe_config_type", config_type},
+        {"moe_config_type", 0u},  // DEPRECATED — no longer read by kernels
+        {"hidden_tiles", hidden_tiles},
+        {"intermediate_tiles", intermediate_tiles},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
         {"matmul_combine_sync_semaphore_id", matmul_combine_sync_semaphore_id},
     };
