@@ -56,14 +56,30 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
             True,  # dynamic_load
             id="1x8tp1",
         ),
+        pytest.param(
+            (4, 8),  # mesh_device
+            (2, 0),  # cfg
+            (2, 0),  # sp
+            (8, 1),  # tp
+            (8, 1),  # encoder_tp
+            (8, 1),  # vae_tp
+            ttnn.Topology.Linear,
+            4,  # num_links
+            "4x8",
+            True,  # encoder_on_device
+            True,  # vae_on_device
+            True,  # is_fsdp
+            False,  # dynamic_load
+            id="4x8",
+        ),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "traced",
     [
-        # pytest.param(True, id="traced"),
-        pytest.param(False, id="not_traced"),
+        pytest.param(True, id="traced"),
+        # pytest.param(False, id="not_traced"),
     ],
 )
 def test_pipeline(
