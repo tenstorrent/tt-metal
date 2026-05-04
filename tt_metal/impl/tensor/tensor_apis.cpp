@@ -745,12 +745,7 @@ HostTensor pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) {
-    // TODO(#40993): Flip to assert when we remove use cases in python and c++
-    if (tensor.layout() != Layout::ROW_MAJOR) {
-        log_warning(
-            tt::LogOp, "Tensor layout {} must be ROW_MAJOR for padding! Returning original tensor!", tensor.layout());
-        return tensor;
-    }
+    TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for padding");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::pad_impl<T>(tensor, output_padded_shape, input_tensor_start, pad_value);
     });
@@ -786,8 +781,7 @@ HostTensor unpad(
     const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end) {
-    // TODO(#40993): This should be a FATAL
-    TT_ASSERT(tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
+    TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Tensor layout must be ROW_MAJOR for unpadding");
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         return CMAKE_UNIQUE_NAMESPACE::unpad_impl<T>(tensor, output_tensor_start, output_tensor_end);
     });
