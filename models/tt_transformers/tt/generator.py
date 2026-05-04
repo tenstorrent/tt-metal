@@ -836,17 +836,24 @@ class Generator(WarmupForwardMixin):
                     hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
                         logits, last_token_idx
                     )
+                    # Single-slot prefill: write the last-token embedding straight into output_tensor. Batched
+                    # prefill or batch_size>1 keeps tensors in prefill_results so the caller can match idx/model_id.
                     if batch_size == 1 and not use_batched_prefill:
+                        # Copy hidden states to host without blocking the worker queue; sync before reading.
                         hidden_states_host = hidden_states.cpu(blocking=False)
                         ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        # start_pos is how many prompt tokens were already in KV (prefix cache). Subtract so we
+                        # index the last *new* token within this prefill chunk, not the absolute sequence index.
                         num_cached_tokens_local = int(start_pos[idx]) if start_pos is not None else 0
                         last_token_idx_relative = last_token_idx - num_cached_tokens_local
                         if self.model_args[model_id].num_devices == 1:
                             hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states_host)[0])
+                            # Activations are tiled (width 32); %32 picks the row for the last prompt token, then slice hidden dim.
                             output_tensor[idx] = hidden_states_torch[
                                 0, 0, (last_token_idx_relative % 32), : self.model_args[model_id].dim
                             ]
                         else:
+                            # Mesh: gather device shards and extract the last-token hidden vector.
                             output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
                                 hidden_states_host, last_token_idx=(last_token_idx_relative % 32)
                             )
@@ -869,17 +876,24 @@ class Generator(WarmupForwardMixin):
                     hidden_states = self.model[model_id].process_hidden_states_after_prefill_trace(
                         logits, last_token_idx
                     )
+                    # Single-slot prefill: write the last-token embedding straight into output_tensor. Batched
+                    # prefill or batch_size>1 keeps tensors in prefill_results so the caller can match idx/model_id.
                     if batch_size == 1 and not use_batched_prefill:
+                        # Copy hidden states to host without blocking the worker queue; sync before reading.
                         hidden_states_host = hidden_states.cpu(blocking=False)
                         ttnn.synchronize_device(self.model[model_id].mesh_device)
+                        # start_pos is how many prompt tokens were already in KV (prefix cache). Subtract so we
+                        # index the last *new* token within this prefill chunk, not the absolute sequence index.
                         num_cached_tokens_local = int(start_pos[idx]) if start_pos is not None else 0
                         last_token_idx_relative = last_token_idx - num_cached_tokens_local
                         if self.model_args[model_id].num_devices == 1:
                             hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states_host)[0])
+                            # Activations are tiled (width 32); %32 picks the row for the last prompt token, then slice hidden dim.
                             output_tensor[idx] = hidden_states_torch[
                                 0, 0, (last_token_idx_relative % 32), : self.model_args[model_id].dim
                             ]
                         else:
+                            # Mesh: gather device shards and extract the last-token hidden vector.
                             output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
                                 hidden_states_host, last_token_idx=(last_token_idx_relative % 32)
                             )
