@@ -174,10 +174,15 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
                 continue  # bucket too small to hold n_pooled image tokens
             _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
             _dummy_ids[0, :_n_pooled] = cfg.image_patch_id
-            # Pass token_type_ids so build_molmo2_prefill_mask is JIT-compiled here
-            # rather than on the first real inference (which caused ~22s test-0 overhead).
-            _dummy_tti = torch.zeros(1, _S_warmup, dtype=torch.long)
-            _dummy_tti[0, :_n_pooled] = 1  # mark image positions as type=1
+            # Pass token_type_ids so build_molmo2_prefill_mask (ttnn.mul/maximum/where)
+            # is JIT-compiled here rather than on the first real inference.
+            # Limit to S_warmup <= 8192: the [S,S] mask tensor at S=16384 is 536MB and
+            # at S=32768 is 2GB — too large to allocate 2 copies during mask build.
+            # Real vision inputs max at S=4233 (51 frames × 83 tok) → bucket 8192.
+            _dummy_tti = None
+            if _S_warmup <= 8192:
+                _dummy_tti = torch.zeros(1, _S_warmup, dtype=torch.long)
+                _dummy_tti[0, :_n_pooled] = 1  # mark image positions as type=1
             logger.info(f"  vision-integrated prefill bucket {_S_warmup}...")
             _ = model.forward_prefill(
                 input_ids=_dummy_ids,
