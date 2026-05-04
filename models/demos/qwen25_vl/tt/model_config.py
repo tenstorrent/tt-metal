@@ -2,15 +2,79 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import math
 import os
+import textwrap
 
 from loguru import logger
 
 import ttnn
 from models.demos.qwen25_vl.tt.common import nearest_multiple
+from models.tt_transformers.tt import model_config as tt_model_config
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+
+
+def find_qwen_vl_width_grid(width: int, tile_size: int, max_rows: int = 4, max_cols: int = 8) -> tuple[int, int]:
+    """Find the largest row/column grid whose width shard remains tile-aligned."""
+    for rows in range(max_rows, 0, -1):
+        for cols in range(max_cols, 0, -1):
+            if width % (tile_size * rows * cols) == 0:
+                return rows, cols
+    raise ValueError(f"Could not find a tile-aligned grid for width={width}")
+
+
+def _build_qwen_model_args_init():
+    source = textwrap.dedent(inspect.getsource(TTModelArgs.__init__))
+    new = textwrap.indent(
+        textwrap.dedent(
+            """\
+            if self.num_devices == 32:
+                lm_head_num_rows, lm_head_cores_per_row = find_qwen_vl_width_grid(
+                    self.dim // self.cluster_shape[1],
+                    ttnn.TILE_SIZE,
+                    max_rows=4,
+                    max_cols=8,
+                )
+            else:
+                lm_head_num_rows = 8
+                lm_head_cores_per_row = 8
+                while self.dim % (ttnn.TILE_SIZE * lm_head_num_rows * lm_head_cores_per_row) != 0:
+                    lm_head_num_rows -= 1
+                    if lm_head_num_rows == 0:
+                        lm_head_cores_per_row -= 1
+                        if lm_head_cores_per_row == 0:
+                            raise ValueError(
+                                f"Could not find a lm_head_num_rows such that self.dim(={self.dim}) % (lm_head_num_rows * 8) == 0"
+                            )
+                        lm_head_num_rows = 8
+"""
+        ),
+        "        ",
+    )
+    start = source.find("if self.num_devices == 32:\n            lm_head_num_rows = 4")
+    if start == -1:
+        raise RuntimeError("Unable to apply Qwen2.5-VL ModelArgs LM-head grid patch")
+    start = source.rfind("\n", 0, start) + 1
+    end = source.find("        self.lm_head_core_grid", start)
+    if end == -1:
+        raise RuntimeError("Unable to find Qwen2.5-VL ModelArgs LM-head grid patch end")
+    source = source[:start] + new + source[end:]
+    namespace = dict(tt_model_config.__dict__)
+    namespace["find_qwen_vl_width_grid"] = find_qwen_vl_width_grid
+    exec(source, namespace)
+    return namespace["__init__"]
+
+
+class ModelArgs(TTModelArgs):
+    LOCAL_HF_PARAMS = {
+        **TTModelArgs.LOCAL_HF_PARAMS,
+        "olmOCR-2-7B-1025": "models/tt_transformers/model_params/Qwen2.5-VL-7B-Instruct",
+    }
+
+    __init__ = _build_qwen_model_args_init()
 
 
 class ModelOptimizations:
@@ -224,7 +288,9 @@ class VisionModelArgs(ModelArgs):
         vision_model = Qwen2_5_VisionTransformerPretrainedModel._from_config(config.vision_config)
 
         if self.dummy_weights:
-            return vision_model
+            import torch
+
+            return vision_model.to(dtype=torch.float32)
 
         # Load only vision weights to reduce host memory usage.
         key_prefixes = ("visual.", "model.visual.")

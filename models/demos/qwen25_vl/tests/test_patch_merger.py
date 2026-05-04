@@ -34,7 +34,8 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
     (1,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
+def test_patch_merger_inference(rows, batch_size, mesh_device, qwen25_vl_mesh_device, reset_seeds, ensure_gc):
+    mesh_device = qwen25_vl_mesh_device
     dtype = ttnn.bfloat8_b
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=rows)

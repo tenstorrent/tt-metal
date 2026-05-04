@@ -16,6 +16,19 @@ from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
+def _power_of_two_prefill_chunks(group_size: int, max_chunk_size: int) -> list[int]:
+    """Split prefill into warmed power-of-two batch shapes."""
+    chunks: list[int] = []
+    remaining = group_size
+    max_chunk_size = max(1, max_chunk_size)
+    while remaining > 0:
+        chunk = min(remaining, max_chunk_size)
+        chunk = 1 << (chunk.bit_length() - 1)
+        chunks.append(chunk)
+        remaining -= chunk
+    return chunks
+
+
 class Generator(WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
@@ -271,8 +284,9 @@ class Generator(WarmupForwardMixin):
                         if chunk_size == 0:
                             chunk_size = 1
 
-                for chunk_start in range(0, group_size, chunk_size):
-                    chunk_end = min(chunk_start + chunk_size, group_size)
+                chunk_start = 0
+                for current_chunk_size in _power_of_two_prefill_chunks(group_size, chunk_size):
+                    chunk_end = chunk_start + current_chunk_size
                     abs_start = group_start + chunk_start
                     abs_end = group_start + chunk_end
                     chunk_logits = self.__prefill_forward_batched_text(
@@ -285,6 +299,7 @@ class Generator(WarmupForwardMixin):
                         model_id=dp_group,
                     )
                     output_logits[abs_start:abs_end] = chunk_logits
+                    chunk_start = chunk_end
         else:
             use_trace = (
                 enable_trace and page_table is not None and batch_seq_len <= self.model_args.max_prefill_chunk_size
@@ -466,6 +481,7 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens=None,
         output_tokens=None,
+        slot_remap=None,
     ):
         if not isinstance(kv_cache, list):
             kv_cache = [kv_cache]
@@ -480,6 +496,7 @@ class Generator(WarmupForwardMixin):
             reset_batch=reset_batch,
             prompt_tokens=prompt_tokens,
             output_tokens=output_tokens,
+            slot_remap=slot_remap,
         )
 
     def __prefill_forward_single_user_text(
@@ -588,7 +605,7 @@ class Generator(WarmupForwardMixin):
         if is_tokens:
             # Device sampling produces UInt32 token IDs; PyTorch CPU lacks
             # kernel support for UInt32 indexing, so cast to int32 here
-            # before the V0 model runner applies perm_table reordering.
+            # before any downstream reordering.
             def _safe_cast(t):
                 if (
                     isinstance(t, torch.Tensor)
@@ -604,14 +621,7 @@ class Generator(WarmupForwardMixin):
                 result = _safe_cast(result)
         return result
 
-    def warmup_model_prefill(
-        self,
-        kv_cache,
-        enable_trace,
-        can_sample_on_device=None,
-        non_greedy_decoding_on_device=None,
-        sampling_params=None,
-    ) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
         """
         Pre-compile programs for expected power-of-2 prefill sequence lengths.
         Uses dummy embeddings and rotation matrices to avoid depending on real data.
@@ -657,6 +667,51 @@ class Generator(WarmupForwardMixin):
                     kv_cache=model_kv_cache,
                     model_id=model_id,
                 )
+
+            if getattr(self.model_args, "disable_batched_prefill", False):
+                continue
+
+            max_batch = min(
+                getattr(self.model_args, "max_batched_prefill_size", 32),
+                self.model_args.max_batch_size,
+            )
+            if max_batch <= 1:
+                continue
+
+            num_devices = self.model_args.num_devices
+            max_chunk_tokens = (
+                MAX_BATCHED_PREFILL_SEQ_LEN * num_devices // 8 if num_devices < 8 else MAX_BATCHED_PREFILL_SEQ_LEN
+            )
+            for seq_len in warmup_seq_lens:
+                max_batch_for_seq = min(max_batch, max(1, max_chunk_tokens // seq_len))
+                batch_sizes = [1 << i for i in range(max_batch_for_seq.bit_length())]
+                for batch_size in batch_sizes:
+                    if batch_size > max_batch_for_seq:
+                        continue
+                    logger.info(f"    Compiling batched prefill for seq_len={seq_len}, batch={batch_size}")
+                    dummy_tokens = torch.zeros(batch_size, seq_len, hidden_dim, dtype=torch.bfloat16)
+                    dummy_cos = torch.ones(batch_size, 1, seq_len, head_dim, dtype=torch.bfloat16)
+                    dummy_sin = torch.zeros(batch_size, 1, seq_len, head_dim, dtype=torch.bfloat16)
+
+                    if model_kv_cache is not None:
+                        block_size = get_block_size(model_kv_cache)
+                        num_blocks = num_blocks_in_seq(seq_len, block_size)
+                        dummy_page_table = torch.zeros(batch_size, num_blocks, dtype=torch.int32)
+                    else:
+                        dummy_page_table = None
+
+                    if dummy_page_table is None:
+                        continue
+
+                    self.__prefill_forward_batched_text(
+                        tokens=dummy_tokens,
+                        rot_mats=(dummy_cos, dummy_sin),
+                        page_table=dummy_page_table,
+                        kv_cache=model_kv_cache,
+                        prompt_lens=[seq_len] * batch_size,
+                        prefill_seq_len=seq_len,
+                        model_id=model_id,
+                    )
 
         logger.info("Qwen2.5-VL prefill warmup complete")
 

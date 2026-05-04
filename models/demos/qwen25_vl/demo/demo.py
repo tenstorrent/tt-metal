@@ -3,6 +3,7 @@
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import pytest
@@ -23,11 +24,11 @@ from models.demos.qwen25_vl.tt.common import (
 )
 from models.demos.qwen25_vl.tt.generator import Generator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen25_vl.tt.model_config import ModelArgs, VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
 
 
 def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config):
@@ -451,18 +452,19 @@ def test_demo(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
     )
     if use_tt_vision:
-        # For DP, use the first submesh for the vision model
-        vision_mesh = model_list[0].mesh_device if data_parallel > 1 else mesh_device
-        vision_model_args = VisionModelArgs(
-            vision_mesh,
-            max_batch_size=batch_size,
-            max_seq_len=max_seq_len,
-            optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
-        )
-        vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)
+        visual_models = []
+        vision_meshes = [model.mesh_device for model in model_list] if data_parallel > 1 else [mesh_device]
+        for vision_mesh in vision_meshes:
+            vision_model_args = VisionModelArgs(
+                vision_mesh,
+                max_batch_size=batch_size,
+                max_seq_len=max_seq_len,
+                optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
+            )
+            vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
+            visual_models.append(DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False))
     else:
-        visual_model = reference_model.visual
+        visual_models = [reference_model.visual]
     processor = AutoProcessor.from_pretrained(ref_model_name)
     num_tokens_generated_decode = []
     num_image_tokens = []
@@ -495,11 +497,34 @@ def test_demo(
         # Vision prefill
         logger.info(f"Vision model prefill batch {batch_idx}")
         profiler.start(f"vision_model_prefill", iteration=batch_idx)
-        image_embeds = (
-            visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-            if "pixel_values" in inputs
-            else torch.tensor([], dtype=torch.bfloat16)
-        )
+        if "pixel_values" in inputs:
+            if use_tt_vision and data_parallel > 1:
+                pixel_chunks = []
+                grid_chunks = []
+                pixel_start = 0
+                for dp_idx in range(data_parallel):
+                    user_start = dp_idx * batch_size
+                    user_end = user_start + batch_size
+                    grid_chunk = inputs.image_grid_thw[user_start:user_end]
+                    pixel_count = int(grid_chunk.prod(dim=1).sum().item())
+                    pixel_chunks.append(inputs.pixel_values[pixel_start : pixel_start + pixel_count])
+                    grid_chunks.append(grid_chunk)
+                    pixel_start += pixel_count
+
+                with ThreadPoolExecutor(max_workers=data_parallel) as executor:
+                    image_embeds = torch.cat(
+                        list(
+                            executor.map(
+                                lambda args: args[0](args[1], grid_thw=args[2]),
+                                zip(visual_models, pixel_chunks, grid_chunks),
+                            )
+                        ),
+                        dim=0,
+                    )
+            else:
+                image_embeds = visual_models[0](inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+        else:
+            image_embeds = torch.tensor([], dtype=torch.bfloat16)
         profiler.end(f"vision_model_prefill", iteration=batch_idx)
 
         logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")

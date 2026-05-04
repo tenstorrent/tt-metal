@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import time
 from types import SimpleNamespace
-from typing import List, Mapping, Optional, Sequence, Union
+from typing import List, Mapping, Optional
 
 import torch
 from loguru import logger
@@ -19,31 +20,13 @@ from vllm.model_executor.models.qwen2_5_vl import (
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
-try:
-    import vllm.envs as envs
-
-    _VLLM_USE_V1 = envs.VLLM_USE_V1
-except (ImportError, AttributeError):
-    _VLLM_USE_V1 = True
-
-if not _VLLM_USE_V1:
-    from vllm.multimodal.inputs import (
-        MultiModalDataDict,
-        MultiModalFieldConfig,
-        MultiModalInputs,
-        MultiModalKwargs,
-    )
-    from vllm.multimodal.parse import MultiModalDataItems
-    from vllm.multimodal.processing import BaseMultiModalProcessor, PromptUpdate
-    from vllm.multimodal.profiling import BaseDummyInputsBuilder
-
 import ttnn
 from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen25_vl.tt.model_config import ModelArgs, VisionModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -73,9 +56,11 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
 def get_platform_specific_optimizations(model_name):
     max_seq_len = 131072
 
-    performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
+    # performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
+    accuracy_opt = lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name)
 
-    return performance_opt, max_seq_len
+    # return performance_opt, max_seq_len
+    return accuracy_opt, max_seq_len
 
 
 def initialize_vllm_text_transformer(
@@ -132,84 +117,10 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
         return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
 
-if not _VLLM_USE_V1:
-
-    class _V0DummyInputsBuilder(BaseDummyInputsBuilder):
-        """Stub for V0 — profiling is not used on TT hardware."""
-
-        def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
-            raise NotImplementedError
-
-        def get_dummy_mm_data(self, seq_len: int, mm_counts: Mapping[str, int]) -> MultiModalDataDict:
-            raise NotImplementedError
-
-    class _V0MultiModalProcessor(BaseMultiModalProcessor):
-        """V0 multi-modal processor that bypasses vLLM image processing
-        and passes images directly to the TT model."""
-
-        def _get_mm_fields_config(
-            self,
-            hf_inputs,
-            hf_processor_mm_kwargs: Mapping[str, object],
-        ) -> Mapping[str, "MultiModalFieldConfig"]:
-            raise NotImplementedError
-
-        def _get_prompt_updates(
-            self,
-            mm_items: "MultiModalDataItems",
-            hf_processor_mm_kwargs: Mapping[str, object],
-            out_mm_kwargs: "MultiModalKwargs",
-        ) -> Sequence["PromptUpdate"]:
-            raise NotImplementedError
-
-        def apply(
-            self,
-            prompt: Union[str, list[int]],
-            mm_data: "MultiModalDataDict",
-            hf_processor_mm_kwargs: Mapping[str, object],
-            tokenization_kwargs: Optional[Mapping[str, object]] = None,
-            return_mm_hashes: bool = False,
-        ) -> "MultiModalInputs":
-            input_processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
-
-            if isinstance(prompt, list) and prompt and isinstance(prompt[0], int):
-                tokenizer = (
-                    getattr(input_processor, "tokenizer") if hasattr(input_processor, "tokenizer") else input_processor
-                )
-                text_prompt = tokenizer.decode(prompt, skip_special_tokens=False)
-                logger.warning(
-                    f"Applied workaround: decoded {len(prompt)} tokens back to text for processor compatibility"
-                )
-            else:
-                text_prompt = prompt
-
-            processed_inputs = input_processor(
-                text=text_prompt,
-                images=mm_data["image"] if mm_data else None,
-                videos=None,
-                return_tensors="pt",
-            )
-
-            assert (
-                processed_inputs.input_ids.shape[0] == 1
-            ), "Expected to process one input prompt at a time in processor"
-            prompt_token_ids = processed_inputs.input_ids[0].tolist()
-
-            mm_inputs = MultiModalInputs(
-                type="multimodal",
-                prompt=prompt,
-                prompt_token_ids=prompt_token_ids,
-                mm_kwargs={"image": processed_inputs},
-                mm_hashes={},
-                mm_placeholders={},
-            )
-            return mm_inputs
-
-
 @MULTIMODAL_REGISTRY.register_processor(
-    Qwen2_5_VLMultiModalProcessor if _VLLM_USE_V1 else _V0MultiModalProcessor,
+    Qwen2_5_VLMultiModalProcessor,
     info=TT_Qwen2_5_VLProcessingInfo,
-    dummy_inputs=Qwen2_5_VLDummyInputsBuilder if _VLLM_USE_V1 else _V0DummyInputsBuilder,
+    dummy_inputs=Qwen2_5_VLDummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     # Class-level capabilities
@@ -293,7 +204,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
         enable_trace,
-        **kwargs,  # V1: pixel_values and image_grid_thw; V0: images
+        **kwargs,  # pixel_values and image_grid_thw
     ):
         empty_slots = kwargs.pop("empty_slots", None)
         start_pos = kwargs.get("start_pos", None)
@@ -310,80 +221,39 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
-        if _VLLM_USE_V1:
-            inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype
-            inputs.attention_mask = torch.zeros(
-                (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
+        inputs.input_ids = tokens.to(torch.int64)  # TODO: Derive dtype
+        inputs.attention_mask = torch.zeros(
+            (tokens.shape[0], padded_seq_len), dtype=inputs.input_ids.dtype, device=tokens.device
+        )
+        for i, plen in enumerate(prompt_lens):
+            inputs.attention_mask[i, :plen] = 1
+
+        if "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None:
+            inputs.pixel_values = torch.concat(
+                [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
             )
-            for i, plen in enumerate(prompt_lens):
-                inputs.attention_mask[i, :plen] = 1
-
-            if "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None:
-                inputs.pixel_values = torch.concat(
-                    [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
-                )
-                assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
-                _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
-                assert _grid_items and all(
-                    im is not None for im in _grid_items
-                ), "Expected non-empty image_grid_thw for image inputs."
-                for g in _grid_items:
-                    assert (
-                        torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
-                    ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
-                inputs.image_grid_thw = torch.stack(
-                    [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
-                    dim=0,
-                )
-                vision_start = time.perf_counter()
-                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-                vision_time = time.perf_counter() - vision_start
-                batch_size = tokens.shape[0]
-                logger.info(
-                    f"[PERF] Vision prefill: {vision_time*1000:.2f}ms " f"({vision_time/batch_size*1000:.2f}ms/user)"
-                )
-            else:
-                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
-        else:  # V0
-            if (
-                "images" in kwargs
-                and isinstance(kwargs["images"], list)
-                and len(kwargs["images"]) > 0
-                and kwargs["images"][0] is not None
-                and "attention_mask" in kwargs["images"][0]
-            ):
-                inputs.input_ids = tokens.to(kwargs["images"][0].attention_mask.dtype)
-            else:
-                inputs.input_ids = tokens
-
-            inputs.attention_mask = torch.concat(
-                [
-                    torch.nn.functional.pad(
-                        im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0
-                    )
-                    if im is not None
-                    else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
-                    for i, im in enumerate(kwargs["images"])
-                ],
+            assert "image_grid_thw" in kwargs, "Expected image_grid_thw when pixel_values are provided."
+            _grid_items = [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw]
+            assert _grid_items and all(
+                im is not None for im in _grid_items
+            ), "Expected non-empty image_grid_thw for image inputs."
+            for g in _grid_items:
+                assert (
+                    torch.is_tensor(g) and g.ndim == 1 and g.numel() == 3
+                ), f"Expected per-image image_grid_thw shape (3,), got {tuple(g.shape)!r}"
+            inputs.image_grid_thw = torch.stack(
+                [g.to(device=tokens.device, dtype=torch.int32) for g in _grid_items],
                 dim=0,
             )
-            images_with_pixels = [
-                im for im in kwargs.get("images", []) if im is not None and hasattr(im, "pixel_values")
-            ]
-            if images_with_pixels:
-                inputs.pixel_values = torch.concat([im.pixel_values for im in images_with_pixels], dim=0)
-                inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images_with_pixels], dim=0)
-
-                vision_start = time.perf_counter()
-                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-                vision_time = time.perf_counter() - vision_start
-                batch_size = tokens.shape[0]
-                logger.info(
-                    f"[PERF] Vision prefill (V0): {vision_time*1000:.2f}ms "
-                    f"({vision_time/batch_size*1000:.2f}ms/user)"
-                )
-            else:
-                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
+            vision_start = time.perf_counter()
+            image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            vision_time = time.perf_counter() - vision_start
+            batch_size = tokens.shape[0]
+            logger.info(
+                f"[PERF] Vision prefill: {vision_time*1000:.2f}ms " f"({vision_time/batch_size*1000:.2f}ms/user)"
+            )
+        else:
+            image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
@@ -440,22 +310,29 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         """Apply cached M-RoPE deltas to each model instance's rope_setup
         using the decode batch's page_table to identify users.
 
-        Only runs when the page_table changes (new prefill / user eviction),
-        which is the only time the base generator re-reads host-side
-        rope_deltas (reset_inputs=True).  On trace-replay steps the device
-        already holds the correct values.
+        Only runs when the page_table **contents** change (new prefill / user
+        eviction), which is the only time the base generator re-reads
+        host-side rope_deltas (reset_inputs=True).  On trace-replay steps
+        the device already holds the correct values.
+
+        The previous version compared ``id(page_table)``, but under V1
+        async-scheduling vLLM rebuilds the page_table tensor each step
+        even when values are unchanged, so the identity check never
+        hit and this ran fully every decode step.  Compare against the
+        user-identifying slice (first column) as a tuple instead — that
+        is stable across steps when no block has been freshly allocated
+        and is cheap to hash.
         """
         if not self._rope_delta_cache or page_table is None:
             return
 
-        page_table_id = id(page_table)
-        if getattr(self, "_prev_page_table_id", None) == page_table_id:
+        page_keys = tuple(page_table[:, 0].tolist())
+        if getattr(self, "_prev_page_keys", None) == page_keys:
             return
-        self._prev_page_table_id = page_table_id
+        self._prev_page_keys = page_keys
 
         max_bsz = self._ttt_generator.model_args[0].max_batch_size
         dp = self._ttt_generator.data_parallel
-        page_keys = page_table[:, 0].tolist()
         cache = self._rope_delta_cache
         for model_id in range(dp):
             start = model_id * max_bsz
@@ -493,16 +370,29 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         self._prev_decode_start = decode_start
 
         dispatch_tok_s = 1.0 / decode_time * batch_size if decode_time > 0 else 0
+        # Gate verbose per-step perf to DEBUG so steady-state decode doesn't emit
+        # a loguru record every ~70 ms (this adds measurable host overhead and
+        # dominates the log at high concurrency). Keep the first few iterations
+        # at INFO so compile / first-token latency is still visible.
+        # Set TT_PERF_DECODE_LOG_EVERY=N in the environment to ALSO emit one
+        # INFO line every N steady-state iterations (N defaults to 0 = off).
+        # Used to inspect steady-state step time vs. first-few-iterations when
+        # investigating client-observed TPOT vs engine device step gaps.
+        steady_log_every = int(os.environ.get("TT_PERF_DECODE_LOG_EVERY", "0") or 0)
+        is_sampled_steady = (
+            steady_log_every > 0 and self._decode_iteration > 3 and self._decode_iteration % steady_log_every == 0
+        )
+        log_fn = logger.info if self._decode_iteration <= 3 or is_sampled_steady else logger.debug
         if step_time and step_time > 0 and self._decode_iteration > 2:
             real_tok_s_user = 1.0 / step_time
             real_tok_s = real_tok_s_user * batch_size
-            logger.info(
+            log_fn(
                 f"[PERF] Decode iteration {self._decode_iteration}: "
                 f"step={step_time*1000:.0f}ms dispatch={decode_time*1000:.0f}ms | "
                 f"{real_tok_s_user:.1f} tok/s/user, {real_tok_s:.1f} tok/s throughput (batch={batch_size})"
             )
         else:
-            logger.info(
+            log_fn(
                 f"[PERF] Decode iteration {self._decode_iteration}: "
                 f"dispatch={decode_time*1000:.0f}ms (batch={batch_size})"
             )

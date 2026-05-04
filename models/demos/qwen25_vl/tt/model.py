@@ -2,13 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 import torch
 from loguru import logger
 
+import models.tt_transformers.tt.decoder as tt_decoder
+import models.tt_transformers.tt.model as tt_model
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.qwen25_vl.tt.distributed_norm import QwenVLDistributedNorm
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.tt.patch_merger import PatchMerger
 from models.demos.qwen25_vl.tt.rope import RotarySetup
@@ -277,15 +281,18 @@ class DropInVisionTransformer(torch.nn.Module):
             ]
             num_windows = len(window_sizes)
             windows_uniform = num_windows > 0 and all(w == window_sizes[0] for w in window_sizes)
+            disable_batched_window_attention = (
+                False  # os.getenv("TT_QWEN25_VL_DISABLE_BATCHED_WINDOW_ATTENTION") == "1"
+            )
             window_pad_info = None
 
-            if windows_uniform:
+            if windows_uniform and not disable_batched_window_attention:
                 windowed_window_info = {
                     "uniform": True,
                     "window_size": window_sizes[0],
                     "num_windows": num_windows,
                 }
-            elif num_windows > 0:
+            elif num_windows > 0 and not disable_batched_window_attention:
                 max_W = max(window_sizes)
                 # Round up to multiple of 32 for tile alignment
                 max_W = ((max_W + 31) // 32) * 32
@@ -486,17 +493,25 @@ class Transformer(TTTransformer):
         prefetcher=None,
     ):
         # Call parent constructor with vision-specific classes
-        super().__init__(
-            args=args,
-            dtype=dtype,
-            mesh_device=mesh_device,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
-            attention_class=Attention,
-            rope_setup_class=RotarySetup,
-        )
+        original_model_norm = tt_model.DistributedNorm
+        original_decoder_norm = tt_decoder.DistributedNorm
+        tt_model.DistributedNorm = QwenVLDistributedNorm
+        tt_decoder.DistributedNorm = QwenVLDistributedNorm
+        try:
+            super().__init__(
+                args=args,
+                dtype=dtype,
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                paged_attention_config=paged_attention_config,
+                use_paged_kv_cache=use_paged_kv_cache,
+                attention_class=Attention,
+                rope_setup_class=RotarySetup,
+            )
+        finally:
+            tt_model.DistributedNorm = original_model_norm
+            tt_decoder.DistributedNorm = original_decoder_norm
 
     def _prepare_cos_sin(self, rot_mats):
         cos_matrix = rot_mats[0]
