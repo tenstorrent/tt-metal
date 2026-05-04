@@ -59,29 +59,31 @@ def mesh_device_fixture():
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    """
-    Skip test vectors that cause L1 circular buffer overflow.
-    group_norm allocates internal circular buffers that can exceed L1 capacity for large tensors.
+    """Skip vectors that would cause L1 overflow under the default kernel path.
 
-    Note: the Flux VAE traces include 1M+ element tensors that the model runs
-    successfully on Galaxy via ``num_out_blocks=-1`` chunking + an 8x8 core grid.
-    Loosening this gate to admit those configs causes the existing golden
-    (``torch.nn.functional.group_norm`` on the raw shape) to diverge from the
-    sharded op output (PCC ~0.5). Closing the gap requires a mesh-aware golden
-    that mirrors the model's per-channel sharding via
-    ``ttnn.create_group_norm_weight_bias_rm`` semantics — out of scope for the
-    initial validation pass.
+    The op fits a circular-buffer worth of input rows in L1 per iteration.
+
+    The Flux VAE master configs are 1M+ elements per device. The op runs
+    them on Galaxy via ``num_out_blocks=-1`` chunking + an 8x8 core grid,
+    but validating the output against torch's ``group_norm`` would require
+    loading the real per-device formatted weight produced by
+    ``ttnn.create_group_norm_weight_bias_rm`` on the model's actual
+    state-dict — using ``torch.ones(C)`` and rebuilding the formatted
+    weight produces a sparse-layout buffer (mostly zeros) that the op
+    interprets as a non-identity affine, so PCC diverges (~0.5–0.7) even
+    when the op itself is correct. Closing the gap requires either:
+      * a mesh-aware golden that mirrors the kernel's sparsified weight
+        layout (effectively reimplementing the kernel), or
+      * loading the real Flux VAE weight values into the sweep input.
+    Both are out of scope for the trace-validation pass; gate at the L1
+    threshold so the test stays clean.
     """
     input_shape = test_vector.get("input_a_shape")
 
     if input_shape:
-        # Calculate total tensor size
         total_elements = 1
         for dim in input_shape:
             total_elements *= dim
-
-        # Skip if tensor is too large (causes circular buffer overflow)
-        # Empirically, tensors > 200K elements cause L1 overflow
         if total_elements > 200000:
             return True, f"group_norm: Skipping large tensor {input_shape} (circular buffer would exceed L1 capacity)"
 
@@ -297,17 +299,29 @@ def run(
         _early_core_grid = ttnn.CoreGrid(y=1, x=1)
     num_cores_across_channel = _early_core_grid.y
 
-    # Use ttnn.create_group_norm_input_mask for proper channel-group mapping
+    # Use ttnn.create_group_norm_input_mask for proper channel-group mapping.
+    # On mesh, replicate so every chip has the mask for its local computation.
     if input_mask_shape and not is_host:
         mask_dtype = input_mask_dtype or ttnn.bfloat8_b
         try:
             input_mask = ttnn.create_group_norm_input_mask(C, num_groups, num_cores_across_channel, mask_dtype)
-            input_mask = ttnn.to_device(input_mask, device)
+            if is_mesh_device:
+                torch_mask = ttnn.to_torch(input_mask)
+                input_mask = ttnn.from_torch(
+                    torch_mask,
+                    dtype=mask_dtype,
+                    layout=input_mask.layout,
+                    device=device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
+            else:
+                input_mask = ttnn.to_device(input_mask, device)
         except Exception as e:
             print(f"Warning: create_group_norm_input_mask failed: {e}, skipping mask")
             input_mask = None
 
-    # Use ttnn.create_group_norm_weight_bias_rm for proper weight formatting
+    # Use ttnn.create_group_norm_weight_bias_rm for proper weight formatting.
+    # On mesh, replicate so every chip has the weight for its local computation.
     if weight_shape and torch_weight is not None and not is_host:
         w_dtype = weight_dtype or ttnn.bfloat16
         w_mem = weight_memory_config or ttnn.DRAM_MEMORY_CONFIG
@@ -315,30 +329,35 @@ def run(
             torch_weight_rm = ttnn.create_group_norm_weight_bias_rm(
                 torch_weight.reshape(C), C, num_cores_across_channel
             )
-            weight_tensor = ttnn.from_torch(
-                torch_weight_rm,
+            from_torch_kwargs = dict(
                 dtype=w_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=w_mem,
             )
+            if is_mesh_device:
+                from_torch_kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+            weight_tensor = ttnn.from_torch(torch_weight_rm, **from_torch_kwargs)
         except Exception as e:
             print(f"Warning: create_group_norm_weight_bias_rm for weight failed: {e}")
             weight_tensor = None
 
-    # Use ttnn.create_group_norm_weight_bias_rm for proper bias formatting
+    # Use ttnn.create_group_norm_weight_bias_rm for proper bias formatting.
+    # On mesh, replicate so every chip has the bias for its local computation.
     if bias_shape and torch_bias is not None and not is_host:
         b_dtype = bias_dtype or ttnn.bfloat16
         b_mem = bias_memory_config or ttnn.DRAM_MEMORY_CONFIG
         try:
             torch_bias_rm = ttnn.create_group_norm_weight_bias_rm(torch_bias.reshape(C), C, num_cores_across_channel)
-            bias_tensor = ttnn.from_torch(
-                torch_bias_rm,
+            from_torch_kwargs = dict(
                 dtype=b_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=b_mem,
             )
+            if is_mesh_device:
+                from_torch_kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+            bias_tensor = ttnn.from_torch(torch_bias_rm, **from_torch_kwargs)
         except Exception as e:
             print(f"Warning: create_group_norm_weight_bias_rm for bias failed: {e}")
             bias_tensor = None
@@ -433,12 +452,22 @@ def run(
         if k not in group_norm_kwargs:
             group_norm_kwargs[k] = v
     output_tensor = ttnn.group_norm(input_tensor_a, **group_norm_kwargs)
-    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
+    # Master traces capture *per-device* tensors (replicated identically across
+    # the 4x8 mesh). The op runs the same per-device computation on every chip
+    # — concat'ing outputs along a sharded axis would multiply size against a
+    # per-device golden. Read device 0 directly to avoid that.
     if is_mesh_device:
-        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
+        device_tensors = ttnn.get_device_tensors(output_tensor)
+        output_tensor = ttnn.to_torch(device_tensors[0])
+    else:
+        output_tensor = ttnn.to_torch(output_tensor)
+
+    # Trim tile padding to match expected logical shape.
+    if output_tensor.ndim == len(shape):
+        output_tensor = output_tensor[tuple(slice(0, s) for s in shape)]
+
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

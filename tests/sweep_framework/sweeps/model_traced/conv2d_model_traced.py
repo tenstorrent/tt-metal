@@ -520,20 +520,38 @@ def run(
     if effective_weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
         effective_weight_dtype = ttnn.float32
 
-    # weight/bias stay as plain HOST tensors. Reproducing the master's
-    # ``ShardTensor2dMesh`` placement on weight/bias triggers a >10-min hang
-    # inside ``ttnn.conv2d`` for the 1024x1024 input configs (the smaller
-    # ones still pass in ~3-5s, but losing those wins isn't worth the larger
-    # configs hanging on every batch). The ``tensor_placement`` diff for
-    # weight/bias remains as an accepted coverage gap.
-    tt_weight = ttnn.from_torch(torch_weight, effective_weight_dtype)
+    # Match master's ShardTensor2dMesh placement on weight/bias for configs
+    # that don't trigger the prepare_conv2d_weights hang. Empirically the
+    # hang shows up for 1024x1024 inputs with in_channels >= 256 + 3x3
+    # kernels (slice_config DRAM_WIDTH sliced 16 ways) — likely the slice
+    # pipeline re-preparing the sharded weight per slice. Smaller spatial
+    # extents (or 1x1 kernels at 1024x1024) reproduce master placement
+    # cleanly in 3-5s. Threshold gates the known-hang corner.
+    activation_cells = int(input_height) * int(input_width) * int(in_channels)
+    # Empirically: 1024x1024 input × in_channels=128 (134M cells) reproduces
+    # placement cleanly; 1024x1024 × in_channels=256 (268M cells) hangs in
+    # prepare_conv2d_weights when given sharded weight + bias. Threshold sits
+    # between the two; revisit once the op handles sharded weights at scale.
+    placement_safe = activation_cells <= 134_217_728
+
+    if placement_safe:
+        tt_weight = _from_torch_host_with_placement(
+            torch_weight, effective_weight_dtype, weight_tensor_placement, device, is_mesh_device
+        )
+    else:
+        tt_weight = ttnn.from_torch(torch_weight, effective_weight_dtype)
 
     tt_bias = None
     if has_bias:
         effective_bias_dtype = bias_dtype
         if effective_bias_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
             effective_bias_dtype = ttnn.float32
-        tt_bias = ttnn.from_torch(torch_bias, effective_bias_dtype)
+        if placement_safe:
+            tt_bias = _from_torch_host_with_placement(
+                torch_bias, effective_bias_dtype, bias_tensor_placement, device, is_mesh_device
+            )
+        else:
+            tt_bias = ttnn.from_torch(torch_bias, effective_bias_dtype)
 
     # --- Call ttnn.conv2d ---
     raw_rod = kwargs.get("return_output_dim", False)

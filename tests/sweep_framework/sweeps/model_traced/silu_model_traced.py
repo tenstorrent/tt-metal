@@ -96,6 +96,33 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Master config 32 (c7a1c4) is the only Flux silu site that pre-allocates
+    # an output_tensor= buffer. The loader expands the named tensor kwarg into
+    # ``output_tensor_*`` keys, but ``build_op_kwargs`` filters those out as
+    # named-tensor metadata. Reconstruct a real ttnn.Tensor and re-add it so
+    # the sweep config_hash matches master.
+    ot_shape = kwargs.get("output_tensor_shape")
+    if ot_shape and ot_shape != "__ABSENT__":
+        ot_dtype = kwargs.get("output_tensor_dtype") or input_a_dtype
+        ot_layout = kwargs.get("output_tensor_layout") or input_a_layout
+        ot_mem_config = kwargs.get("output_tensor_memory_config") or input_a_memory_config
+        ot_placement = kwargs.get("output_tensor_tensor_placement") or input_a_tensor_placement
+        ot_shape_t = tuple(ot_shape) if isinstance(ot_shape, (list, tuple)) else ot_shape
+        torch_ot = torch.zeros(ot_shape_t, dtype=torch.float32)
+        if is_mesh_device and ot_placement:
+            preallocated_output = create_tensor_on_mesh(
+                torch_ot, device, ot_dtype, ot_layout, ot_mem_config, ot_placement
+            )
+        else:
+            preallocated_output = ttnn.from_torch(
+                torch_ot,
+                dtype=ot_dtype,
+                layout=ot_layout,
+                device=device,
+                memory_config=ot_mem_config,
+            )
+        op_kwargs["output_tensor"] = preallocated_output
+
     start_time = start_measuring_time()
     output_tensor = ttnn.silu(input_tensor_a, **op_kwargs)
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
