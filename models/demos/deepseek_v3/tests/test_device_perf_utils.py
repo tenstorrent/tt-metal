@@ -6,6 +6,15 @@ import csv
 import pytest
 
 from models.demos.deepseek_v3.utils.device_perf_utils import _parse_signposts, filter_profile_csv, process_profile_stats
+from models.demos.deepseek_v3.utils.signpost_names import (
+    DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST,
+    DECODE_EXECUTE_TRACE_SIGNPOST,
+    DECODE_TRACE_CAPTURE_SIGNPOST,
+    DECODE_WARMUP_SIGNPOST,
+    FIRST_DENSE_LAYER_SIGNPOST,
+    FIRST_MOE_LAYER_SIGNPOST,
+    WARMUP_MODEL_SIGNPOST,
+)
 
 HEADER = [
     "OP CODE",
@@ -34,35 +43,35 @@ def _write_csv(path, header, rows):
 
 def test_parse_signposts_uses_nested_decode_warmup_inside_warmup_model():
     rows = [
-        _signpost("warmup_model"),
+        _signpost(WARMUP_MODEL_SIGNPOST),
         _op("prefill_op"),
-        _signpost("decode_warmup"),
+        _signpost(DECODE_WARMUP_SIGNPOST),
         _op("embedding_op"),
-        _signpost("first_dense_layer"),
+        _signpost(FIRST_DENSE_LAYER_SIGNPOST),
         _op("dense_op"),
-        _signpost("first_dense_layer"),
-        _signpost("first_moe_layer"),
+        _signpost(FIRST_DENSE_LAYER_SIGNPOST),
+        _signpost(FIRST_MOE_LAYER_SIGNPOST),
         _op("moe_op"),
-        _signpost("first_moe_layer"),
+        _signpost(FIRST_MOE_LAYER_SIGNPOST),
         _op("tail_op"),
-        _signpost("decode_warmup"),
-        _signpost("decode_trace_capture"),
+        _signpost(DECODE_WARMUP_SIGNPOST),
+        _signpost(DECODE_TRACE_CAPTURE_SIGNPOST),
         _op("trace_capture_op"),
-        _signpost("decode_trace_capture"),
-        _signpost("warmup_model"),
-        _signpost("decode_execute_trace"),
+        _signpost(DECODE_TRACE_CAPTURE_SIGNPOST),
+        _signpost(WARMUP_MODEL_SIGNPOST),
+        _signpost(DECODE_EXECUTE_TRACE_SIGNPOST),
         _op("trace_embedding_op"),
         _op("trace_dense_op"),
         _op("trace_moe_op"),
         _op("trace_tail_op"),
-        _signpost("decode_execute_trace_sample_on_device"),
+        _signpost(DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST),
         _op("sample_op"),
-        _signpost("decode_execute_trace"),
+        _signpost(DECODE_EXECUTE_TRACE_SIGNPOST),
         _op("trace_embedding_op_1"),
         _op("trace_dense_op_1"),
         _op("trace_moe_op_1"),
         _op("trace_tail_op_1"),
-        _signpost("decode_execute_trace_sample_on_device"),
+        _signpost(DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST),
     ]
 
     info = _parse_signposts(rows, op_code_idx=0, op_type_idx=2)
@@ -75,40 +84,40 @@ def test_parse_signposts_uses_nested_decode_warmup_inside_warmup_model():
         "tail": (10, 10),
     }
     assert info["trace_capture_range"] == (12, 14)
-    assert info["trace_execution_ranges"] == [(17, 22)]
+    assert info["trace_execution_ranges"] == [(17, 20), (24, 27)]
 
 
 def test_filter_profile_csv_ignores_outer_warmup_model_and_labels_decode_warmup(tmp_path):
     rows = [
-        _signpost("warmup_model"),
+        _signpost(WARMUP_MODEL_SIGNPOST),
         _op("prefill_op"),
-        _signpost("decode_warmup"),
+        _signpost(DECODE_WARMUP_SIGNPOST),
         _op("embedding_op"),
-        _signpost("first_dense_layer"),
+        _signpost(FIRST_DENSE_LAYER_SIGNPOST),
         _op("dense_op"),
-        _signpost("first_dense_layer"),
-        _signpost("first_moe_layer"),
+        _signpost(FIRST_DENSE_LAYER_SIGNPOST),
+        _signpost(FIRST_MOE_LAYER_SIGNPOST),
         _op("moe_op", attributes="cluster_axis=0"),
-        _signpost("first_moe_layer"),
+        _signpost(FIRST_MOE_LAYER_SIGNPOST),
         _op("tail_op"),
-        _signpost("decode_warmup"),
-        _signpost("decode_trace_capture"),
+        _signpost(DECODE_WARMUP_SIGNPOST),
+        _signpost(DECODE_TRACE_CAPTURE_SIGNPOST),
         _op("trace_capture_op"),
-        _signpost("decode_trace_capture"),
-        _signpost("warmup_model"),
-        _signpost("decode_execute_trace"),
+        _signpost(DECODE_TRACE_CAPTURE_SIGNPOST),
+        _signpost(WARMUP_MODEL_SIGNPOST),
+        _signpost(DECODE_EXECUTE_TRACE_SIGNPOST),
         _op("trace_embedding_op"),
         _op("trace_dense_op"),
         _op("trace_moe_op", attributes="cluster_axis=0"),
         _op("trace_tail_op"),
-        _signpost("decode_execute_trace_sample_on_device"),
+        _signpost(DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST),
         _op("sample_op"),
-        _signpost("decode_execute_trace"),
+        _signpost(DECODE_EXECUTE_TRACE_SIGNPOST),
         _op("trace_embedding_op_1"),
         _op("trace_dense_op_1"),
         _op("trace_moe_op_1", attributes="cluster_axis=0"),
         _op("trace_tail_op_1"),
-        _signpost("decode_execute_trace_sample_on_device"),
+        _signpost(DECODE_EXECUTE_TRACE_SAMPLE_ON_DEVICE_SIGNPOST),
     ]
     input_path = tmp_path / "ops.csv"
     output_path = tmp_path / "filtered.csv"
@@ -128,7 +137,10 @@ def test_filter_profile_csv_ignores_outer_warmup_model_and_labels_decode_warmup(
         ("trace_execution_0", "trace_dense_op", "Dense Decoder"),
         ("trace_execution_0", "trace_moe_op", "MoE Decoder"),
         ("trace_execution_0", "trace_tail_op", "Tail"),
-        ("trace_execution_0", "sample_op", "Tail"),
+        ("trace_execution_1", "trace_embedding_op_1", "Embedding"),
+        ("trace_execution_1", "trace_dense_op_1", "Dense Decoder"),
+        ("trace_execution_1", "trace_moe_op_1", "MoE Decoder"),
+        ("trace_execution_1", "trace_tail_op_1", "Tail"),
     ]
     assert filtered_rows[2]["OP TYPE"] == "CCL"
 
