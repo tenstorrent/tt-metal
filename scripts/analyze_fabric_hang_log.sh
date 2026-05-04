@@ -840,6 +840,14 @@ FIX_AQ_SUCCESS=$(grep -cE 'FIX AQ.*sentinel poll complete' "$CLEAN" 2>/dev/null;
 FIX_RP_SUCCESS=$(grep -cE 'FIX RP.*transitioned to base-UMD sentinel' "$CLEAN" 2>/dev/null; :)
 FIX_RP_TIMEOUT=$(grep -cE 'FIX RP.*did NOT transition.*within' "$CLEAN" 2>/dev/null; :)
 FIX_RP_UNEXPECTED=$(grep -cE 'FIX RP.*transitioned to unexpected value' "$CLEAN" 2>/dev/null; :)
+# FIX RZ2: stale_base_umd flag cleared after ring-sync + health check pass
+FIX_RZ2_CLEAR_COUNT=$(grep -cE 'FIX RZ2.*clearing fabric_stale_base_umd|RZ2.*base-UMD channels confirmed healthy' "$CLEAN" 2>/dev/null; :)
+# FIX M: base-UMD channel transitions via launch_msg (sets stale_base_umd=true)
+FIX_M_TRANSITION_COUNT=$(grep -cE 'FIX M\b.*Setting fabric_stale_base_umd|base-UMD channel.*transitioned via launch_msg|Setting fabric_stale_base_umd_channels_=true' "$CLEAN" 2>/dev/null; :)
+# FIX QW SKIP: test skip due to stale_base_umd or channels_not_ready in fixture SetUp
+FIX_QW_SKIP_COUNT=$(grep -cE 'stale_base_umd=true|channels_not_ready=true|FIX QW.*skip|stale_base_umd_channels=true.*skipping' "$CLEAN" 2>/dev/null; :)
+# FIX AR2: post-deassert delay before heartbeat poll (avoids stale 0xABCD false positive)
+FIX_AR2_FIRES=$(grep -cE 'FIX AR2.*post-deassert delay' "$CLEAN" 2>/dev/null; :)
 # FIX AT: Phase 5 handshake poll skipped when MMIO master chan was FIX AS Pass-0 timeout'd
 FIX_AT_FIRES=$(grep -cE 'FIX AT|Pass-0 timeout.*skipping.*handshake|master chan.*FIX AS.*Pass-0 timeout' "$CLEAN" 2>/dev/null; :)
 # FIX AY: deferred non-MMIO ETH ERISC reset via restored MMIO relay
@@ -1271,6 +1279,22 @@ if [ "${FIX_RP_SUCCESS:-0}" -gt 0 ] || [ "${FIX_RP_TIMEOUT:-0}" -gt 0 ] || [ "${
         echo "     This may indicate firmware crash or L1 corruption mid-boot."
     fi
 fi
+if [ "${FIX_M_TRANSITION_COUNT:-0}" -gt 0 ]; then
+    echo "  => [FIX M] base-UMD channel transitions via launch_msg: ${FIX_M_TRANSITION_COUNT} device(s) set stale_base_umd=true."
+fi
+if [ "${FIX_RZ2_CLEAR_COUNT:-0}" -gt 0 ]; then
+    echo "  => [FIX RZ2] stale_base_umd flag cleared after ring-sync + health check: ${FIX_RZ2_CLEAR_COUNT} device(s)."
+fi
+if [ "${FIX_M_TRANSITION_COUNT:-0}" -gt 0 ] && [ "${FIX_RZ2_CLEAR_COUNT:-0}" -eq 0 ]; then
+    echo "     WARNING: FIX M set stale_base_umd on ${FIX_M_TRANSITION_COUNT} device(s) but FIX RZ2 never cleared it."
+    echo "     Root cause: ring-sync or health check failed, so channels are truly degraded."
+fi
+if [ "${FIX_QW_SKIP_COUNT:-0}" -gt 0 ]; then
+    echo "  => [FIX QW] test skip guards fired: ${FIX_QW_SKIP_COUNT} occurrence(s) (stale_base_umd or channels_not_ready)."
+fi
+if [ "${FIX_AR2_FIRES:-0}" -gt 0 ]; then
+    echo "  => [FIX AR2] post-deassert heartbeat delay fired: ${FIX_AR2_FIRES} time(s) (prevents stale 0xABCD false positive)."
+fi
 if [ "${FIX_AY_FIRES:-0}" -gt 0 ]; then
     if [ "${FIX_AY_FAILED:-0}" -eq 0 ]; then
         echo "  => [FIX AY] deferred non-MMIO ERISC reset succeeded (${FIX_AY_FIRES} event(s), ${FIX_AY_SUCCEEDED} ERISCs reset) — next session should find base fw"
@@ -1679,6 +1703,10 @@ echo "  FIX_AQ_TIMEOUT:            ${FIX_AQ_TIMEOUT:-0}  (edm_status sentinel po
 echo "  FIX_RP_SUCCESS:            ${FIX_RP_SUCCESS:-0}  (non-MMIO ROM postcode transitioned to base-UMD)"
 echo "  FIX_RP_TIMEOUT:            ${FIX_RP_TIMEOUT:-0}  (non-MMIO ROM postcode did NOT transition within 5s)"
 echo "  FIX_RP_UNEXPECTED:         ${FIX_RP_UNEXPECTED:-0}  (non-MMIO ROM postcode transitioned to unexpected value)"
+echo "  FIX_M_TRANSITION_COUNT:    ${FIX_M_TRANSITION_COUNT:-0}  (base-UMD channels transitioned via launch_msg — stale_base_umd set)"
+echo "  FIX_RZ2_CLEAR_COUNT:      ${FIX_RZ2_CLEAR_COUNT:-0}  (stale_base_umd cleared after ring-sync + health check)"
+echo "  FIX_QW_SKIP_COUNT:        ${FIX_QW_SKIP_COUNT:-0}  (test skip guards fired on stale_base_umd or channels_not_ready)"
+echo "  FIX_AR2_FIRES:            ${FIX_AR2_FIRES:-0}  (post-deassert delay before heartbeat poll — prevents stale 0xABCD)"
 echo "  FIX_TV_SUCCESS:            ${FIX_TV_SUCCESS:-0}  (MMIO ETH heartbeat confirmed after reset_cores)"
 echo "  FIX_TV_TIMEOUT:            ${FIX_TV_TIMEOUT:-0}  (MMIO ETH heartbeat poll timed out — probe_dead likely)"
 echo ""

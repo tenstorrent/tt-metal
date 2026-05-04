@@ -517,6 +517,20 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
                     }
                 }
             }
+            // FIX AR2 (#42429): Wait 100ms after FIX AC deassert before polling heartbeats.
+            // ROM boot zeros L1 (including the heartbeat address) within ~10ms of deassert.
+            // Without this delay, the first heartbeat read can see the STALE pre-reset
+            // 0xABCDxxxx value from the previous firmware instance.  FIX TW then immediately
+            // marks the channel "ready" (false positive), and FIX AQ proceeds under the
+            // assumption that the relay is restored — but the ERISC is still in ROM boot.
+            // 100ms is conservative: ROM zeros L1 in <10ms, so even 20ms would suffice.
+            // This delay is paid once per FIX AC event (not per channel).
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            log_info(
+                tt::LogAlways,
+                "teardown: FIX AR2 (#42429) — 100ms post-deassert delay complete; "
+                "starting heartbeat poll (avoids stale 0xABCDxxxx false positive).");
+
             // FIX AR: poll ALL reset ETH cores in a single shared time window instead of
             // sequentially (1000ms per core × N cores).  WH ETH link training takes ~1–3s;
             // with per-core sequential polling, every core times out because its individual
