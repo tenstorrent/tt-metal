@@ -22,7 +22,7 @@ jobs:
     name: "Docker setup"
     uses: ./.github/workflows/build-docker-artifact.yaml
 
-  e2e-tests:
+  llk-e2e-tests:
     name: "LLK e2e Tests"
     needs: build-images
     uses: ./.github/workflows/llk-e2e-impl.yaml
@@ -33,11 +33,11 @@ jobs:
       pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
       coverage: true
 
-  e2e-summary:
+  llk-e2e-summary:
     name: "LLK e2e summary"
     if: always()
     needs:
-      - e2e-tests
+      - llk-e2e-tests
     runs-on: ubuntu-latest
     steps:
       - name: Check e2e test results
@@ -49,7 +49,7 @@ jobs:
     name: "Report status"
     runs-on: ubuntu-latest
     if: always()
-    needs: e2e-summary
+    needs: llk-e2e-summary
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -58,7 +58,7 @@ jobs:
       - name: Report status
         uses: ./.github/actions/report-failure
         with:
-          test_name: "LLK e2e Tests"
+          test_name: "LLK e2e tests"
           slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.e2e-summary.result }}
+          status: ${{ needs.llk-e2e-summary.result }}

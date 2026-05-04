@@ -135,20 +135,3 @@ jobs:
           report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
           include_passed: true
           annotate_only: true
-
-  check-all-green:
-    name: "Check all green"
-    if: always()
-    needs:
-      - build-images
-      - load-test-matrix
-      - llk-perf-exec
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check if the required jobs succeeded or failed
-        uses: re-actors/alls-green@release/v1
-        with:
-          jobs: ${{ toJSON(needs) }}
-          allowed-skips: >-
-            load-test-matrix,
-            llk-perf-exec
