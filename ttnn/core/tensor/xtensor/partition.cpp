@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <tt-metalium/float8.hpp>
 #include "tensor/xtensor/partition.hpp"
 
 #include <type_traits>
@@ -261,6 +262,7 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim) {
         case tt::tt_metal::DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::FP8_E4M3: return adaptor::concat_impl<float8_e4m3>(tensors, reference_layout, dim);
         default: TT_THROW("Unsupported data type: {}", reference_layout.get_data_type());
     }
 }
@@ -300,6 +302,7 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(int32_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint8_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint16_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint32_t)
+EXPLICIT_INSTANTIATIONS_FOR_TYPE(float8_e4m3)
 // NOLINTEND(bugprone-macro-parentheses)
 
 #undef EXPLICIT_INSTANTIATIONS_FOR_TYPE

@@ -865,36 +865,52 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
-        auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
-            ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
-            std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
-            if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
-                tilized_data = tensor_impl::to_tile_major_layout(
-                    input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
-                data = ttsl::make_const_span(tilized_data);
-            }
-
-            auto float_packed_data = [&]() {
-                constexpr bool row_major_input = false;
-                constexpr bool is_exp_a = false;
-                if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
-                } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
-                } else {
-                    static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
+        if constexpr (std::is_same_v<SrcType, float8_e4m3>) {
+            // FP8_E4M3 is ROW_MAJOR-only; BFLOAT8_B/BFLOAT4_B require TILE. The combination
+            // is meaningless — caller must convert via float explicitly. Discarding the bfp
+            // pack path here also prevents instantiation of pack_as_bfpX_tiles<float8_e4m3>.
+            TT_THROW(
+                "to_dtype: FP8_E4M3 → BFLOAT8_B/BFLOAT4_B not supported (incompatible layouts). "
+                "Convert FP8_E4M3 → FLOAT32 → BFLOAT8_B/BFLOAT4_B explicitly.");
+            return input_buffer;  // unreachable, satisfies return type
+        } else {
+            auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
+                ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
+                std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
+                if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
+                    tilized_data = tensor_impl::to_tile_major_layout(
+                        input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
+                    data = ttsl::make_const_span(tilized_data);
                 }
-            }();
-            return tt::tt_metal::HostBuffer(std::move(float_packed_data));
-        };
 
-        return input_buffer.transform(transform_fn);
+                auto float_packed_data = [&]() {
+                    constexpr bool row_major_input = false;
+                    constexpr bool is_exp_a = false;
+                    if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
+                        return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
+                        return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    } else {
+                        static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
+                    }
+                }();
+                return tt::tt_metal::HostBuffer(std::move(float_packed_data));
+            };
+
+            return input_buffer.transform(transform_fn);
+        }  // closes the SrcType != float8_e4m3 else
     } else {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             auto data = buffer.view_as<const SrcType>();
             std::vector<DstType> output_vector(data.size());
             std::transform(data.begin(), data.end(), output_vector.begin(), [](SrcType value) {
-                return static_cast<DstType>(value);
+                // float8_e4m3 only knows how to convert to/from float, so route any fp8
+                // ↔ {bfloat16, integer, ...} conversion through float as the common type.
+                if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
+                    return static_cast<DstType>(static_cast<float>(value));
+                } else {
+                    return static_cast<DstType>(value);
+                }
             });
             return tt::tt_metal::HostBuffer(std::move(output_vector));
         };
@@ -932,7 +948,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                 case DataType::UINT16: return with_src_and_dst.operator()<SrcType, uint16_t>();
                 case DataType::UINT32: return with_src_and_dst.operator()<SrcType, uint32_t>();
                 case DataType::INT32: return with_src_and_dst.operator()<SrcType, int32_t>();
-                case DataType::FP8_E4M3: TT_THROW("to_dtype: FP8_E4M3 destination conversion is not yet implemented");
+                case DataType::FP8_E4M3: return with_src_and_dst.operator()<SrcType, float8_e4m3>();
                 case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
             }
             TT_THROW("Unreachable");
@@ -947,7 +963,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
             case DataType::UINT16: return with_src.operator()<uint16_t>();
             case DataType::UINT32: return with_src.operator()<uint32_t>();
             case DataType::INT32: return with_src.operator()<int32_t>();
-            case DataType::FP8_E4M3: TT_THROW("to_dtype: FP8_E4M3 source conversion is not yet implemented");
+            case DataType::FP8_E4M3: return with_src.operator()<float8_e4m3>();
             case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
         }
         TT_THROW("Unreachable");
@@ -999,6 +1015,8 @@ void validate_datatype(DataType dtype) {
         TT_FATAL(dtype == DataType::UINT16, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, uint8_t>) {
         TT_FATAL(dtype == DataType::UINT8, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, float8_e4m3>) {
+        TT_FATAL(dtype == DataType::FP8_E4M3, "Incorrect data type {}", dtype);
     } else {
         static_assert(sizeof(BaseType) == 0, "Unsupported DataType");
     }
@@ -1058,6 +1076,7 @@ INSTANTIATE_HOST_BUFFER_FUNCTIONS(float)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(bfloat16)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint16_t)
 INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint8_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(float8_e4m3)
 
 #undef INSTANTIATE_HOST_BUFFER_FUNCTIONS
 

@@ -279,11 +279,14 @@ def test_ttnn_combine(
     mesh_composer = get_ep_mesh_composer(mesh_device)
 
     if use_fp8_output:
-        # Device returned uint8 bytes that decode as float8_e4m3fn — widen to bfloat16
-        # for the validation comparison (validate_combine_output expects a real float dtype).
+        # Device returns a torch.float8_e4m3fn tensor directly via dlpack (DataType::FP8_E4M3
+        # → dlpack code Float8_E4M3FN). Widen to bfloat16 for validation, since
+        # validate_combine_output expects a regular float dtype.
         tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
-        assert tt_output_torch.dtype == torch.uint8, f"expected uint8 fp8 combine output, got {tt_output_torch.dtype}"
-        tt_output_torch = tt_output_torch.view(torch.float8_e4m3fn).to(torch.bfloat16)
+        assert (
+            tt_output_torch.dtype == torch.float8_e4m3fn
+        ), f"expected torch.float8_e4m3fn fp8 combine output, got {tt_output_torch.dtype}"
+        tt_output_torch = tt_output_torch.to(torch.bfloat16)
     else:
         tt_output_torch = ttnn.to_torch(
             tt_output,

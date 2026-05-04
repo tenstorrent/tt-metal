@@ -397,7 +397,15 @@ def to_torch(
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, queue_id=cq_id)
 
+    # Capture the ttnn dtype before going through dlpack — torch ≤ 2.7's dlpack importer
+    # rejects fp8 codes, so the C++ side exposes FP8_E4M3 as uint8 bytes via dlpack and we
+    # reinterpret to torch.float8_e4m3fn here. Same bytes, no copy.
+    is_fp8_e4m3 = tensor.dtype == ttnn.DataType.FP8_E4M3
+
     tensor = tensor.to_torch(mesh_composer=mesh_composer)
+
+    if is_fp8_e4m3:
+        tensor = tensor.view(torch.float8_e4m3fn)
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:

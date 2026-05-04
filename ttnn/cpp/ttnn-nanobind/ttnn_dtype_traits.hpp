@@ -263,12 +263,14 @@ struct ttnn_datatype_traits<DataType::INT32> {
     static constexpr auto name = nbd::const_name("INT32");
 };
 
-// fp8_e4m3 has no native dlpack representation; expose host bytes as uint8 (the workaround
-// already used in the deepseek_prefill dispatch/combine kernels). Callers reinterpret via
-// torch.float8_e4m3fn on the host side.
+// FP8_E4M3 is a first-class dtype on the C++ side (underlying_type = float8_e4m3 wrapper).
+// dlpack code stays UInt8 because torch ≤ 2.7's dlpack importer rejects Float8_E4M3FN
+// (code 10) with "Unsupported code 10". The ttnn.to_torch Python wrapper detects
+// DataType.FP8_E4M3 and reinterprets the uint8 bytes as torch.float8_e4m3fn — same
+// byte path, but the user-visible dtype is the fp8 type as expected.
 template <>
 struct ttnn_datatype_traits<DataType::FP8_E4M3> {
-    using underlying_type = std::uint8_t;
+    using underlying_type = ::float8_e4m3;
     static constexpr nbdlp::dtype value{
         .code = static_cast<std::uint8_t>(nbdlp::dtype_code::UInt), .bits = 8, .lanes = 1};
     static constexpr auto name = nbd::const_name("FP8_E4M3");
