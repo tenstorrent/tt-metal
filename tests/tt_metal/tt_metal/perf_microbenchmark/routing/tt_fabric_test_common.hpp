@@ -908,29 +908,34 @@ public:
         const std::vector<FabricNodeId>& device_ids, bool is_galaxy) const override {
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
 
-        // Galaxy Ring/Torus uses coordinate-based neighbors for N/S/E/W;
-        // Z always uses control plane (no coordinate dimension).
+        // Galaxy Ring/Torus uses coordinate-based neighbors, all others use control plane
         const bool use_coordinate_neighbors =
             is_galaxy && (topology_ == Topology::Ring || topology_ == Topology::Torus);
 
         for (const auto& src_node : device_ids) {
             const auto src_coord = get_device_coord(src_node);
             for (const auto& direction : FabricContext::routing_directions) {
-                if (direction == RoutingDirection::Z || !use_coordinate_neighbors) {
-                    // Control plane path: always for Z, also for non-Ring/non-Torus topologies.
-                    // Uses get_all_neighbor_node_ids() to handle multi-Z (multiple meshes).
-                    auto neighbors = get_all_neighbor_node_ids(src_node, direction);
-                    for (const auto& neighbor : neighbors) {
-                        bool is_valid = true;
-                        if (topology_ == Topology::Linear) {
+                // Z is multi-mesh capable (a chip can have Z-links to multiple meshes,
+                // each with a different mesh_id) and has no coordinate dimension, so it
+                // always goes through the control plane and fans out to every Z-neighbor.
+                // On architectures without Z-links the control plane returns empty here.
+                if (direction == RoutingDirection::Z) {
+                    for (const auto& neighbor : get_all_neighbor_node_ids(src_node, direction)) {
+                        bool is_valid = (neighbor != src_node);
+                        if (is_valid && topology_ == Topology::Linear) {
                             is_valid = are_devices_linear({src_node, neighbor});
                         }
                         if (is_valid) {
                             pairs.emplace_back(src_node, neighbor);
                         }
                     }
-                } else {
-                    // Coordinate-based path: N/S/E/W only, for Galaxy Ring/Torus
+                    continue;
+                }
+
+                std::optional<FabricNodeId> neighbor_opt;
+
+                if (use_coordinate_neighbors) {
+                    // Coordinate-based neighbor lookup with boundary wrapping
                     const auto neighbor_coord = src_coord.get_neighbor(
                         mesh_shape_,
                         get_step_for_direction(direction),
@@ -938,10 +943,34 @@ public:
                         get_boundary_mode_for_dimension(get_dim_for_direction(direction)));
 
                     if (neighbor_coord.has_value()) {
-                        auto neighbor = get_fabric_node_id(neighbor_coord.value());
-                        if (neighbor != src_node) {
-                            pairs.emplace_back(src_node, neighbor);
+                        neighbor_opt = get_fabric_node_id(neighbor_coord.value());
+                    }
+                } else {
+                    // Control plane neighbor lookup
+                    const auto& neighbors =
+                        tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(
+                            src_node, direction);
+
+                    if (!neighbors.empty()) {
+                        auto neighbor_mesh_it = neighbors.begin();
+                        const auto& neighbor_chips = neighbor_mesh_it->second;
+                        if (!neighbor_chips.empty()) {
+                            neighbor_opt = FabricNodeId(neighbor_mesh_it->first, neighbor_chips[0]);
                         }
+                    }
+                }
+
+                // Validate and add neighbor
+                if (neighbor_opt.has_value()) {
+                    const auto& neighbor = neighbor_opt.value();
+                    bool is_valid = (neighbor != src_node);
+
+                    if (is_valid && topology_ == Topology::Linear) {
+                        is_valid = are_devices_linear({src_node, neighbor});
+                    }
+
+                    if (is_valid) {
+                        pairs.emplace_back(src_node, neighbor);
                     }
                 }
             }
