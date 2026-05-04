@@ -167,6 +167,7 @@ class Generator(WarmupForwardMixin):
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
+        self._force_next_decode_reset_inputs = False
         self._disable_prefill_tracing = False  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
 
@@ -605,6 +606,8 @@ class Generator(WarmupForwardMixin):
                 log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
                 prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
 
+            self._force_next_decode_reset_inputs = True
+
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
             # This is inefficient and should be fixed
@@ -1028,6 +1031,9 @@ class Generator(WarmupForwardMixin):
         self._prev_sampling_on_device = sampling_on_device
         if prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device:
             reset_inputs = True
+        if getattr(self, "_force_next_decode_reset_inputs", False):
+            reset_inputs = True
+            self._force_next_decode_reset_inputs = False
         if self.prev_page_table is None:
             self.prev_page_table = (
                 page_table.clone()

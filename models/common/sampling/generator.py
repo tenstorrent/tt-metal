@@ -461,6 +461,13 @@ def format_sampling_params(sampling_params, max_batch_size):
         if repetition_penalty[i] == 0:
             repetition_penalty[i] = _SAMPLING_PARAM_DEFAULTS["repetition_penalty"]
 
+        # Top-1 requests are deterministic even when a mixed batch routes them
+        # through the stochastic TT sampling kernel. Use a fixed internal seed
+        # for unseeded top-1 slots so incidental RNG consumption cannot leak
+        # into greedy outputs.
+        if top_k[i] == 1 and seed[i] is None:
+            seed[i] = 0
+
     kwargs = dict(
         temperature=temperature,
         top_p=top_p,
