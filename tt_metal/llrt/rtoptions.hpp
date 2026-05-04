@@ -276,6 +276,10 @@ class RunTimeOptions {
     // Feature flag to register Blackhole DRAM programmable cores in the HAL on silicon.
     bool enable_blackhole_dram_programmable_cores = true;
 
+    // Comma-separated allow-list of DRAM firmware initialization steps. Unset means all steps enabled.
+    bool dram_fw_init_steps_set_ = false;
+    std::set<std::string> dram_fw_init_steps_;
+
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
@@ -673,6 +677,13 @@ public:
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
 
     bool get_enable_blackhole_dram_programmable_cores() const { return enable_blackhole_dram_programmable_cores; }
+
+    bool dram_fw_init_step_enabled(const std::string& step) const {
+        return !dram_fw_init_steps_set_ || dram_fw_init_steps_.contains(step);
+    }
+    bool dram_fw_init_steps_configured() const { return dram_fw_init_steps_set_; }
+    const std::set<std::string>& get_dram_fw_init_steps() const { return dram_fw_init_steps_; }
+    static const std::set<std::string>& get_known_dram_fw_init_steps();
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }

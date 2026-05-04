@@ -39,6 +39,22 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
+constexpr char kDramFwInitStepClearL1[] = "clear_l1";
+constexpr char kDramFwInitStepAssertReset[] = "assert_reset";
+constexpr char kDramFwInitStepWriteBankTables[] = "write_bank_tables";
+constexpr char kDramFwInitStepLoadBinaries[] = "load_binaries";
+constexpr char kDramFwInitStepWriteLaunchMsg[] = "write_launch_msg";
+constexpr char kDramFwInitStepWriteGoMsg[] = "write_go_msg";
+constexpr char kDramFwInitStepWriteMailboxPtrs[] = "write_mailbox_ptrs";
+constexpr char kDramFwInitStepWriteResetPc[] = "write_reset_pc";
+constexpr char kDramFwInitStepWriteCoreInfo[] = "write_core_info";
+constexpr char kDramFwInitStepDeassertReset[] = "deassert_reset";
+constexpr char kDramFwInitStepWaitInitDone[] = "wait_init_done";
+
+}  // namespace
+
 RiscFirmwareInitializer::RiscFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor,
     const GetControlPlaneFn& get_control_plane,
@@ -238,7 +254,8 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         cluster_.write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
     }
 
-    bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM) &&
+                       rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepClearL1);
     if (has_dram_fw) {
         uint32_t dram_l1_size = hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
         std::vector<uint32_t> dram_zero_vec(dram_l1_size / sizeof(uint32_t), 0);
@@ -335,7 +352,8 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
 }
 
 void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
-    bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM) &&
+                       rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepAssertReset);
     if (has_dram_fw) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
@@ -886,7 +904,10 @@ void RiscFirmwareInitializer::initialize_firmware(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
         "Tensix cores require end_core to be specified for bank to noc table initialization.");
 
-    initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core, end_core);
+    if (core_type != HalProgrammableCoreType::DRAM ||
+        rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteBankTables)) {
+        initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core, end_core);
+    }
     if (core_type == HalProgrammableCoreType::TENSIX) {
         initialize_worker_logical_to_virtual_tables(device_id, core_type, virtual_core, end_core.value());
     }
@@ -1063,8 +1084,11 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
-            if (not rtoptions_.get_skip_loading_fw()) {
+            if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepAssertReset)) {
+                cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            }
+            if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepLoadBinaries) &&
+                not rtoptions_.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
@@ -1076,31 +1100,41 @@ void RiscFirmwareInitializer::initialize_firmware(
                     }
                 }
             }
-            launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
-            prepare_initial_launch_msg();
 
-            uint64_t launch_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH);
-            uint64_t go_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG);
-            uint64_t launch_msg_rd_ptr_addr =
-                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
-            uint64_t go_message_index_addr =
-                hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX);
-            cluster_.write_core(
-                init_launch_msg_data.data(),
-                init_launch_msg_data.size(),
-                tt_cxy_pair(device_id, virtual_core),
-                launch_addr);
-            cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
-            uint32_t zero = 0;
-            cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
-            cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteLaunchMsg)) {
+                launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
+                prepare_initial_launch_msg();
+                uint64_t launch_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH);
+                cluster_.write_core(
+                    init_launch_msg_data.data(),
+                    init_launch_msg_data.size(),
+                    tt_cxy_pair(device_id, virtual_core),
+                    launch_addr);
+            }
+            if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteGoMsg)) {
+                uint64_t go_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG);
+                cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
+            }
+            if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteMailboxPtrs)) {
+                uint64_t launch_msg_rd_ptr_addr =
+                    hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+                uint64_t go_message_index_addr =
+                    hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX);
+                uint32_t zero = 0;
+                cluster_.write_core(
+                    &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
+                cluster_.write_core(
+                    &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            }
 
             // Write reset PC (register address, no L1 NOC offset needed)
-            cluster_.write_core(
-                &jit_build_config.fw_launch_addr_value,
-                sizeof(uint32_t),
-                tt_cxy_pair(device_id, virtual_core),
-                jit_build_config.fw_launch_addr);
+            if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteResetPc)) {
+                cluster_.write_core(
+                    &jit_build_config.fw_launch_addr_value,
+                    sizeof(uint32_t),
+                    tt_cxy_pair(device_id, virtual_core),
+                    jit_build_config.fw_launch_addr);
+            }
             break;
         }
         default:
@@ -1221,12 +1255,15 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
             dram_core_info.view().absolute_logical_x() = dram_noc.x;
             dram_core_info.view().absolute_logical_y() = dram_noc.y;
-            uint64_t core_info_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
-            cluster_.write_core(
-                dram_core_info.data(),
-                dram_core_info.size(),
-                {static_cast<size_t>(device_id), virtual_dram_core},
-                core_info_addr);
+            if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteCoreInfo)) {
+                uint64_t core_info_addr =
+                    hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
+                cluster_.write_core(
+                    dram_core_info.data(),
+                    dram_core_info.size(),
+                    {static_cast<size_t>(device_id), virtual_dram_core},
+                    core_info_addr);
+            }
             initialize_firmware(
                 device_id,
                 HalProgrammableCoreType::DRAM,
@@ -1256,7 +1293,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
     for (const auto& dram_core : dram_not_done_cores) {
-        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
+        if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepDeassertReset)) {
+            cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
+        }
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
@@ -1268,7 +1307,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
     log_debug(LogDevice, "Firmware init complete");
 
-    if (!dram_not_done_cores.empty()) {
+    if (!dram_not_done_cores.empty() && rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWaitInitDone)) {
         log_debug(LogDevice, "Waiting for DRAM firmware init complete");
         try {
             llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);

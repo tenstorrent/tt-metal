@@ -109,6 +109,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Enable Blackhole DRAM programmable cores
+    TT_METAL_DRAM_FW_INIT_STEPS,                         // Comma-separated DRAM firmware init step allow-list
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -278,7 +279,41 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
 
+const std::set<std::string>& known_dram_fw_init_steps() {
+    static const std::set<std::string> steps = {
+        "assert_reset",
+        "clear_l1",
+        "deassert_reset",
+        "load_binaries",
+        "wait_init_done",
+        "write_bank_tables",
+        "write_core_info",
+        "write_go_msg",
+        "write_launch_msg",
+        "write_mailbox_ptrs",
+        "write_reset_pc",
+    };
+    return steps;
+}
+
+std::string join_strings(const std::set<std::string>& values) {
+    if (values.empty()) {
+        return "none";
+    }
+
+    std::string joined;
+    for (const auto& value : values) {
+        if (!joined.empty()) {
+            joined += ",";
+        }
+        joined += value;
+    }
+    return joined;
+}
+
 }  // namespace
+
+const std::set<std::string>& RunTimeOptions::get_known_dram_fw_init_steps() { return known_dram_fw_init_steps(); }
 
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
 // Default assume package install path
@@ -667,6 +702,47 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
             this->enable_blackhole_dram_programmable_cores = is_env_enabled(value);
             break;
+
+        // TT_METAL_DRAM_FW_INIT_STEPS
+        // Comma-separated allow-list of DRAM firmware initialization steps.
+        // Default: unset (all steps enabled)
+        // Usage: export TT_METAL_DRAM_FW_INIT_STEPS=assert_reset,load_binaries,deassert_reset
+        case EnvVarID::TT_METAL_DRAM_FW_INIT_STEPS: {
+            this->dram_fw_init_steps_set_ = true;
+            this->dram_fw_init_steps_.clear();
+
+            std::stringstream stream(value ? value : "");
+            for (std::string token; std::getline(stream, token, ',');) {
+                token = trim_copy(token);
+                if (token.empty()) {
+                    continue;
+                }
+
+                if (!known_dram_fw_init_steps().contains(token)) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Ignoring unknown TT_METAL_DRAM_FW_INIT_STEPS value '{}'. Known steps are: {}",
+                        token,
+                        join_strings(known_dram_fw_init_steps()));
+                    continue;
+                }
+                this->dram_fw_init_steps_.insert(token);
+            }
+
+            std::set<std::string> skipped_steps;
+            for (const auto& step : known_dram_fw_init_steps()) {
+                if (!this->dram_fw_init_steps_.contains(step)) {
+                    skipped_steps.insert(step);
+                }
+            }
+            if (!skipped_steps.empty()) {
+                log_info(
+                    tt::LogMetal,
+                    "Skipping DRAM firmware init steps due to TT_METAL_DRAM_FW_INIT_STEPS: {}",
+                    join_strings(skipped_steps));
+            }
+            break;
+        }
 
         // TT_METAL_USE_MGD_2_0
         // Enables use of Mesh Graph Descriptor 2.0 format for fabric configuration.
