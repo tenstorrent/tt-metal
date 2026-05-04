@@ -15,6 +15,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -135,6 +136,9 @@ def test_ttnn_dispatch(
     # Only exercise the fp8 path with random (N(0,1)) data that fits in range.
     if use_fp8_output and use_predictable_data:
         pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
+
+    if use_fp8_output and is_wormhole_b0():
+        pytest.skip("fp8 output not supported on Wormhole hardware")
 
     torch.manual_seed(42)
 
