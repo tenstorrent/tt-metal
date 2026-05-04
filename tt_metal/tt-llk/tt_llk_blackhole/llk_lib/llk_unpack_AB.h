@@ -14,6 +14,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_defs.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
@@ -151,18 +152,32 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
- * @param transpose: Whether to transpose within each face (0 = no transpose, >0 = transpose)
+ * @param transpose: Transpose mode for SrcA face order and/or within-face transpose.
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose = 0)
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
+    const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
+    const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
 
     config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
 
-    _llk_unpack_AB_mop_config_<BType>(transpose > 0, tensor_shape); // transpose of faces 0,2,1,3
+    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape); // transpose of faces 0,2,1,3
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+{
+    _llk_unpack_AB_init_<BType>(tensor_shape, ckernel::Transpose::None);
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose)
+{
+    _llk_unpack_AB_init_<BType>(tensor_shape, transpose > 0 ? ckernel::Transpose::Both : ckernel::Transpose::None);
 }
 
 /**

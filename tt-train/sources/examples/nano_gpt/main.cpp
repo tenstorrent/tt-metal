@@ -157,7 +157,6 @@ struct TrainingConfig {
     std::string model_config;
     std::string data_path;
     std::string scheduler_type = "identity";
-    std::string tokenizer_type = "char";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
 };
@@ -179,7 +178,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
-    config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
 
     return config;
 }
@@ -485,39 +483,43 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    auto create_dataset =
-        [](const auto &data_source, const auto sequence_length, const auto &train_config, auto &model_config) {
-            std::string tokenizer_type = train_config.tokenizer_type;
+    auto create_dataset = [](const auto &data_source, const auto sequence_length, auto &model_config) {
+        auto current_vocab_size =
+            std::visit([](const auto &arg) { return arg.vocab_size; }, model_config.transformer_config);
 
-            if (tokenizer_type == "char") {
-                auto [dataset, tokenizer] =
-                    ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                        std::get<std::string>(data_source), sequence_length);
-
-                if (!tokenizer) {
-                    throw std::runtime_error("Failed to create CharTokenizer");
-                }
-
-                std::visit(
-                    [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, model_config.transformer_config);
-
-                return dataset;
-            } else if (tokenizer_type == "bpe") {
-                auto &yaml_node = std::get<YAML::Node>(data_source);
-
-                auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
-
-                std::visit(
-                    [&](auto &&arg) { arg.vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>(); },
-                    model_config.transformer_config);
-
-                return dataset;
-            } else {
-                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+        if (std::holds_alternative<std::string>(data_source)) {
+            // Plain text -> character tokenizer; vocab_size must be absent (0) so it can be auto-detected
+            if (current_vocab_size != 0U) {
+                throw std::runtime_error(
+                    "Plain text data uses character tokenization, which auto-detects vocab_size from the "
+                    "text. Remove vocab_size from the model config (or set it to 0). Got vocab_size=" +
+                    std::to_string(current_vocab_size));
             }
-        };
+            auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                std::get<std::string>(data_source), sequence_length);
 
-    auto dataset = create_dataset(text_or_tokens, sequence_length, training_config, model_config);
+            if (!tokenizer) {
+                throw std::runtime_error("Failed to create CharTokenizer");
+            }
+
+            std::visit(
+                [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, model_config.transformer_config);
+
+            return dataset;
+        } else {
+            // Pre-tokenized YAML data; vocab_size must be explicitly set in the model config
+            if (current_vocab_size == 0U) {
+                throw std::runtime_error(
+                    "Pre-tokenized data requires vocab_size to be set in the model config. "
+                    "Omitting vocab_size is only valid for plain text (character-tokenized) data.");
+            }
+            auto &yaml_node = std::get<YAML::Node>(data_source);
+            auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
+            return dataset;
+        }
+    };
+
+    auto dataset = create_dataset(text_or_tokens, sequence_length, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
 

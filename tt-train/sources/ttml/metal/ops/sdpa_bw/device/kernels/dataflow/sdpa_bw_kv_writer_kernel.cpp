@@ -19,10 +19,11 @@ void kernel_main() {
     constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;  // Output: grad_V
 
     // Get compile-time arguments
-    constexpr uint32_t kWt = get_compile_time_arg_val(0);              // key/value width in tiles
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);               // sequence length in tiles
-    constexpr uint32_t q_heads = get_compile_time_arg_val(2);          // number of query heads
-    constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // heads per group
+    constexpr uint32_t kWt = get_compile_time_arg_val(0);              // key width in tiles (grad_K)
+    constexpr uint32_t vWt = get_compile_time_arg_val(1);              // value width in tiles (grad_V)
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);               // sequence length in tiles
+    constexpr uint32_t q_heads = get_compile_time_arg_val(3);          // number of query heads
+    constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // heads per group
 
 #ifdef CAUSAL_MASK
     // Generate causal mask tile ONCE - will be reused for every diagonal
@@ -30,15 +31,16 @@ void kernel_main() {
     generate_causal_mask_tile(cb_attn_mask);
 #endif
 
-    const uint32_t tile_bytes = get_tile_size(cb_grad_key);
+    const uint32_t tile_bytes_k = get_tile_size(cb_grad_key);
+    const uint32_t tile_bytes_v = get_tile_size(cb_grad_value);
 
     // TensorAccessor definitions with chained offsets
-    constexpr auto grad_key_args = TensorAccessorArgs<4>();
+    constexpr auto grad_key_args = TensorAccessorArgs<5>();
     constexpr auto grad_value_args = TensorAccessorArgs<grad_key_args.next_compile_time_args_offset()>();
 
     // Create TensorAccessor generators for output gradients
-    const auto grad_key_addr_generator = TensorAccessor(grad_key_args, grad_key_addr);
-    const auto grad_value_addr_generator = TensorAccessor(grad_value_args, grad_value_addr);
+    const auto grad_key_addr_generator = TensorAccessor(grad_key_args, grad_key_addr, tile_bytes_k);
+    const auto grad_value_addr_generator = TensorAccessor(grad_value_args, grad_value_addr, tile_bytes_v);
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
@@ -50,11 +52,11 @@ void kernel_main() {
         const uint32_t s_tile_idx = global_row_idx % Ht;
         const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
 
-        const uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
-        write_tiles_by_row(cb_grad_value, grad_value_addr_generator, grad_v_row_base_tiles, kWt, tile_bytes, kWt);
+        const uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * vWt;
+        write_tiles_by_row(cb_grad_value, grad_value_addr_generator, grad_v_row_base_tiles, vWt, tile_bytes_v, vWt);
 
         const uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
-        write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes, kWt);
+        write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes_k, kWt);
     };
 
     // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx
@@ -83,12 +85,12 @@ void kernel_main() {
         const uint32_t group_idx = (r / Ht) % num_of_groups;  // which group of K and V we are processing
 
         // -------- Grad Value: same shape as Value (B, vNH, S, vEmbd) --------
-        const uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
-        write_tiles_by_row(cb_grad_value, grad_value_addr_generator, grad_v_row_base_tiles, kWt, tile_bytes, kWt);
+        const uint32_t grad_v_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * vWt;
+        write_tiles_by_row(cb_grad_value, grad_value_addr_generator, grad_v_row_base_tiles, vWt, tile_bytes_v, vWt);
 
         // -------- Grad Key: same shape as Key (B, kNH, S, kEmbd) --------
         const uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;
-        write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes, kWt);
+        write_tiles_by_row(cb_grad_key, grad_key_addr_generator, grad_k_row_base_tiles, kWt, tile_bytes_k, kWt);
     }
 #endif
 }

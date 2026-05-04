@@ -77,6 +77,7 @@ ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         operation_attributes.compute_kernel_config,
         operation_attributes.sub_core_grids,
         operation_attributes.negate,
+        operation_attributes.post_mul_scaler,
         program_factory.index(),
         tensor_args.dtype(),
         tensor_args.memory_config(),
@@ -93,7 +94,8 @@ ttnn::Tensor reduce(
     const std::optional<DataType>& output_dtype,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool negate) {
+    bool negate,
+    float post_mul_scaler) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -103,7 +105,8 @@ ttnn::Tensor reduce(
             output_dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             sub_core_grids,
-            negate},
+            negate,
+            post_mul_scaler},
         input_tensor);
 }
 

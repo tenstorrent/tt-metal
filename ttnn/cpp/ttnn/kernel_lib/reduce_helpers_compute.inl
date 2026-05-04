@@ -107,7 +107,8 @@ ALWI void reload_accumulator_if_needed(
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
             accum_cb.wait_front(onetile);
-            copy_tile_to_dst_init_short_with_dt(input_cb_id, accumulate.config.cb_accumulator);
+            const uint32_t prev_srca_cb = use_matmul ? scaler_cb_id : input_cb_id;
+            copy_tile_to_dst_init_short_with_dt(prev_srca_cb, accumulate.config.cb_accumulator);
             copy_tile(accumulate.config.cb_accumulator, 0, accumulate.config.dst_index);
             accum_cb.pop_front(onetile);
 
@@ -296,6 +297,11 @@ ALWI void reduce(
                     }
                 }
             }
+
+            // Call post-reduce operation on the single accumulated DST register.
+            // No-op when PostReduceOp is the default NoOp.
+            post_reduce_op(dst_idx);
+
             // Pop modes: reserve per-batch
             if constexpr (should_pop(input_policy)) {
                 output_cb.reserve_back(onetile);

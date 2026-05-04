@@ -236,7 +236,7 @@ def create_tt_model(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -833,9 +833,10 @@ def test_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
+            run_type="demo",
             ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
+            device_name=tt_device_name,
             num_layers=model_args.n_layers,
             batch_size=batch_size,
             config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},

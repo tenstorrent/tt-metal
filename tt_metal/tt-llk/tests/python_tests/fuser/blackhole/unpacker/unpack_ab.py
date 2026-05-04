@@ -135,7 +135,18 @@ class UnpackerAB(Unpacker):
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
 
         tile_shape = compute_unit.src_a.tile_shape
-        transpose_value = "1" if compute_unit.unpack_transpose_faces.value else "0"
+        if compute_unit.unpack_transpose_faces.value:
+            transpose_value = (
+                "ckernel::Transpose::Both"
+                if compute_unit.unpack_transpose_within_face.value
+                else "ckernel::Transpose::InterFace"
+            )
+        else:
+            transpose_value = (
+                "ckernel::Transpose::IntraFace"
+                if compute_unit.unpack_transpose_within_face.value
+                else "ckernel::Transpose::None"
+            )
         shape_var = f"tensor_shape_stage_{operation.stage_id}"
         return (
             f"const ckernel::TensorShape {shape_var} = "
@@ -154,3 +165,13 @@ class UnpackerAB(Unpacker):
         buffer_b = compute_unit.src_b.cpp_name
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
         return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        shape_var = f"tensor_shape_stage_{operation.stage_id}"
+        return f"_llk_unpack_AB_uninit_({shape_var}, {shape_var});\n"
