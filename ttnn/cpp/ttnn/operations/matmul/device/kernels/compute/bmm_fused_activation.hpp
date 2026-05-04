@@ -31,27 +31,15 @@ struct ActivationInitHelper {
             silu_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::TANH) {
             // PARAM0: 0 = accurate, non-zero = fast
-            if constexpr (PARAM0 != 0) {
-                tanh_tile_init_pack<true>();
-            } else {
-                tanh_tile_init_pack<false>();
-            }
+            tanh_tile_init_pack<PARAM0 != 0>();
         } else if constexpr (ACT == KernelActivation::GELU) {
             // PARAM0: 0 = accurate, non-zero = fast
-            if constexpr (PARAM0 != 0) {
-                gelu_tile_init_pack<true>();
-            } else {
-                gelu_tile_init_pack<false>();
-            }
+            gelu_tile_init_pack<PARAM0 != 0>();
         } else if constexpr (ACT == KernelActivation::RELU6) {
             relu_max_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
             // Enhanced: PARAM1 is fast_approximate flag
-            if constexpr (PARAM1 != 0) {
-                sigmoid_tile_init_pack<true>();
-            } else {
-                sigmoid_tile_init_pack<false>();
-            }
+            sigmoid_tile_init_pack<PARAM1 != 0>();
         } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
             hardsigmoid_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::HARDTANH) {
@@ -84,18 +72,10 @@ struct ActivationApplyHelper {
             silu_tile_pack(tile_index);
         } else if constexpr (ACT == KernelActivation::TANH) {
             // PARAM0: 0 = accurate, non-zero = fast
-            if constexpr (PARAM0 != 0) {
-                tanh_tile_pack<true>(tile_index);
-            } else {
-                tanh_tile_pack<false>(tile_index);
-            }
+            tanh_tile_pack<PARAM0 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::GELU) {
             // PARAM0: 0 = accurate, non-zero = fast
-            if constexpr (PARAM0 != 0) {
-                gelu_tile_pack<true>(tile_index);
-            } else {
-                gelu_tile_pack<false>(tile_index);
-            }
+            gelu_tile_pack<PARAM0 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::RELU6) {
             // PARAM0 is the max value (as uint32_t bit pattern)
             // Default to 6.0 if PARAM0 is 0
@@ -104,11 +84,7 @@ struct ActivationApplyHelper {
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
             // Enhanced: PARAM0 is vector mode, PARAM1 is fast_approximate
             constexpr int vec_mode = (PARAM0 == 1) ? VectorMode::R : (PARAM0 == 2) ? VectorMode::C : VectorMode::RC;
-            if constexpr (PARAM1 != 0) {
-                sigmoid_tile_pack<vec_mode, true>(tile_index);
-            } else {
-                sigmoid_tile_pack<vec_mode, false>(tile_index);
-            }
+            sigmoid_tile_pack<vec_mode, PARAM1 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
             hardsigmoid_tile_pack(tile_index);
         } else if constexpr (ACT == KernelActivation::HARDTANH) {
