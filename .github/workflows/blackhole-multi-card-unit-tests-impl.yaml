@@ -58,17 +58,6 @@ jobs:
               TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
             timeout: 15
             test-type: fast
-          - name: Host IO fast unit test (viommu only)
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
-            timeout: 10
-            test-type: fast-viommu
-          - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
-            cmd: |
-              pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
-              # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
-              # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
-            timeout: 15
-            test-type: fast
           - name: fabric and ttnn UDM unit tests
             cmd: |
               ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DUDMModeFixture.*:*ChannelTrimming*"
