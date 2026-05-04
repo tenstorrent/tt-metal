@@ -351,3 +351,145 @@ def test_mla(
         logger.debug("✓ Distributed synchronization completed")
 
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
+
+
+# sp x tp
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(32, 4), (8, 4), (2, 4)],
+    ids=["32x4", "8x4", "2x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+    ],
+    ids=["line", "ring"],
+    indirect=True,
+)
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
+@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
+@pytest.mark.parametrize("num_iterations", [1, 25, 50, 2000], ids=["iter1", "iter25", "iter50", "iter2000"])
+@pytest.mark.timeout(0)
+def test_mla_loop(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    scale_down_sl,
+    is_balanced,
+    num_iterations,
+    device_params,
+):
+    """
+    Functional stability loop: invoke MLA.forward N times with device + distributed
+    sync after each call. No PCC check. Module, RoPE, KVPE cache, and inputs are
+    built once and reused across iterations so failures are attributable to the
+    repeated forward execution itself.
+    """
+    weight_type = "Pretrained" if use_pretrained else "Random"
+    logger.info("=" * 80)
+    logger.info(f"Test: MLA forward loop ({weight_type} weights, num_iterations={num_iterations})")
+    logger.info("=" * 80)
+
+    if use_pretrained:
+        config, sd = request.getfixturevalue("pretrained_transformer_weights")
+        weights = sd["layers"][0]["mla_weights"]
+    else:
+        config, weights = request.getfixturevalue("random_weights")
+
+    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
+    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+
+    production_mesh = [32, 4]
+    sp_axis = 0
+    tp_axis = 1
+    mesh_shape = list(mesh_device.shape)
+
+    if scale_down_sl:
+        seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
+
+    config.max_seq_len = seq_len
+
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_cache_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+    )
+
+    logger.info("Creating TT MLA...")
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=is_balanced,
+        topology=topology,
+    )
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
+    rope_tensors = rope_setup.get_rope_tensors(seq_len)
+
+    batch_size = 1
+    hidden_size = config.hidden_size
+    torch.manual_seed(42)
+    hidden_states = torch.randn(batch_size, seq_len, hidden_size).to(torch.bfloat16)
+
+    sp_factor = mesh_shape[sp_axis]
+    chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
+    tt_input = hidden_states.unsqueeze(0)
+    if is_balanced:
+        tt_input = reorder_tensor_chunks(tt_input, chunk_order, seq_dim=2)
+
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = -1
+    shard_dims[sp_axis] = -2
+    tt_hidden_states = ttnn.from_torch(
+        tt_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    for i in range(num_iterations):
+        logger.info(f"--- MLA forward iter {i + 1}/{num_iterations} ---")
+        tt_output = mla_tt.forward(
+            hidden_states=tt_hidden_states,
+            rope_tensors=rope_tensors,
+            kvpe_cache=tt_kvpe_cache,
+        )
+
+        logger.debug("  synchronize_device started")
+        ttnn.synchronize_device(mesh_device)
+        logger.debug("  synchronize_device completed")
+
+        logger.debug("  distributed_context_barrier started")
+        ttnn.distributed_context_barrier()
+        logger.debug("  distributed_context_barrier completed")
+
+        # Free per-iteration output so memory does not accumulate across the loop.
+        ttnn.deallocate(tt_output)
+
+    logger.success(
+        f"✓ MLA forward loop completed: {num_iterations} iterations "
+        f"(weights={weight_type}, mesh={mesh_shape}, topology={topology}, "
+        f"seq_len={seq_len}, is_balanced={is_balanced})"
+    )
