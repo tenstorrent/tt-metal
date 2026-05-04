@@ -65,16 +65,13 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
 
 }  // namespace detail
 void kernel_main() {
-    // Extract config type from compile-time argument
-    constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
-
-    constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
-    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
+    constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
@@ -109,12 +106,12 @@ void kernel_main() {
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
 
-    // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = config_t::NUM_W2_TILES_H;
+    // Constants for MoE — derived from compile-time shape args
+    constexpr uint32_t num_w0_w1_tiles_h = Ht;
+    constexpr uint32_t num_w2_tiles_h = Nt;
 
-    const uint32_t num_w0_w1_tiles_w = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = config_t::W2_TILES_PER_CORE[ring_core_id];
+    const uint32_t num_w0_w1_tiles_w = moe_ring::shard_tiles(Nt, ring_core_id, num_cores);
+    const uint32_t num_w2_tiles_w = moe_ring::w2_shard_tiles(Ht, ring_core_id, Nt, num_cores);
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -127,35 +124,35 @@ void kernel_main() {
     constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
-    // When has_bias, dm0 reads (num_w0_w1_tiles_h + 1) tiles per column (weights + 1 bias row).
-    // Block counts must match what dm0 pushes into the CB.
-    constexpr uint32_t w0_w1_dram_tiles_h = config_t::NUM_W0_W1_DRAM_TILES_H;
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile = detail::div_up<w0_w1_dram_tiles_h, w0_w1_block_tiles_h>();
-    constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * config_t::IN2_TILES_PER_STEP / 2;
+    constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
+    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
+        (w0_w1_dram_tiles_h + w0_w1_block_tiles_h - 1) / w0_w1_block_tiles_h;
+    constexpr uint32_t in2_tiles_per_step = (Nt + num_cores - 1) / num_cores;
+    constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * in2_tiles_per_step / 2;
+
     // W2 reading constants
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
-    constexpr auto w2_tiles_per_expert_w = config_t::W2_TILES_PER_EXPERT_W;
-    // constexpr uint32_t w2_subblock_rem_idx = config_t::W2_SUBBLOCK_REM * w2_tiles_per_iter_w;
+    constexpr uint32_t max_w2_tiles_per_core = (Ht + num_cores - 1) / num_cores;
+    constexpr uint32_t num_a2a_iters = (max_w2_tiles_per_core + w2_tiles_per_iter_w - 1) / w2_tiles_per_iter_w;
+    constexpr auto w2_tiles_per_expert_w = num_a2a_iters * w2_tiles_per_iter_w;
     constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_dram_tiles_h = config_t::NUM_W2_DRAM_TILES_H;
-    constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
-    constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_dram_tiles_h = has_bias ? Nt + 1 : Nt;
+    constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;
+    constexpr uint32_t w2_tiles_per_expert_h =
+        ((w2_dram_tiles_h + w2_tiles_per_iter_h - 1) / w2_tiles_per_iter_h) * w2_tiles_per_iter_h;
+    constexpr uint32_t w2_blocks_per_expert =
+        w2_tiles_per_expert_w * w2_tiles_per_expert_h / (moe_ring::W2_TXNS_PER_BLOCK * moe_ring::W2_TILES_PER_TXN);
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
-    // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = config_t::NUM_A2A_ITERS;
-
     constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
 
-    // The number of steps to take in the all2all is the number of cores
-    constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
+    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
-    // The number of tiles to send in each step
-    constexpr uint32_t tiles_per_step = config_t::IN2_TILES_PER_STEP;  // max(num_w0_w1_tiles_w)
+    constexpr uint32_t tiles_per_step = in2_tiles_per_step;
 
     //-------------------------------------------------------------------------
     // Compute
@@ -325,7 +322,7 @@ void kernel_main() {
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
                 uint32_t dm1_step = 0;
-                uint32_t dm1_tiles_remaining = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
+                uint32_t dm1_tiles_remaining = moe_ring::shard_tiles(Nt, ring_core_id, num_cores);
                 cb_wait_front(cb_w2c_rdy, 1);
 
                 uint32_t in2_offset = 0, in2_index = 0;
@@ -359,7 +356,8 @@ void kernel_main() {
                         if (dm1_tiles_remaining == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
                             cb_wait_front(cb_w2c_rdy, 1);
-                            dm1_tiles_remaining = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][++dm1_step];
+                            dm1_tiles_remaining = moe_ring::shard_tiles(
+                                Nt, (ring_core_id + num_cores - (++dm1_step)) % num_cores, num_cores);
                             in2_offset += tiles_per_step;
                             in2_index = in2_offset;
                         }

@@ -8,17 +8,14 @@
 #include "moe_ring_common.h"
 
 void kernel_main() {
-    // Extract config type from compile-time argument
-    constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
-
-    constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
-    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
+    constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     // For synchronization with tilize cores
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
@@ -79,10 +76,17 @@ void kernel_main() {
     constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
-    // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
-    const uint32_t num_w0_w1_tiles_w = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = config_t::W2_TILES_PER_CORE[ring_core_id];
+    // Constants for MoE — derived from compile-time shape args
+    constexpr uint32_t num_w0_w1_tiles_h = Ht;
+    const uint32_t num_w0_w1_tiles_w = moe_ring::shard_tiles(Nt, ring_core_id, num_cores);
+    const uint32_t num_w2_tiles_w = moe_ring::w2_shard_tiles(Ht, ring_core_id, Nt, num_cores);
+
+    // Derived ring constants
+    constexpr uint32_t in2_tiles_per_step = (Nt + num_cores - 1) / num_cores;
+    constexpr uint32_t max_w2_tiles_per_core = (Ht + num_cores - 1) / num_cores;
+    constexpr uint32_t num_a2a_iters =
+        (max_w2_tiles_per_core + moe_ring::W2_TILES_PER_A2A_ITER_W - 1) / moe_ring::W2_TILES_PER_A2A_ITER_W;
+    constexpr uint32_t w2_tiles_per_expert_w = num_a2a_iters * moe_ring::W2_TILES_PER_A2A_ITER_W;
 
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
@@ -90,27 +94,19 @@ void kernel_main() {
     cb_reserve_back(cb_s2c_in, 1);
     const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
     cb_push_back(cb_s2c_in, 1);
-    constexpr uint32_t source_width_tiles = config_t::W2_TILES_PER_EXPERT_W;  // padded width in tiles
-    const uint32_t output_width_tiles_core = config_t::W2_TILES_PER_CORE[ring_core_id];
-    // offset in tiles into the token width for this core
-    const uint32_t width_tile_base = config_t::COMBINE_W_OFFSET_PER_CORE[ring_core_id];
-    // number of compute cores that send data to each column of output shards (combine cores)
-    constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;
+    constexpr uint32_t source_width_tiles = w2_tiles_per_expert_w;
+    const uint32_t output_width_tiles_core = moe_ring::w2_shard_tiles(Ht, ring_core_id, Nt, num_cores);
+    const uint32_t width_tile_base = moe_ring::compute_w2_tile_offset(ring_core_id, Ht, Nt, num_cores);
+    constexpr uint32_t RING_CORES_PER_COMBINE_COL = num_cores / width_shard_dim;
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
     const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
-    // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = config_t::NUM_A2A_ITERS;
+    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
-    // The number of steps to take in the all2all is the number of cores
-    constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
-
-    // The number of tiles to send in each step
-    // Tiles send per step, may include 1 tile of padding.
-    constexpr uint32_t tiles_per_step = config_t::IN2_TILES_PER_STEP;  // max(num_w0_w1_tiles_w)
+    constexpr uint32_t tiles_per_step = in2_tiles_per_step;
 
     //-------------------------------------------------------------------------
     // Ring NoC setup
@@ -241,7 +237,7 @@ void kernel_main() {
                     // Write tiles from local cb_s2c_in2 to neighbor's cb_s2c_in2
                     // Double buffer offset: alternate between buffer 0 and buffer 1 based on step
                     const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step];
-                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == 11) ? 0 : (step + 1)];
+                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step == num_cores - 1) ? 0 : (step + 1)];
 
                     noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr);
                     noc_async_write_one_packet_with_state</*posted=*/true>(

@@ -25,10 +25,13 @@ void bind_moe_compute(nb::module_& mod) {
     ttnn::bind_function<"moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(
-        Experimental fused MoE compute for DeepSeek-class models.
+        Experimental fused MoE compute supporting arbitrary ``(hidden_size, intermediate_size)`` pairs.
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
         projection via W2) and activation (SILU or SwiGLU) in a fused compute kernel.
+        Tile distribution across the 12-core ring is derived at compile time from
+        ``hidden_size`` and ``intermediate_size`` using Euclidean-rhythm (Bresenham)
+        shard formulas — no model-specific configuration tables are needed.
 
         Note: This is the **compute** portion of the MoE pipeline. The A2A dispatch
         (producing the sparse buffer consumed by this op) and the A2A combine (reducing
@@ -43,24 +46,33 @@ void bind_moe_compute(nb::module_& mod) {
         - ``matmul_w0_w1_tensor``: Interleaved W0 and W1 (gate + up projection weights).
         - ``matmul_w2_tensor``: W2 (down projection weights).
 
-        The exact byte layout expected by the kernels is model- and config-dependent.
-        Callers must match the layout the device op expects or use the reference packer
-        from ``ttnn.experimental.moe_compute_utils`` (see below).
+        The exact byte layout expected by the kernels depends on ``hidden_size`` and
+        ``intermediate_size``. Callers must match the layout the device op expects or
+        use the reference packer from ``ttnn.experimental.moe_compute_utils`` (see below).
+
+        **Key parameters**
+
+        - ``intermediate_size``: The MoE intermediate (expert FFN) dimension. Together
+          with ``hidden_size`` (inferred from the input tensor), this determines the
+          per-core tile shard counts via ``shard_tiles()`` / ``w2_shard_tiles()`` and
+          the number of data-parallel cores (``num_data_parallel_cores``).
+
+        - ``output_height_shard_dim``: Number of tile columns per output shard. Use
+          ``auto_output_width_shard_dim(hidden_size)`` from ``moe_compute_utils`` to
+          compute the optimal value for a given hidden size.
 
         **Bias support (optional)**
 
-        - ``has_bias=False`` (default): tensors contain only weights; original no-bias
-          layout (K=7168 elements for the reference config, N+192=2240).
+        - ``has_bias=False`` (default): tensors contain only weights.
         - ``has_bias=True``: tensors must include fused bias tiles. Bias values are
           appended to the weight tensors in a kernel-specific format:
 
           - For W0/W1: Bias tiles (shape expanded to TILE_SIZE rows with row 0 populated)
             are concatenated along the K dimension, then K is padded to a multiple of
-            14 tiles (W0_W1_TILES_PER_TXN). In the reference config this yields K_padded
-            = 7616 elements (238 tiles).
+            BLOCK_TILES_H (7) tiles.
           - For W2: The bias tile is appended along the N (intermediate) dimension
-            **without** ring-rotation (matching GPT-OSS behavior). N is padded to 70
-            tiles (2240 elements), same total size as the non-bias path.
+            **without** ring-rotation. N is then padded to a multiple of BLOCK_TILES_H
+            tiles.
 
         ``has_bias`` must match the actual layout of the provided tensors; mismatch
         produces silent wrong results or UB.
@@ -74,6 +86,9 @@ void bind_moe_compute(nb::module_& mod) {
           ``prepare_w2_tensor_for_moe_compute``
         - With bias: ``prepare_w0_w1_tensor_with_bias``,
           ``prepare_w2_tensor_with_bias``
+        - Shard maps: ``get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size)``
+        - Memory configs: ``get_weight_mem_configs(...)``
+        - Output shard dim: ``auto_output_width_shard_dim(hidden_size)``
 
         These functions are kept in sync with the test suite and can be used as
         "executable documentation" for the layout contract; they are not a required
@@ -92,6 +107,7 @@ void bind_moe_compute(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("layer_id"),
         nb::arg("output_height_shard_dim"),
+        nb::arg("intermediate_size"),
         nb::arg("has_bias") = false,
         nb::arg("cluster_axis"),
         nb::arg("topology") = nb::none(),

@@ -263,6 +263,7 @@ std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& matmul_w2_tensor,
     const uint32_t layer_id,
     const uint32_t output_height_shard_dim,
+    const uint32_t intermediate_size,
     const bool has_bias,
     uint32_t cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
@@ -284,14 +285,14 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& num_token_parallel_cores = output_height_shard_dim;
 
-    // Determine num_data_parallel_cores based on hidden size. Bias does not matter for these values
-    uint32_t num_data_parallel_cores;
-    if (hidden_size == 7168) {
-        num_data_parallel_cores = moe_ring::DeepSeekRingConfig</*HasBias=*/false>::OUTPUT_WIDTH_SHARD_DIM;
-    } else if (hidden_size == 2880) {
-        num_data_parallel_cores = moe_ring::GptRingConfig</*HasBias=*/false>::OUTPUT_WIDTH_SHARD_DIM;
-    } else {
-        TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
+    // Auto-compute num_data_parallel_cores: largest divisor of hidden_tiles <= 4
+    const uint32_t hidden_tiles = hidden_size / 32;
+    uint32_t num_data_parallel_cores = 1;
+    for (uint32_t d = 4; d >= 1; --d) {
+        if (hidden_tiles % d == 0) {
+            num_data_parallel_cores = d;
+            break;
+        }
     }
 
     auto* mesh_device = tilize_input_tensor.device();
@@ -317,6 +318,7 @@ std::vector<ttnn::Tensor> moe_compute(
         OperationType::operation_attributes_t{
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
+            .intermediate_size = intermediate_size,
             .has_bias = has_bias,
             .combine_params = combine_params,
             .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},

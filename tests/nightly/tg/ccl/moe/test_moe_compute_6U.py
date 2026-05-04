@@ -17,12 +17,7 @@ from ttnn.experimental.moe_compute_utils import (
     prepare_w0_w1_tensor_with_bias,
     prepare_w2_tensor_for_moe_compute,
     prepare_w2_tensor_with_bias,
-    DS_PAD_CORES,
-    DS_W0_W1_SHARD_VALS,
-    DS_W2_SHARD_VALS,
-    GPT_PAD_CORES,
-    GPT_W0_W1_SHARD_VALS,
-    GPT_W2_SHARD_VALS,
+    auto_output_width_shard_dim,
     get_weight_core_shard_maps,
     get_weight_mem_configs,
 )
@@ -38,12 +33,6 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
-
-# TODO (AM) this should go in a central location
-HIDDEN_TO_SHARD_INFO = {
-    7168: (DS_PAD_CORES, DS_W0_W1_SHARD_VALS, DS_W2_SHARD_VALS),
-    2880: (GPT_PAD_CORES, GPT_W0_W1_SHARD_VALS, GPT_W2_SHARD_VALS),
-}
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -1325,9 +1314,7 @@ def run_moe_compute_test(
     # Shard grid
     # --------------------------------------------------------------------------
 
-    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
-        mesh_device, *HIDDEN_TO_SHARD_INFO[hidden_size]
-    )
+    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
@@ -1538,6 +1525,7 @@ def run_moe_compute_test(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=output_height_shard_dim,
+            intermediate_size=N,
             has_bias=has_bias,
             cluster_axis=cluster_axis,
             mux_core_range_set=mux_core_range_set,
@@ -1741,7 +1729,7 @@ def test_moe_compute_deepseek(
     N = 2048
     hidden_size = 7168
     output_height_shard_dim = 4
-    output_width_shard_dim = 4  # DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
     dtype = ttnn.bfloat16
     activation_type = MoEActivationFunction.SILU
 
@@ -1812,7 +1800,7 @@ def test_moe_compute_gpt_oss(
     N = 2880
     hidden_size = 2880
     output_height_shard_dim = 4
-    output_width_shard_dim = 3  # GptRingConfig::OUTPUT_WIDTH_SHARD_DIM
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
     dtype = ttnn.bfloat16
     activation_type = MoEActivationFunction.SILU
 
@@ -1825,6 +1813,75 @@ def test_moe_compute_gpt_oss(
         selected_experts_k = 8
         num_layers = 5
         num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
+
+
+# Test for GLM-5 configuration - requires 1x16 mesh
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"GLM-5 test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["correctness"])
+@pytest.mark.parametrize("has_bias", [False])
+def test_moe_compute_glm5(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+):
+    """Test MoE compute for GLM-5 configuration (hidden=6144, N=2048) on 1x16 mesh."""
+
+    cluster_axis = 1
+    experts_per_device = 2
+    tokens_per_device = 32
+    N = 2048
+    hidden_size = 6144
+    output_height_shard_dim = 4
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:  # correctness
+        selected_experts_k = 8
+        num_layers = 3
+        num_iterations = 2
 
     run_moe_compute_test(
         mesh_device=mesh_device,

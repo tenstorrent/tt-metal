@@ -24,17 +24,33 @@
     } while (0)
 
 void kernel_main() {
-    // Extract config type from compile-time argument
-    constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
+    constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
-    constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
-    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
+    // Derived ring constants
+    constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
+    constexpr uint32_t w2_dram_tiles_h = has_bias ? Nt + 1 : Nt;
+
+    constexpr uint32_t in2_tiles_per_step = (Nt + num_cores - 1) / num_cores;
+    constexpr uint32_t w0_w1_block_tiles_h_c = moe_ring::W0_W1_BLOCK_TILES_H;  // = 7
+    constexpr uint32_t w0_w1_blocks_per_col = (w0_w1_dram_tiles_h + w0_w1_block_tiles_h_c - 1) / w0_w1_block_tiles_h_c;
+    constexpr uint32_t w0_w1_blocks_per_expert_c = w0_w1_blocks_per_col * in2_tiles_per_step / 2;
+
+    constexpr uint32_t max_w2_tiles_per_core = (Ht + num_cores - 1) / num_cores;
+    constexpr uint32_t num_a2a_iters =
+        (max_w2_tiles_per_core + moe_ring::W2_TILES_PER_A2A_ITER_W - 1) / moe_ring::W2_TILES_PER_A2A_ITER_W;
+    constexpr uint32_t w2_tiles_per_expert_w = num_a2a_iters * moe_ring::W2_TILES_PER_A2A_ITER_W;
+    constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;  // = 7
+    constexpr uint32_t w2_tiles_per_expert_h =
+        ((w2_dram_tiles_h + w2_tiles_per_iter_h - 1) / w2_tiles_per_iter_h) * w2_tiles_per_iter_h;
+    constexpr uint32_t w2_blocks_per_expert_c =
+        w2_tiles_per_expert_w * w2_tiles_per_expert_h / (moe_ring::W2_TXNS_PER_BLOCK * moe_ring::W2_TILES_PER_TXN);
 
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     // For synchronization with tilize cores
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
@@ -84,17 +100,10 @@ void kernel_main() {
     constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
-    constexpr uint32_t w0_w1_dram_tiles_h = config_t::NUM_W0_W1_DRAM_TILES_H;
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile = detail::div_up<w0_w1_dram_tiles_h, w0_w1_block_tiles_h>();
-    constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * config_t::IN2_TILES_PER_STEP / 2;
-
     // W2 reading constants
-    constexpr uint32_t w2_dram_tiles_h = config_t::NUM_W2_DRAM_TILES_H;
     constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
     constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
-    constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;  // 14 * 2 = 28
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -106,12 +115,12 @@ void kernel_main() {
 
     // Offsets for layer_id
 
-    constexpr uint32_t w0_w1_total_size_per_expert = w0_w1_blocks_per_expert * 2 * w0_w1_bytes_per_txn;
+    constexpr uint32_t w0_w1_total_size_per_expert = w0_w1_blocks_per_expert_c * 2 * w0_w1_bytes_per_txn;
     constexpr uint32_t w0_w1_total_size_per_layer = num_experts * w0_w1_total_size_per_expert;
     constexpr uint32_t w0_w1_layer_offset = layer_id * w0_w1_total_size_per_layer;
 
     // W2: same approach
-    constexpr uint32_t w2_total_size_per_expert = w2_blocks_per_expert * 2 * w2_bytes_per_txn;
+    constexpr uint32_t w2_total_size_per_expert = w2_blocks_per_expert_c * 2 * w2_bytes_per_txn;
     constexpr uint32_t w2_total_size_per_layer = num_experts * w2_total_size_per_expert;
     constexpr uint32_t w2_layer_offset = layer_id * w2_total_size_per_layer;
 
@@ -178,7 +187,7 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             uint32_t w0_w1_dram_read_offset = w0_w1_expert_offset;
 
-            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert; ++block_id) {
+            for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_expert_c; ++block_id) {
                 // Issue reads with current trid
                 noc_async_read_set_trid(trid_to_issue);
                 noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
@@ -215,7 +224,7 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             uint32_t w2_dram_read_offset = w2_expert_offset;
 
-            for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
+            for (uint32_t block_id = 0; block_id < w2_blocks_per_expert_c; ++block_id) {
                 // Issue reads with current trid
                 noc_async_read_set_trid(trid_to_issue);
                 noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
