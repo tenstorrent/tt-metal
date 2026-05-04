@@ -275,9 +275,14 @@ public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
+        DPRINT << "CBWriter: acquire_pages: n=" << n << " sem_addr: " << (uintptr_t)sem_addr << "sem id: " << my_sem_id
+               << ENDL();
 
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
+        DPRINT << "CBWriter: acquire_pages: after atomic barrier" << ENDL();
+        DPRINT << "CBWriter: acquire_pages: additional_count=" << additional_count << ENDL();
+        DPRINT << "CBWriter: acquire_pages: sem value=" << *sem_addr << ENDL();
 
         WAYPOINT("DAPW");
         // Use a wrapping compare here to compare distance
@@ -289,6 +294,7 @@ public:
         } while (wrap_gt(n, additional_count + *sem_addr));
         WAYPOINT("DAPD");
         additional_count -= n;
+        DPRINT << "CBWriter: acquire_pages: after loop: additional_count=" << additional_count << ENDL();
     }
 
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
@@ -350,11 +356,17 @@ public:
             }
         }
 #endif
-        DPRINT << "release_pages: sem_addr: " << (uintptr_t)get_semaphore<fd_core_type>(downstream_sem_id)
+        DPRINT << "release_pages: n=" << n << " sem_addr: " << (uintptr_t)get_semaphore<fd_core_type>(downstream_sem_id)
                << "sem id: " << downstream_sem_id << ENDL();
         volatile tt_l1_ptr uint32_t* local_sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(downstream_sem_id));
         *local_sem_addr += n;
+        // #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        //         // Push the dirty line out of this core's private write-back L1 D$ so the consumer (other RISC
+        //         // on the same core) can see the increment via L2.
+        //         flush_l1_dcache((uintptr_t)local_sem_addr);
+        // #endif
+        DPRINT << "release_pages: local_sem_addr value=" << *local_sem_addr << ENDL();
     }
 
     uint32_t additional_count{0};
@@ -432,6 +444,7 @@ protected:
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
         DPRINT << "acquire_pages: sem_addr: " << (uintptr_t)sem_addr << "sem id: " << my_sem_id << ENDL();
 
+        DPRINT << "acquire_pages: local_count_=" << local_count_ << " upstream_count_=" << upstream_count_ << ENDL();
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
             uint32_t heartbeat = 0;
@@ -441,6 +454,8 @@ protected:
             } while ((upstream_count_ = *sem_addr) == local_count_);
             WAYPOINT("UAPD");
         }
+        DPRINT << "acquire_pages: after loop: local_count_=" << local_count_ << " upstream_count_=" << upstream_count_
+               << ENDL();
 
         // Set a fence to limit how much is processed at once
         uint32_t limit = static_cast<uint32_t>((block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size);
@@ -543,11 +558,13 @@ private:
         // allows time for writes from that block to complete. Note: this is incorrect if writes can be sent out of
         // order. We should use transaction IDs instead in that case.
         if (released_prev_block_) {
+            DPRINT << "release_block_pages: released_prev_block_ is true" << ENDL();
             WAYPOINT("CBRW");
             while (!noc_nonposted_writes_sent_at_count(noc_index, this->block_noc_writes_to_clear_));
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
             WAYPOINT("CBRD");
         } else {
+            DPRINT << "release_block_pages: setting released_prev_block_ to true" << ENDL();
             released_prev_block_ = true;
         }
         this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);

@@ -148,14 +148,26 @@ RelayClientType relay_client;
 struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
+        DPRINT << "NocReleasePolicy: release: pages=" << pages << " sem_id=" << sem_id << ENDL();
         uint32_t sem_addr = get_semaphore<fd_core_type>(sem_id);
-        noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
+        // noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
+        // do local pointer increment
+        volatile tt_l1_ptr uint32_t* sem =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+        *sem += pages;
+        // #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        //         // Push the dirty line out of this core's private write-back L1 D$ so the consumer (other RISC
+        //         // on the same core) can see the increment via L2.
+        //         flush_l1_dcache((uintptr_t)sem);
+        // #endif
+        DPRINT << "NocReleasePolicy: after local pointer increment: sem val = " << *sem << ENDL();
     }
 };
 
 struct RemoteReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
+        DPRINT << "RemoteReleasePolicy: release: pages=" << pages << " sem_id=" << sem_id << ENDL();
         relay_client.template release_pages<noc_idx, noc_xy, sem_id>(pages);
     }
 };
@@ -503,10 +515,9 @@ void process_write_linear(uint32_t num_mcast_dests) {
     uint64_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint64_t length = cmd->write_linear.length;
     uintptr_t data_ptr = cmd_ptr + sizeof(CQDispatchCmdLarge);
-    // DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index << ",
-    // dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr << DEC() << ENDL();
-    // DEVICE_PRINT("process_write_linear noc_xy:0x{:x} write_offset:{} dst_addr:0x{08x} length:{} data_ptr:0x{08x}\n",
-    // dst_noc, write_offset_index, dst_addr, length, data_ptr);
+    // DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index
+    //        << ", dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr
+    //        << ", num_mcast_dests:" << DEC() << num_mcast_dests << ENDL();
     if (multicast) {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
     } else {
@@ -1247,20 +1258,20 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_SINK:
-            DPRINT << "cmd_sink" << ENDL();
-            DEVICE_PRINT("cmd_sink\n");
+            // DPRINT << "cmd_sink" << ENDL();
+            // DEVICE_PRINT("cmd_sink\n");
             break;
 
         case CQ_DISPATCH_CMD_DEBUG:
-            DPRINT << "cmd_debug" << ENDL();
-            DEVICE_PRINT("cmd_debug\n");
+            // DPRINT << "cmd_debug" << ENDL();
+            // DEVICE_PRINT("cmd_debug\n");
             cmd_ptr = process_debug_cmd(cmd_ptr);
             goto re_run_command;
             break;
 
         case CQ_DISPATCH_CMD_DELAY:
-            DPRINT << "cmd_delay" << ENDL();
-            DEVICE_PRINT("cmd_delay\n");
+            // DPRINT << "cmd_delay" << ENDL();
+            // DEVICE_PRINT("cmd_delay\n");
             process_delay_cmd();
             break;
 
@@ -1550,7 +1561,7 @@ void kernel_main() {
     // Initialize progress counter in L1 memory
     *get_dispatch_progress_ptr() = dispatch_progress;
 
-    DPRINT << "Starting dispatch loop" << ENDL();
+    // DPRINT << "Starting dispatch loop" << ENDL();
     while (!done) {
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages(cmd_ptr);
 
