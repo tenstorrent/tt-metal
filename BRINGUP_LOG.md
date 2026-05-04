@@ -2,8 +2,8 @@
 
 ## Current Status
 
-**Status**: COMPLETE — Docker server verified 105/105 tests, 97.1% accuracy, zero JIT during inference
-**Branch**: `ssinghal/molmo2_new` — commit `b655be4ec6e`
+**Status**: COMPLETE — 97/105 accuracy, S=36864 (384 frames + 4992 text) works
+**Branch**: `ssinghal/molmo2_new` — commit `5aca298376d`
 **Docker image**: `molmo2-pr-dev:latest` (overlay on `0.12.0-735b65d-7a07a97`)
 
 ## Session 1 — 2026-04-29
