@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Updated splitter that also regenerates generation_manifest.json per axis."""
 import json, re
 from pathlib import Path
