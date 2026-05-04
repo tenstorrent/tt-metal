@@ -598,6 +598,82 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     bool quiet_mode = false,
     TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
 
+/**
+ * @brief Find up to N distinct valid topology mappings.
+ *
+ * Runs the solver repeatedly (using blocking clauses for SAT, continued backtracking for DFS)
+ * collecting distinct solutions until either max_solutions mappings have been found or the
+ * problem space is exhausted. Each returned MappingResult is individually validated.
+ *
+ * @param target_graph The target (sub-)graph pattern to embed
+ * @param global_graph The host graph to embed into
+ * @param constraints Mapping constraints
+ * @param max_solutions Maximum number of solutions to return (0 means return all, capped at 1000)
+ * @param connection_validation_mode STRICT or RELAXED channel validation
+ * @param quiet_mode Suppress verbose logging
+ * @param solver_engine Which backend to use
+ * @return Vector of up to max_solutions valid MappingResults (may be empty if no solution exists)
+ */
+template <typename TargetNode, typename GlobalNode>
+std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    size_t max_solutions,
+    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false,
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
+
+/**
+ * @brief Find all distinct valid topology mappings, capped at 1000 to prevent runaway.
+ *
+ * Equivalent to solve_topology_mapping_n(..., 1000, ...).
+ *
+ * @param target_graph The target (sub-)graph pattern to embed
+ * @param global_graph The host graph to embed into
+ * @param constraints Mapping constraints
+ * @param connection_validation_mode STRICT or RELAXED channel validation
+ * @param quiet_mode Suppress verbose logging
+ * @param solver_engine Which backend to use
+ * @return Vector of all valid MappingResults found (capped at 1000)
+ */
+template <typename TargetNode, typename GlobalNode>
+std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false,
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
+
+/**
+ * @brief Find a valid topology mapping that differs from all previously found ones.
+ *
+ * For the DFS engine, runs search_n with max_solutions = excluded_mappings.size() + 1 and
+ * skips any result that matches an excluded mapping. For the SAT engine, each excluded mapping
+ * is encoded as an upfront blocking clause before the first solve.
+ *
+ * Returns a result with success=false when no new mapping exists.
+ *
+ * @param target_graph The target (sub-)graph pattern to embed
+ * @param global_graph The host graph to embed into
+ * @param constraints Mapping constraints
+ * @param excluded_mappings Previously found mappings to exclude
+ * @param connection_validation_mode STRICT or RELAXED channel validation
+ * @param quiet_mode Suppress verbose logging
+ * @param solver_engine Which backend to use
+ * @return A new MappingResult not matching any excluded mapping, or success=false if exhausted
+ */
+template <typename TargetNode, typename GlobalNode>
+MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
+    ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
+    bool quiet_mode = false,
+    TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto);
+
 namespace detail {
 
 bool topology_mapping_should_use_sat_engine(
@@ -1101,6 +1177,31 @@ public:
         bool quiet_mode = false);
 
     /**
+     * @brief Search for up to max_solutions distinct complete mappings using DFS with backtracking.
+     *
+     * Unlike search(), this method does NOT stop at the first solution. At each base-case
+     * (all targets assigned) the mapping is pushed to all_mappings_out and the DFS continues
+     * backtracking to look for additional solutions. Memoization of failed states is disabled
+     * because a state that reaches one solution is not "failed" and should not prune other paths.
+     * Stops early once all_mappings_out.size() >= max_solutions.
+     *
+     * @param graph_data Indexed graph data
+     * @param constraint_data Indexed constraint data
+     * @param validation_mode Connection validation mode
+     * @param max_solutions Maximum number of solutions to collect
+     * @param all_mappings_out Output vector populated with each solution (mapping[target_idx] = global_idx)
+     * @param quiet_mode If true, suppress verbose info-level log messages
+     * @return true if at least one solution was found
+     */
+    bool search_n(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        ConnectionValidationMode validation_mode,
+        size_t max_solutions,
+        std::vector<std::vector<int>>& all_mappings_out,
+        bool quiet_mode = false);
+
+    /**
      * @brief Get the current search state
      *
      * @return const reference to the internal search state
@@ -1160,6 +1261,29 @@ public:
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         ConnectionValidationMode validation_mode,
+        bool quiet_mode = false);
+
+    /**
+     * @brief Search for up to max_solutions distinct complete mappings using SAT with blocking clauses.
+     *
+     * After each SAT solve that returns SAT, the current assignment is decoded and pushed to
+     * all_mappings_out. A blocking clause is then added to forbid that exact assignment, and
+     * the solver is called again. This repeats until UNSAT or all_mappings_out.size() >= max_solutions.
+     *
+     * @param graph_data Indexed graph data
+     * @param constraint_data Indexed constraint data
+     * @param validation_mode Connection validation mode
+     * @param max_solutions Maximum number of solutions to collect
+     * @param all_mappings_out Output vector populated with each solution (mapping[target_idx] = global_idx)
+     * @param quiet_mode If true, suppress verbose info-level log messages
+     * @return true if at least one solution was found
+     */
+    bool search_n(
+        const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+        ConnectionValidationMode validation_mode,
+        size_t max_solutions,
+        std::vector<std::vector<int>>& all_mappings_out,
         bool quiet_mode = false);
 
     const TopologySearchState& get_state() const { return state_; }

@@ -1314,4 +1314,111 @@ bool topology_sat_search(
     return finalize_success(solver, enc);
 }
 
+// ── SatSearchEngine::search_n -- Enumerate up to max_solutions with blocking clauses ───────────
+
+template <typename TargetNode, typename GlobalNode>
+bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    ConnectionValidationMode validation_mode,
+    size_t max_solutions,
+    std::vector<std::vector<int>>& all_mappings_out,
+    bool quiet_mode) {
+    state_ = TopologySearchState{};
+    state_.mapping.assign(graph_data.n_target, -1);
+    state_.used.assign(graph_data.n_global, false);
+    quiet_mode_ = quiet_mode;
+    all_mappings_out.clear();
+
+    if (max_solutions == 0) {
+        return false;
+    }
+
+    // Trivial case: empty target — one valid (empty) solution.
+    if (graph_data.n_target == 0) {
+        all_mappings_out.push_back({});
+        return true;
+    }
+
+    if (graph_data.n_global < graph_data.n_target) {
+        return false;
+    }
+
+    // Build the hard constraint SAT formula once. We keep the solver alive and add blocking clauses
+    // incrementally between solves to enumerate distinct solutions.
+    TopologySatSolver solver;
+    TopologySatHardEncoding enc;
+
+    if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+        // Trivially UNSAT — no solutions exist.
+        return false;
+    }
+
+    // Enumerate: after each SAT solve that succeeds, decode the assignment, store it, and add a
+    // blocking clause that forbids exactly that assignment before solving again.
+    while (all_mappings_out.size() < max_solutions) {
+        const int status = solver.solve();
+        if (status != TopologySatSolver::kSat) {
+            break;  // UNSAT — no more solutions.
+        }
+
+        // Decode the current satisfying assignment.
+        std::vector<int> current_mapping;
+        if (!topology_sat_decode_hard_solution<TargetNode, GlobalNode>(solver, enc, current_mapping)) {
+            // Decoding failed unexpectedly — stop enumeration to avoid an infinite loop.
+            break;
+        }
+        all_mappings_out.push_back(current_mapping);
+
+        // Add a blocking clause: NOT (assign_lit[t][k] for the k chosen in this solution, for every t).
+        // This clause prevents Kissat from returning the same assignment again.
+        // A blocking clause is the disjunction of the negations of all chosen literals, i.e.,
+        //   (-x_{0,g0}) v (-x_{1,g1}) v ... v (-x_{n-1,g_{n-1}})
+        // If Kissat returns any other assignment at least one of these literals will differ.
+        const size_t nt = enc.assign_lit.size();
+        bool block_ok = true;
+        for (size_t t = 0; t < nt && block_ok; ++t) {
+            const int chosen_global = current_mapping[t];
+            if (chosen_global < 0) {
+                // Should not happen after a successful decode, but handle defensively.
+                block_ok = false;
+                break;
+            }
+            // Find which position k in enc.allowed_global_idx[t] corresponds to chosen_global.
+            const auto& globs = enc.allowed_global_idx[t];
+            const auto& lits = enc.assign_lit[t];
+            bool found_k = false;
+            for (size_t k = 0; k < globs.size(); ++k) {
+                if (static_cast<int>(globs[k]) == chosen_global) {
+                    // Add the negation of this literal to the blocking clause.
+                    solver.add(-lits[k]);
+                    found_k = true;
+                    break;
+                }
+            }
+            if (!found_k) {
+                block_ok = false;
+            }
+        }
+        if (!block_ok) {
+            break;
+        }
+        // Terminate the blocking clause.
+        solver.add(0);
+    }
+
+    // Update state for reporting: use the last found solution if any.
+    if (!all_mappings_out.empty()) {
+        state_.mapping = all_mappings_out.back();
+        std::fill(state_.used.begin(), state_.used.end(), false);
+        for (int gi : state_.mapping) {
+            if (gi >= 0 && static_cast<size_t>(gi) < state_.used.size()) {
+                state_.used[static_cast<size_t>(gi)] = true;
+            }
+        }
+    }
+
+    return !all_mappings_out.empty();
+}
+
 }  // namespace tt::tt_fabric::detail

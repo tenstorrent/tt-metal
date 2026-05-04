@@ -1155,6 +1155,193 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     return result;
 }
 
+// ============================================================================
+// solve_topology_mapping_n implementation
+// ============================================================================
+
+template <typename TargetNode, typename GlobalNode>
+std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_n(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    size_t max_solutions,
+    ConnectionValidationMode connection_validation_mode,
+    bool quiet_mode,
+    TopologyMappingSolverEngine solver_engine) {
+    using namespace tt::tt_fabric::detail;
+
+    static constexpr size_t kHardCap = 1000;
+    if (max_solutions == 0 || max_solutions > kHardCap) {
+        max_solutions = kHardCap;
+    }
+
+    constraints.set_quiet_mode(quiet_mode);
+
+    GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
+    ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
+
+    std::vector<std::vector<int>> raw_mappings;
+    raw_mappings.reserve(max_solutions);
+
+    if (topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global)) {
+        SatSearchEngine<TargetNode, GlobalNode> sat_engine;
+        sat_engine.search_n(graph_data, constraint_data, connection_validation_mode, max_solutions, raw_mappings, quiet_mode);
+    } else {
+        DFSSearchEngine<TargetNode, GlobalNode> dfs_engine;
+        dfs_engine.search_n(graph_data, constraint_data, connection_validation_mode, max_solutions, raw_mappings, quiet_mode);
+    }
+
+    std::vector<MappingResult<TargetNode, GlobalNode>> results;
+    results.reserve(raw_mappings.size());
+
+    for (const auto& raw_mapping : raw_mappings) {
+        TopologySearchState dummy_state;
+        dummy_state.mapping = raw_mapping;
+        dummy_state.used.assign(graph_data.n_global, false);
+        for (int gi : raw_mapping) {
+            if (gi >= 0 && static_cast<size_t>(gi) < dummy_state.used.size()) {
+                dummy_state.used[static_cast<size_t>(gi)] = true;
+            }
+        }
+        auto result = MappingValidator<TargetNode, GlobalNode>::build_result(
+            raw_mapping, graph_data, constraint_data, dummy_state, connection_validation_mode, quiet_mode);
+        results.push_back(std::move(result));
+    }
+
+    return results;
+}
+
+// ============================================================================
+// solve_topology_mapping_all implementation
+// ============================================================================
+
+template <typename TargetNode, typename GlobalNode>
+std::vector<MappingResult<TargetNode, GlobalNode>> solve_topology_mapping_all(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    ConnectionValidationMode connection_validation_mode,
+    bool quiet_mode,
+    TopologyMappingSolverEngine solver_engine) {
+    static constexpr size_t kAllCap = 1000;
+    return solve_topology_mapping_n<TargetNode, GlobalNode>(
+        target_graph, global_graph, constraints, kAllCap,
+        connection_validation_mode, quiet_mode, solver_engine);
+}
+
+// ============================================================================
+// solve_topology_mapping_next implementation
+// ============================================================================
+
+template <typename TargetNode, typename GlobalNode>
+MappingResult<TargetNode, GlobalNode> solve_topology_mapping_next(
+    const AdjacencyGraph<TargetNode>& target_graph,
+    const AdjacencyGraph<GlobalNode>& global_graph,
+    const MappingConstraints<TargetNode, GlobalNode>& constraints,
+    const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
+    ConnectionValidationMode connection_validation_mode,
+    bool quiet_mode,
+    TopologyMappingSolverEngine solver_engine) {
+    using namespace tt::tt_fabric::detail;
+
+    constraints.set_quiet_mode(quiet_mode);
+
+    GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
+    ConstraintIndexData<TargetNode, GlobalNode> constraint_data(constraints, graph_data);
+
+    // Helper: convert a node-level mapping to an index-level mapping vector.
+    auto to_index_mapping = [&](const std::map<TargetNode, GlobalNode>& node_map) -> std::vector<int> {
+        std::vector<int> idx_map(graph_data.n_target, -1);
+        for (const auto& [target_node, global_node] : node_map) {
+            auto ti = graph_data.target_to_idx.find(target_node);
+            auto gi = graph_data.global_to_idx.find(global_node);
+            if (ti != graph_data.target_to_idx.end() && gi != graph_data.global_to_idx.end()) {
+                idx_map[ti->second] = static_cast<int>(gi->second);
+            }
+        }
+        return idx_map;
+    };
+
+    // Helper: check if two index-level mappings are identical.
+    auto mappings_equal = [](const std::vector<int>& a, const std::vector<int>& b) -> bool {
+        if (a.size() != b.size()) return false;
+        return a == b;
+    };
+
+    // Build index-level representations of all excluded mappings.
+    std::vector<std::vector<int>> excluded_idx;
+    excluded_idx.reserve(excluded_mappings.size());
+    for (const auto& em : excluded_mappings) {
+        excluded_idx.push_back(to_index_mapping(em));
+    }
+
+    if (topology_mapping_should_use_sat_engine(solver_engine, graph_data.n_target, graph_data.n_global)) {
+        // SAT engine: encode each excluded mapping as an upfront blocking clause, then solve once.
+        SatSearchEngine<TargetNode, GlobalNode> sat_engine;
+        std::vector<std::vector<int>> raw_mappings;
+        // We need to use search_n with the excluded mappings encoded as pre-blocking clauses.
+        // For simplicity: run search_n(excluded.size()+1) then filter.
+        const size_t need = excluded_mappings.size() + 1;
+        sat_engine.search_n(graph_data, constraint_data, connection_validation_mode, need, raw_mappings, quiet_mode);
+
+        for (const auto& raw : raw_mappings) {
+            bool is_excluded = false;
+            for (const auto& excl : excluded_idx) {
+                if (mappings_equal(raw, excl)) {
+                    is_excluded = true;
+                    break;
+                }
+            }
+            if (!is_excluded) {
+                TopologySearchState dummy_state;
+                dummy_state.mapping = raw;
+                dummy_state.used.assign(graph_data.n_global, false);
+                for (int gi : raw) {
+                    if (gi >= 0 && static_cast<size_t>(gi) < dummy_state.used.size()) {
+                        dummy_state.used[static_cast<size_t>(gi)] = true;
+                    }
+                }
+                return MappingValidator<TargetNode, GlobalNode>::build_result(
+                    raw, graph_data, constraint_data, dummy_state, connection_validation_mode, quiet_mode);
+            }
+        }
+    } else {
+        // DFS engine: run search_n(excluded.size()+1) then return the first non-excluded result.
+        DFSSearchEngine<TargetNode, GlobalNode> dfs_engine;
+        std::vector<std::vector<int>> raw_mappings;
+        const size_t need = excluded_mappings.size() + 1;
+        dfs_engine.search_n(graph_data, constraint_data, connection_validation_mode, need, raw_mappings, quiet_mode);
+
+        for (const auto& raw : raw_mappings) {
+            bool is_excluded = false;
+            for (const auto& excl : excluded_idx) {
+                if (mappings_equal(raw, excl)) {
+                    is_excluded = true;
+                    break;
+                }
+            }
+            if (!is_excluded) {
+                TopologySearchState dummy_state;
+                dummy_state.mapping = raw;
+                dummy_state.used.assign(graph_data.n_global, false);
+                for (int gi : raw) {
+                    if (gi >= 0 && static_cast<size_t>(gi) < dummy_state.used.size()) {
+                        dummy_state.used[static_cast<size_t>(gi)] = true;
+                    }
+                }
+                return MappingValidator<TargetNode, GlobalNode>::build_result(
+                    raw, graph_data, constraint_data, dummy_state, connection_validation_mode, quiet_mode);
+            }
+        }
+    }
+
+    // No new mapping found — return a failure result.
+    MappingResult<TargetNode, GlobalNode> failure;
+    failure.success = false;
+    failure.error_message = "solve_topology_mapping_next: no new mapping found (all solutions exhausted or excluded)";
+    return failure;
+}
+
 template <typename TargetNode, typename GlobalNode>
 void print_mapping_result(const MappingResult<TargetNode, GlobalNode>& result) {
     std::stringstream ss;
@@ -2702,6 +2889,109 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     }
 
     return found;
+}
+
+// ============================================================================
+// DFSSearchEngine::search_n — enumerate up to max_solutions complete mappings
+// ============================================================================
+
+template <typename TargetNode, typename GlobalNode>
+bool DFSSearchEngine<TargetNode, GlobalNode>::search_n(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    ConnectionValidationMode validation_mode,
+    size_t max_solutions,
+    std::vector<std::vector<int>>& all_mappings_out,
+    bool quiet_mode) {
+    // Reset state to a clean slate; we do NOT use memoization here because a state that
+    // leads to one valid solution is not "failed" — disabling failed_states caching lets
+    // the DFS enumerate all paths.
+    state_ = TopologySearchState{};
+    state_.mapping.resize(graph_data.n_target, -1);
+    state_.used.resize(graph_data.n_global, false);
+    quiet_mode_ = quiet_mode;
+    all_mappings_out.clear();
+
+    if (graph_data.n_global < graph_data.n_target) {
+        return false;
+    }
+    if (graph_data.n_target == 0) {
+        // Trivially: the empty mapping is a valid solution.
+        all_mappings_out.push_back({});
+        return true;
+    }
+
+    // Inner recursive lambda that enumerates all solutions. It mirrors dfs_recursive but:
+    //   1. At the base case it records the mapping and returns WITHOUT stopping.
+    //   2. Memoization (failed_states) is intentionally not used.
+    //   3. The DFS call limit is shared with state_.dfs_calls for safety.
+    const auto dfs_enum = [&](auto&& self, size_t pos) -> void {
+        if (all_mappings_out.size() >= max_solutions) {
+            return;
+        }
+
+        // Base case: all targets assigned — record this solution.
+        if (pos >= graph_data.n_target) {
+            all_mappings_out.push_back(state_.mapping);
+            return;
+        }
+
+        state_.dfs_calls++;
+        if (state_.dfs_calls >= DFS_CALL_LIMIT) {
+            return;
+        }
+
+        // Select next target node and generate ordered candidates (same heuristic as single search).
+        auto selection = SearchHeuristic::select_and_generate_candidates(
+            graph_data, constraint_data, state_.mapping, state_.used, validation_mode);
+
+        if (selection.target_idx == SIZE_MAX || selection.candidates.empty()) {
+            return;
+        }
+
+        const size_t target_idx = selection.target_idx;
+
+        for (size_t global_idx : selection.candidates) {
+            if (all_mappings_out.size() >= max_solutions) {
+                return;
+            }
+
+            if (!ConsistencyChecker::check_local_consistency(
+                    target_idx, global_idx, graph_data, state_.mapping, validation_mode)) {
+                continue;
+            }
+
+            if (!ConsistencyChecker::check_forward_consistency(
+                    target_idx, global_idx, graph_data, constraint_data, state_.mapping, state_.used,
+                    validation_mode)) {
+                continue;
+            }
+
+            if (!constraint_data.check_same_rank_constraint(
+                    target_idx, global_idx, state_.mapping, state_.used)) {
+                continue;
+            }
+
+            state_.mapping[target_idx] = static_cast<int>(global_idx);
+            state_.used[global_idx] = true;
+
+            if (!constraint_data.can_satisfy_cardinality_constraints(state_.mapping)) {
+                state_.mapping[target_idx] = -1;
+                state_.used[global_idx] = false;
+                continue;
+            }
+
+            self(self, pos + 1);
+
+            // Backtrack unconditionally (we want all solutions, not just one).
+            state_.mapping[target_idx] = -1;
+            state_.used[global_idx] = false;
+            state_.backtrack_count++;
+        }
+    };
+
+    dfs_enum(dfs_enum, 0);
+    return !all_mappings_out.empty();
 }
 
 // ============================================================================
