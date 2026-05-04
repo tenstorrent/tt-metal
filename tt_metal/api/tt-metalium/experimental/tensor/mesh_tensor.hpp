@@ -116,9 +116,11 @@ public:
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    distributed::MeshBuffer& mesh_buffer() const;
+    const distributed::MeshBuffer& mesh_buffer() const;
 
     /**
+     * THIS IS INTERNAL FUNCTION AND WILL BE DELETED ASAP, DO NOT USE, DO NOT RELY.
+     *
      * Wider API compatible mesh_buffer() that returns a shared ownership to the underlying storage.
      *
      * Note: Prefer mesh_buffer() wherever possible, as it breaks unique ownership semantics easily.
@@ -187,11 +189,19 @@ public:
     // Is a MeshTensor with a new tensor topology fundamentally different?
     void update_tensor_topology(TensorTopology tensor_topology);
 
+    /**
+     * Access to the implementation.
+     *
+     * pre-condition: The MeshTensor must not be in a default constructed state.
+     */
+    MeshTensorImpl& impl();
+    const MeshTensorImpl& impl() const;
+
 private:
-    // impl could be a nullptr if MeshTensor is in a default constructed state.
-    // Avoid using impl pointer directly, use the accessors instead.
+    // impl_ could be a nullptr if MeshTensor is in a default constructed state.
+    // Avoid using impl_ pointer directly, use the accessors instead.
     // Otherwise, please add manual TT_ASSERT checks for nullptr.
-    std::unique_ptr<MeshTensorImpl> impl;
+    std::unique_ptr<MeshTensorImpl> impl_;
 };
 
 }  // namespace tt::tt_metal

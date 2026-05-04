@@ -1,0 +1,74 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <memory>
+#include <utility>
+
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt_stl/assert.hpp>
+
+/**
+ * Internal implementation header for MeshTensor.
+ *
+ * This header exposes MeshTensorImpl so that translation units within tt_metal (e.g. tensor_apis.cpp)
+ * can operate directly on the implementation without going through the public MeshTensor compatibility accessors.
+ * It is private to tt_metal and is not part of the installed public API.
+ */
+
+namespace tt::tt_metal {
+
+class MeshTensorImpl {
+public:
+    MeshTensorImpl(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
+        MeshTensorImpl(std::move(mesh_buffer), std::move(spec), std::move(topology), nullptr) {}
+
+    MeshTensorImpl(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer,
+        TensorSpec spec,
+        TensorTopology topology,
+        std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer) :
+        mesh_buffer_(std::move(mesh_buffer)),
+        spec_(std::move(spec)),
+        topology_(std::move(topology)),
+        root_mesh_buffer_(std::move(root_mesh_buffer)) {
+        TT_FATAL(mesh_buffer_ != nullptr, "MeshBuffer cannot be nullptr.");
+        TT_FATAL(mesh_buffer_->is_allocated(), "MeshBuffer must be allocated.");
+        TT_FATAL(
+            mesh_buffer_->size() >= spec_.compute_packed_buffer_size_bytes(),
+            "MeshBuffer must be large enough to hold the tensor.");
+    }
+
+    // Two step construction for MeshTensor,
+    // for transiet purpose.
+    MeshTensorImpl(MeshTensorImpl&& other, TensorSpec spec, TensorTopology topology) :
+        mesh_buffer_(std::move(other.mesh_buffer_)),
+        spec_(std::move(spec)),
+        topology_(std::move(topology)),
+        root_mesh_buffer_(std::move(other.root_mesh_buffer_)) {}
+
+    const distributed::MeshBuffer& mesh_buffer() const { return *raw_mesh_buffer(); }
+    const std::shared_ptr<distributed::MeshBuffer>& raw_mesh_buffer() const { return mesh_buffer_; }
+    const TensorSpec& spec() const { return spec_; }
+    const TensorTopology& topology() const { return topology_; }
+    void update_topology(TensorTopology topology) { topology_ = std::move(topology); }
+
+private:
+    // Invariant:
+    // 1. Cannot be nullptr and must be allocated.
+    // 2. Must be large enough to hold a tensor describale with spec_
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
+    TensorSpec spec_;
+    // TODO(river): What is the invariant of topology?
+    TensorTopology topology_;
+
+    // Experimental feature: Accomodates #38101
+    // This keeps mesh_buffer_ alive in limited cases.
+    std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer_;
+};
+
+}  // namespace tt::tt_metal
