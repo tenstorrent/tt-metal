@@ -1000,11 +1000,14 @@ class TtMolmo2Model(LightweightModule):
                 tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, tti_pad_len, dtype=torch.long)], dim=1)
             else:
                 tti_padded = token_type_ids.long()
+            # Mask built on CPU, uploaded in bfloat4_b for all S:
+            # saves 4× device DRAM vs bfloat16 (enables 384-frame S=32768),
+            # and the 105 tests at S≤8192 validate the same dtype path.
             attn_mask = build_molmo2_prefill_mask(
                 S_pad,
                 tti_padded,
                 self.mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat4_b,
                 causal_cache=self._causal_masks.get(S_pad),
             )
 
