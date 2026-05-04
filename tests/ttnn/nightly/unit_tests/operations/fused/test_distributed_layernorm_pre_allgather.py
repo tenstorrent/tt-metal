@@ -11,7 +11,7 @@ import ttnn
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
 
@@ -477,6 +477,85 @@ def test_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
     run_layernorm_pre_all_gather_residual_pcc(device, inp_shape)
 
 
+@pytest.mark.parametrize(
+    "inp_shape",
+    [(1, 1, 32, 42)],  # W=42 → padded W=64, 22 cols of implicit tile padding per row
+)
+def test_layernorm_pre_all_gather_residual_padding_isolated_from_stats(device, inp_shape):
+    """Both input and residual implicit tile padding must not contaminate the layernorm stats.
+
+    The kernel reads input and residual tile-by-tile and adds them inside the tile,
+    including the implicit padded columns past the logical width. A correct op must
+    zero both tensors' implicit padding. We "poison" both tensors
+    with a large constant; if either zeroing is missing, the per-row sum(x^2) will
+    be off by ~22 * poison^2, which a tight tolerance will catch.
+    """
+    torch.manual_seed(0)
+
+    POISON = 100.0  # large enough that 22 * POISON^2 dominates any honest stat value
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+
+    torch_inp = torch.randn(inp_shape, dtype=torch.bfloat16)
+    torch_res = torch.randn(inp_shape, dtype=torch.bfloat16)
+    combined = torch_inp + torch_res
+
+    out_torch = reference(combined.chunk(1, dim=-1), 1, False)[0]
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_inp = torch2tt_tensor(
+        torch_inp, tt_dtype=ttnn.bfloat16, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
+    )
+    # Poison input's implicit tile padding. A correct op must ignore these values.
+    tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, POISON)
+    tt_res = torch2tt_tensor(
+        torch_res, tt_dtype=ttnn.bfloat16, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
+    )
+    # Poison residual's implicit tile padding. A correct op must ignore these values.
+    tt_res = ttnn.fill_implicit_tile_padding(tt_res, POISON)
+
+    tt_stats = ttnn.layer_norm_pre_all_gather(
+        tt_inp,
+        residual_input_tensor=tt_res,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=kernel_config,
+        memory_config=dram_memcfg,
+    )
+
+    tt_output_host = tt2torch_tensor(tt_stats)
+
+    # Both out_torch and tt_output_host are shape (B, 1, S, 64): two 32-wide tiles where
+    # each stat is packed into column 0 of its tile and the remaining 31 columns are zero.
+    # reference() constructs out_torch in this layout using the logical-width torch tensor
+    # (W=42 values, no tile padding), so out_torch[:,0,0,0] = sum(combined_logical**2) and
+    # out_torch[:,0,0,32] = sum(combined_logical).
+    # If the op correctly zeroes both tensors' implicit padding before the add, the kernel
+    # also reduces over 42 real values (+ 22 zeros), matching the torch sums. If either
+    # padding was not zeroed, the POISON values in the padded region would inflate the TT
+    # sums, causing the assertions below to fail.
+    assert_numeric_metrics(
+        out_torch[:, :, :, 0].float(),
+        tt_output_host[:, :, :, 0].float(),
+        rtol=1e-2,
+        atol=1.0,
+        pcc_threshold=0.999,
+    )
+    # Column 32 = start of the second tile where sum(x) lives.
+    assert_numeric_metrics(
+        out_torch[:, :, :, 32].float(),
+        tt_output_host[:, :, :, 32].float(),
+        rtol=1e-2,
+        atol=1.0,
+        pcc_threshold=0.999,
+    )
+
+
 def _create_recip_tensor(device, w):
     grid = device.compute_with_storage_grid_size()
     core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -544,9 +623,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape):
     fused_host = tt2torch_tensor(stats_fused)
     combined_host = tt2torch_tensor(stats_combined)
 
-    passing, output_str = comp_allclose_and_pcc(combined_host, fused_host, rtol=1e-2, atol=1e-2, pcc=0.999)
-    logger.debug(f"welford fused vs combined stats = {output_str}")
-    assert passing, output_str
+    assert_numeric_metrics(combined_host, fused_host, rtol=1e-2, atol=1e-2, pcc_threshold=0.999)
 
 
 @pytest.mark.parametrize(

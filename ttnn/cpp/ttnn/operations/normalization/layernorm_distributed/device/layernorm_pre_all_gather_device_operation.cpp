@@ -121,6 +121,11 @@ Tensor layer_norm_pre_all_gather(
     const std::optional<bool>& use_2d_core_grid) {
     using OperationType = LayerNormPreAllGatherDeviceOperation;
     auto input_padded = ttnn::fill_implicit_tile_padding(input, 0.0f);
+    // Also zero residual's implicit tile padding so it doesn't contaminate the kernel-fused
+    // a + b that gets fed into the per-row stats.
+    auto residual_padded = residual_input_tensor.has_value()
+                               ? std::make_optional(ttnn::fill_implicit_tile_padding(*residual_input_tensor, 0.0f))
+                               : std::nullopt;
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
@@ -131,7 +136,7 @@ Tensor layer_norm_pre_all_gather(
         },
         OperationType::tensor_args_t{
             .input = input_padded,
-            .residual_input_tensor = residual_input_tensor,
+            .residual_input_tensor = residual_padded,
             .recip_tensor = recip_tensor,
         });
 }
