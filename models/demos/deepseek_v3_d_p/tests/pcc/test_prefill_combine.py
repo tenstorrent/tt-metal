@@ -87,6 +87,9 @@ def test_ttnn_combine(
     if use_fp8_output and use_predictable_data:
         pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
 
+    if use_fp8_output and not run_pcc_check:
+        pytest.skip("fp8 perf test doesn't run PCC")
+
     # The fp8 output path is only wired up in combine_program_factory.cpp inside the
     # is_tile_layout branch (the c_18 untilized_output CB swap to Fp8_e4m3). The ROW_MAJOR
     # path has no untilize stage to retarget, so fp8 + row_major isn't a supported combo.
