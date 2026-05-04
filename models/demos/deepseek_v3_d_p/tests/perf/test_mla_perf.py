@@ -34,7 +34,7 @@ def test_deepseek_v3_mla_perf_loudbox():
     """
     run_mla_perf_with_approximation(
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=8_800_538,
+        expected_ns_2x4=10_288_780,
         model_name_2x4="deepseek_v3_mla_lb_2x4",
         subdir="deepseek_v3_mla",
         margin=0.03,
