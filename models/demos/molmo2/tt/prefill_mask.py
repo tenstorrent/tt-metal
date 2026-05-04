@@ -67,7 +67,7 @@ def build_molmo2_prefill_mask(
     def _upload(t):
         return ttnn.from_torch(
             t.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -113,8 +113,5 @@ def build_molmo2_prefill_mask(
     ttnn.deallocate(condition)
     ttnn.deallocate(zeros)
     ttnn.deallocate(neg_inf)
-
-    if dtype != ttnn.bfloat16:
-        bias = ttnn.typecast(bias, dtype)
 
     return bias

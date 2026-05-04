@@ -996,11 +996,15 @@ class TtMolmo2Model(LightweightModule):
                 tti_padded = torch.cat([token_type_ids.long(), torch.zeros(B, tti_pad_len, dtype=torch.long)], dim=1)
             else:
                 tti_padded = token_type_ids.long()
+            # For S_pad > 8192 there is no causal_cache (only cached up to 8192),
+            # so all ops are bfloat4_b — no mixed-dtype issue.
+            # For S_pad ≤ 8192 causal_cache is bfloat16; keep bfloat16 to match.
+            _mask_dtype = ttnn.bfloat4_b if S_pad > 8192 else ttnn.bfloat16
             attn_mask = build_molmo2_prefill_mask(
                 S_pad,
                 tti_padded,
                 self.mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=_mask_dtype,
                 causal_cache=self._causal_masks.get(S_pad),
             )
 
