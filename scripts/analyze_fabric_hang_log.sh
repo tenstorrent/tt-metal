@@ -831,7 +831,15 @@ FIX_AJ_FIRES=$(grep -cE 'FIX AJ|relay path confirmed dead during force-reset' "$
 FIX_AK_FIRES=$(grep -cE 'relay-dead device.*confirmed.*skipping l1_barrier.*FIX AK|FIX AK.*skipping l1_barrier' "$CLEAN" 2>/dev/null; :)
 # FIX AQ: secondary edm_status_address sentinel poll after FIX AR heartbeat poll
 FIX_AQ_FIRES=$(grep -cE 'FIX AQ' "$CLEAN" 2>/dev/null; :)
-FIX_AQ_TIMEOUT=$(grep -cE 'FIX AQ.*ROM postcode.*after.*ms' "$CLEAN" 2>/dev/null; :)
+FIX_AQ_TIMEOUT=$(grep -cE 'FIX AQ.*edm_status_address still.*after' "$CLEAN" 2>/dev/null; :)
+FIX_AQ_SUCCESS=$(grep -cE 'FIX AQ.*sentinel poll complete' "$CLEAN" 2>/dev/null; :)
+# FIX RP (#42429): ROM postcode 0x49705180 transition polling on non-MMIO channels
+# Success: "FIX RP Device N chan=N ROM postcode ... transitioned to base-UMD sentinel"
+# Timeout: "FIX RP Device N chan=N ROM postcode ... did NOT transition ... within Nms"
+# Unexpected: "FIX RP Device N chan=N ROM postcode ... transitioned to unexpected value"
+FIX_RP_SUCCESS=$(grep -cE 'FIX RP.*transitioned to base-UMD sentinel' "$CLEAN" 2>/dev/null; :)
+FIX_RP_TIMEOUT=$(grep -cE 'FIX RP.*did NOT transition.*within' "$CLEAN" 2>/dev/null; :)
+FIX_RP_UNEXPECTED=$(grep -cE 'FIX RP.*transitioned to unexpected value' "$CLEAN" 2>/dev/null; :)
 # FIX AT: Phase 5 handshake poll skipped when MMIO master chan was FIX AS Pass-0 timeout'd
 FIX_AT_FIRES=$(grep -cE 'FIX AT|Pass-0 timeout.*skipping.*handshake|master chan.*FIX AS.*Pass-0 timeout' "$CLEAN" 2>/dev/null; :)
 # FIX AY: deferred non-MMIO ETH ERISC reset via restored MMIO relay
@@ -1245,10 +1253,22 @@ if [ "${FIX_AK_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX AK] transitive relay guard: l1_barrier skipped for ALL non-MMIO devices (${FIX_AK_FIRES} event(s)) — relay-dead device(s) present"
 fi
 if [ "${FIX_AQ_FIRES:-0}" -gt 0 ]; then
-    if [ "${FIX_AQ_TIMEOUT:-0}" -eq 0 ]; then
-        echo "  => [FIX AQ] edm_status_address sentinel poll complete (${FIX_AQ_FIRES} event(s)) — UMD relay wrote 0x49706550 before next session started"
-    else
-        echo "  => [FIX AQ] edm_status_address sentinel poll TIMED OUT (${FIX_AQ_TIMEOUT} channel(s)) — 0x49705180 ROM postcode persisted; next session may still see corrupt L1"
+    echo "  => [FIX AQ] edm_status_address sentinel poll: ${FIX_AQ_SUCCESS:-0} succeeded, ${FIX_AQ_TIMEOUT:-0} timed out (${FIX_AQ_FIRES} total events)."
+    if [ "${FIX_AQ_TIMEOUT:-0}" -gt 0 ]; then
+        echo "     TIMED OUT channels: ROM postcode 0x49705180 persisted past 10s (FIX AT timeout)."
+        echo "     Next session will see FIX RP polling on these channels."
+    fi
+fi
+if [ "${FIX_RP_SUCCESS:-0}" -gt 0 ] || [ "${FIX_RP_TIMEOUT:-0}" -gt 0 ] || [ "${FIX_RP_UNEXPECTED:-0}" -gt 0 ]; then
+    echo "  => [FIX RP] ROM postcode transition poll (non-MMIO): ${FIX_RP_SUCCESS:-0} succeeded, ${FIX_RP_TIMEOUT:-0} timed out, ${FIX_RP_UNEXPECTED:-0} unexpected value."
+    if [ "${FIX_RP_TIMEOUT:-0}" -gt 0 ]; then
+        echo "     TIMED OUT: 0x49705180 did NOT transition to base-UMD (0x49706550) within 5s."
+        echo "     These channels fall through to probe_dead_channels → relay_broken cascade."
+        echo "     Possible cause: ROM boot after PCIe hard reset takes >5s; consider increasing kRomPostcodePollTotalMs."
+    fi
+    if [ "${FIX_RP_UNEXPECTED:-0}" -gt 0 ]; then
+        echo "     UNEXPECTED VALUE: channel transitioned to something other than 0x49706550 or 0x49705180."
+        echo "     This may indicate firmware crash or L1 corruption mid-boot."
     fi
 fi
 if [ "${FIX_AY_FIRES:-0}" -gt 0 ]; then
@@ -1654,6 +1674,11 @@ echo "  FIX_UP2_FIRES:             ${FIX_UP2_FIRES:-0}  (pre-test-loop ring-sync
 echo "  FIX_TM2_FIRES:             ${FIX_TM2_FIRES:-0}  (ring-sync timeout in post-TL warm-up)"
 echo "  FIX_TH3_FIRES:             ${FIX_TH3_FIRES:-0}  (120s/12x ring-sync timeout extension)"
 echo "  FIX_TG2_SYNC_CLEARS:       ${FIX_TG2_SYNC_CLEARS:-0}  (stale sync-address clears for base-UMD channels)"
+echo "  FIX_AQ_SUCCESS:            ${FIX_AQ_SUCCESS:-0}  (edm_status sentinel reached 0x49706550 in teardown)"
+echo "  FIX_AQ_TIMEOUT:            ${FIX_AQ_TIMEOUT:-0}  (edm_status sentinel poll timed out at 10s — ROM postcode persisted)"
+echo "  FIX_RP_SUCCESS:            ${FIX_RP_SUCCESS:-0}  (non-MMIO ROM postcode transitioned to base-UMD)"
+echo "  FIX_RP_TIMEOUT:            ${FIX_RP_TIMEOUT:-0}  (non-MMIO ROM postcode did NOT transition within 5s)"
+echo "  FIX_RP_UNEXPECTED:         ${FIX_RP_UNEXPECTED:-0}  (non-MMIO ROM postcode transitioned to unexpected value)"
 echo "  FIX_TV_SUCCESS:            ${FIX_TV_SUCCESS:-0}  (MMIO ETH heartbeat confirmed after reset_cores)"
 echo "  FIX_TV_TIMEOUT:            ${FIX_TV_TIMEOUT:-0}  (MMIO ETH heartbeat poll timed out — probe_dead likely)"
 echo ""
