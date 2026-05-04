@@ -129,6 +129,11 @@ class ProgramConfig:
             MatmulMultiCoreReuseMultiCast1DProgramConfig
         """
         core_x, core_y = cores
+        total_cores = core_x * core_y
+        n_tiles = int(math.ceil(n / 32))
+        # Floor split (n_tiles // total_cores) can leave per_core_N==1 while N-block count
+        # stays at n_tiles, so num_blocks_total exceeds total_cores on small grids (BH T3K).
+        per_core_N = max(1, int(math.ceil(n_tiles / total_cores)))
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
             in0_block_w=in0_block_w,
@@ -137,7 +142,7 @@ class ProgramConfig:
             out_block_h=1,
             out_block_w=1,
             per_core_M=max(32, m) // 32,
-            per_core_N=int(math.ceil(n / 32)) // (core_x * core_y),
+            per_core_N=per_core_N,
             fuse_batch=False,
             fused_activation=None,
             mcast_in0=True,

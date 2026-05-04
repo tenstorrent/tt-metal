@@ -1091,6 +1091,26 @@ def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
     return ti_skip(not is_wormhole_b0(), reason=reason_str)
 
 
+def gpt_oss_text_demo_device_supported():
+    """
+    True when this machine can run the GPT-OSS text demo mesh harness:
+    Wormhole B0 with 8 or 32 devices, or Blackhole **BH T3K** with 4 or 8 devices.
+    """
+    try:
+        n = ttnn.get_num_devices()
+    except Exception:
+        return False
+    if is_wormhole_b0() and n in (8, 32):
+        return True
+    if is_blackhole() and n in (4, 8):
+        return True
+    return False
+
+
+def run_for_gpt_oss_text_demo_hw(reason_str="GPT-OSS text demo: Wormhole 8/32 or BH T3K (Blackhole 4- or 8-chip)"):
+    return ti_skip(not gpt_oss_text_demo_device_supported(), reason=reason_str)
+
+
 def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
     return ti_skip(ttnn.get_num_devices() != n, reason=reason_str)
 

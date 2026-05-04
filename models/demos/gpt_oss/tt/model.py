@@ -2,20 +2,57 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+import os
+
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import is_blackhole, nearest_32
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, should_enable_bfloat_opt, time_span
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
+
+
+def _resolve_layer_worker_count(num_layers: int) -> int:
+    raw = os.getenv("GPT_OSS_PARALLEL_LAYER_LOAD", "").strip().lower()
+    if not raw or raw == "0":
+        return 1
+    if raw == "auto":
+        n = min(num_layers, os.cpu_count() or 1)
+        return max(1, n)
+    try:
+        n = int(raw)
+    except ValueError:
+        logger.warning(f"Invalid GPT_OSS_PARALLEL_LAYER_LOAD={raw!r}; falling back to sequential load")
+        return 1
+    return max(1, min(n, num_layers))
+
+
+def _effective_layer_worker_count(num_layers: int) -> int:
+    n = _resolve_layer_worker_count(num_layers)
+    if n <= 1:
+        return 1
+    if os.getenv("PYTEST_CURRENT_TEST") and os.getenv("GPT_OSS_PARALLEL_LAYER_LOAD_IN_PYTEST", "").lower() not in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    ):
+        logger.info(
+            "Using sequential DecoderLayer load under pytest (parallel workers keep running after "
+            "pytest-timeout and contend on loguru locks). Set GPT_OSS_PARALLEL_LAYER_LOAD_IN_PYTEST=1 "
+            "to keep GPT_OSS_PARALLEL_LAYER_LOAD>1 inside pytest."
+        )
+        return 1
+    return n
 
 
 def compute_per_device_vocab(vocab_size, num_tp):
@@ -163,26 +200,39 @@ class Model:
             cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.layers = [
-            DecoderLayer(
-                mesh_device,
-                hf_config,
-                substate(state_dict, f"model.layers.{layer_idx}"),
-                layer_idx,
-                ccl_manager,
-                dtype=dtype,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
-                paged_attention_config=paged_attention_config,
-                mesh_config=self.mesh_config,
-                create_kv_cache=create_kv_cache,
-                transformation_mats=self.transformation_mats,
-                max_local_batch_size=max_local_batch_size,
-                users_row_sharded=users_row_sharded,
-                use_throughput_experts=use_throughput_experts,
-                tokens_per_device=max_local_batch_size,
-            )
-            for layer_idx in range(hf_config.num_hidden_layers)
-        ]
+        layer_workers = _effective_layer_worker_count(hf_config.num_hidden_layers)
+
+        def _build_layer(layer_idx):
+            with time_span(f"model.layer_load.{layer_idx:03d}"):
+                return DecoderLayer(
+                    mesh_device,
+                    hf_config,
+                    substate(state_dict, f"model.layers.{layer_idx}"),
+                    layer_idx,
+                    ccl_manager,
+                    dtype=dtype,
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
+                    paged_attention_config=paged_attention_config,
+                    mesh_config=self.mesh_config,
+                    create_kv_cache=create_kv_cache,
+                    transformation_mats=self.transformation_mats,
+                    max_local_batch_size=max_local_batch_size,
+                    users_row_sharded=users_row_sharded,
+                    use_throughput_experts=use_throughput_experts,
+                    tokens_per_device=max_local_batch_size,
+                )
+
+        with time_span("model.all_layers_load"):
+            if layer_workers <= 1:
+                self.layers = [_build_layer(i) for i in range(hf_config.num_hidden_layers)]
+            else:
+                from concurrent.futures import ThreadPoolExecutor
+
+                logger.info(
+                    f"Parallel DecoderLayer load: {hf_config.num_hidden_layers} layers x {layer_workers} workers"
+                )
+                with ThreadPoolExecutor(max_workers=layer_workers) as pool:
+                    self.layers = list(pool.map(_build_layer, range(hf_config.num_hidden_layers)))
         self.norm = RMSNorm(
             mesh_device,
             hf_config,
@@ -217,23 +267,39 @@ class Model:
             cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_padded_pow2.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
+            enable_bfloat_opt=should_enable_bfloat_opt(ttnn.bfloat8_b),
         )
 
-        # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
         self._supports_on_device_sampling = per_device_padded <= 64 * 1024
+        worker_grid = mesh_device.compute_with_storage_grid_size()
+        worker_cores = worker_grid.x * worker_grid.y
+        self._lm_head_grid = worker_grid
+        self._lm_head_per_device_n = per_device_padded
+        if self._supports_on_device_sampling and is_blackhole():
+            force_env = os.environ.get("GPT_OSS_FORCE_DEVICE_SAMPLING", "").lower()
+            disable_device_sampling = force_env in ("0", "false", "no", "off")
+            if disable_device_sampling:
+                logger.warning(
+                    f"On-device sampling disabled via GPT_OSS_FORCE_DEVICE_SAMPLING={force_env}; "
+                    "using host logits for sampling."
+                )
+                self._supports_on_device_sampling = False
+            elif worker_cores < 64:
+                logger.warning(
+                    f"Disabling on-device sampling on Blackhole: compute grid {worker_grid.x}×{worker_grid.y} "
+                    f"({worker_cores} worker cores) is below the minimum this path expects (64). "
+                    f"Prefill/decode use host logits; demos that need device sampling require a larger BH grid."
+                )
+                self._supports_on_device_sampling = False
         self._prefill_sampling_active = False
-        # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
         if self._supports_on_device_sampling:
-            # tt_ccl=None makes TTSampling fall back to ttnn.all_gather() which works on [4,8] meshes
             self.sampling = SamplingGenerator(
                 args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device),
                 mesh_device=mesh_device,
                 tt_ccl=None,
                 enable_internal_trace=False,
             )
-            # Hook reset_sampling_params to set prefill flag — Generator calls this
-            # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
             _orig_reset = self.sampling.reset_sampling_params
 
             def _reset_with_flag(params, _orig=_orig_reset, **kwargs):
@@ -245,9 +311,28 @@ class Model:
         else:
             self.sampling = None
 
-    def _make_sampling_args(self, hf_config, mesh_device):
-        """Create a minimal args object for SamplingGenerator/TTSampling."""
+    def _build_lm_head_program_config(self, m):
+        core_x = self._lm_head_grid.x
+        core_y = self._lm_head_grid.y
+        total_cores = core_x * core_y
+        n_tiles = int(math.ceil(self._lm_head_per_device_n / 32))
+        per_core_N = max(1, int(math.ceil(n_tiles / total_cores)))
+        per_core_M = max(1, (max(32, m) + 31) // 32)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
 
+    def _make_sampling_args(self, hf_config, mesh_device):
         class _SamplingArgs:
             pass
 
@@ -260,15 +345,25 @@ class Model:
         args.sampling_all_gather_axis = 1
         args.num_devices = mesh_device.get_num_devices()
         args.is_galaxy = mesh_device.shape[0] > 1
-        args.model_config = {}  # No SAMPLING_AG_CONFIG → regular sampling path always used
-        # sampling_dp: number of independent sampling groups (one per mesh row)
-        # Only use row-sharded sampling when users_row_sharded is active
+        args.model_config = {}
         args.sampling_dp = self.sampling_dp
         args.use_topk_logprobs = True
+        worker_grid = mesh_device.compute_with_storage_grid_size()
+        args.sub_core_grids = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(worker_grid.x - 1, worker_grid.y - 1))]
+        )
+        topk_side = 1
+        while (topk_side * 2) <= min(worker_grid.x, worker_grid.y):
+            topk_side *= 2
+        args.sub_core_grid_topk = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(topk_side - 1, topk_side - 1))]
+        )
+        args.start_core = ttnn.CoreCoord(0, 0)
+        args.max_top_k = 32
+        args.max_batch_size = self.max_local_batch_size * self.sampling_dp
         return args
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
-        """On-device position increment for traced decode loops with sampling."""
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
@@ -397,7 +492,18 @@ class Model:
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        use_explicit_lm_head_pc = sampling_on_device or self._prefill_sampling_active
+        if use_explicit_lm_head_pc:
+            lm_head_pc = self._build_lm_head_program_config(hidden_states.shape[-2])
+            logits = ttnn.matmul(
+                hidden_states,
+                self.lm_head_weight,
+                dtype=ttnn.bfloat8_b,
+                program_config=lm_head_pc,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
         # TP all-gather is deferred to process_output_prefill / process_output_decode
@@ -963,8 +1069,6 @@ class Model:
             torch_out = self.concat_device_output(tt_out)
         torch_out = torch_out[:, 0, :, :]  # [1, 1, B, padded_vocab_size]
         torch_out = torch_out.view(B, S, -1)
-        # Truncate to vocab_size — lm_head is padded to padded_vocab_size for
-        # on-device sampling (pow2 topk), but callers expect vocab_size width.
         if torch_out.shape[-1] > self.vocab_size:
             torch_out = torch_out[:, :, : self.vocab_size]
         return torch_out

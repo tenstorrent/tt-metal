@@ -86,8 +86,16 @@ class MLP:
                 swiglu_limit=hf_config.swiglu_limit,
             )
 
-            # Use GPT-OSS specific program config
-            program_config = GPTOSSProgramConfig()
+            # Use GPT-OSS specific program config, with in0_block_w values chosen so
+            # Kt % in0_block_w == 0 for the current tensor-parallel degree. The defaults
+            # were tuned for tp=8; on BH T3K 4-chip (tp=4) gpt-oss-120b has Kt=23 for
+            # down_proj, which needs a divisor of 23 (falls back to 1).
+            tp = mesh_device.shape[1]
+            program_config = GPTOSSProgramConfig.for_model(
+                hidden_size=hf_config.hidden_size,
+                intermediate_size=hf_config.intermediate_size,
+                tp=tp,
+            )
 
             # Create experts with new modular implementation
             self.experts = Experts(

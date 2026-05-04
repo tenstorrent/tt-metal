@@ -143,16 +143,21 @@ def run_accuracy(
 @pytest.mark.parametrize(
     "mesh_shape",
     [
+        (1, 4),
         (1, 8),
         (4, 8),
     ],
     ids=[
+        "mesh_bh_t3k_4",
         "mesh_1x8",
         "mesh_4x8",
     ],
 )
 def test_full_model_accuracy(mesh_device, mesh_shape, device_params, reset_seeds, state_dict):
     """Test full model with accuracy testing using new abstractions"""
+
+    if mesh_shape != tuple(mesh_device.shape):
+        pytest.skip(f"mesh_shape {mesh_shape} not active on this host (device mesh {tuple(mesh_device.shape)})")
 
     # Cache file for reference tokens
     cache_dir = "models/demos/gpt_oss/tests/accuracy/"

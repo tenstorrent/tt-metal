@@ -16,6 +16,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.gpt_oss.utils.general_utils import time_span
 from models.tt_transformers.tt.common import (
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
@@ -104,8 +105,8 @@ class ModelArgs:
             self.tokenizer = None
             self.processor = None
         else:
-            # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
+            with time_span("tokenizer.load"):
+                self.tokenizer = _load_tokenizer_cached(self.weights_path)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
         self.disable_batched_prefill = True
@@ -176,10 +177,14 @@ class ModelArgs:
             "gpt-oss-120b": {
                 "T3K": [128],
                 "TG": [128],
+                "P150x4": [128],
+                "P150x8": [128],
             },
             "gpt-oss-20b": {
                 "T3K": [128],
                 "TG": [128],
+                "P150x4": [128],
+                "P150x8": [128],
             }
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
@@ -227,9 +232,12 @@ class ModelArgs:
         if dummy_weights:
             # Return dummy state dict for testing
             return {}
-        else:
-            # Load actual GPT-OSS weights directly from safetensors files
-            # Check if we have a cached torch_state_dict.pt file
+
+        cached = _load_cached_state_dict_if_any(weights_path, convert_to_meta_format)
+        if cached is not None:
+            return cached
+
+        with time_span("state_dict.hf_from_pretrained"):
             model = AutoModelForCausalLM.from_pretrained(
                 weights_path,
                 torch_dtype="auto"
@@ -238,17 +246,23 @@ class ModelArgs:
                 # unnecessary cast.
             )
             state_dict = model.state_dict()
-            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
-            if convert_to_meta_format:
-                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
+        # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
+        if convert_to_meta_format:
+            logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
+            with time_span("state_dict.convert_qkv_meta_format"):
                 state_dict = convert_hf_qkv_to_meta_format(state_dict, model.config.head_dim)
-            if state_dict["model.norm.weight"].dtype != torch.bfloat16:
-                # Convert to bfloat16 if needed
+        if state_dict["model.norm.weight"].dtype != torch.bfloat16:
+            # Convert to bfloat16 if needed
+            with time_span("state_dict.cast_fp32_to_bf16"):
                 state_dict = {
                     k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
                     for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
                 }
-            return state_dict
+
+        del model
+
+        _save_cached_state_dict(weights_path, state_dict, convert_to_meta_format)
+        return state_dict
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
@@ -283,6 +297,91 @@ class ModelArgs:
     def max_grid_size(self):
         """Return maximum grid size for the device"""
         return ttnn.CoreGrid(y=8, x=8)  # Standard grid size
+
+
+_STATE_DICT_CACHE_VERSION = "v1"
+_STATE_DICT_CACHE_BASENAME = f"torch_state_dict_bf16_{_STATE_DICT_CACHE_VERSION}.pt"
+_STATE_DICT_CACHE_BASENAME_RAW = f"torch_state_dict_bf16_raw_{_STATE_DICT_CACHE_VERSION}.pt"
+_TOKENIZER_CACHE_BASENAME = ".tokenizer.pkl"
+
+
+def _state_dict_cache_path(weights_path, convert_to_meta_format):
+    basename = _STATE_DICT_CACHE_BASENAME if convert_to_meta_format else _STATE_DICT_CACHE_BASENAME_RAW
+    override = os.getenv("GPT_OSS_STATE_DICT_CACHE")
+    if override:
+        return Path(override) / basename
+    return Path(weights_path) / basename
+
+
+def _state_dict_cache_enabled():
+    return os.getenv("GPT_OSS_DISABLE_STATE_DICT_CACHE", "").lower() not in ("1", "true", "yes", "y")
+
+
+def _load_cached_state_dict_if_any(weights_path, convert_to_meta_format):
+    if not _state_dict_cache_enabled():
+        return None
+
+    cache_path = _state_dict_cache_path(weights_path, convert_to_meta_format)
+    if not cache_path.exists():
+        return None
+
+    try:
+        with time_span("state_dict.load_bf16_cache"):
+            state_dict = torch.load(cache_path, map_location="cpu", weights_only=True, mmap=True)
+        logger.info(f"Loaded cached bf16 state_dict from {cache_path} (mmap)")
+        return state_dict
+    except Exception as e:
+        logger.warning(f"Failed to load bf16 state_dict cache {cache_path}: {e}; falling back to HF load")
+        return None
+
+
+def _save_cached_state_dict(weights_path, state_dict, convert_to_meta_format):
+    if not _state_dict_cache_enabled():
+        return
+    cache_path = _state_dict_cache_path(weights_path, convert_to_meta_format)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with time_span("state_dict.save_bf16_cache"):
+            torch.save(state_dict, cache_path)
+        logger.info(f"Saved bf16 state_dict cache to {cache_path}")
+    except OSError as e:
+        logger.warning(f"Could not write bf16 state_dict cache to {cache_path}: {e}")
+
+
+def _tokenizer_cache_path(weights_path):
+    override = os.getenv("GPT_OSS_TOKENIZER_CACHE")
+    if override:
+        return Path(override)
+    return Path(weights_path) / _TOKENIZER_CACHE_BASENAME
+
+
+def _load_tokenizer_cached(weights_path):
+    import pickle
+
+    use_cache = os.getenv("GPT_OSS_DISABLE_TOKENIZER_CACHE", "").lower() not in ("1", "true", "yes", "y")
+    cache_path = _tokenizer_cache_path(weights_path)
+
+    if use_cache and cache_path.exists():
+        try:
+            with open(cache_path, "rb") as fh:
+                tokenizer = pickle.load(fh)
+            logger.info(f"Loaded pickled tokenizer from {cache_path}")
+            return tokenizer
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer cache {cache_path}: {e}; reloading from HF")
+
+    tokenizer = AutoTokenizer.from_pretrained(weights_path, trust_remote_code=True)
+
+    if use_cache:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "wb") as fh:
+                pickle.dump(tokenizer, fh)
+            logger.info(f"Saved pickled tokenizer to {cache_path}")
+        except (OSError, pickle.PickleError) as e:
+            logger.warning(f"Could not write tokenizer cache to {cache_path}: {e}")
+
+    return tokenizer
 
 
 def determine_device_name(mesh_device):

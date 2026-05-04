@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, should_enable_bfloat_opt
 
 from .config import ThroughputExpertConfig
 
@@ -97,6 +97,7 @@ def _shard_experts_by_device(
         ),
         cache_file_name=cache_file_name,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        enable_bfloat_opt=should_enable_bfloat_opt(dtype),
     )
 
 
@@ -962,6 +963,7 @@ def create_fused_moe_gpt_config(
         memory_config=w0_w1_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(ring_devices, mesh_cols)),
         cache_file_name=get_cache_file_name(tensor_cache_path, f"fused_w0_w1_dtype{weight_dtype}"),
+        enable_bfloat_opt=should_enable_bfloat_opt(weight_dtype),
     )
 
     N_bias = N + 32  # N + 1 bias tile row (32 rows)
@@ -982,6 +984,7 @@ def create_fused_moe_gpt_config(
         memory_config=w2_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(ring_devices, mesh_cols)),
         cache_file_name=get_cache_file_name(tensor_cache_path, f"fused_w2_dtype{weight_dtype}"),
+        enable_bfloat_opt=should_enable_bfloat_opt(weight_dtype),
     )
     # --- Expert routing mapping: [total_devices, num_experts] uint16 ---
     # Uses global expert IDs (0..num_experts-1) with gen_expert_mapping logic.

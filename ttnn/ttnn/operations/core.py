@@ -590,6 +590,7 @@ def as_tensor(
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
+    enable_bfloat_opt: bool = False,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -605,9 +606,7 @@ def as_tensor(
         cache_file_name (str | pathlib.Path, optional): The cache file name. Defaults to `None`.
         preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
         mesh_mapper (ttnn.CppTensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
-
-            - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
-            - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
+        enable_bfloat_opt (bool, optional): If True, use a fast bf4/8 dtype conversion on the device, but with precision loss due to hw rounding rules. Cached tensors are tagged with ``_bfopt`` to avoid colliding with host-packed caches. Defaults to `False`.
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
@@ -619,6 +618,8 @@ def as_tensor(
     torch_tensor = tensor
     dtype_name = dtype.name if dtype is not None else "None"
     layout_name = layout.name if layout is not None else "None"
+    if enable_bfloat_opt and dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        enable_bfloat_opt = False
 
     def torch_to_ttnn(
         tensor: "torch.Tensor",
@@ -637,6 +638,7 @@ def as_tensor(
             mesh_mapper=mesh_mapper,
             memory_config=memory_config,
             device=device,
+            enable_bfloat_opt=enable_bfloat_opt,
         )
 
     if cache_file_name is None:
@@ -668,7 +670,8 @@ def as_tensor(
             tensor = tensor.to(device, memory_config)
         return tensor
 
-    cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.tensorbin"
+    bfopt_suffix = "_bfopt" if enable_bfloat_opt else ""
+    cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}{bfopt_suffix}.tensorbin"
     cache_path = pathlib.Path(cache_file_name)
 
     if not cache_path.exists() or not cache_path.is_file():

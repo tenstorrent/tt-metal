@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, run_for_gpt_oss_text_demo_hw
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
@@ -173,7 +173,9 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
-@pytest.mark.timeout(1200)
+# Cold 120B runs (HF load + bfopt tensor cache) exceed pytest.ini's global 300s when
+# timeout_func_only is false; func_only=True excludes session fixtures from this budget.
+@pytest.mark.timeout(14_400, func_only=True)
 @pytest.mark.parametrize(
     "mesh_shape",
     [
@@ -181,10 +183,11 @@ def prepare_gpt_oss_generator_args(
         (1, 8),
         # Galaxy (4×8) - Multi-device mesh, higher throughput
         (4, 8),
+        (1, 4),
     ],
-    ids=["mesh_1x8", "mesh_4x8"],
+    ids=["mesh_1x8", "mesh_4x8", "mesh_bh_t3k_4"],
 )
-@run_for_wormhole_b0()
+@run_for_gpt_oss_text_demo_hw()
 @pytest.mark.parametrize(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
     [
@@ -442,6 +445,20 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
+    if mesh_shape == (1, 4):
+        if not is_blackhole() or mesh_device.get_num_devices() != 4:
+            pytest.skip("(1,4) mesh is only for BH T3K (Blackhole 4-chip)")
+    elif mesh_shape == (4, 8):
+        if is_blackhole():
+            pytest.skip("(4,8) mesh is Wormhole Galaxy only, not BH T3K")
+        if is_wormhole_b0() and mesh_device.get_num_devices() < 32:
+            pytest.skip("(4,8) mesh requires 32 Wormhole devices")
+    elif mesh_shape == (1, 8):
+        if is_blackhole():
+            if mesh_device.get_num_devices() != 8:
+                pytest.skip("(1,8) mesh on Blackhole requires BH T3K (8-chip)")
+        elif is_wormhole_b0() and mesh_device.get_num_devices() < 8:
+            pytest.skip("(1,8) mesh requires 8 Wormhole devices")
     if mesh_shape[0] == 1:
         if batch_size > 1:
             pytest.skip(

@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig, Mode
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, should_enable_bfloat_opt
 
 from .config import ExpertConfig
 
@@ -76,6 +76,7 @@ def load_expert_weights(
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
 
     # Load gate projection
+    bfloat_opt = should_enable_bfloat_opt(weight_dtype)
     gate_proj_tt = ttnn.as_tensor(
         gate_proj,
         device=mesh_device,
@@ -84,6 +85,7 @@ def load_expert_weights(
         mesh_mapper=col_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, "gate_proj"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        enable_bfloat_opt=bfloat_opt,
     )
 
     # Load up projection
@@ -95,6 +97,7 @@ def load_expert_weights(
         mesh_mapper=col_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, "up_proj"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        enable_bfloat_opt=bfloat_opt,
     )
     bias_dtype = ttnn.bfloat16
     # Load gate bias
@@ -140,6 +143,7 @@ def load_expert_weights(
         mesh_mapper=row_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, "down_proj"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        enable_bfloat_opt=bfloat_opt,
     )
 
     down_proj_bias_tt = ttnn.as_tensor(

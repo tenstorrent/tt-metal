@@ -47,6 +47,29 @@ def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
 
+def _resolve_warmup_worker_count(num_tasks: int) -> int:
+    import os as _os
+
+    raw = _os.environ.get("GPT_OSS_PARALLEL_WARMUP", "")
+    if not raw:
+        return 1
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1
+    if value <= 0:
+        return 1
+    return max(1, min(value, num_tasks))
+
+
+def _should_skip_decode_read(read_stride: int, step_index) -> bool:
+    if read_stride is None or read_stride <= 1:
+        return False
+    if step_index is None:
+        return False
+    return ((step_index + 1) % read_stride) != 0
+
+
 def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
@@ -70,6 +93,8 @@ class Generator(WarmupForwardMixin):
         self.tokenizer = tokenizer
         self.data_parallel = len(self.model)
         self.prev_page_table = None
+        self._prev_page_table_ids = None
+        self._chunk_slice_cache: dict[int, tuple] = {}
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
@@ -89,6 +114,45 @@ class Generator(WarmupForwardMixin):
     model_capabilities = {
         "supports_prefix_caching": True,
     }
+
+    def _dp_chunk_slices(self, outer_size: int) -> tuple:
+        cached = self._chunk_slice_cache.get(outer_size)
+        if cached is not None:
+            return cached
+
+        dp = self.data_parallel
+        if dp <= 1 or outer_size <= 0:
+            slices = ((0, outer_size),)
+        else:
+            chunk = (outer_size + dp - 1) // dp
+            slices = tuple((i * chunk, min((i + 1) * chunk, outer_size)) for i in range(dp) if i * chunk < outer_size)
+        self._chunk_slice_cache[outer_size] = slices
+        return slices
+
+    def _dp_chunk(self, tensor):
+        if tensor is None:
+            return None
+        slices = self._dp_chunk_slices(tensor.shape[0])
+        if len(slices) == 1 and slices[0] == (0, tensor.shape[0]):
+            return (tensor,)
+        return tuple(tensor[start:end] for start, end in slices)
+
+    def _page_table_changed(self, page_table) -> bool:
+        if self.prev_page_table is None:
+            return True
+
+        if page_table is None:
+            return True
+
+        prev_ids = self._prev_page_table_ids
+        if prev_ids is not None and len(prev_ids) == len(page_table):
+            if all(id(pt) == pid for pt, pid in zip(page_table, prev_ids)):
+                return False
+
+        if any(prev.shape != curr.shape for prev, curr in zip(self.prev_page_table, page_table)):
+            return True
+
+        return any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
 
     def _set_sampling_trace_mode(self, enabled: bool):
         for model_instance in self.model:
@@ -136,6 +200,7 @@ class Generator(WarmupForwardMixin):
         if enable_trace:
             logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
 
+        tasks = []
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
                 if model_id != 0 and (
@@ -175,21 +240,37 @@ class Generator(WarmupForwardMixin):
                         sampling_params = [None]
 
                     for param in sampling_params:
-                        logger.info(
-                            f"Warming up prefill for sequence length: {supported_length} for batch size: {batch_size} with sampling params: {param}"
-                        )
-                        self.prefill_forward_text(
-                            **warmup_args,
-                            kv_cache=kv_cache,
-                            enable_trace=enable_trace,
-                            model_id_warmup=model_id,
-                            sampling_params=param,
-                        )
+                        tasks.append((supported_length, batch_size, model_id, param, warmup_args))
 
                     sampling_parameters_sweeped = True
 
                 if skip_sequence_lengths:
                     break
+
+        def _run_task(task):
+            supported_length, batch_size, model_id, param, warmup_args = task
+            logger.info(
+                f"Warming up prefill for sequence length: {supported_length} for batch size: {batch_size} with sampling params: {param}"
+            )
+            self.prefill_forward_text(
+                **warmup_args,
+                kv_cache=kv_cache,
+                enable_trace=enable_trace,
+                model_id_warmup=model_id,
+                sampling_params=param,
+            )
+
+        workers = _resolve_warmup_worker_count(len(tasks))
+        if workers <= 1 or len(tasks) <= 1:
+            for task in tasks:
+                _run_task(task)
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+
+            logger.info(f"Parallel warmup-prefill captures: {len(tasks)} tasks x {workers} workers")
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for _ in pool.map(_run_task, tasks):
+                    pass
 
         # Vision compile for multimodal models
         if getattr(self.model_args[0], "is_multimodal", False):
@@ -1048,6 +1129,8 @@ class Generator(WarmupForwardMixin):
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
+        read_stride: int = 1,
+        step_index: int | None = None,
         **kwargs,
     ):
         mode_switched = False
@@ -1065,9 +1148,9 @@ class Generator(WarmupForwardMixin):
 
         B = tokens.shape[0]
 
-        tokens = torch.chunk(tokens, self.data_parallel, 0)
-        start_pos = torch.chunk(start_pos, self.data_parallel, 0)
-        page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+        tokens = self._dp_chunk(tokens)
+        start_pos = self._dp_chunk(start_pos)
+        page_table = self._dp_chunk(page_table)
         sampling_params_list = None
         if sampling_params is not None:
             # sampling_dp may differ from data_parallel for models that internally
@@ -1139,7 +1222,8 @@ class Generator(WarmupForwardMixin):
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
-        if read_from_device:
+        skip_read = _should_skip_decode_read(read_stride, step_index)
+        if read_from_device and not skip_read:
             to_host = self.read_decode_output(tt_decode_output)
             return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
         return tt_decode_output
@@ -1272,13 +1356,13 @@ class Generator(WarmupForwardMixin):
         self._prev_sampling_on_device = sampling_on_device
         sampling_mode_changed = prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device
         reset_inputs = reset_batch or not sampling_on_device or sampling_mode_changed
-        if self.prev_page_table is None or any(
-            not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
-        ):
-            # If the page table has changed, it means additional pages have been added or inputs are shuffled
+        if self._page_table_changed(page_table):
             reset_inputs = True
             if page_table is not None:
+                self._prev_page_table_ids = tuple(id(pt) for pt in page_table)
                 self.prev_page_table = tuple(pt.clone() for pt in page_table)
+            else:
+                self._prev_page_table_ids = None
 
         if reset_inputs:
             for i in range(self.data_parallel):

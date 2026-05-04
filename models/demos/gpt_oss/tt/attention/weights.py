@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, should_enable_bfloat_opt
 from models.demos.gpt_oss.utils.substate import substate
 
 from .config import AttentionConfig
@@ -145,6 +145,7 @@ def load_attention_weights(
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
 
     # Load QKV weight
+    bfloat_opt = should_enable_bfloat_opt(weight_dtype)
     wqkv = ttnn.as_tensor(
         qkv_cat,
         device=mesh_device,
@@ -153,6 +154,7 @@ def load_attention_weights(
         mesh_mapper=col_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        enable_bfloat_opt=bfloat_opt,
     )
 
     wqkv_bias = ttnn.as_tensor(
@@ -173,6 +175,7 @@ def load_attention_weights(
         mesh_mapper=row_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        enable_bfloat_opt=bfloat_opt,
     )
 
     o_proj_bias_tt = ttnn.as_tensor(
