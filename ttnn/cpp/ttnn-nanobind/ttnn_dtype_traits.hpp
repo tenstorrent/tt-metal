@@ -263,6 +263,17 @@ struct ttnn_datatype_traits<DataType::INT32> {
     static constexpr auto name = nbd::const_name("INT32");
 };
 
+// fp8_e4m3 has no native dlpack representation; expose host bytes as uint8 (the workaround
+// already used in the deepseek_prefill dispatch/combine kernels). Callers reinterpret via
+// torch.float8_e4m3fn on the host side.
+template <>
+struct ttnn_datatype_traits<DataType::FP8_E4M3> {
+    using underlying_type = std::uint8_t;
+    static constexpr nbdlp::dtype value{
+        .code = static_cast<std::uint8_t>(nbdlp::dtype_code::UInt), .bits = 8, .lanes = 1};
+    static constexpr auto name = nbd::const_name("FP8_E4M3");
+};
+
 [[nodiscard]]
 constexpr nbdlp::dtype get_dtype_from_ttnn_datatype(DataType dt) noexcept {
     switch (dt) {
@@ -274,6 +285,7 @@ constexpr nbdlp::dtype get_dtype_from_ttnn_datatype(DataType dt) noexcept {
         case DataType::UINT8: return ttnn_datatype_traits<DataType::UINT8>::value;
         case DataType::UINT16: return ttnn_datatype_traits<DataType::UINT16>::value;
         case DataType::INT32: return ttnn_datatype_traits<DataType::INT32>::value;
+        case DataType::FP8_E4M3: return ttnn_datatype_traits<DataType::FP8_E4M3>::value;
         case DataType::INVALID: [[fallthrough]];
         default: TT_THROW("get_dtype_from_ttnn_datatype: got INVALID or unhandled DataType.");
     }

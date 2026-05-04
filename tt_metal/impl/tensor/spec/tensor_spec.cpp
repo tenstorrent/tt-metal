@@ -98,9 +98,9 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
         TT_ASSERT(
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
              dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::BFLOAT16 ||
-             dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B),
-            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
-            "device!");
+             dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || dtype == DataType::FP8_E4M3),
+            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 dtypes are "
+            "supported on device!");
     };
     auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
@@ -114,11 +114,14 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             case DataType::BFLOAT4_B:
                 TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
                 break;
+            case DataType::FP8_E4M3:
+                TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for FP8_E4M3 dtype!");
+                break;
             default:
                 TT_ASSERT(
                     false,
-                    "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, or BFLOAT4_B dtypes are supported on "
-                    "device!");
+                    "Only UINT32, INT32, FLOAT32, UINT16, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 dtypes are "
+                    "supported on device!");
                 break;
         }
     };

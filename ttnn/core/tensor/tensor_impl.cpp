@@ -53,6 +53,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
         case DataType::UINT16: os << "uint16"; break;
         case DataType::UINT32: os << "uint32"; break;
         case DataType::INT32: os << "int32"; break;
+        case DataType::FP8_E4M3: os << "fp8_e4m3"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
