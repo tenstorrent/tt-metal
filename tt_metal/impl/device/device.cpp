@@ -403,7 +403,8 @@ bool Device::compile_fabric() {
 
 void Device::configure_fabric(
     const std::unordered_set<uint32_t>& pre_dead_channels,
-    const std::unordered_set<uint32_t>& skip_soft_reset_channels) {
+    const std::unordered_set<uint32_t>& skip_soft_reset_channels,
+    const std::unordered_set<uint32_t>& external_umd_channels) {
     if (fabric_program_ == nullptr) {
         return;
     }
@@ -435,11 +436,16 @@ void Device::configure_fabric(
     // force-reset and recovered should not be permanently excluded from Phase 5 health checks
     // in subsequent cycles — the set is repopulated by this configure_fabric() call below.
     fabric_pre_dead_channels_.clear();
+    // FIX EXT (#42429): Clear and repopulate external_umd_channels each configure_fabric() call.
+    fabric_external_umd_channels_.clear();
 
     // FIX P2 (#42429): Persist pre_dead_channels so quiesce Phase 5 can skip them.
     // These channels have no fabric firmware loaded; Phase 5's READY_FOR_TRAFFIC check must
     // not throw for them (they will never reach that state).
     fabric_pre_dead_channels_ = pre_dead_channels;
+    // FIX EXT (#42429): Persist external_umd_channels so phase5b_erisc_health_check treats them
+    // as expected-non-responding (pre_dead_unhealthy) rather than truly_unhealthy.
+    fabric_external_umd_channels_ = external_umd_channels;
 
     // Returns FabricCoresHealth describing per-channel reset results.
     // newly_dead_channels: channels that NEWLY failed soft reset in this call (not pre-known).
@@ -452,7 +458,13 @@ void Device::configure_fabric(
     // and avoid the indefinite hang that occurs on non-MMIO device channels in T3K (#42429).
     // skip_soft_reset_channels: channels with base-UMD relay firmware (0x49706550).
     // FIX M (#42429): soft reset would halt the relay BRISC and cascade → hang.
-    const auto health = tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels, skip_soft_reset_channels);
+    // FIX EXT (#42429): external_umd_channels are also passed as skip_soft_reset_channels so
+    // configure_fabric_cores() applies FIX TG2 partial L1 clear (preserves 0x49706550 sentinel)
+    // and skips soft-reset for them — merged union used for configure_fabric_cores call only.
+    std::unordered_set<uint32_t> skip_soft_reset_with_ext = skip_soft_reset_channels;
+    skip_soft_reset_with_ext.insert(external_umd_channels.begin(), external_umd_channels.end());
+    const auto health =
+        tt::tt_fabric::configure_fabric_cores(this, pre_dead_channels, skip_soft_reset_with_ext);
     if (!health.all_channels_healthy) {
         if (!health.newly_dead_channels.empty()) {
             // Truly unexpected new dead channels: ALL L1 writes to this device now route through
@@ -479,8 +491,25 @@ void Device::configure_fabric(
     // so we can skip write_launch_msg_to_core for dead ETH cores.  Attempting to write launch
     // messages to an ERISC core whose ETH relay is broken causes the NOC write to route through
     // the dead channel and hang (same failure mode as the l1_barrier above).
-    const auto& all_dead_channels = pre_dead_channels.empty() ? health.newly_dead_channels
-                                                                : pre_dead_channels;
+    // FIX EXT (#42429): also treat external_umd_channels as "no firmware loaded" so
+    // write_launch_msg_to_core, WriteRuntimeArgsToDevice, and ConfigureDeviceWithProgram
+    // all skip them.  External channels preserve live relay BRISC (0x49706550) but must NOT
+    // have FABRIC_1D loaded on them — their out-of-mesh peer can never complete the handshake.
+    std::unordered_set<uint32_t> all_dead_channels_storage;
+    const std::unordered_set<uint32_t>* all_dead_channels_ptr;
+    if (!external_umd_channels.empty()) {
+        // Merge base dead + external into a new set so write_launch_msg_to_core skips both.
+        const auto& base_dead =
+            pre_dead_channels.empty() ? health.newly_dead_channels : pre_dead_channels;
+        all_dead_channels_storage = base_dead;
+        all_dead_channels_storage.insert(external_umd_channels.begin(), external_umd_channels.end());
+        all_dead_channels_ptr = &all_dead_channels_storage;
+    } else {
+        all_dead_channels_storage =
+            pre_dead_channels.empty() ? health.newly_dead_channels : pre_dead_channels;
+        all_dead_channels_ptr = &all_dead_channels_storage;
+    }
+    const auto& all_dead_channels = *all_dead_channels_ptr;
     // Look up SOC descriptor once for the ETH-core→channel reverse mapping.
     MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
     const auto& soc_desc_for_dead = env_impl.get_cluster().get_soc_desc(this->id_);
@@ -616,7 +645,10 @@ void Device::configure_fabric(
                     auto eth_chan = soc_desc_for_dead.get_eth_channel_for_core(
                         tt::umd::CoreCoord(logical_core.x, logical_core.y, CoreType::ETH, CoordSystem::LOGICAL),
                         CoordSystem::LOGICAL);
-                    is_skip_reset_chan = skip_soft_reset_channels.count(eth_chan) > 0;
+                    // FIX EXT (#42429): also skip canary write for external channels (same
+                    // reasoning — preserve live 0x49706550 sentinel for next session detection).
+                    is_skip_reset_chan = skip_soft_reset_channels.count(eth_chan) > 0 ||
+                                        external_umd_channels.count(eth_chan) > 0;
                 } catch (...) {
                     // Cannot resolve channel — conservatively skip canary write.
                     log_warning(
@@ -2391,6 +2423,17 @@ bool Device::phase5b_erisc_health_check(
     };
     std::vector<ChanToCheck> chans;
     for (const auto& [eth_chan_id, direction] : active_channels) {
+        // FIX EXT (#42429): skip external channels — firmware not loaded, expected at 0x49706550.
+        // Treat them as pre-dead (non-participating) rather than truly_unhealthy.
+        if (fabric_external_umd_channels_.count(eth_chan_id) > 0) {
+            log_info(
+                tt::LogMetal,
+                "phase5b_erisc_health_check: Device {} chan={} is external ETH (no in-cluster "
+                "peer, firmware not loaded) — skipping health check. (FIX EXT #42429)",
+                this->id(),
+                eth_chan_id);
+            continue;
+        }
         const auto eth_logical_core =
             soc_desc_p5.get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
         chans.push_back({eth_chan_id, eth_logical_core});
@@ -3007,7 +3050,22 @@ void Device::wait_for_fabric_workers_ready() {
                 master_chan,
                 kSyncTimeoutMs);
         }
-        const bool master_is_dead = fabric_pre_dead_channels_.count(master_chan) > 0 || master_newly_dead_fixas;
+        // FIX EXT (#42429): also treat external master_chan as dead — firmware not loaded on it,
+        // so the handshake poll would spin until FIX AL STARTED early-exit (kStartedTimeoutMs)
+        // and then set fabric_channels_not_ready_for_traffic_=true via FIX AM.  Skip cleanly.
+        const bool master_is_external = fabric_external_umd_channels_.count(master_chan) > 0;
+        if (master_is_external) {
+            log_info(
+                tt::LogMetal,
+                "wait_for_fabric_workers_ready: Device {} Phase 5: master chan={} is external ETH "
+                "(no in-cluster peer, firmware not loaded) — skipping handshake poll. "
+                "(FIX EXT #42429)",
+                this->id(),
+                master_chan);
+        }
+        const bool master_is_dead =
+            fabric_pre_dead_channels_.count(master_chan) > 0 || master_newly_dead_fixas ||
+            master_is_external;
         if (!master_is_dead) {
             log_info(
                 tt::LogMetal,

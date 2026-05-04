@@ -122,10 +122,18 @@ private:
     //   SKIP assert_risc_reset_at_core() for these channels — halting their BRISC kills the ETH
     //   relay endpoint used by non-MMIO reads, cascading into a full hang.  write_launch_msg_to_core
     //   transitions this firmware to fabric firmware without needing a soft reset.
+    // - external_umd_channels: ETH channel IDs where edm_status == 0x49706550 AND the channel
+    //   has no in-cluster peer (not present in cluster_.get_ethernet_connections()).  These are
+    //   out-of-mesh channels (e.g. T3K Device 4 chan 6 connecting to an external host).  FIX EXT
+    //   (#42429): like base_umd_channels, soft-reset is skipped (preserve relay BRISC); UNLIKE
+    //   base_umd_channels, write_launch_msg_to_core is also skipped — loading FABRIC_1D on an
+    //   external channel whose peer can never respond causes ring-sync timeouts that cascade into
+    //   fabric_channels_not_ready_for_traffic_ → GTEST_SKIP on 5 AllGather tests.
     struct TerminateStaleResult {
         std::unordered_set<uint32_t> probe_dead_channels;
         bool relay_broken;
         std::unordered_set<uint32_t> base_umd_channels;
+        std::unordered_set<uint32_t> external_umd_channels;
     };
     TerminateStaleResult terminate_stale_erisc_routers(
         Device* dev, const tt_fabric::FabricBuilderContext& builder_context) const;
@@ -175,6 +183,14 @@ private:
     // instead of waiting the full 30s timeout, reducing total wait from N×30s to 1×30s.
     // Declared mutable so wait_for_fabric_router_sync() (const) can set it.
     mutable bool ring_sync_already_timed_out_ = false;
+
+    // FIX EXT (#42429): per-device ETH channels at 0x49706550 with no in-cluster peer.
+    // Populated in compile_and_configure_fabric() from terminate_stale_erisc_routers() results.
+    // These channels skip write_launch_msg_to_core (firmware not loaded), ring-sync validation,
+    // and verify_all_fabric_channels_healthy checks.  Stored separately from base_umd_channels
+    // so they do NOT trigger FIX RZ (fabric_stale_base_umd_channels_) or FIX TH2/TI timeout
+    // extension — external channels are expected to never handshake.
+    std::unordered_map<ChipId, std::unordered_set<uint32_t>> external_umd_channels_map_;
 
     // GAP 5: Track channels that were force-reset during teardown.
     // On the next verify_all_fabric_channels_healthy() call, channels that were force-reset

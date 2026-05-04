@@ -1049,9 +1049,13 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
     // as the ETH relay endpoint for non-MMIO reads.  Soft-resetting halts the relay BRISC and
     // causes all subsequent reads from MMIO→non-MMIO to time out (5s each, then cascade hang).
     std::unordered_set<uint32_t> base_umd_channels;
+    // FIX EXT (#42429): External ETH channels — at 0x49706550 but no in-cluster peer.
+    // Soft-reset is skipped (preserve relay BRISC) and write_launch_msg_to_core is skipped
+    // (FABRIC_1D not loaded — external peer can never complete ETH handshake).
+    std::unordered_set<uint32_t> external_umd_channels;
 
     if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
-        return {probe_dead_channels, false, base_umd_channels};
+        return {probe_dead_channels, false, base_umd_channels, external_umd_channels};
     }
 
     const auto router_sync_address = builder_context.get_fabric_router_sync_address_and_status().first;
@@ -1251,15 +1255,45 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 // base-UMD channels to probe_dead_channels falsely marks every device as
                 // dead-relay on a clean machine, which prevents dispatch kernel initialization
                 // and causes fetch_queue_reserve_back timeouts on the very first run.
-                base_umd_channels.insert(eth_chan_id);
-                log_info(
-                    tt::LogMetal,
-                    "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
-                    "(base-UMD-firmware sentinel) — relay is live, skipping all writes. "
-                    "Added to base_umd_channels to skip soft reset in configure_fabric_cores.",
-                    dev->id(),
-                    eth_chan_id,
-                    status_buf[0]);
+                //
+                // FIX EXT (#42429): Distinguish in-cluster vs external base-UMD channels.
+                // An "external" channel has no entry in cluster_.get_ethernet_connections() —
+                // its peer is outside the fabric mesh (e.g. T3K Device 4 chan 6 connects to
+                // an out-of-mesh host).  Loading FABRIC_1D on external channels causes ring-sync
+                // timeouts because the external peer never responds to the ETH handshake.
+                // Route external channels to external_umd_channels: skip soft-reset (preserve
+                // relay BRISC) AND skip write_launch_msg_to_core (do not load FABRIC_1D).
+                {
+                    bool peer_in_cluster = false;
+                    const auto& eth_connections = cluster_.get_ethernet_connections();
+                    auto dev_conn_it = eth_connections.find(dev->id());
+                    if (dev_conn_it != eth_connections.end()) {
+                        peer_in_cluster =
+                            dev_conn_it->second.count(static_cast<int>(eth_chan_id)) > 0;
+                    }
+                    if (peer_in_cluster) {
+                        base_umd_channels.insert(eth_chan_id);
+                        log_info(
+                            tt::LogMetal,
+                            "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
+                            "(base-UMD-firmware sentinel) — relay is live, skipping all writes. "
+                            "Added to base_umd_channels to skip soft reset in configure_fabric_cores.",
+                            dev->id(),
+                            eth_chan_id,
+                            status_buf[0]);
+                    } else {
+                        external_umd_channels.insert(eth_chan_id);
+                        log_info(
+                            tt::LogMetal,
+                            "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
+                            "(base-UMD-firmware sentinel, no in-cluster peer) — external ETH "
+                            "channel. Added to external_umd_channels; soft-reset and "
+                            "write_launch_msg_to_core will both be skipped. (FIX EXT #42429)",
+                            dev->id(),
+                            eth_chan_id,
+                            status_buf[0]);
+                    }
+                }
             } else if (is_canary) {
                 // 0xA0A0A0A0 canary: fabric firmware entered kernel_main() but crashed before
                 // POSTCODE(INITIALIZATION_STARTED).  The ERISC is not running any live firmware —
@@ -1570,7 +1604,11 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
             base_umd_channels.size());
     }
 
-    return {std::move(probe_dead_channels), relay_broken, std::move(base_umd_channels)};
+    return {
+        std::move(probe_dead_channels),
+        relay_broken,
+        std::move(base_umd_channels),
+        std::move(external_umd_channels)};
 }
 
 // Quiesce/Teardown Phase Protocol
@@ -1797,9 +1835,14 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
                 base_umd_channels_map[dev->id()] = std::move(result.base_umd_channels);
                 // FIX TH2 (#42429): Record that this session has base-UMD channels so
                 // get_fabric_router_sync_timeout_ms() can extend the per-device timeout.
+                // NOTE: external_umd_channels do NOT set has_base_umd_channels_ — they never
+                // participate in ring-sync, so they cannot cause a ring-barrier timeout that
+                // would require the extended 30s timeout window (FIX TH2/TI).
                 if (!base_umd_channels_map[dev->id()].empty()) {
                     has_base_umd_channels_ = true;
                 }
+                // FIX EXT (#42429): collect external channels (no firmware loaded on these).
+                external_umd_channels_map_[dev->id()] = std::move(result.external_umd_channels);
             }
 
             // FIX E2 (#42429): Only mark non-MMIO devices as dead-relay when ETH relay is
@@ -1904,17 +1947,29 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // UMD firmware and can service relay reads), then configure MMIO devices.
     // This is the same ordering discipline as PHASE 1 probe reads.
     size_t configured_count = 0;
+    // FIX EXT (#42429): empty set used as default when a device has no external channels.
+    static const std::unordered_set<uint32_t> kEmptyChannelSet;
+    auto get_external = [&](ChipId id) -> const std::unordered_set<uint32_t>& {
+        auto it = external_umd_channels_map_.find(id);
+        return it != external_umd_channels_map_.end() ? it->second : kEmptyChannelSet;
+    };
     // Pass 1: non-MMIO devices (relay-dependent — must run before MMIO ETH switches fw)
     for (auto* dev : compiled_devices) {
         if (dev && cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
-            dev->configure_fabric(probe_dead_channels_map[dev->id()], base_umd_channels_map[dev->id()]);
+            dev->configure_fabric(
+                probe_dead_channels_map[dev->id()],
+                base_umd_channels_map[dev->id()],
+                get_external(dev->id()));
             configured_count++;
         }
     }
     // Pass 2: MMIO devices (PCIe-direct — safe to configure after non-MMIO relay ops complete)
     for (auto* dev : compiled_devices) {
         if (dev && cluster_.get_associated_mmio_device(dev->id()) == dev->id()) {
-            dev->configure_fabric(probe_dead_channels_map[dev->id()], base_umd_channels_map[dev->id()]);
+            dev->configure_fabric(
+                probe_dead_channels_map[dev->id()],
+                base_umd_channels_map[dev->id()],
+                get_external(dev->id()));
             configured_count++;
         }
     }
@@ -2121,6 +2176,24 @@ void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms)
         }
 
         const auto master_router_chan = builder_context.get_fabric_master_router_chan(dev->id());
+
+        // FIX EXT (#42429): skip if master router channel is external (no in-cluster peer).
+        // Firmware was NOT loaded on external channels (write_launch_msg_to_core skipped),
+        // so the ring-sync value will never appear.  Skip cleanly — no timeout, no FIX TI.
+        {
+            auto ext_it = external_umd_channels_map_.find(dev->id());
+            if (ext_it != external_umd_channels_map_.end() &&
+                ext_it->second.count(master_router_chan) > 0) {
+                log_info(
+                    tt::LogMetal,
+                    "wait_for_fabric_router_sync: Device {} master chan={} is an external ETH "
+                    "channel (no in-cluster peer, firmware not loaded) — skipping ring sync "
+                    "cleanly. (FIX EXT #42429)",
+                    dev->id(),
+                    master_router_chan);
+                return;
+            }
+        }
         const auto master_router_logical_core =
             cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(master_router_chan, CoordSystem::LOGICAL);
 
@@ -2348,7 +2421,28 @@ void FabricFirmwareInitializer::verify_all_fabric_channels_healthy() const {
         }
         const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
         const auto& active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
+        // FIX EXT (#42429): look up this device's external channels once per device.
+        const std::unordered_set<uint32_t>* ext_chans_ptr = nullptr;
+        {
+            auto ext_it = external_umd_channels_map_.find(dev->id());
+            if (ext_it != external_umd_channels_map_.end() && !ext_it->second.empty()) {
+                ext_chans_ptr = &ext_it->second;
+            }
+        }
         for (const auto& [eth_chan_id, direction] : active_channels) {
+            // FIX EXT (#42429): skip external channels — firmware was not loaded on them,
+            // so they will never be at READY_FOR_TRAFFIC.  They are expected to remain at
+            // 0x49706550 (base-UMD) indefinitely; treat as non-participant, not a failure.
+            if (ext_chans_ptr != nullptr && ext_chans_ptr->count(eth_chan_id) > 0) {
+                log_info(
+                    tt::LogMetal,
+                    "verify_all_fabric_channels_healthy: Device {} chan={} is external ETH "
+                    "(no in-cluster peer, firmware not loaded) — skipping health check. "
+                    "(FIX EXT #42429)",
+                    dev->id(),
+                    eth_chan_id);
+                continue;
+            }
             const auto eth_logical_core =
                 cluster_.get_soc_desc(dev->id()).get_eth_core_for_channel(eth_chan_id, CoordSystem::LOGICAL);
             channels_to_check.push_back({dev, eth_chan_id, eth_logical_core});

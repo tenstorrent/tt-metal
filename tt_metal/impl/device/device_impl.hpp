@@ -161,9 +161,14 @@ public:
     // skip_soft_reset_channels: ETH channel IDs with base-UMD relay firmware (edm_status=0x49706550).
     // FIX M (#42429): configure_fabric_cores() must NOT soft-reset these — their BRISC is the relay
     // endpoint for non-MMIO reads; halting it cascades into a full hang on deassert_risc_reset_at_core.
+    // external_umd_channels: ETH channel IDs at 0x49706550 with no in-cluster peer.
+    // FIX EXT (#42429): like skip_soft_reset_channels (soft-reset skipped via configure_fabric_cores),
+    // but ALSO skip write_launch_msg_to_core — loading FABRIC_1D on external channels causes ring-sync
+    // timeouts because the external peer can never respond to the ETH handshake.
     void configure_fabric(
         const std::unordered_set<uint32_t>& pre_dead_channels = {},
-        const std::unordered_set<uint32_t>& skip_soft_reset_channels = {});
+        const std::unordered_set<uint32_t>& skip_soft_reset_channels = {},
+        const std::unordered_set<uint32_t>& external_umd_channels = {});
     // Terminate fabric MUX tensix worker cores and re-launch them fresh.
     // Called during quiesce to ensure MUX channel state is reset between iterations.
     // Phase 1: quiesce_and_restart_fabric_workers() — terminate + reconfigure + relaunch all cores.
@@ -342,6 +347,10 @@ private:
     // was loaded for these channels, so Phase 5 of quiesce_and_restart_fabric_workers must not
     // expect them to reach READY_FOR_TRAFFIC.
     std::unordered_set<uint32_t> fabric_pre_dead_channels_;
+    // FIX EXT (#42429): ETH channel IDs at 0x49706550 with no in-cluster peer (out-of-mesh
+    // channels).  Firmware was NOT loaded on these (write_launch_msg_to_core skipped).  Phase 5b
+    // (phase5b_erisc_health_check) must treat them as pre-dead (warning-only, not truly_unhealthy).
+    std::unordered_set<uint32_t> fabric_external_umd_channels_;
     // FIX I2 (#42429): True when this MMIO device's master ETH channel connects to a
     // dead-relay peer.  Firmware was loaded on this device but the peer will never complete
     // the handshake (peer ETH relay broken).  wait_for_fabric_workers_ready() must skip
