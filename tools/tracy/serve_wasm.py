@@ -85,6 +85,33 @@ def _profiler_server_log_path() -> Path:
     return resolved
 
 
+def _embed_trace_dest_path() -> Path:
+    """Resolved embed.tracy path under PROFILER_WASM_DIR (constant basename only)."""
+    wasm_root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
+    dest = wasm_root / PROFILER_WASM_TRACE_FILE_NAME
+    resolved = _resolve_under_root(dest, strict=False)
+    try:
+        resolved.relative_to(wasm_root)
+    except ValueError as e:
+        raise RuntimeError(f"Invalid embed trace path under {wasm_root}") from e
+    if resolved.name != PROFILER_WASM_TRACE_FILE_NAME:
+        raise RuntimeError("Embed trace basename mismatch")
+    return resolved
+
+
+def _cmdline_targets_this_script(argv: list[str], script_realpath: str) -> bool:
+    joined = " ".join(argv)
+    if script_realpath in joined or __file__ in joined:
+        return True
+    for arg in argv[1:]:
+        try:
+            if os.path.realpath(arg) == script_realpath:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _resolve_wasm_http_port(explicit_port=None):
     if explicit_port is not None:
         return int(explicit_port)
@@ -98,14 +125,42 @@ clients = set()
 
 
 def _kill_previous_server_process():
+    """Stop other serve_wasm.py instances without spawning ps/shell (avoids command-injection noise)."""
+    script_real = os.path.realpath(__file__)
+    my_pid = os.getpid()
+    proc = Path("/proc")
+    if not proc.is_dir():
+        logger.warning("No /proc; skipping stale Tracy WASM server cleanup.")
+        return
     try:
-        output = subprocess.check_output(["ps", "-eo", "pid,cmd"]).decode()
-        for line in output.splitlines():
-            if __file__ in line and "python" in line:
-                pid = int(line.strip().split(None, 1)[0])
-                if pid != os.getpid():
-                    logger.info(f"Killing previous server process with PID {pid}")
-                    os.kill(pid, signal.SIGKILL)
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == my_pid:
+                continue
+            cmdline_file = entry / "cmdline"
+            try:
+                raw = cmdline_file.read_bytes()
+            except (FileNotFoundError, PermissionError, OSError):
+                continue
+            if not raw:
+                continue
+            argv = [p.decode("utf-8", errors="replace") for p in raw.split(b"\x00") if p]
+            if len(argv) < 2:
+                continue
+            interp = os.path.basename(argv[0]).lower()
+            if not interp.startswith("python"):
+                continue
+            if not _cmdline_targets_this_script(argv, script_real):
+                continue
+            logger.info(f"Killing previous server process with PID {pid}")
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError as e:
+                logger.warning(f"Could not kill PID {pid}: {e}")
     except Exception as e:
         logger.warning(f"Could not kill previous server process: {e}")
 
@@ -126,17 +181,22 @@ def launch_server_subprocess(directory=None, port=None, daemon=True):
         validated_dir = _validated_wasm_serve_directory(directory)
         cmd += ["--dir", str(validated_dir)]
     logger.info(f"Running command: {' '.join(cmd)}")
-    log_file = open(log_path, "a", buffering=1)  # line-buffered
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    process = subprocess.Popen(
-        cmd,
-        env=env,
-        stdout=log_file,
-        stderr=log_file,
-        start_new_session=True,
-        close_fds=True,
-    )
+    with open(log_path, "a", buffering=1) as log_file:
+        dup_fd = os.dup(log_file.fileno())
+    child_log = os.fdopen(dup_fd, "a", buffering=1)
+    try:
+        process = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=child_log,
+            stderr=child_log,
+            start_new_session=True,
+            close_fds=True,
+        )
+    finally:
+        child_log.close()
     logger.info(f"Started server with PID {process.pid}, logging to {log_path}")
     return process
 
@@ -156,7 +216,6 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
         traces_dir = PROFILER_WASM_TRACES_DIR
         if self.path.startswith("/traces/"):
             import urllib.parse
-            import shutil
 
             filename = self.path[len("/traces/") :]
             # Remove query string if present
@@ -181,28 +240,33 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                 os.remove(str(file_path))
                 print(f"[DEBUG] DELETE /traces/ deleted file: '{file_path}'")
                 # Check if embed.tracy is a symlink to the deleted file
-                embed_path = os.path.join(PROFILER_WASM_DIR, PROFILER_WASM_TRACE_FILE_NAME)
-                if os.path.islink(embed_path):
-                    target = os.readlink(embed_path)
-                    abs_target = os.path.abspath(os.path.join(os.path.dirname(embed_path), target))
-                    abs_deleted = os.path.abspath(str(file_path))
-                    if abs_target == abs_deleted:
-                        os.unlink(embed_path)
-                        # Find first available .tracy file
-                        files = [
-                            f
-                            for f in os.listdir(traces_dir)
-                            if f.endswith(".tracy") and os.path.isfile(os.path.join(traces_dir, f))
-                        ]
-                        files.sort(reverse=True)
-                        if files:
-                            new_target = os.path.relpath(
-                                os.path.join(traces_dir, files[0]), os.path.dirname(embed_path)
-                            )
-                            os.symlink(new_target, embed_path)
-                            print(f"[DEBUG] embed.tracy now points to: {new_target}")
-                        else:
-                            print("[DEBUG] No .tracy files left to point embed.tracy to.")
+                embed_path = _embed_trace_dest_path()
+                traces_root = _resolve_under_root(Path(traces_dir), strict=False)
+                abs_deleted = _resolve_under_root(file_path, strict=False)
+                if embed_path.is_symlink():
+                    abs_target = (embed_path.parent / embed_path.readlink()).resolve()
+                    try:
+                        abs_target.relative_to(traces_root)
+                    except ValueError:
+                        pass
+                    else:
+                        if abs_target == abs_deleted:
+                            embed_path.unlink()
+                            # Find first available .tracy file
+                            files = [
+                                f
+                                for f in os.listdir(traces_dir)
+                                if f.endswith(".tracy") and os.path.isfile(os.path.join(traces_dir, f))
+                            ]
+                            files.sort(reverse=True)
+                            if files:
+                                new_target = os.path.relpath(
+                                    os.path.join(traces_dir, files[0]), embed_path.parent
+                                )
+                                os.symlink(new_target, embed_path)
+                                print(f"[DEBUG] embed.tracy now points to: {new_target}")
+                            else:
+                                print("[DEBUG] No .tracy files left to point embed.tracy to.")
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"Deleted")
@@ -282,9 +346,9 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Disposition", f"attachment; filename={filename}")
             self.end_headers()
-            with open(file_path, "rb") as f:
+            with file_path.open("rb") as trace_stream:
                 while True:
-                    chunk = f.read(8192)
+                    chunk = trace_stream.read(8192)
                     if not chunk:
                         break
                     self.wfile.write(chunk)
@@ -301,13 +365,13 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"Invalid filename")
                 return
-            dst_path = Path(PROFILER_WASM_DIR) / PROFILER_WASM_TRACE_FILE_NAME
+            dst_path = _embed_trace_dest_path()
             import shutil
 
             try:
                 # Remove embed.tracy if it is a symlink
-                if os.path.islink(dst_path):
-                    os.unlink(dst_path)
+                if dst_path.is_symlink():
+                    dst_path.unlink()
                 shutil.copyfile(src_path, dst_path)
                 self.send_response(200)
                 self.end_headers()
@@ -318,7 +382,8 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(str(e).encode("utf-8"))
             return
         # Default: serve as normal static file (from PROFILER_WASM_DIR)
-        return super().do_GET()
+        super().do_GET()
+        return
 
 
 async def notify_clients():
@@ -329,16 +394,18 @@ async def notify_clients():
 
 
 async def watch_embed_file():
+    embed_abs = _embed_trace_dest_path()
     last_mtime = None
     while True:
         try:
-            mtime = os.path.getmtime(PROFILER_WASM_TRACE_FILE_NAME)
+            mtime = embed_abs.stat().st_mtime
             if last_mtime is None:
                 last_mtime = mtime
             elif mtime != last_mtime:
                 last_mtime = mtime
                 await notify_clients()
         except FileNotFoundError:
+            # Trace file may not exist yet (or may be temporarily absent); keep polling.
             pass
         await asyncio.sleep(1)
 
@@ -353,9 +420,9 @@ async def ws_handler(websocket):
 
 
 async def websocket_main(ws_port):
-    ws_server = await websockets.serve(ws_handler, "0.0.0.0", ws_port)
-    print(f"WebSocket server running on ws://0.0.0.0:{ws_port}")
-    await watch_embed_file()
+    async with websockets.serve(ws_handler, "0.0.0.0", ws_port):
+        print(f"WebSocket server running on ws://0.0.0.0:{ws_port}")
+        await watch_embed_file()
 
 
 def start_websocket_server(ws_port):
