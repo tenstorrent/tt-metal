@@ -905,19 +905,29 @@ class TtMolmo2Model(LightweightModule):
         ttnn.deallocate(input_ids_ttnn)
 
         # ---- Vision backbone + image feature injection ----
+        # Pre-compute S_pad (power-of-2) so vision path uses the same padded size as
+        # the eager path below — ensures ttnn.add and concat use bucket-aligned shapes
+        # and don't trigger per-S JIT recompilation at inference time.
+        if S <= 8192:
+            _S_pad_early = max(256, 1 << math.ceil(math.log2(S)) if S > 1 else 256)
+        else:
+            _S_pad_early = ((S + 255) // 256) * 256
+
         if pixel_values is not None:
             image_features = self.run_vision_backbone(pixel_values, pooled_patches_idx)
 
             # Additive injection via dense delta + ttnn.add — no D2H of embedding.
             # Build a zero tensor, write image features at patch positions (CPU, cheap
             # since we write into zeros not read the embedding), H2D, then add on device.
+            # Use _S_pad_early (padded to power-of-2 bucket) so all TTNN ops see the same
+            # tensor shape regardless of actual S, avoiding per-S JIT recompilation.
             H = self.configuration.dim
             is_patch_flat = input_ids.view(-1) == self.configuration.image_patch_id
             # Keep delta in float32 to match original precision: old code did
             # float32 add (embedding promoted to f32, features in f32) then
             # truncated to bf16. ttnn.add(bf16, f32) performs in f32 → bf16.
-            delta = torch.zeros(1, 1, S, H, dtype=torch.float32)
-            delta.view(-1, H)[is_patch_flat] = image_features  # float32, no conversion
+            delta = torch.zeros(1, 1, _S_pad_early, H, dtype=torch.float32)
+            delta.view(-1, H)[:S][is_patch_flat] = image_features  # float32, no conversion
             delta_ttnn = ttnn.from_torch(
                 delta,
                 dtype=ttnn.float32,
@@ -928,6 +938,17 @@ class TtMolmo2Model(LightweightModule):
             )
             x_ttnn = ttnn.to_layout(x_ttnn, ttnn.TILE_LAYOUT)
             x_ttnn = ttnn.reshape(x_ttnn, [1, 1, S, H])
+            if _S_pad_early > S:
+                x_pad = ttnn.from_torch(
+                    torch.zeros(1, 1, _S_pad_early - S, H, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                x_ttnn = ttnn.concat([x_ttnn, x_pad], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(x_pad)
             x_ttnn = ttnn.add(x_ttnn, delta_ttnn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(delta_ttnn)
         else:
@@ -990,11 +1011,9 @@ class TtMolmo2Model(LightweightModule):
         #             embedding tensor 536 MB/device which OOMs alongside 12 GB weights.
         #             chunk-multiple gives S_pad=34560 (283 MB/device, fits).
         # In both cases S_pad % 256 == 0 → no partial Q-tiles.
-        if S <= 8192:
-            S_pad = max(256, 1 << math.ceil(math.log2(S)) if S > 1 else 256)
-        else:
-            S_pad = ((S + 255) // 256) * 256
-        pad_len = S_pad - S
+        # Vision path already padded x_ttnn to _S_pad_early (same formula), so skip here.
+        S_pad = _S_pad_early
+        pad_len = 0 if pixel_values is not None else S_pad - S
 
         if pad_len > 0:
             # Pad embedding output: [1,1,S,dim] → [1,1,S_pad,dim]
