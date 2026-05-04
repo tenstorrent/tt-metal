@@ -1587,6 +1587,8 @@ inline __attribute__((always_inline)) void noc_write_with_state(
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
     }
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, ndests);
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
     }
@@ -1630,6 +1632,8 @@ inline __attribute__((always_inline)) void noc_wwrite_with_state(
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(
             cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
     }
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, ndests);
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
     }
