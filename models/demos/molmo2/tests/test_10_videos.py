@@ -186,7 +186,11 @@ def tt_model(mesh_device):
     logger.info("[warmup] vision (ViT + pooling + projector)...")
     model.warmup_vision_compile()
 
-    logger.info("Model fully warmed up (JIT + traces + vision)")
+    # Step 4: Capture decode trace so first inference has no trace-capture stall
+    logger.info("[warmup] Capturing decode trace...")
+    model.warmup_decode_trace()
+
+    logger.info("Model fully warmed up (JIT + traces + vision + decode trace)")
     return model, cfg
 
 
