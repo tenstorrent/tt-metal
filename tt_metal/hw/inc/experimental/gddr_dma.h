@@ -35,38 +35,32 @@ namespace experimental {
 /////////////////// Internal helpers /////////////////////////////
 //////////////////////////////////////////////////////////////////
 
-static inline __attribute__((always_inline)) void dma_check_stream_(uint8_t stream) {
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+static inline __attribute__((always_inline)) void check_stream_(uint8_t stream) {
     ASSERT(stream == 0 || stream == 1, DebugAssertTripped);
-#endif
 }
 
-static inline __attribute__((always_inline)) void dma_check_transfer_size_(uint32_t size_bytes) {
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+static inline __attribute__((always_inline)) void check_transfer_size_(uint32_t size_bytes) {
     ASSERT((size_bytes & 0xF) == 0, DebugAssertTripped);
     ASSERT(size_bytes <= 262128u, DebugAssertTripped);  // 14-bit transfer_size_words field
-#endif
 }
 
-static inline __attribute__((always_inline)) void outstanding_reads_check_(uint32_t n) {
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+static inline __attribute__((always_inline)) void check_outstanding_reads_(uint32_t n) {
     ASSERT(n <= 255, DebugAssertTripped);
-#endif
 }
 
-static inline __attribute__((always_inline)) void outstanding_writes_check_(uint32_t n) {
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+static inline __attribute__((always_inline)) void check_outstanding_writes_(uint32_t n) {
     ASSERT(n <= 15, DebugAssertTripped);
-#endif
 }
 
-static inline __attribute__((always_inline)) void dma_write_addr_(uint8_t stream, uint32_t src_l1, uint64_t dst_gddr) {
+static inline __attribute__((always_inline)) void program_dma_write_addresses_(
+    uint8_t stream, uint32_t src_l1, uint64_t dst_gddr) {
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_WRITE_TRANSFER_START_ADDR_REG_OFFSET, src_l1);
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_WRITE_DEST_ADDR_LOW_REG_OFFSET, (uint32_t)(dst_gddr & 0xFFFFFFFFu));
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_WRITE_DEST_ADDR_HIGH_REG_OFFSET, (uint32_t)(dst_gddr >> 32));
 }
 
-static inline __attribute__((always_inline)) void dma_read_addr_(uint8_t stream, uint64_t src_gddr, uint32_t dst_l1) {
+static inline __attribute__((always_inline)) void program_dma_read_addresses_(
+    uint8_t stream, uint64_t src_gddr, uint32_t dst_l1) {
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_READ_TRANSFER_SOURCE_LOW_REG_OFFSET, (uint32_t)(src_gddr & 0xFFFFFFFFu));
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_READ_TRANSFER_SOURCE_HIGH_REG_OFFSET, (uint32_t)(src_gddr >> 32));
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_READ_TRANSFER_DEST_REG_OFFSET, dst_l1);
@@ -96,9 +90,7 @@ inline __attribute__((always_inline)) void dma_restore_default_transfer_attrs() 
  * @param burst_size  Beats per AXI burst (1-255).
  */
 inline __attribute__((always_inline)) void dma_set_burst_size(uint8_t burst_size = 0x10) {
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
     ASSERT(burst_size > 0 && burst_size <= 255, DebugAssertTripped);
-#endif
     DmaCtrlTransferAttrs_u attrs;
     attrs.val = READ_TX_CTRL_REG(TX_CTRL_TX_TRANSFER_ATTRIBUTES_REG_OFFSET);
     attrs.f.max_burst_size = burst_size;
@@ -115,8 +107,8 @@ inline __attribute__((always_inline)) void dma_set_burst_size(uint8_t burst_size
  */
 inline __attribute__((always_inline)) void dma_async_read(
     uint8_t stream, uint64_t src_gddr, uint32_t dst_l1, uint32_t size_bytes) {
-    dma_check_stream_(stream);
-    dma_check_transfer_size_(size_bytes);
+    check_stream_(stream);
+    check_transfer_size_(size_bytes);
 
     DmaTxqTransferAttrs_u attrs = {.val = DmaTxqTransferAttrs_DEFAULT};
     attrs.f.transfer_size_words = size_bytes >> 4;
@@ -127,7 +119,7 @@ inline __attribute__((always_inline)) void dma_async_read(
         status.val = READ_TX_CTRL_REG(TX_CTRL_TX_READ_STATUS_REG_OFFSET);
     } while (status.f.read_ready != 1);
 
-    dma_read_addr_(stream, src_gddr, dst_l1);
+    program_dma_read_addresses_(stream, src_gddr, dst_l1);
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);
 }
 
@@ -141,8 +133,8 @@ inline __attribute__((always_inline)) void dma_async_read(
  */
 inline __attribute__((always_inline)) void dma_async_write(
     uint8_t stream, uint32_t src_l1, uint64_t dst_gddr, uint32_t size_bytes) {
-    dma_check_stream_(stream);
-    dma_check_transfer_size_(size_bytes);
+    check_stream_(stream);
+    check_transfer_size_(size_bytes);
 
     DmaTxqTransferAttrs_u attrs = {.val = DmaTxqTransferAttrs_DEFAULT};
     attrs.f.transfer_size_words = size_bytes >> 4;
@@ -155,7 +147,7 @@ inline __attribute__((always_inline)) void dma_async_write(
         status.val = READ_TX_CTRL_REG(TX_CTRL_TX_WRITE_STATUS_REG_OFFSET);
     } while (status.f.write_ready != 1);
 
-    dma_write_addr_(stream, src_l1, dst_gddr);
+    program_dma_write_addresses_(stream, src_l1, dst_gddr);
     WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);
 }
 
@@ -165,7 +157,7 @@ inline __attribute__((always_inline)) void dma_async_write(
  * @param stream  TX stream (0 or 1).
  */
 inline __attribute__((always_inline)) void dma_async_read_barrier(uint8_t stream) {
-    dma_check_stream_(stream);
+    check_stream_(stream);
     volatile DmaTxqStatus_u status;
     do {
         status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
@@ -178,7 +170,7 @@ inline __attribute__((always_inline)) void dma_async_read_barrier(uint8_t stream
  * @param stream  TX stream (0 or 1).
  */
 inline __attribute__((always_inline)) void dma_async_write_barrier(uint8_t stream) {
-    dma_check_stream_(stream);
+    check_stream_(stream);
     volatile DmaTxqStatus_u status;
     do {
         status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
@@ -196,8 +188,8 @@ inline __attribute__((always_inline)) void dma_async_write_barrier(uint8_t strea
  * @param n       Target outstanding read count to wait for.
  */
 inline __attribute__((always_inline)) void dma_async_read_wait_n(uint8_t stream, uint8_t n) {
-    dma_check_stream_(stream);
-    outstanding_reads_check_(n);
+    check_stream_(stream);
+    check_outstanding_reads_(n);
     volatile DmaTxqStatus_u status;
     do {
         status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
@@ -215,8 +207,8 @@ inline __attribute__((always_inline)) void dma_async_read_wait_n(uint8_t stream,
  * @param n       Target outstanding write count to wait for.
  */
 inline __attribute__((always_inline)) void dma_async_write_wait_n(uint8_t stream, uint8_t n) {
-    dma_check_stream_(stream);
-    outstanding_writes_check_(n);
+    check_stream_(stream);
+    check_outstanding_writes_(n);
     volatile DmaTxqStatus_u status;
     do {
         status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
@@ -228,8 +220,8 @@ inline __attribute__((always_inline)) void dma_async_write_wait_n(uint8_t stream
  *
  * @param stream  TX stream (0 or 1).
  */
-inline __attribute__((always_inline)) uint8_t dma_reads_outstanding(uint8_t stream) {
-    dma_check_stream_(stream);
+inline __attribute__((always_inline)) uint8_t dma_get_reads_outstanding(uint8_t stream) {
+    check_stream_(stream);
     DmaTxqStatus_u status;
     status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
     return static_cast<uint8_t>(status.f.num_reads_outstanding);
@@ -240,8 +232,8 @@ inline __attribute__((always_inline)) uint8_t dma_reads_outstanding(uint8_t stre
  *
  * @param stream  TX stream (0 or 1).
  */
-inline __attribute__((always_inline)) uint8_t dma_writes_outstanding(uint8_t stream) {
-    dma_check_stream_(stream);
+inline __attribute__((always_inline)) uint8_t dma_get_writes_outstanding(uint8_t stream) {
+    check_stream_(stream);
     DmaTxqStatus_u status;
     status.val = READ_TX_STREAM_REG(stream, TX_REG_STREAM_STATUS_REG_OFFSET);
     return static_cast<uint8_t>(status.f.num_writes_outstanding);

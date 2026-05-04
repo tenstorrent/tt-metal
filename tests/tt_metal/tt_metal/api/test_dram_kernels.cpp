@@ -45,7 +45,10 @@ protected:
         drisc_l1_base_ = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
         drisc_l1_noc_addr_ = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
         tensix_l1_base_ = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
-        dram_unreserved_base_ = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+        // Use the allocator's managed base rather than a raw HAL constant. We don't
+        // formally allocate a buffer here because each test owns the DRAM exclusively
+        // for its duration and nothing else allocates into this region concurrently.
+        dram_unreserved_base_ = device_->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         dram_unreserved_size_ = hal.get_dev_size(HalDramMemAddrType::UNRESERVED);
     }
 
