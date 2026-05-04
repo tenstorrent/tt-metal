@@ -70,6 +70,19 @@ def _cli_filesystem_path(path: str, base_dir: Optional[Path] = None) -> Path:
     return resolved
 
 
+def _safe_audio_output_path(path: str) -> Path:
+    """Allow WAV writes under cwd, home, or /tmp (absolute /tmp/... is common for demos)."""
+    raw = Path(path).expanduser()
+    if ".." in raw.parts:
+        raise ValueError(f"Path must not contain '..': {path!r}")
+    resolved = raw.resolve()
+    allowed_roots = (Path.cwd().resolve(), Path.home().resolve(), Path("/tmp").resolve())
+    if not any(resolved == r or r in resolved.parents for r in allowed_roots):
+        roots = ", ".join(str(r) for r in allowed_roots)
+        raise ValueError(f"Audio output must resolve under one of: {roots}")
+    return resolved
+
+
 def load_hf_weights(model_id: str, cache_dir: Optional[str] = None) -> dict:
     """
     Load weights from HuggingFace model.
@@ -179,7 +192,7 @@ def save_audio(audio: torch.Tensor, output_path: str, sample_rate: int = 24000):
     audio = audio.detach().cpu().float().numpy()
     audio = (audio * 32767).astype("int16")
 
-    out_path = _cli_filesystem_path(output_path)
+    out_path = _safe_audio_output_path(output_path)
     wavfile.write(str(out_path), sample_rate, audio)
     print(f"Audio saved to: {out_path}")
 
@@ -539,12 +552,16 @@ def run_demo(
                 # Convert logits to token IDs (argmax)
                 print("Converting logits to tokens...")
                 token_ids_list = []
+                codebook_size = speech_config.codebook_size
                 for logits in logits_list:
                     logits_torch = ttnn.to_torch(logits)  # [batch, 1, seq_len, vocab_size]
                     # Squeeze extra dimensions and take argmax
                     logits_torch = logits_torch.squeeze()  # [seq_len, vocab_size] or [batch, seq_len, vocab_size]
                     if logits_torch.dim() == 2:
                         logits_torch = logits_torch.unsqueeze(0)  # [1, seq_len, vocab_size]
+                    # Semantic head (group 0) can be 3072-wide while RVQ codebooks are 2048 entries; embedding would OOB.
+                    if logits_torch.shape[-1] > codebook_size:
+                        logits_torch = logits_torch[..., :codebook_size]
                     token_ids = torch.argmax(logits_torch, dim=-1)  # [batch, seq_len]
                     token_ids_list.append(token_ids)
 
@@ -653,7 +670,7 @@ def main():
         "--audio-output",
         type=str,
         default="output.wav",
-        help="Output path for generated audio (default: output.wav)",
+        help="WAV path under cwd, $HOME, or /tmp (default: output.wav in cwd)",
     )
     parser.add_argument(
         "--text",
