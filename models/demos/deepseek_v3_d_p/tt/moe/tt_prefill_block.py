@@ -353,6 +353,7 @@ class TtPrefillBlock(LightweightModule):
         x = ttnn.add(x, ffn_out)
         ttnn.deallocate(ffn_out)
 
+        ttnn.ReadDeviceProfiler(self.mesh_device)
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
         return x, kv_cache
 

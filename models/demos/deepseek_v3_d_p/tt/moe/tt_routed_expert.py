@@ -412,6 +412,8 @@ class TtRoutedExpert(LightweightModule):
             )
             logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
+            ttnn.ReadDeviceProfiler(self.mesh_device)
+
         # Shape: (experts_per_chip, max_tokens, emb_dim)
         logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
 
@@ -473,6 +475,8 @@ class TtRoutedExpert(LightweightModule):
             # Shape: (1, max_tokens, emb_dim)
             output = ttnn.unsqueeze(output, dim=0)
             expert_outputs_list.append(output)
+
+            ttnn.ReadDeviceProfiler(self.mesh_device)
 
         # Concatenate along expert dimension
         # Shape: (experts_per_chip, max_tokens, emb_dim)

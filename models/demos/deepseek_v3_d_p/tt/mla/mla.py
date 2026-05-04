@@ -695,5 +695,6 @@ class ttMLA:
             )
         else:
             out = v_out
+        ttnn.ReadDeviceProfiler(self.mesh_device)
         signpost(header="MLA_END")
         return out

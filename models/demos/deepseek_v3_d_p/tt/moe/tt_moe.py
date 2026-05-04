@@ -420,6 +420,7 @@ class TtMoe(LightweightModule):
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
         )
+        ttnn.ReadDeviceProfiler(self.mesh_device)
         x = ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
@@ -467,6 +468,7 @@ class TtMoe(LightweightModule):
             metadata,
             tt_expert_token_counts,
         )
+        ttnn.ReadDeviceProfiler(self.mesh_device)
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape}")
 
         # ========================================
@@ -534,5 +536,6 @@ class TtMoe(LightweightModule):
                 expert_token_counts=tt_expert_token_counts,
             )
 
+        ttnn.ReadDeviceProfiler(self.mesh_device)
         signpost(header="MoE_END")
         return final_output, intermediates
