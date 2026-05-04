@@ -258,29 +258,45 @@ FabricCoresHealth configure_fabric_cores(
             // where corrupt status persisted across container restarts on bare metal.
             continue;
         }
-        // FIX TG (#42429): Skip L1 clear for base-UMD relay channels.
+        // FIX TG (#42429): For base-UMD relay channels, preserve edm_status_address (0x49706550)
+        // so the next session's terminate_stale_erisc_routers() can identify base-UMD state
+        // and fire FIX M (launch_msg transition).
         //
-        // If the device is closed quickly (e.g., conftest warm-up, < 200 ms), ERISC may not
-        // have had time to process the write_launch_msg_to_core and transition out of base-UMD
-        // firmware before teardown.  In that case:
-        //   - Without FIX TG: edm_status_address was zeroed by L1 clear → next session's
-        //     terminate_stale_erisc_routers() reads 0 (not 0x49706550) → classifies channel
-        //     as corrupted/dead → skips FIX M's launch_msg path → ERISC stays in base-UMD,
-        //     fabric operations hang.
-        //   - With FIX TG: edm_status_address retains 0x49706550 (written by base-UMD FW)
-        //     → next session correctly identifies base-UMD relay state → FIX M fires →
-        //     launch_msg transitions ERISC → fabric operations proceed normally.
+        // FIX TG2 (#42429): PARTIAL L1 clear — zero all sync-critical addresses EXCEPT
+        // edm_status_address.  Original FIX TG skipped ALL clears, but that left stale
+        // edm_local_sync_address / edm_local_tensix_sync_address / termination_signal_address
+        // from a previous failed ring-sync session (stuck at REMOTE_HANDSHAKE_COMPLETE
+        // 0xa1b1c1d1).  After tt-smi -r the ERISC restarts into base-UMD (writes 0x49706550
+        // back to edm_status_address) but does NOT reset the sync addresses.  The new
+        // session's fabric firmware then boots, encounters the stale handshake state, and
+        // stalls at REMOTE_HANDSHAKE_COMPLETE again — causing the same 120s ring-sync
+        // timeout across multiple smi-reset cycles (FIX UP2 INFRA_ERROR pattern observed
+        // on runs 25293661493 + 25294660215 on t3k-08/t3k-05 respectively).
         //
-        // Safety: write_launch_msg_to_core is still called for these channels in configure_fabric()
-        // — the new fabric firmware initializes its own state (edm_status, etc.) on startup, so
-        // leaving the old 0x49706550 value in L1 is harmless; the firmware overwrites it.
+        // Fix: clear edm_local_sync_address, edm_local_tensix_sync_address, and
+        // termination_signal_address for base-UMD channels.  Skip ONLY edm_status_address.
         if (skip_soft_reset_channels.count(router_chan)) {
-            log_debug(
-                tt::LogMetal,
-                "configure_fabric_cores: device {} channel {} base-UMD relay — skipping L1 clear "
-                "to preserve 0x49706550 sentinel [FIX TG #42429]",
-                device->id(),
-                router_chan);
+            auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
+            for (const auto& address : addresses_to_clear) {
+                if (address == router_config.edm_status_address) {
+                    log_debug(
+                        tt::LogMetal,
+                        "configure_fabric_cores: device {} channel {} base-UMD relay — preserving "
+                        "edm_status_address (0x49706550 sentinel) [FIX TG #42429]",
+                        device->id(),
+                        router_chan);
+                    continue;  // Preserve 0x49706550 sentinel for next-session base-UMD detection
+                }
+                log_debug(
+                    tt::LogMetal,
+                    "configure_fabric_cores: device {} channel {} base-UMD relay — clearing sync "
+                    "address 0x{:08x} to prevent stale handshake state [FIX TG2 #42429]",
+                    device->id(),
+                    router_chan,
+                    address);
+                tt::tt_metal::detail::WriteToDeviceL1(
+                    device, router_logical_core, address, router_zero_buf, CoreType::ETH);
+            }
             continue;
         }
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
