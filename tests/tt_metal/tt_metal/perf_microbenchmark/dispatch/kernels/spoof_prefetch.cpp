@@ -16,6 +16,9 @@ constexpr uint32_t dispatch_cb_sem = get_compile_time_arg_val(3);
 constexpr uint32_t cmd_cb_base = get_compile_time_arg_val(4);
 constexpr uint32_t cmd_cb_pages = get_compile_time_arg_val(5);
 constexpr uint32_t page_batch_size = get_compile_time_arg_val(6);
+// spoof prefetcher's own credit-pool sem. Distinct from dispatch_cb_sem when dispatcher and prefetcher
+// kernels are on the same core.
+constexpr uint32_t spoof_my_sem = get_compile_time_arg_val(7);
 
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));
@@ -27,7 +30,8 @@ void kernel_main() {
 
     uint32_t cmd_ptr;
     uint32_t dispatch_data_ptr = dispatch_cb_base;
-    CBWriter<dispatch_cb_sem, my_noc_index, dispatch_noc_xy, dispatch_cb_sem> writer;
+    // my_sem_id=spoof_my_sem (credit pool), downstream_sem_id=dispatch_cb_sem (produced-count on dispatch).
+    CBWriter<spoof_my_sem, my_noc_index, dispatch_noc_xy, dispatch_cb_sem> writer;
     for (int i = 0; i < iterations; i++) {
         cmd_ptr = cmd_cb_base;
         for (uint32_t j = 0; j < (cmd_cb_pages - 1) / page_batch_size; j++) {

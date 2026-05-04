@@ -2791,10 +2791,12 @@ public:
             this->device_,
             dispatch_buffer_pages,
             di_dispatch_cb_sem,
+            pf_downstream_cb_sem,
             di_sync_sem,
             phys_prefetch,
             phys_disp,
             memmap,
+            dispatch_cb_base,
             dev_completion_base,
             Common::SD_COMPLETION_QUEUE_SIZE);
         auto dispatch_kernel = tt_metal::CreateKernel(
