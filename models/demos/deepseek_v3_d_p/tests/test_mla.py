@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -382,7 +383,7 @@ def test_mla(
             "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
         },
     ],
-    ids=["line", "ring", "line-emb", "ring-emb"],
+    ids=["line-original", "ring-original", "line-emb", "ring-emb"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
