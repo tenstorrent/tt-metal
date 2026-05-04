@@ -2888,7 +2888,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
-    uint32_t B,
+    uint32_t in0_B,
+    uint32_t in1_B,
     uint32_t M,
     uint32_t N,
     uint32_t K,
@@ -2958,7 +2959,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (B * num_blocks > 1) {
+    if (in0_B * num_blocks > 1) {
         in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
@@ -2976,7 +2977,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
-    if (B * num_blocks > 1) {
+    if (in1_B * num_blocks > 1) {
         in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     if (in1_is_sharded) {
@@ -3152,7 +3153,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             (std::uint32_t)in0_block_h,  // in0_block_h
 
             // batch args
-            (std::uint32_t)B  // batch
+            (std::uint32_t)in0_B  // batch
         };
     } else {
         in0_sender_compile_time_args = {
@@ -3181,8 +3182,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
             // batch args
             (std::uint32_t)M * K,  // MtKt
-            (std::uint32_t)B,      // batch
-            (std::uint32_t)B,      // batch
+            (std::uint32_t)in0_B,  // batch
+            (std::uint32_t)in1_B,  // batch
             (std::uint32_t)false,  // reuse_in0_in_CB
             // sparsity args
             (std::uint32_t)0,     // batchB
@@ -3217,7 +3218,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         (std::uint32_t)0,  // in1_mcast_num_cores
         // batch args
         (std::uint32_t)K * N,        // KtNt
-        (std::uint32_t)B,            // batch
+        (std::uint32_t)in0_B,        // batch
         (std::uint32_t)bcast_batch,  // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
@@ -3266,8 +3267,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)B,     // batch
-        (std::uint32_t)false  // get_batch_from_reader
+        (std::uint32_t)in0_B,  // batch
+        (std::uint32_t)false   // get_batch_from_reader
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -3493,7 +3494,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        B,                       // batch
+        in0_B,                   // batch
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
@@ -4178,7 +4179,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)in1_B,  // batch
+        (std::uint32_t)((in0_B == 1 && in1_B > 1) ? in1_B : in0_B),  // batch (must match in1 sender)
 
         // WRITER
         // out tensor args
@@ -5156,6 +5157,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
             program_config.compute_with_storage_grid_size,
             ttnn::get_throttle_level(compute_kernel_config),
             in0_B,
+            in1_B,
             Mt,
             Nt,
             Kt,

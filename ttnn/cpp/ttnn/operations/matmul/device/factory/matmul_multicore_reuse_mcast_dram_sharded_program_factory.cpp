@@ -71,7 +71,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     bool untilize_out,
     bool skip_compute,
     bool skip_in0_mcast,
-    bool skip_write_back) {
+    bool skip_write_back,
+    bool row_broadcast_bias) {
     using namespace tt;
 
     // currently only support transpose of the full tile
@@ -435,7 +436,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         false,         // in0_transpose_tile
     };
     if (bias_buffer != nullptr) {
-        compute_kernel_args.push_back(1u);  // row_broadcast_bias: DRAM sharded always uses row broadcast
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
     }
 
     KernelDescriptor compute_kernel_desc;
@@ -901,6 +902,8 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
         bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
+    const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
+
     tt::tt_metal::IDevice* device = a.device();
 
     TT_FATAL(
@@ -1008,7 +1011,8 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
         untilize_out,
         skip_compute,
         skip_in0_mcast,
-        skip_write_back);
+        skip_write_back,
+        row_broadcast_bias);
 }
 
 }  // namespace ttnn::prim
