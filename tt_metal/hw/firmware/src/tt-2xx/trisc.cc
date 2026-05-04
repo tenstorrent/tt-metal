@@ -70,16 +70,18 @@ namespace ckernel {
 // volatile tt_reg_ptr uint* const regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
 #undef PTR_CONST
 
-uint32_t cfg_state_id __attribute__((used)) = 0;    // Flip between 0 and 1 to keep state between kernel calls
-uint32_t dest_offset_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep dest pointer between kernel calls
+// Flip between 0 and 1 to keep state between kernel calls
+thread_local uint32_t cfg_state_id __attribute__((used)) = 0;
+// Flip between 0 and 1 to keep dest pointer between kernel calls
+thread_local uint32_t dest_offset_id __attribute__((used)) = 0;
 
-uint32_t op_info_offset __attribute__((used)) = 0;
+thread_local uint32_t op_info_offset __attribute__((used)) = 0;
 
-tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
+thread_local tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 }  // namespace ckernel
 
 #if !defined(UCK_CHLKC_MATH)
-uint32_t tt_l1_ptr* cb_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* cb_l1_base __attribute__((used));
 #endif
 
 #if defined(UCK_CHLKC_UNPACK)

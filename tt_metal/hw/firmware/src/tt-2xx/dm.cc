@@ -195,18 +195,9 @@ extern "C" uint32_t _start1() {
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
-        // DM + TRISC handshake (dmk.cc + trisck.cc). Reset once before subordinates run.
-        // run_triscs() returns immediately while TRISC firmware runs; clearing shared_globals_ready after
-        // run_triscs races trisck publishing GO on slots 8..11 and causes infinite wait there.
-        for (uint32_t i = 0; i < MaxNumKernels; i++) {
-            mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
-            mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
-        }
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
-    // Wait until first thread in the group has set its slot to GO.
-
     WAYPOINT("I");
     DPRINT("DM0-FW: initialized\n");
 
@@ -290,6 +281,11 @@ extern "C" uint32_t _start1() {
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
+
+                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                    mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
 
                 run_triscs(enables);
 
