@@ -10,11 +10,11 @@ import ttnn
 from ttnn.device import Arch
 from typing import Tuple
 from models.tt_cnn.tt.builder import (
+    AutoShardedStrategyConfiguration,
     Conv2dConfiguration,
     MaxPool2dConfiguration,
     TtConv2d,
     TtMaxPool2d,
-    HeightShardedStrategyConfiguration,
 )
 
 
@@ -57,7 +57,7 @@ class TTNNDPUnit:
                 dilation=(1, 1),
                 weight=self.conv1_weight,
                 bias=self.conv1_bias,
-                sharding_strategy=HeightShardedStrategyConfiguration(),
+                sharding_strategy=AutoShardedStrategyConfiguration(),
                 weights_dtype=ttnn.bfloat8_b,
                 enable_act_double_buffer=False,
                 enable_weights_double_buffer=False,
@@ -81,7 +81,7 @@ class TTNNDPUnit:
                 dilation=(1, 1),
                 weight=self.conv2_weight,
                 bias=self.conv2_bias,
-                sharding_strategy=HeightShardedStrategyConfiguration(),
+                sharding_strategy=AutoShardedStrategyConfiguration(),
                 activation=ttnn.UnaryOpType.RELU,
                 weights_dtype=ttnn.bfloat8_b,
                 enable_act_double_buffer=False,
@@ -130,7 +130,7 @@ class TTNNConvBN:
                 dilation=(1, 1),
                 weight=self.weight,
                 bias=self.bias,
-                sharding_strategy=HeightShardedStrategyConfiguration(),
+                sharding_strategy=AutoShardedStrategyConfiguration(),
                 activation=ttnn.UnaryOpType.RELU,
                 weights_dtype=ttnn.bfloat8_b,
                 enable_act_double_buffer=False,
@@ -174,7 +174,7 @@ class TTNNConv1x1:
                 dilation=(1, 1),
                 weight=self.weight,
                 bias=self.bias,
-                sharding_strategy=HeightShardedStrategyConfiguration(),
+                sharding_strategy=AutoShardedStrategyConfiguration(),
                 weights_dtype=ttnn.bfloat8_b,
                 enable_act_double_buffer=False,
                 enable_weights_double_buffer=False,
