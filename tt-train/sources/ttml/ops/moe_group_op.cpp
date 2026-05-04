@@ -8,6 +8,7 @@
 #include <ttnn/operations/core/core.hpp>
 #include <ttnn/operations/creation/creation.hpp>
 #include <ttnn/operations/data_movement/reshape_view/reshape.hpp>
+#include <ttnn/operations/data_movement/transpose/transpose.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/unary/unary.hpp>
 
@@ -73,10 +74,13 @@ MoEGroupOutputs moe_group_op(
             }
             auto d_grouped_scores = grouped_scores_out->get_grad();
 
-            // ttnn::reshape and ttnn::eq don't accept uint16 — widen k_slot
-            // and arange to uint32.
-            auto k_slot_u32 = ttnn::typecast(k_slot, ttnn::DataType::UINT32);
-            k_slot_u32 = ttnn::reshape(k_slot_u32, ttnn::Shape({1, 1, t_cap, 1}));
+            // ttnn::eq doesn't accept uint16 — widen k_slot to uint32. Then
+            // route to TILE [1,1,T_cap,1] via transpose rather than RM reshape
+            // (RM→RM reshape repaginates across DRAM banks; TILE transpose is
+            // a per-tile swap).
+            auto k_slot_u32_rm = ttnn::typecast(k_slot, ttnn::DataType::UINT32);
+            auto k_slot_u32_tile = ttnn::to_layout(k_slot_u32_rm, ttnn::Layout::TILE);
+            auto k_slot_col_tile = ttnn::transpose(k_slot_u32_tile, -2, -1);
 
             auto arange_K = ttnn::arange(
                 /*start=*/0,
@@ -85,20 +89,20 @@ MoEGroupOutputs moe_group_op(
                 ttnn::DataType::UINT32,
                 std::ref(*device));
             arange_K = ttnn::reshape(arange_K, ttnn::Shape({1, 1, 1, k}));
+            auto arange_K_tile = ttnn::to_layout(arange_K, ttnn::Layout::TILE);
 
-            // [1,1,T_cap,1] eq [1,1,1,K] -> [1,1,T_cap,K] uint32, broadcast.
+            // [1,1,T_cap,1] eq [1,1,1,K] -> [1,1,T_cap,K] uint32, broadcast in TILE.
             // Direct uint32→bf16 typecast is broken (returns 2^31 for value 1),
             // so go through float32.
-            auto one_hot_u32 = ttnn::eq(k_slot_u32, arange_K);
+            auto one_hot_u32 = ttnn::eq(k_slot_col_tile, arange_K_tile);
             auto one_hot_f32 = ttnn::typecast(one_hot_u32, ttnn::DataType::FLOAT32);
-            auto one_hot = ttnn::typecast(one_hot_f32, ttnn::DataType::BFLOAT16);
+            auto one_hot_tile = ttnn::typecast(one_hot_f32, ttnn::DataType::BFLOAT16);
 
-            auto dot_col = ttnn::reshape(d_grouped_scores, ttnn::Shape({1, 1, t_cap, 1}));
+            // d_grouped_scores is RM [1,1,1,T_cap]; we need TILE [1,1,T_cap,1]
+            // for the broadcast multiply. Same TILE-transpose route.
+            auto d_tile = ttnn::to_layout(d_grouped_scores, ttnn::Layout::TILE);
+            auto dot_col_tile = ttnn::transpose(d_tile, -2, -1);
 
-            // Promote to TILE bf16 before broadcasting multiply — ttnn binary
-            // ops produce garbage for sub-tile-aligned broadcasts on ROW_MAJOR.
-            auto one_hot_tile = ttnn::to_layout(one_hot, ttnn::Layout::TILE);
-            auto dot_col_tile = ttnn::to_layout(dot_col, ttnn::Layout::TILE);
             auto sparse_dot_tile = ttnn::multiply(one_hot_tile, dot_col_tile);
 
             auto d_scores = ttml::metal::moe_ungroup(sparse_dot_tile, plan, offsets, ones_gs, e_local, d, b, s);

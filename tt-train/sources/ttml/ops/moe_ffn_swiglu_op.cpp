@@ -12,6 +12,7 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -59,9 +60,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     auto offsets_host = offsets.to_vector<uint32_t>();
     if (offsets_host.size() != num_experts + 1U) {
         throw std::runtime_error("moe_ffn_swiglu_fw: offsets size must be num_experts + 1.");
-    }
-    if (offsets_host.back() != token_capacity) {
-        throw std::runtime_error("moe_ffn_swiglu_fw: offsets[-1] must equal token_capacity.");
     }
 
     // Per-expert forward: slice grouped once per expert, run gate+up matmuls
@@ -122,6 +120,20 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
 
     if (down_proj_parts.empty()) {
         throw std::runtime_error("moe_ffn_swiglu_fw: all experts empty (token_capacity == 0).");
+    }
+    // Pad y to [1, 1, token_capacity, hidden_dim] on device — moe_ungroup
+    // expects expert_out's row count to match plan/grouped_scores' T_cap,
+    // and moe_group allocates pessimistically (full-grid budget) so T_cap
+    // may exceed offsets[-1] = sum of per-expert real rows.
+    const uint32_t y_rows = offsets_host.back();
+    if (y_rows < token_capacity) {
+        auto* device = grouped_value.device();
+        auto tail = ttnn::zeros(
+            ttnn::Shape{1U, 1U, token_capacity - y_rows, hidden_dim},
+            ttnn::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            std::ref(*device));
+        down_proj_parts.push_back(std::move(tail));
     }
     auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
     down_proj_parts.clear();
@@ -214,6 +226,19 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         gate_proj_parts.clear();
         up_proj_parts.clear();
 
+        // dX_parts sums to offsets[-1] rows; pad to grouped's T_cap so
+        // grouped->add_grad sees the matching shape (forward pads y too).
+        const uint32_t dx_rows = offsets_host.back();
+        const uint32_t t_cap = grouped->get_value().logical_shape()[-2];
+        if (dx_rows < t_cap) {
+            auto* device = grouped->get_value().device();
+            auto tail = ttnn::zeros(
+                ttnn::Shape{1U, 1U, t_cap - dx_rows, hidden_dim},
+                ttnn::DataType::BFLOAT16,
+                ttnn::Layout::TILE,
+                std::ref(*device));
+            dX_parts.push_back(std::move(tail));
+        }
         auto dX = (dX_parts.size() == 1U) ? dX_parts.front() : ttnn::concat(dX_parts, /*dim=*/2);
         grouped->add_grad(dX);
     };

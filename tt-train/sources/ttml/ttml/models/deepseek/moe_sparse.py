@@ -28,11 +28,10 @@ import ttml
 from .moe import MoE
 from .autograd_ops import (
     autograd_concat,
-    autograd_sigmoid,
     autograd_slice,
-    autograd_softmax,
     moe_routing_normalize,
 )
+from ttml.common.profiler_utils import profiler_marker_start, profiler_marker_end
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +146,9 @@ class SparseMoE(MoE):
         K = self.n_activated
         E = self.num_experts
 
+        x = profiler_marker_start(x, "MoE")
+        x = profiler_marker_start(x, "MoE.routing")
+
         scores, _topk_values, topk_indices = self.compute_routing(x)
 
         # Per-expert masks for sigmoid-path normalization and the on-device
@@ -182,6 +184,8 @@ class SparseMoE(MoE):
         new_counts = ttnn.add(self._token_counts.tensor.get_value(), batch_counts)
         self._token_counts.tensor.set_value(new_counts)
 
+        scores_for_routing = profiler_marker_end(scores_for_routing, "MoE.routing")
+
         # ── moe_group_op ──
         # x is [B, 1, S, dim] which we treat as [D=B, B'=1, S, H=dim] for the
         # wrapper. Total tokens = B*S as expected.
@@ -198,7 +202,11 @@ class SparseMoE(MoE):
 
         x_rm = _to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         scores_for_routing_rm = _to_layout(scores_for_routing, ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = profiler_marker_start(x_rm, "MoE.group_op")
         group_out = ttml.ops.moe.moe_group_op(x_rm, metadata, scores_for_routing_rm, leids, int(E), int(K))
+        # MoEGroupOutputs fields are read-only; thread the marker through a
+        # local rebind of `grouped` instead of mutating the struct.
+        grouped = profiler_marker_end(group_out.grouped, "MoE.group_op")
 
         # ── Per-expert SwiGLU on grouped layout ──
         # moe_ffn_swiglu_fw consumes parallel lists of per-expert weights.
@@ -209,34 +217,17 @@ class SparseMoE(MoE):
         w_up = [_transpose(self.experts[e].w3.weight.tensor, -2, -1) for e in range(E)]
         w_down = [_transpose(self.experts[e].w2.weight.tensor, -2, -1) for e in range(E)]
 
-        # The FFN op requires offsets[-1] == grouped.shape[-2]. moe_group
-        # allocates grouped pessimistically (full-grid budget) but
-        # split_work_to_cores typically uses fewer cores → offsets[-1]
-        # (T_used) < T_cap. Slice grouped to T_used here, then pad the FFN
-        # output back up to T_cap for moe_ungroup. (The tail past T_used
-        # is by-design garbage; padding with zeros is just shape-matching.)
-        T_cap = int(list(group_out.grouped.shape())[2])
-        T_used = int(ttnn.to_torch(group_out.offsets).numpy().flatten()[-1])
-        if T_used == T_cap:
-            grouped_used = group_out.grouped
-        else:
-            grouped_used = autograd_slice(group_out.grouped, [0, 0, 0, 0], [1, 1, T_used, dim])
-
-        y_used = ttml.ops.moe.moe_ffn_swiglu_fw(grouped_used, group_out.offsets, w_gate, w_up, w_down)
-
-        if T_used == T_cap:
-            y_grouped = y_used
-        else:
-            tail = ttml.autograd.Tensor.from_numpy(
-                torch.zeros(1, 1, T_cap - T_used, dim, dtype=torch.float32).numpy(),
-                layout=ttnn.Layout.TILE,
-                new_type=ttnn.bfloat16,
-            )
-            y_grouped = autograd_concat([y_used, tail], dim=2)
+        # At production shapes the kernel uses the full grid → offsets[-1]
+        # equals T_cap, so we feed `grouped` straight into the FFN with no
+        # slice/pad dance.
+        grouped_marked = profiler_marker_start(grouped, "MoE.ffn")
+        y_grouped = ttml.ops.moe.moe_ffn_swiglu_fw(grouped_marked, group_out.offsets, w_gate, w_up, w_down)
+        y_grouped = profiler_marker_end(y_grouped, "MoE.ffn")
 
         # ── moe_ungroup_op ──
         # The kernel returns ROW_MAJOR; downstream layers (RMSNorm, etc.)
         # expect TILE, so re-tile here.
+        y_grouped = profiler_marker_start(y_grouped, "MoE.ungroup_op")
         output_rm = ttml.ops.moe.moe_ungroup_op(
             y_grouped,
             group_out.grouped_scores,
@@ -250,10 +241,12 @@ class SparseMoE(MoE):
             1,  # B'
             int(S),  # S
         )
+        output_rm = profiler_marker_end(output_rm, "MoE.ungroup_op")
         output = _to_layout(output_rm, ttnn.TILE_LAYOUT)
 
         # Shared experts.
         if self.shared_experts is not None:
             output = ttml.ops.binary.add(output, self.shared_experts(x))
 
+        output = profiler_marker_end(output, "MoE")
         return output
