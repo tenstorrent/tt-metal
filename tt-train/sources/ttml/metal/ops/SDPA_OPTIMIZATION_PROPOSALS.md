@@ -26,9 +26,12 @@ Tracking of completed, in-progress, and blocked work.
 | Type | Link | Description |
 |------|------|-------------|
 | **PR** | [#41683](https://github.com/tenstorrent/tt-metal/pull/41683) | FP32 logsumexp intermediates, precision improvements, ring attention update |
+| **PR** | [#42820](https://github.com/tenstorrent/tt-metal/pull/42820) | Phase A: SFPU optimizations (F13, F1, F3, F5) |
+| **PR** | [#39812](https://github.com/tenstorrent/tt-metal/pull/39812) | B5: Precomputed u_scalar |
 | **Ticket** | [#41686](https://github.com/tenstorrent/tt-metal/issues/41686) | SFPU FP32 softmax path (blocked on LLK primitives) |
 | **Blocked on** | [#41593](https://github.com/tenstorrent/tt-metal/issues/41593) | LLK: SFPU row-reduce-max |
 | **Blocked on** | [#41594](https://github.com/tenstorrent/tt-metal/issues/41594) | LLK: SFPU sub_bcast_col |
+| **Reference** | `models/demos/deepseek_v3_b1/kernel_includes/.../sdpa.h` | DeepSeek V3 SDPA: FPU/SFPU overlap, MOVD2B, bcast_col_reuse, semaphore signalling |
 
 ### Completed / In PR
 
@@ -44,12 +47,12 @@ Tracking of completed, in-progress, and blocked work.
 | **F1** — Fuse Scale into Exp (full) | **Done** (in Phase A PR) | Completes the partial F1 from [#41683](https://github.com/tenstorrent/tt-metal/pull/41683). Scale factor is now a compile-time `uint16_t` BF16 constant passed directly to the fused `exp_tile<false, true>(idx, VectorMode::RC, scaler_bf16)` intrinsic. Eliminates the separate `mul_unary_tile` SFPU pass entirely. Applied to `apply_exp_inplace_and_find_exp_sum` and `update_exp_max_diff`. |
 | **F3** — `recip_tile_first_column` | **Done** (in Phase A PR) | Custom SFPU intrinsic that processes only column 0 of a tile using `VectorMode::C` (2 faces) with 4 iterations per face and stride-2 access. 4x fewer SFPU iterations than full `recip_tile`. Used in `recip_tile_inplace` for softmax normalization. |
 | **F5** — `exp_tile_first_column` | **Done** (in Phase A PR) | Custom SFPU intrinsic for first-column-only fused scale+exp. Uses `_ckernel_sfpu_exp_accurate_` (same 7th-order Taylor series as `exp_tile<false>`) for training-grade accuracy. 4x fewer SFPU iterations. Used in `update_exp_max_diff` for max-correction factor. |
+| **B5** — Eliminate redundant u_scalar | **Done** (merged [#39812](https://github.com/tenstorrent/tt-metal/pull/39812)) | Precomputed `u_scalar = rowsum(dO * O)` in a pre-pass kernel. Result stored as `(B, H, S, 32)` tensor. Eliminates O(S²) redundant recomputation in KV-kernel and removes the need to read O tensor in KV backward. ~1.4% step-time improvement. |
+| **Different head dim for QK and V** | **Done** (merged) | Support different last dimension for QK and V tensors in SDPA forward and backward. Infrastructure change enabling future head-dim optimizations. |
 
 ### In Progress
 
-| Optimization | Status | Notes |
-|---|---|---|
-| **B5** — Eliminate redundant u_scalar | **Branch exists** | Precomputed u_scalar optimization on separate branch. Will be integrated after [#41683](https://github.com/tenstorrent/tt-metal/pull/41683) merges. |
+(No items currently in progress.)
 
 ### Blocked
 
@@ -70,12 +73,13 @@ Tracking of completed, in-progress, and blocked work.
 | Baseline (BF16 intermediates, before PR) | 1932 ms | — |
 | FP32 intermediates only (B11) | 1912 ms | -1.0% |
 | Full PR (FP32 intermediates + FP32 buffers + reconfig fixes) | 1933 ms | +0.1% |
-| **Phase A (F13 + F1 + F3 + F5)** | **~1842 ms** | **-4.7%** |
+| + B5 (u_scaler) + diff head dim | 1934 ms | — (new baseline) |
+| **Phase A (F13 + F1 + F3 + F5)** | **1820 ms** | **-5.9%** |
 
 The FP32 intermediate format itself is slightly faster (fewer tiles: 1 FP32 vs 2 BF16 per row). The ~20 ms overhead comes from FP32 `cb_attention_weights` promotion, which will be recovered by [#41686](https://github.com/tenstorrent/tt-metal/issues/41686).
 
-Phase A optimizations target the SFPU-bound compute pipeline. The ~5.6% step-time reduction
-(~1955 ms baseline → ~1842 ms) comes from a **22% SDPA FW kernel speedup** confirmed via
+Phase A optimizations target the SFPU-bound compute pipeline. The ~5.9% step-time reduction
+(1934 ms baseline → 1820 ms) comes from a **22% SDPA FW kernel speedup** confirmed via
 device profiling:
 
 | Zone | Main (µs) | Phase A (µs) | Improvement |
@@ -1258,10 +1262,15 @@ Phase D (advanced):
 
 ### B1. Fuse Scale into Exp (Backward)
 
+> **Status: N/A** — Superseded by B11 (logsumexp intermediates). After B11, backward
+> softmax recomputation is `P = exp(S - lse)` with no scale factor in the exp. The scale
+> `1/sqrt(d)` is applied during the Q@K^T matmul, not in the exp call. There is no
+> separate `mul_unary_tile` + `exp_tile` sequence to fuse.
+
 | | |
 |---|---|
 | **Source** | TTNN (same as F1) |
-| **Impact** | Medium |
+| **Impact** | ~~Medium~~ N/A |
 | **Effort** | Low |
 | **Accuracy** | **LOSSLESS** |
 
@@ -1304,10 +1313,14 @@ Validate convergence.
 
 ### B3. recip_tile_first_column (Backward)
 
+> **Status: N/A** — Superseded by B11 (logsumexp intermediates). After B11, backward
+> computes `P = exp(S - lse)` directly — there is no `recip_sum_exp` and therefore no
+> `recip_tile` call in the backward softmax recomputation path.
+
 | | |
 |---|---|
 | **Source** | TTNN (same as F3) |
-| **Impact** | Medium |
+| **Impact** | ~~Medium~~ N/A |
 | **Effort** | Low |
 | **Accuracy** | **LOSSLESS** |
 
@@ -1317,10 +1330,15 @@ Same as F3. Applies wherever `recip_tile` is called on column-reduced data in ba
 
 ### B4. exp_tile_first_column for Max Correction (Backward)
 
+> **Status: N/A** — Superseded by B11 (logsumexp intermediates). After B11, backward
+> does not perform online softmax with max-correction — it directly computes
+> `P = exp(S - lse)` from the stored logsumexp. There is no `exp(prev_max - cur_max)`
+> column-vector correction to optimize.
+
 | | |
 |---|---|
 | **Source** | TTNN (same as F5) |
-| **Impact** | Medium |
+| **Impact** | ~~Medium~~ N/A |
 | **Effort** | Low |
 | **Accuracy** | **LOSSLESS** |
 
@@ -1331,8 +1349,8 @@ computed on column vectors.
 
 ### B5. Eliminate Redundant u_scalar Computation
 
-> **Status: BRANCH EXISTS** — Precomputed u_scalar optimization is on a separate branch.
-> Will be integrated after [#41683](https://github.com/tenstorrent/tt-metal/pull/41683) merges.
+> **Status: DONE** — Merged in [#39812](https://github.com/tenstorrent/tt-metal/pull/39812).
+> ~1.4% step-time improvement (1927 ms vs 1955 ms baseline).
 
 | | |
 |---|---|
@@ -1550,6 +1568,68 @@ prerequisite. It can be implemented on the current single-tile architecture.
 4. Pipeline startup: first iteration has no previous dS/P for MATH to accumulate;
    last iteration has no next tile for PACK to recompute
 
+**Reference implementation — DeepSeek V3 SDPA:**
+The DeepSeek V3 SDPA kernel (`models/demos/deepseek_v3_b1/kernel_includes/.../sdpa.h`)
+implements exactly this FPU/SFPU overlap pattern with custom LLK extensions:
+
+- **`MOVD2B` (Move DEST → SrcB):** Transfers column vector (max/lse) directly from DST
+  to SrcB register without going through the unpacker. Avoids the TF32 truncation that
+  the standard `unary_bcast` path introduces (though SrcB itself is TF32, this avoids
+  L1 roundtrips).
+- **`sdpa_bcast_col_srca_srcb_reuse`:** FPU `ELWSUB`/`ELWMUL` with `SRCB_BCAST_COL`.
+  The preamble loads the column vector into SrcB via `MOVD2B` once, then reuses it
+  across multiple tiles. Each tile's data is moved from DST → SrcA via `MOVD2A`
+  (replay-buffered), then the FPU eltwise op runs with column broadcast from SrcB.
+  `t6_semaphore_post(FPU_SFPU)` signals tile-by-tile completion.
+- **SFPU exp on PACK thread:** After each FPU subtraction completes (signalled via
+  semaphore), `fast_approx_exp` or `_ckernel_sfpu_exp_accurate_` runs on the PACK
+  thread. For training accuracy we would use `_ckernel_sfpu_exp_accurate_` (7th-order
+  Taylor, same as `exp_tile<false>`).
+- **Tile-by-tile signalling:** `t6_semaphore_post(FPU_SFPU)` / `t6_semaphore_wait_on_zero`
+  coordinate FPU and SFPU so exp starts as soon as each tile's subtraction finishes.
+
+Key custom LLK files to adapt:
+- `llk_math_sdpa_bcast_col_srca_srcb_reuse.h` — FPU bcast_col with SrcA+SrcB reuse
+- `llk_math_sdpa_bcast_col_srcb_reuse.h` — FPU bcast_col with SrcB reuse only
+- `llk_unpack_A_sdpa_api.h` — Custom unpack for SDPA
+- `llk_math_sdpa_reduce_row.h` — SFPU row reduction (max/sum)
+
+**Detailed KV backward inner-loop breakdown** (current sequential flow):
+```
+Step 1: S = Q @ K^T                    (FPU matmul)
+Step 2: P = exp(S - lse)               (FPU bcast sub + SFPU exp, via apply_softmax_statistics_on_dst)
+         → pack P to cb_attention_weights
+Step 3: P^T = transpose_tile_fpu(P)    (FPU transpose via L1 roundtrip)
+Step 4: dV += P^T @ dO                 (FPU matmul with L1 accum)
+Step 5: dP = dO @ V^T                  (FPU matmul)
+Step 6: dS = P * (dP - u) * scale      (FPU binary ops via compute_grad_scores)
+Step 7: dS^T = transpose_tile_fpu(dS)  (FPU transpose via L1 roundtrip)
+Step 8: dK += dS^T @ Q                 (FPU matmul with L1 accum)
+```
+
+**Practical overlap strategy** — the subtraction in step 2 uses FPU (`sub_tiles_bcast_cols`
+or `ELWSUB` with `SRCB_BCAST_COL`), so only the exp portion can run on PACK thread.
+The overlap window is:
+```
+MATH:  [── sub(S, lse) ──] commit → [── next FPU work (step 3/4/5) ──]
+PACK:                       wait → [── exp_packthread_tile ── pack P ──] release
+```
+Even partial overlap of SFPU exp (~1000+ cycles for accurate 7th-order Taylor) with
+the FPU transpose setup or dP matmul prep saves cycles on every inner iteration.
+
+**DST register budget** (FP32 mode, 4 tiles per half):
+- Half A: matmul result (1–2 tiles) + working space
+- Half B: softmax recomputation (scores + lse = 2 tiles) + exp result
+- Sufficient for the current single-tile-per-iteration architecture
+
+**Open questions** (see `FPU_SFPU_OVERLAP_GUIDE.md` for details):
+1. Pack-thread SFPU replay slots: Does `exp_tile<false>` (accurate, 7th-order Taylor)
+   fit within BH's SFPU replay program capacity without clobbering matmul MOPs?
+2. L1 accumulation + overlap: `pack_reconfig_l1_acc(true)` for dV/dK accumulation
+   may conflict with pack-thread SFPU operations that also use the packer.
+3. `mm_init` vs `mm_init_short` after SFPU: Known issue — full `mm_init` may be needed
+   after pack-thread SFPU to restore matmul state.
+
 **Accuracy note:** The softmax recomputation for tile `j` and the gradient matmul for
 tile `j-1` operate on completely independent data. Running them concurrently vs
 sequentially produces bit-identical results.
@@ -1570,7 +1650,7 @@ K/V tile once.
 
 ---
 
-### B9. Q/dO/O Sharing for Balanced Pairs (KV Backward)
+### B9. Q/dO Sharing for Balanced Pairs (KV Backward)
 
 | | |
 |---|---|
@@ -1581,7 +1661,11 @@ K/V tile once.
 
 KV backward in balanced mode pairs heavy and light KV rows that iterate over overlapping
 Q rows. Interleave the two rows' inner loops; when processing a shared Q row, read
-Q/dO/O/intermediates once for both.
+Q/dO/intermediates once for both.
+
+> **Note (post-B5):** After B5 merged, KV backward no longer reads the O (attention output)
+> tensor — O was only used for `u_scalar = rowsum(dO * O)`, which is now precomputed.
+> The sharing benefit is reduced to Q, dO, and intermediates (lse).
 
 ---
 
@@ -1788,10 +1872,15 @@ Same as F14. Skip no-op reconfig calls in backward kernels.
 
 ### B15. Conditional Rescaling for Q Backward
 
+> **Status: N/A** — Superseded by B11 (logsumexp intermediates). After B11, backward
+> does not perform online softmax with max-correction rescaling. It directly computes
+> `P = exp(S - lse)` from stored logsumexp. There is no conditional rescaling step
+> to optimize.
+
 | | |
 |---|---|
 | **Source** | FA4 (same as F7) |
-| **Impact** | Medium |
+| **Impact** | ~~Medium~~ N/A |
 | **Effort** | Low |
 | **Accuracy** | **LOSSLESS with epsilon=0; UNACCEPTABLE with epsilon>0** |
 
@@ -2012,6 +2101,144 @@ head per device, which is a fundamentally under-parallelized configuration.
 | Reader kernels (×2) | Same — remove ifdef, iterate row index list. |
 | Writer kernels (×2) | Same — remove ifdef, iterate row index list. |
 | **Total** | 10 files changed. Kernel code gets *simpler* (removes ifdef + pair formula). Host code gets slightly more complex (adds scheduler). Net: code reduction. |
+
+---
+
+### B17. SFPU Reduce SUM for u_scaler Row Reduction
+
+| | |
+|---|---|
+| **Source** | LLK `sfpu_reduce` ([#41593](https://github.com/tenstorrent/tt-metal/issues/41593)) |
+| **Impact** | Medium |
+| **Effort** | Low |
+| **Accuracy** | **LOSSLESS to SLIGHTLY BETTER** — SFPU reduce operates at full FP32 in DST, avoiding TF32 truncation through SrcA |
+
+**Current code** (`sdpa_bw_compute_utils.hpp`, `compute_u_scalar_row`):
+```cpp
+// Row reduction via FPU matmul-with-ones vector
+mm_init_short(cb_u_scalar_row, cb_mat_mul_reduction, 0);
+matmul_tiles(cb_u_scalar_row, cb_mat_mul_reduction, 0, 0, accum_register);
+```
+
+The `u_scaler` computation uses `rowsum(dO * O)` which is implemented as a matmul
+against a pre-filled ones-vector (`cb_mat_mul_reduction`). This requires:
+1. A CB slot for the ones-vector (loaded from reader)
+2. FPU matmul cycles for a simple reduction
+3. Data passes through SrcA unpacker → TF32 truncation
+
+**Change:** Replace with `sfpu_reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>` which
+is now available in LLK. This:
+1. Eliminates the CB roundtrip for the ones-vector
+2. Frees FPU for other work (relevant for B7 overlap)
+3. Operates at full FP32 directly on DST registers — no TF32 truncation
+4. Simplifies reader kernels (no need to load/manage ones-vector tile)
+
+---
+
+### B18. Inner-Loop CB Roundtrip Fusion
+
+| | |
+|---|---|
+| **Source** | Analysis of pack→L1→unpack overhead in inner loop |
+| **Impact** | High |
+| **Effort** | Medium |
+| **Accuracy** | **LOSSLESS** — same computation, fewer data movements |
+
+**Current:** Several chained operations in the inner loop pack their result to a CB
+and immediately unpack it for the next operation. Each pack→L1→unpack roundtrip costs:
+- PACK: DST → CB (L1 write)
+- UNPACK: CB → SrcA/SrcB (L1 read + TF32 truncation)
+- Synchronization overhead (cb_push_back / cb_wait_front / cb_pop_front)
+
+**Specific roundtrips to eliminate:**
+1. Between `compute_grad_attn_weights` and `compute_grad_scores`: the grad_attn_weights
+   result is packed to `cb_grad_attention`, then immediately unpacked for the next step.
+   Can keep the result in DST.
+2. Between softmax recomputation (`apply_softmax_statistics_on_dst`) and its consumers:
+   attention weights are packed to `cb_attention_weights`, then re-read. With careful
+   DST register management, these can stay in registers.
+
+**Savings multiply:** With B=5, that's `1280 × avg_inner_iterations` redundant
+roundtrips eliminated across all cores.
+
+**Precision bonus:** Keeping data in DST avoids TF32 truncation from SrcA/SrcB
+unpacker on the intermediate values.
+
+---
+
+### B19. Fused Softmax Recomputation (`copy_tile` + SFPU sub_bcast_col + exp)
+
+| | |
+|---|---|
+| **Source** | Analysis of `apply_softmax_statistics_on_dst` precision and performance |
+| **Impact** | Medium-High |
+| **Effort** | Medium |
+| **Accuracy** | **SLIGHTLY BETTER** — eliminates TF32 truncation of lse through SrcB, keeps full FP32 |
+
+**Current code** (`sdpa_bw_compute_utils.hpp:105-126`, `apply_softmax_statistics_on_dst`):
+```cpp
+// Step 1: Load lse into DST via unary_bcast<COL> (B2D path)
+//   lse goes: L1 → SrcB unpacker → TF32 truncation → FPU broadcast → DST[lse_reg]
+unary_bcast<BroadcastType::COL>(cb_intermediates, 0, lse_reg);
+
+// Step 2: SFPU subtract (scores - lse), both in DST
+sub_binary_tile(scores_reg, lse_reg, scores_reg);  // SFPU traversal 1
+
+// Step 3: SFPU exp
+exp_tile<false>(scores_reg);                         // SFPU traversal 2
+```
+
+**Three problems:**
+1. **TF32 truncation of lse**: `unary_bcast<COL>` uses `unpack_to_dest = false` with B2D
+   path, routing lse through SrcB → TF32 (loses 4 mantissa bits from FP32 lse).
+2. **Redundant SFPU traversal**: `sub_binary_tile` STORE→LOAD between sub and exp.
+3. **FPU occupation**: `unary_bcast<COL>` uses FPU for broadcast, blocking matmul.
+
+**Proposed approach — two options:**
+
+**Option A (DeepSeek-style, best performance):**
+1. `copy_tile(cb_intermediates, 0, lse_reg)` — uses Blackhole's **unpack-to-dest** path
+   for FP32 data: L1 → Unpacker → **DST directly** (bypasses SrcA/SrcB entirely).
+   Full FP32 precision, no TF32 truncation.
+2. `MOVD2B` — move lse column from DST → SrcB (TF32 truncation, but avoids L1 roundtrip)
+3. FPU `ELWSUB` with `SRCB_BCAST_COL` — fast FPU subtraction
+4. `exp_packthread_tile` on PACK thread — SFPU exp overlapped with next FPU work
+
+Requires custom LLK files from DeepSeek V3 SDPA (see B7 reference).
+
+**Option B (pure SFPU, simpler, best precision):**
+1. `copy_tile(cb_intermediates, 0, lse_reg)` — same unpack-to-dest path, full FP32
+2. Custom SFPU function that reads column 0 from `DST[lse_reg]`, broadcasts across
+   all 32 columns, subtracts from `DST[scores_reg]`, and applies exp — **one fused
+   SFPU traversal** instead of two:
+```cpp
+// Pseudocode for fused bcast_col_sub_exp SFPU function
+template <int ITERATIONS = 8>
+inline void _calculate_bcast_col_sub_exp_(uint32_t dst_scores, uint32_t dst_lse) {
+    constexpr uint32_t dst_tile_size = 32;
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat score = dst_reg[dst_scores * dst_tile_size];
+        vFloat lse_val = dst_reg[dst_lse * dst_tile_size];
+        // lse_val holds column 0 of the lse tile — already a scalar per row
+        // (4 rows per SFPU iteration, col 0 value broadcast to all 8 lanes)
+        vFloat diff = score - lse_val;
+        vFloat result = _ckernel_sfpu_exp_accurate_<false, DST_ACCUM_MODE>(diff, 0);
+        dst_reg[dst_scores * dst_tile_size] = result;
+        dst_reg++;
+    }
+}
+```
+
+Full FP32 end-to-end: lse loaded at FP32 via unpack-to-dest, subtraction and exp
+both operate on DST at native 32-bit precision. No FPU occupation at all.
+
+**Note on `copy_tile` FP32 precision:** On Blackhole, `copy_tile` is compiled with
+`UnpackToDestEn = true`. For 32-bit data (`is_32bit_input() == true`), the unpacker
+writes directly to DST bypassing SrcA/SrcB. Confirmed in
+`llk_unpack_A.h:54` (`unpack_to_dest && is_32bit_input`).
+
+**Applies to:** `apply_softmax_statistics_on_dst` (Q and KV backward compute kernels)
+and `apply_statistics_inplace` (KV backward).
 
 ---
 
@@ -2447,26 +2674,29 @@ Same as F6 for backward correction paths.
 
 | # | Optimization | Impact | Effort | Accuracy | Requires | Status |
 |---|---|---|---|---|---|---|
-| **B1** | Fuse scale into exp | Medium | Low | LOSSLESS | — | Not started |
+| **B1** | Fuse scale into exp | ~~Medium~~ | Low | LOSSLESS | — | **N/A** (superseded by B11) |
 | **B2** | Approximate exp + ReLU | High | Very Low | MODERATE-HIGH RISK | — (pair with F2) | Not started |
-| **B3** | recip_tile_first_column | Medium | Low | LOSSLESS | — | Not started |
-| **B4** | exp_tile_first_column | Medium | Low | LOSSLESS | — | Not started |
-| **B5** | Eliminate redundant u_scalar | Very High | Medium | LOSSLESS | — | Branch exists |
-| **B6** | Transposed recomputation | High | Medium | NEGLIGIBLE | — | Not started |
+| **B3** | recip_tile_first_column | ~~Medium~~ | Low | LOSSLESS | — | **N/A** (superseded by B11) |
+| **B4** | exp_tile_first_column | ~~Medium~~ | Low | LOSSLESS | — | **N/A** (superseded by B11) |
+| **B5** | Eliminate redundant u_scalar | Very High | Medium | LOSSLESS | — | **Done** ([#39812](https://github.com/tenstorrent/tt-metal/pull/39812)) |
+| **B6** | Transposed recomputation | High | Medium | NEGLIGIBLE | — | Not started (ROI unclear — see notes) |
 | **B7** | Overlap softmax/MMA pipeline | Very High | Medium-High | LOSSLESS | — | Not started |
 | **B8** | K/V sharing for pairs (Q bw) | Medium | Medium | LOSSLESS | — | Not started |
-| **B9** | Q/dO/O sharing for pairs (KV bw) | Medium | Medium | LOSSLESS | — | Not started |
+| **B9** | Q/dO sharing for pairs (KV bw) | Medium | Medium | LOSSLESS | — | Not started (O no longer read after B5) |
 | **B11** | Store logsumexp (eliminates recip error) | Medium | Low | **BETTER** | — (changes FW too) | **Done** ([#41683](https://github.com/tenstorrent/tt-metal/pull/41683)) |
 | **B14** | Uniform dataformat skip | Low | Very Low | LOSSLESS | — | Not started |
-| **B15** | Conditional rescaling (eps=0) | Medium | Low | LOSSLESS | — | Not started |
-| **B10.1** | Fuse backward (partial: u_scalar) | Very High | Medium | LOSSLESS | B5 | Not started |
+| **B15** | Conditional rescaling (eps=0) | ~~Medium~~ | Low | LOSSLESS | — | **N/A** (superseded by B11) |
+| **B16** | Generic host-side work scheduling | **Very High** | Medium | LOSSLESS | — | Balanced pairing done; heavy-row-first (LPT within pairs) **Done** (Phase A PR); host-side LPT upgrade not started |
+| **B17** | SFPU reduce SUM for u_scaler | Medium | Low | LOSSLESS-to-BETTER | — | Not started |
+| **B18** | Inner-loop CB roundtrip fusion | High | Medium | LOSSLESS | — | Not started |
+| **B19** | Fused softmax recomp (copy_tile + SFPU sub_bcast_col + exp) | Medium-High | Medium | **BETTER** (full FP32 lse) | — | Not started |
+| **B10.1** | Fuse backward (partial: u_scalar) | Very High | Medium | LOSSLESS | B5 ✓ | Not started |
 | **B10.2** | Fuse backward (full: outer Q, reduce dK/dV) | Very High | Very High | NEGLIGIBLE | B10.1 | Not started |
 | **B10 dK/dV** | dK/dV cross-core MPSC reduction (2-pass) | — | High | NEGLIGIBLE | B10.2 | Not started |
 | **B12** | Multi-tile K/V chunking | Very High | High | NEGLIGIBLE | — | Not started |
 | **B13** | Fused correction block | Medium | Medium | BETTER | B12 | Not started |
-| **B16** | Generic host-side work scheduling | **Very High** | Medium | LOSSLESS | — | Balanced pairing done; heavy-row-first (LPT within pairs) **Done** (Phase A PR); host-side LPT upgrade not started |
 
-**Recommended implementation order (informed by profiling):**
+**Recommended implementation order (informed by profiling, updated May 2026):**
 
 Both kernels are **strongly compute-bound** (WAIT < 0.01%, BW utilization 52%).
 The KV-kernel (14.62 ms) is 1.94x the Q-kernel (7.54 ms) and dominates the backward.
@@ -2479,56 +2709,68 @@ Two independent bottlenecks:
    B7 (pipeline overlap) addresses this directly.
 
 ```
-Phase 0 (immediate — accuracy fix + backward simplification):
-  B11 (logsumexp intermediates)
-  Eliminates recip_tile approximation error — the dominant source of sdpa_bw
-  accuracy issues. Forward stores lse = max + log(sum_exp) as 1 tile instead of
-  max + recip_sum_exp as 2 tiles. Backward simplifies: P = exp(S - lse), removing
-  the mul_bcast step entirely. Forward cost: ~0.1% (one log_tile per Q row in
-  finalization). Changes ~7 files across FW and BW. Low effort, high accuracy payoff.
-  Also halves intermediate DRAM bandwidth and enables cleaner Ring Attention.
+COMPLETED:
+  Phase 0: B11 (logsumexp intermediates) ✓ — merged in #41683
+    Eliminated recip_tile approximation error. Backward simplified to P = exp(S - lse).
+    Also halved intermediate DRAM bandwidth and enabled cleaner Ring Attention.
 
-Phase 1 (load balance fix, LOSSLESS):
+  Phase A: F13 + F1 + F3 + F5 ✓ — PR #42820
+    Heavy-row-first + fused scale+exp + first-column SFPU ops.
+    22% SDPA FW kernel speedup, 5.9% end-to-end step-time reduction.
+
+  B5 (u_scalar precomputation) ✓ — merged in #39812
+    Eliminated O(S²) redundant recomputation. ~1.4% step-time improvement.
+
+NEXT — Phase B (backward per-iteration compute improvements):
+  B17 (SFPU reduce SUM for u_scaler row reduction)
+    Replace FPU matmul-with-ones row reduction in compute_u_scalar_row with
+    sfpu_reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>. Eliminates CB roundtrip
+    for the ones-vector and frees FPU cycles. Low effort, immediate win.
+
+  B19 (fused softmax recomputation — copy_tile + SFPU sub_bcast_col + exp)
+    Replace unary_bcast<COL> (TF32 truncation of lse through SrcB) + separate
+    sub_binary_tile + exp_tile (2 SFPU passes) with:
+    - copy_tile using unpack-to-dest (full FP32 lse, bypasses SrcA/SrcB)
+    - Fused SFPU function: bcast_col_sub + exp in single traversal
+    Or DeepSeek-style: MOVD2B + FPU ELWSUB + SFPU exp (better for B7 overlap).
+    Precision win (full FP32 lse) + performance win (1 SFPU pass instead of 2).
+
+  B18 (inner-loop CB roundtrip fusion)
+    Eliminate redundant pack→L1→unpack between chained compute steps:
+    compute_grad_attn_weights → compute_grad_scores, and softmax recomputation
+    → its consumers. Keep intermediate results in DST registers. With B=5,
+    that's 1280 × avg_inner_iterations redundant roundtrips eliminated.
+
+  B7 (FPU/SFPU overlap — highest single-optimization impact)
+    Overlap softmax recomputation (SFPU on PACK thread) with gradient matmuls
+    (FPU on MATH thread). Uses DeepSeek-style MOVD2B + ELWSUB(SRCB_BCAST_COL)
+    + exp_packthread_tile with semaphore-based tile-by-tile signalling.
+    Expected saving: ~30-40% of compute time on both kernels.
+    Does NOT require multi-tile chunking. Works on current single-tile arch.
+    Reference: models/demos/deepseek_v3_b1/kernel_includes/.../sdpa.h
+
+Phase C (load balance):
   B16 (generic host-side work scheduling)
-  Replaces hardcoded balanced-pairing kernel logic with host-side LPT scheduler.
-  Generic across hardware (N150/N300/BH), shapes (any B/kvH/Ht/hpg), and TP configs.
-  Expected saving: ~3 ms (21% of KV-kernel) for TinyLlama on N300.
-  Also simplifies kernel code (removes #ifdef BALANCED_PARALLELISM from 8 files).
+    Replaces hardcoded balanced-pairing kernel logic with host-side LPT scheduler.
+    Expected saving: ~3 ms (21% of KV-kernel) for TinyLlama on N300.
+    Lower priority for large batch sizes (B=5 → <1% imbalance already).
 
-Phase 2 (quick SFPU wins — LOSSLESS, both kernels):
-  F13/heavy-row-first ✓ (applied to all BW kernels in Phase A PR)
-  B1 (fuse scale into exp) → B3 (recip_first_column) → B4 (exp_first_column)
-  → B14 (dataformat skip) → B15 (conditional rescaling)
-  Expected saving: ~10-15% of compute per iteration
+Phase D (architectural changes):
+  B6 (transposed recomputation — ROI unclear, deferred)
+    Net gain is ~1 transpose per inner iteration after accounting for u_scaler
+    transpose overhead. May revisit if profiling shows transpose as bottleneck.
 
-Phase 3 (eliminate redundant work):
-  B5 (eliminate u_scalar recomputation in KV-kernel)
-  → B10.1 (partial fusion — already implemented via USE_PRECOMPUTED_U_SCALER)
-  → B6 (transposed recomputation — eliminate 2 transposes per iteration)
-  Expected saving: ~10-15% additional
-  Note: B6 interacts with B11 — if B11 stores lse as row vector (transpose in
-  pack_intermediate_result), backward can use bcast_rows directly. Zero extra cost.
-
-Phase 4 (pipeline overlap — highest single-optimization impact on compute):
-  B7 (overlap softmax recomp with gradient matmuls)
-  Expected saving: ~30-40% of compute time on both kernels
-  Note: B7 does NOT require multi-tile chunking. Works on current single-tile arch.
-
-Phase 5 (multi-tile chunking):
   B12 (multi-tile K/V chunking) → B13 (fused correction block)
-  Expected saving: reduces per-tile overhead, enables subblock matmul
+    Reduces per-tile overhead, enables subblock matmul.
 
-Phase 6 (full fusion — Option 2: outer Q, reduce dK/dV):
-  B10.2 Phase 1: fused kernel (extend sdpa_bw_q) + DRAM scratch dK/dV reduction
-  B10.2 Phase 2: NOC-based 2-pass MPSC dK/dV reduction (optimize perf)
-  B10.2 Phase 3: K-chunking for D≥96 (generalize to all head dimensions)
+Phase E (full fusion):
+  B10.1 (partial fusion — u_scalar pre-pass already done via B5)
+  → B10.2 (full fusion: outer Q, reduce dK/dV)
   Expected saving: ~42% of combined backward (29% compute + load balance fix).
-  dQ always local (no reduction). K-chunking aligns with B12 patterns.
-  2048 Q rows for B16 scheduling → 0.1% load imbalance (vs 5.2% with Option 1).
 
 Defer (marginal while compute-bound):
-  B8/B9 (data sharing) — reader has 1.9x headroom, benefit is negligible
-  Re-evaluate B8/B9 after B7 shifts the bottleneck toward memory.
+  B8/B9 (data sharing) — reader has 1.9x headroom, benefit is negligible.
+  Re-evaluate after B7 shifts the bottleneck toward memory.
 
 Always pair:
   F2 + B2 (same exp approximation in forward and backward)
@@ -2540,12 +2782,14 @@ Always pair:
 
 | Risk Level | Optimizations | Guidance |
 |---|---|---|
-| **LOSSLESS** (zero risk) | F1, F3, F5, F7(eps=0), F8, F12, F13, F14, B1, B3, B4, B5, B7, B8, B9, B10.1, B14, B15(eps=0), B16 | Apply freely |
-| **SLIGHTLY BETTER** (improves precision) | F6, F9, F10, B6, B11, B13 | Apply freely |
+| **LOSSLESS** (zero risk) | F1, F3, F5, F7(eps=0), F8, F12, F13, F14, B5, B7, B8, B9, B10.1, B14, B16, B18 | Apply freely |
+| **LOSSLESS to SLIGHTLY BETTER** | B17 (SFPU reduce avoids TF32 truncation) | Apply freely |
+| **SLIGHTLY BETTER** (improves precision) | F6, F9, F10, B6, B11, B13, B19 (full FP32 lse via unpack-to-dest) | Apply freely |
 | **NEGLIGIBLE** (BF16 rounding order) | F4, B10.2, B10-dK/dV-reduction, B12 | Apply freely |
 | **LOW RISK** (within BF16 noise) | F11(degree≥2) | Quick validation recommended |
 | **MODERATE RISK** (needs convergence test) | F2, B2 | Must validate with 1000+ training steps; always pair F2+B2 |
-| **UNACCEPTABLE** for training | F7(eps>0), B15(eps>0), F11(degree=1) | Do NOT use |
+| **UNACCEPTABLE** for training | F7(eps>0), F11(degree=1) | Do NOT use |
+| **N/A** (superseded by B11) | B1, B3, B4, B15 | No longer applicable |
 
 **The golden rule:** Whatever exp approximation you choose for forward, use the exact same
 one in backward. Consistency between `P_forward` and `P_recomputed_backward` matters more
