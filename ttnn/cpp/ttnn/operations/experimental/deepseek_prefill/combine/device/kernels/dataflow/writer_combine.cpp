@@ -95,6 +95,11 @@ void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
+    // Separate semaphore for the exit handshake. Reusing init_semaphore_address
+    // for both phases is racy: a fast partner's exit-inc can land inside the
+    // post-init noc_semaphore_set(0) window and get wiped, deadlocking the
+    // pair on combine_devices==2 (mesh-2x4 column pair).
+    uint32_t exit_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t zero_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
@@ -215,9 +220,11 @@ void kernel_main() {
 #ifdef DEST_CHIP_ID
     noc_async_write_barrier();
 
-    // Exit semaphore exchange
+    // Exit semaphore exchange — uses a dedicated semaphore (exit_semaphore_address)
+    // and the dedicated sem_packet_header so neither can collide with anything from
+    // the init handshake or the data loop above.
     {
-        const uint64_t exit_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
             topology,
@@ -226,10 +233,10 @@ void kernel_main() {
             mesh_cols,
             axis,
             total_mesh_devices>(
-            fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, exit_noc_semaphore_addr);
+            fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, exit_noc_semaphore_addr);
 
         volatile tt_l1_ptr uint32_t* exit_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
         noc_semaphore_wait(exit_sem_ptr, combine_devices - 1);
         noc_semaphore_set(exit_sem_ptr, 0);
     }
