@@ -855,8 +855,6 @@ def test_matmul_dram_sharded_with_bias_and_activation(
     function_level_defaults,
 ):
     """Test DRAM sharded matmul with combinations of bias and activation."""
-    logger.info(f"Testing DRAM sharded matmul: M={M}, K={K}, N={N}, bias={has_bias}, activation={activation}")
-
     run_test_matmul_dram_sharded_with_bias_and_activation(
         device=device,
         in0_sharded=True,
@@ -875,8 +873,6 @@ def test_matmul_dram_sharded_with_bias_and_activation(
         out_dtype=out_dtype,
         function_level_defaults=function_level_defaults,
     )
-
-    logger.info(f"✓ Test passed: bias={has_bias}, activation={activation}")
 
 
 @pytest.mark.parametrize(
@@ -902,8 +898,6 @@ def test_special_activation_combinations(
     grid_size = (8, 1)
     has_bias = True  # Always test with bias for these special cases
 
-    logger.info(f"Testing special combo: activation={activation}, fidelity={fidelity}, l1_acc={packer_l1_acc}")
-
     run_test_matmul_dram_sharded_with_bias_and_activation(
         device=device,
         in0_sharded=True,
@@ -922,8 +916,6 @@ def test_special_activation_combinations(
         out_dtype=ttnn.bfloat16,
         function_level_defaults=function_level_defaults,
     )
-
-    logger.info(f"✓ Special combo passed: {activation} with {fidelity}")
 
 
 @pytest.mark.parametrize(
@@ -1017,8 +1009,6 @@ def test_matmul_1d_gather_with_activations(
     else:
         activation_param = activation
 
-    logger.info(f"Testing matmul with activation: {activation_param}")
-
     # Convert to TTNN tensors
     in0_ttnn = ttnn.from_torch(in0, dtype=in0_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     in1_ttnn = ttnn.from_torch(in1, dtype=in1_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1107,5 +1097,3 @@ def test_matmul_1d_gather_with_activations(
                 logger.info(f"Using lower PCC threshold {pcc_threshold} for fast approximation")
 
     assert pcc >= pcc_threshold, f"PCC {pcc:.4f} below threshold {pcc_threshold} for activation {activation}"
-
-    logger.info(f"✓ Matmul with activation {activation} passed (PCC: {pcc:.4f})")
