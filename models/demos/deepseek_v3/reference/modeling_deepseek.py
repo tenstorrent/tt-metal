@@ -401,9 +401,7 @@ class MoEGate(nn.Module):
 
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
         if self.topk_method == "noaux_tc":
-            fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
-            bound = 1 / math.sqrt(fan_in)
-            init.uniform_(self.e_score_correction_bias, -bound, bound)
+            init.zeros_(self.e_score_correction_bias)
 
     def grouped_gate_golden(
         self, scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
