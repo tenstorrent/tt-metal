@@ -116,7 +116,7 @@ jobs:
               pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_grouped_topk.py -k "realistic" -vvv --tb=short || exit_code=$?
               pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer3 and device and isl_6k4" -vvv --tb=short --timeout=900 || exit_code=$?
               exit $exit_code
-            timeout: 70
+            timeout: 100
             test-type: loudbox
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
