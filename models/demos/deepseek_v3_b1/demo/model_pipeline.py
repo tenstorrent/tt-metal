@@ -10,7 +10,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
-import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
@@ -112,6 +111,7 @@ class ModelPipeline:
         self.pipeline.setup_and_run()
 
         self._page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
+        self.position_id: int | None = None
         self.model: DeepSeekV3 | None = None
         if self.pipeline.my_stage_idx == 0:
             self.model = DeepSeekV3(
@@ -144,6 +144,7 @@ class ModelPipeline:
             for i in range(len(tokens))
         ]
         results = self.model.prefill(prompt_token_tensors)
+        self.position_id = len(tokens)
         logger.debug(f"Done prefilling with {len(tokens)} tokens.")
         return results
 
@@ -152,14 +153,20 @@ class ModelPipeline:
         if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("decode_forward() should only be called on mesh id 0")
         assert self.model is not None
+        if self.position_id is None:
+            raise RuntimeError("decode_forward() requires prefill_forward() to be called first")
 
-        output = self.model.decode_step(
-            to_spec_input(input_token, user_id=0, position_id=self.position_id, page_size_datums=self._page_size_datums)
+        self.model.write_input(
+            input_token,
+            -1,
+            user_id=0,
+            position_id=self.position_id,
+            token_type=TokenType.BASE,
         )
+        result = self.model.read_result()
         self.position_id += 1
 
-        next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
-        return next_token_id
+        return result.token_0
 
     def _write_spec_pair(self, token_0: int, pos_0: int, token_1: int, pos_1: int, user_id: int = 0) -> None:
         """Write two tokens (base + speculation) into the pipeline."""

@@ -161,7 +161,10 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         "this.",
         num_groups_per_core);
 
-    // Compute num_out_blocks if not provided
+    // -1 sentinel from GroupNormMultiCoreProgramConfig means "auto select":
+    // pick num_out_blocks from a simple input-size / grid-size heuristic, rounded
+    // up to the next power of two and capped at MAX_HEURISTIC_NUM_OUT_BLOCKS.
+    // Any other value is taken as an explicit user choice and validated below.
     if (num_out_blocks == static_cast<uint32_t>(-1)) {
         const uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
         const uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;
@@ -951,12 +954,15 @@ GroupNormNoMcastProgramFactory::cached_program_t GroupNormNoMcastProgramFactory:
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
     }
 
-    uint32_t ex_cb_external_index = tt::CBIndex::c_10;
-    tt::tt_metal::CircularBufferConfig ex_cb_external_config =
-        tt::tt_metal::CircularBufferConfig(
-            2 * single_tile_size * num_cores_per_mcast_group, {{ex_cb_external_index, cb_data_format}})
-            .set_page_size(ex_cb_external_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
+    // Welford does not use cb_ex_external.
+    if (!use_welford) {
+        uint32_t ex_cb_external_index = tt::CBIndex::c_10;
+        tt::tt_metal::CircularBufferConfig ex_cb_external_config =
+            tt::tt_metal::CircularBufferConfig(
+                2 * single_tile_size * num_cores_per_mcast_group, {{ex_cb_external_index, cb_data_format}})
+                .set_page_size(ex_cb_external_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
+    }
 
     uint32_t ex_cb_index = tt::CBIndex::c_9;
     uint32_t ex_global_cb_index = tt::CBIndex::c_15;
