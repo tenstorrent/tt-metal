@@ -15,13 +15,13 @@ float get_estimator_peak_dram_bw_gbps(tt::ARCH arch) {
         NocEstimatorParams params;
         params.arch = (arch == tt::ARCH::BLACKHOLE) ? Architecture::BLACKHOLE : Architecture::WORMHOLE_B0;
         params.mechanism = NocMechanism::UNICAST;
-        params.pattern = NocPattern::ONE_FROM_ONE;
+        params.pattern = NocPattern::ONE_FROM_ALL;
         params.memory = MemoryType::DRAM_INTERLEAVED;
         params.transaction_size_bytes = 65536;
         params.num_transactions = 64;
 
         auto estimate = estimate_noc_performance(params);
-        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.2f : 1.0f;
+        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.35f : 1.0f;
         return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
     } catch (const std::runtime_error&) {
         return 0.0f;  // Signal caller to use fallback

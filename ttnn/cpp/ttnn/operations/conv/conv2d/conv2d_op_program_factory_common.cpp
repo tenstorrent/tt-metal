@@ -426,7 +426,7 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
         params.num_transactions = 64;
 
         auto estimate = estimate_noc_performance(params);
-        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.2f : 1.0f;
+        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.35f : 1.0f;
         return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
     } catch (const std::runtime_error&) {
         // Legacy fallback: linear interpolation
@@ -474,7 +474,7 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
         params.num_transactions = 64;
 
         auto estimate = estimate_noc_performance(params);
-        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.2f : 1.0f;
+        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.35f : 1.0f;
         return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
     } catch (const std::runtime_error&) {
         // Legacy fallback: linear interpolation
@@ -523,7 +523,7 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
         params.num_subordinates = 8;
 
         auto estimate = estimate_noc_performance(params);
-        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.2f : 1.0f;
+        float freq_ghz = (arch == tt::ARCH::BLACKHOLE) ? 1.35f : 1.0f;
         return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
     } catch (const std::runtime_error&) {
         // Legacy fallback: linear interpolation

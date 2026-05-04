@@ -105,7 +105,7 @@ float get_transaction_noc_bw(
         params.memory = noc_estimator::MemoryType::L1;
 
         auto estimate = noc_estimator::estimate_noc_performance(params);
-        float freq_ghz = (index == WormholeIndex) ? 1.0f : 1.2f;
+        float freq_ghz = (index == WormholeIndex) ? 1.0f : 1.35f;
         return static_cast<float>(estimate.bandwidth_bytes_per_cycle) * freq_ghz;
     } catch (const std::runtime_error&) {
         // Fallback: existing power-of-2 interpolation
@@ -222,7 +222,7 @@ std::vector<uint32_t> get_cycles_for_transaction_size(
     }
 
     auto transaction_bw = get_transaction_noc_bw(transaction_size, transaction_type, index);
-    float device_frequency_hz = index == WormholeIndex ? 1e9 : 1.2e9;
+    float device_frequency_hz = index == WormholeIndex ? 1e9 : 1.35e9;
     uint32_t cycles =
         std::ceil((float)(num_transactions * transaction_size * device_frequency_hz) / (float)(transaction_bw * 1e9));
     return {cycles, latency_cyles};
