@@ -1025,86 +1025,90 @@ static std::vector<Tensor> pool2d(
     }
     // For rank-4, input_tensor_4d is already the input_tensor, no copy needed
 
-    // Global average pool fast path: kernel covers entire spatial input with no padding/dilation.
+    // Global average pool fast path: kernel exactly covers spatial input with no padding/dilation.
     // pool_sum reduction is much cheaper than the sliding-window pool kernels for this case
-    // (no halo, no scatter, single reduction per output element).
+    // (no halo, no scatter, single reduction per output element). We require strict equality
+    // (== rather than >=) so that oversized kernels still hit the regular path's validation.
     std::array<uint32_t, 4> padding_check = sliding_window::get_pair_n4_padding(padding);
     uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
     uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
     bool is_global_pool =
-        (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
+        (kernel_size[0] == input_h && kernel_size[1] == input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0) &&
         (dilation_h == 1 && dilation_w == 1);
 
     if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
-        // Use interleaved memory for the reduction. Sharded inputs may have a shard spec sized
-        // for the full spatial input that won't fit the much smaller (1×1 spatial) reduction output.
+        // Reduction needs interleaved input/output. The output is a tiny (1×1 spatial) tensor;
+        // a shard spec sized for the full input cannot fit it, so we fall back to interleaved
+        // with the same buffer type (DRAM/L1) when either the caller asked for a sharded
+        // placement or the input is itself sharded. Callers that need a specific sharded layout
+        // for the output should re-shard explicitly.
         MemoryConfig input_mem = input_tensor_4d.memory_config();
-        MemoryConfig reduce_mem =
-            input_mem.is_sharded() ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, input_mem.buffer_type()} : input_mem;
+        MemoryConfig requested_out_mem = memory_config.value_or(input_mem);
+        MemoryConfig reduce_mem = (requested_out_mem.is_sharded() || input_mem.is_sharded())
+                                      ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, requested_out_mem.buffer_type()}
+                                      : requested_out_mem;
+        // If the caller's requested config is sharded, do not try to re-shard the small output.
+        bool honor_requested_out_mem = !requested_out_mem.is_sharded();
         uint32_t hw = input_h * input_w;
         // count_include_pad is irrelevant here: is_global_pool guarantees padding is zero in every
         // direction, so every element of the kernel window corresponds to a real input value.
         float scalar = divisor_override.has_value() ? 1.0f / float(divisor_override.value()) : 1.0f / float(hw);
 
-        if (batch_size == 1) {
-            // Fast path: input is already (1, 1, H*W, C). Reduce dim 2 in place.
-            // Convert to ROW_MAJOR first to strip tile padding — TILE inputs may carry non-zero
-            // garbage in padded rows/cols from prior ops, which would corrupt the sum. Also
-            // unshard since pool_sum expects interleaved input.
-            Tensor input = input_tensor_4d;
-            if (input.is_sharded()) {
-                input = ttnn::to_memory_config(input, reduce_mem);
-            }
-            if (input.layout() != Layout::ROW_MAJOR) {
-                input = ttnn::to_layout(input, Layout::ROW_MAJOR);
-            }
-            // pool_sum is deprecated, but it applies the scalar divisor inside the reduction
-            // kernel (1 device op). ttnn::sum has no scalar param (would need sum + multiply, 2 ops),
-            // and ttnn::mean cannot honor divisor_override. Replace if/when ttnn::sum gains a
-            // scalar parameter.
-            Tensor output = ttnn::operations::reduction::pool_sum(input, 2, reduce_mem, compute_kernel_config, scalar);
+        // Convert to ROW_MAJOR INTERLEAVED for the reduction. ROW_MAJOR strips tile padding
+        // garbage that would otherwise corrupt the sum; pool_sum requires interleaved input.
+        Tensor input = input_tensor_4d;
+        if (input.memory_config() != reduce_mem) {
+            input = ttnn::to_memory_config(input, reduce_mem);
+        }
+        if (input.layout() != Layout::ROW_MAJOR) {
+            input = ttnn::to_layout(input, Layout::ROW_MAJOR);
+        }
 
-            // Set the logical channel count back (zero-copy view).
-            ttnn::Shape output_padded_shape = output.padded_shape();
+        // Canonicalize to (batch_size, 1, H*W, C) form using an explicit logical+padded reshape.
+        // This is format-agnostic: it accepts both flat (1, 1, N*H*W, C) input from direct
+        // avg_pool2d callers and NHWC (N, H, W, C) input from the global_avg_pool2d Python
+        // wrapper, and it preserves any pre-existing padding (e.g., legacy callers that
+        // pad_to_tile zero-pad the spatial dim) by carrying the input's padded_shape into
+        // the canonical form. The padded H*W ≥ logical H*W, padded values must be zero.
+        const auto& post_padded = input.padded_shape();
+        uint32_t total_padded_spatial = post_padded[0] * post_padded[1] * post_padded[2];
+        uint32_t channels_padded = post_padded[3];
+        TT_FATAL(
+            total_padded_spatial % batch_size == 0,
+            "Global pool fast path: padded spatial elements ({}) must be divisible by batch_size ({})",
+            total_padded_spatial,
+            batch_size);
+        uint32_t hw_padded_per_batch = total_padded_spatial / batch_size;
+        ttnn::Shape canonical_logical({batch_size, 1, hw, channels});
+        ttnn::Shape canonical_padded({batch_size, 1, hw_padded_per_batch, channels_padded});
+        Tensor canonical = ttnn::reshape(input, canonical_logical, canonical_padded);
+
+        // ttnn::sum exposes a scalar parameter, but pool_sum is the only reduction entry point
+        // that accepts (N, 1, H*W, C) tensors with H*W padding without producing garbage.
+        // Replace once ttnn::sum gains equivalent handling.
+        Tensor output = ttnn::operations::reduction::pool_sum(canonical, 2, reduce_mem, compute_kernel_config, scalar);
+        // pool_sum returns (N, 1, 1, C). For batch=1 this is (1, 1, 1, C), the avg_pool2d output
+        // convention (1, 1, N*out_H*out_W, C) coincides. For batch>1 we reshape to (1, 1, N, C).
+        const auto& output_padded_shape = output.padded_shape();
+        if (batch_size == 1) {
+            // Set logical channel count (zero-copy view).
             ttnn::Shape out_logical({1, 1, 1, channels});
             ttnn::Shape out_padded({output_padded_shape[0], 1, 1, output_padded_shape[3]});
             output = ttnn::experimental::view(output, out_logical, out_padded);
-            if (output.layout() != output_layout) {
-                output = ttnn::to_layout(output, output_layout, std::nullopt, reduce_mem);
-            }
-            return {output};
+        } else {
+            ttnn::Shape correct_logical({1, 1, batch_size, channels});
+            ttnn::Shape correct_padded({1, 1, output_padded_shape[0], output_padded_shape[3]});
+            output = ttnn::reshape(output, correct_logical, correct_padded);
         }
 
-        // Multi-batch: reshape to (N, H, W, C), then view as (N, 1, H*W, C) so we can reduce
-        // dim 2 once per batch element. ttnn::reshape requires ROW_MAJOR interleaved input.
-        if (input_tensor_4d.is_sharded()) {
-            input_tensor_4d = ttnn::to_memory_config(input_tensor_4d, reduce_mem);
-        }
-        if (input_tensor_4d.layout() != Layout::ROW_MAJOR) {
-            input_tensor_4d = ttnn::to_layout(input_tensor_4d, Layout::ROW_MAJOR);
-        }
-        ttnn::Shape in_shape = input_tensor_4d.padded_shape();
-
-        ttnn::Shape nhwc_logical({batch_size, input_h, input_w, channels});
-        ttnn::Shape nhwc_padded({batch_size, input_h, input_w, in_shape[3]});
-        Tensor nhwc_input = ttnn::reshape(input_tensor_4d, nhwc_logical, nhwc_padded);
-
-        ttnn::Shape padded_nhwc_shape = nhwc_input.padded_shape();
-        ttnn::Shape flat_shape(
-            {padded_nhwc_shape[0], 1, padded_nhwc_shape[1] * padded_nhwc_shape[2], padded_nhwc_shape[3]});
-        Tensor flat_input = ttnn::experimental::view(nhwc_input, flat_shape);
-
-        Tensor output = ttnn::operations::reduction::pool_sum(
-            flat_input, int(flat_shape.rank() - 2), reduce_mem, compute_kernel_config, scalar);
-
-        // Reshape (N, 1, 1, C) → (1, 1, N, C) to match avg_pool2d's flat NHWC output convention.
-        ttnn::Shape output_padded_shape = output.padded_shape();
-        ttnn::Shape correct_logical({1, 1, batch_size, channels});
-        ttnn::Shape correct_padded({1, 1, output_padded_shape[0], output_padded_shape[3]});
-        output = ttnn::reshape(output, correct_logical, correct_padded);
         if (output.layout() != output_layout) {
             output = ttnn::to_layout(output, output_layout, std::nullopt, reduce_mem);
+        }
+        // Honor caller's requested output memory config when feasible. We skip re-sharding
+        // because a shard spec sized for the input H×W can't fit the 1×1 output.
+        if (honor_requested_out_mem && output.memory_config() != requested_out_mem) {
+            output = ttnn::to_memory_config(output, requested_out_mem);
         }
         return {output};
     }
