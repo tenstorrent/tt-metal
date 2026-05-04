@@ -12,19 +12,18 @@
 #include <cstdint>
 
 /**
- * For one loaded tile, argmax over H (height) at a fixed in-tile W index `local_w` (0..tile_width-1).
- * The face loops, get_face_data_range, and L1 index match process_input_tile (reader_argmax_tile_layout)
- * and only filter to the column in_tile W == local_w, tracking global H index.
+ * One pass over the tile already in the CB: for each in-tile column `in_tile_w`, update
+ * max_vals[in_tile_w] / arg_maxs[in_tile_w] (argmax along global H for that global_w column).
+ * Matches face indexing and padding handling of process_input_tile (W reader).
  */
 template <typename DTYPE, DataFormat format>
-void process_input_tile_for_h_column(
-    const InputContext& ctx, uint32_t w_tile, uint32_t h_tile, uint32_t local_w, DTYPE& max_val, uint32_t& arg_max) {
+void process_loaded_tile_all_h_columns(
+    const InputContext& ctx, uint32_t w_tile, uint32_t h_tile, DTYPE max_vals[], uint32_t arg_maxs[]) {
     const bool has_padding = ctx.has_padding;
     (void)has_padding;
     auto src_ptr = get_tt_l1_ptr_based_on_data_format<format>(ctx.cb_addr);
 
     for (uint32_t face_id = 0; face_id < 4; face_id++) {
-        // Same initialization as process_input_tile (W reader); get_face will overwrite.
         uint32_t rows_to_process = face_width;
         uint32_t cols_to_process = face_height;
         if (ctx.has_padding) {
@@ -46,9 +45,6 @@ void process_input_tile_for_h_column(
             for (uint32_t col = 0; col < cols_to_process; col++) {
                 const bool is_left_side_face = (face_id == 0 || face_id == 2);
                 const uint32_t in_tile_w = (is_left_side_face ? 0U : face_width) + col;
-                if (in_tile_w != local_w) {
-                    continue;
-                }
 
                 const uint32_t index = row * face_width + col;
                 const DTYPE value = face_ptr[index];
@@ -56,6 +52,14 @@ void process_input_tile_for_h_column(
                 if (global_h >= ctx.logical_height) {
                     continue;
                 }
+
+                const uint32_t global_w = w_tile * ctx.tile_width + in_tile_w;
+                if (global_w >= ctx.logical_width) {
+                    continue;
+                }
+
+                DTYPE& max_val = max_vals[in_tile_w];
+                uint32_t& arg_max = arg_maxs[in_tile_w];
 
                 bool new_max = false;
                 if constexpr (format == DataFormat::Float16_b) {

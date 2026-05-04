@@ -12,6 +12,9 @@
 /**
  * Argmax over the H (height) dimension for TILE layout, without transposing the input.
  * For each (outer, global_w) position, scan all H tiles and rows; index is 0..logical_height-1.
+ *
+ * Loop order: for fixed (outer, w_tile), load each (h_tile, w_tile) tile once; one pass over the
+ * tile in L1 updates all in-tile columns (avoids repeated NOC reads and repeated full-tile scans).
  */
 
 void kernel_main() {
@@ -87,27 +90,31 @@ void kernel_main() {
 
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {
         for (uint32_t w_tile = 0; w_tile < input_width; w_tile++) {
+            src_element_type max_vals[tile_width];
+            uint32_t arg_maxs[tile_width];
+            for (uint32_t lw = 0; lw < tile_width; lw++) {
+                max_vals[lw] = default_val;
+                arg_maxs[lw] = 0;
+            }
+
+            for (uint32_t h_tile = 0; h_tile < input_height; h_tile++) {
+                const int src_tile_id = outer_index * inner_size + h_tile * input_width + w_tile;
+
+                const uint64_t src_noc_addr = get_noc_addr(src_tile_id, s_src);
+                noc_async_read(src_noc_addr, src_cb_addr, src_page_size);
+                noc_async_read_barrier();
+
+                process_loaded_tile_all_h_columns<src_element_type, src_data_format>(
+                    input_ctx, w_tile, h_tile, max_vals, arg_maxs);
+            }
+
             for (uint32_t local_w = 0; local_w < tile_width; local_w++) {
                 const uint32_t global_w = w_tile * tile_width + local_w;
                 if (global_w >= logical_width) {
                     continue;
                 }
 
-                src_element_type max_val = default_val;
-                uint32_t arg_max = 0;
-
-                for (uint32_t h_tile = 0; h_tile < input_height; h_tile++) {
-                    const int src_tile_id = outer_index * inner_size + h_tile * input_width + w_tile;
-
-                    const uint64_t src_noc_addr = get_noc_addr(src_tile_id, s_src);
-                    noc_async_read(src_noc_addr, src_cb_addr, src_page_size);
-                    noc_async_read_barrier();
-
-                    process_input_tile_for_h_column<src_element_type, src_data_format>(
-                        input_ctx, w_tile, h_tile, local_w, max_val, arg_max);
-                }
-
-                collect_row_major_output<false>(&arg_max, 1, output_ctx);
+                collect_row_major_output<false>(&arg_maxs[local_w], 1, output_ctx);
 
                 if (output_ctx.collected_count >= output_page_elements) {
                     write_to_output<dst_accessor_type, false>(s_dst, output_ctx);
