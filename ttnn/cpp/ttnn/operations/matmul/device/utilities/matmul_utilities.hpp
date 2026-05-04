@@ -21,6 +21,17 @@ namespace ttnn::operations::matmul::utilities {
 // Allows easily changing buffering strategy in one place for relevant factories.
 constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
 
+inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor>& bias) {
+    if (!bias.has_value()) {
+        return false;
+    }
+    const auto& shape = bias->logical_shape();
+    if (shape.rank() < 2) {
+        return true;
+    }
+    return shape[-2] == 1;
+}
+
 uint32_t get_estimated_size_of_cbs(
     uint32_t per_core_M,
     uint32_t per_core_N,

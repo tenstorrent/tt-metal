@@ -76,6 +76,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
@@ -882,6 +883,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     // Create compute kernel descriptor
     KernelDescriptor compute_kernel_desc;
@@ -1536,6 +1540,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
@@ -2309,6 +2314,9 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
         {"cb_in0", tt::CBIndex::c_0},
@@ -3239,6 +3247,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         output_data_format,
         untilize_out,
         fused_op_signaler,
+        fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core);
 }
 
@@ -3394,6 +3403,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
         output_data_format,
         untilize_out,
         fused_op_signaler,
+        fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core);
 }
 

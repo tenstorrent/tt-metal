@@ -13,6 +13,7 @@
 
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
 #endif
 
 #ifdef SFPU_ACTIVATION
@@ -197,6 +198,8 @@ void kernel_main() {
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
+    // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles
+    constexpr bool row_broadcast_bias = (bool)get_compile_time_arg_val(18);
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     experimental::CircularBuffer bias_cb(bias_cb_id);
 #else
@@ -444,8 +447,11 @@ void kernel_main() {
 #endif
 
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
-                // reconfigure unpacker df for src B
+                if constexpr (row_broadcast_bias) {
+                    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+                } else {
+                    add_tiles_init(mm_partials_cb_id, bias_cb_id);
+                }
                 bias_cb.wait_front(in1_block_w);
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
@@ -456,7 +462,11 @@ void kernel_main() {
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                             uint32_t bcast_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                                add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
+                                if constexpr (row_broadcast_bias) {
+                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
+                                } else {
+                                    add_tiles(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
+                                }
                                 bcast_tile_idx++;
                             }
                         }

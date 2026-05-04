@@ -477,6 +477,9 @@ create_program_batch_sharded(
         0u,                      // get_batch_from_reader
         0u,                      // in0_transpose_tile
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(1u);  // row_broadcast_bias: DRAM sharded always uses row broadcast
+    }
 
     // Create kernels on all cores in bounding box
     // Runtime args control which cores are active workers vs idle
@@ -1033,6 +1036,9 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         0u,
         0u,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(1u);  // row_broadcast_bias: DRAM sharded always uses row broadcast
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build Kernel Descriptors

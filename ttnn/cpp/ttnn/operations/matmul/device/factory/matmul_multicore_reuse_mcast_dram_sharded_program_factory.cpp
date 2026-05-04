@@ -455,6 +455,9 @@ create_program_dram_sharded(
         false,         // get_batch_from_reader
         false,         // in0_transpose_tile
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(1u);  // row_broadcast_bias: DRAM sharded always uses row broadcast
+    }
 
     // Setup named compile args
     std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
@@ -1315,6 +1318,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         false,         // get_batch_from_reader
         false,         // in0_transpose_tile
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(1u);  // row_broadcast_bias: DRAM sharded always uses row broadcast
+    }
 
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =

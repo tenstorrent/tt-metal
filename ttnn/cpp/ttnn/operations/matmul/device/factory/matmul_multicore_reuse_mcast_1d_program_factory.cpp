@@ -116,6 +116,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
     using tt::tt_metal::num_cores_to_corerangeset;
 
@@ -691,6 +692,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
         {"cb_in0", tt::CBIndex::c_0},
@@ -1113,6 +1117,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
+    bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -1573,6 +1578,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     // Setup named compile args
     std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
@@ -2913,6 +2921,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
     using tt::tt_metal::num_cores_to_corerangeset;
 
@@ -3490,6 +3499,9 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     compute_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
@@ -3900,6 +3912,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
+    bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -4342,6 +4355,9 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         false,         // get_batch_from_reader
         in0_transpose_tile,
     };
+    if (bias_buffer != nullptr) {
+        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
+    }
 
     compute_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
@@ -4946,6 +4962,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             output.memory_config().is_sharded(),
             untilize_out,
             fused_op_signaler,
+            operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias),
             sub_device_start_core);
     }
     return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
@@ -4989,6 +5006,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         a.memory_config().is_sharded(),
         output.memory_config().is_sharded(),
         untilize_out,
+        operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core);
 }
 
@@ -5146,6 +5164,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
             output.memory_config().is_sharded(),
             untilize_out,
             fused_op_signaler,
+            fused_matmul_bias_row_broadcastable(bias),
             sub_device_start_core);
     }
     return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_descriptor(
@@ -5188,6 +5207,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
         a.memory_config().is_sharded(),
         output.memory_config().is_sharded(),
         untilize_out,
+        fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core);
 }
 
