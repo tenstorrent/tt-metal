@@ -5087,7 +5087,7 @@ TEST_F(TopologySolverTest, SatStress_RingOnMesh_Forbidden_Required_Cardinality) 
 
     size_t card_satisfied = 0;
     for (const auto& [tn, gn] : card_pairs) {
-        if (sat_result.target_to_global.count(tn) && sat_result.target_to_global.at(tn) == gn) {
+        if (sat_result.target_to_global.contains(tn) && sat_result.target_to_global.at(tn) == gn) {
             card_satisfied++;
         }
     }

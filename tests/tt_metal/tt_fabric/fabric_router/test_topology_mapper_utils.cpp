@@ -435,7 +435,7 @@ protected:
                 mapped_asics.push_back(asic);
             }
         }
-        EXPECT_FALSE(mapped_asics.empty()) << "No mapped ASICs for logical mesh " << logical_mesh.get();
+        ASSERT_FALSE(mapped_asics.empty()) << "No mapped ASICs for logical mesh " << logical_mesh.get();
         std::vector<::tt::tt_fabric::MeshId> candidates;
         for (const auto& [pm, graph] : physical.mesh_adjacency_graphs_) {
             const auto& nodes = graph.get_nodes();
@@ -450,7 +450,7 @@ protected:
                 candidates.push_back(pm);
             }
         }
-        EXPECT_EQ(candidates.size(), 1u) << "Mapped ASICs for logical mesh " << logical_mesh.get()
+        ASSERT_EQ(candidates.size(), 1u) << "Mapped ASICs for logical mesh " << logical_mesh.get()
                                          << " should lie in exactly one physical mesh subgraph";
         return candidates.front();
     }
