@@ -86,6 +86,13 @@ inline void _init_swiglu_()
 //   LREG5     : +2L          (loaded by _init_swiglu_)
 //   LREG6     : alpha        (loaded by _init_swiglu_)
 //   LREG7     : sigmoid work_reg, then glu = gate * sig
+//
+// TODO(post-bringup): profile back-to-back SFPMAD pairs in the gate min-clamp
+// (lines 99/101) and up clip (lines 108/110/112). If Quasar inserts pipeline
+// nops between dependent SFPMADs, hand-interleaving independent ops from
+// different clamp identities could remove them — but that's a scheduler
+// concern (see PR #43152 review by amahmudTT) and we're keeping the source
+// readable until profiling shows it matters.
 inline void _calculate_swiglu_(const int iterations, const int gate_offset_idx, const int up_offset_idx, const int out_offset_idx)
 {
 #pragma GCC unroll 8
