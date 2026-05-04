@@ -101,14 +101,25 @@
   owner_id: U03HY7MK4BT
   team: models
 
-- name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalSingleDevice
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalMatmulExpert
   cmd: |
     python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
-      --bucket pure_local_single_device
+      --bucket pure_local_matmul_expert
   model: deepseek_decode
   skus:
     bh_galaxy:
-      timeout: 90
+      timeout: 70
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_galaxy_DeepSeek_B1_Unit_Tests_PureLocalSingleDeviceRemainder
+  cmd: |
+    python models/demos/deepseek_v3_b1/tests/run_isolated_unit_tests.py \
+      --bucket pure_local_single_device_remainder
+  model: deepseek_decode
+  skus:
+    bh_galaxy:
+      timeout: 20
   owner_id: U03HY7MK4BT
   team: models
 

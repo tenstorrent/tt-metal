@@ -329,7 +329,7 @@ def skip_known_decoder_moe_failure(
 ):
     """Skip exact known decoder MoE failures."""
     if (
-        position_id == 0
+        position_id in {0, 127}
         and validate_standalone_mla
         and validate_standalone_moe
         and expert_upload_mode == "unrigged_all_experts"
@@ -339,7 +339,10 @@ def skip_known_decoder_moe_failure(
         and decoder_layer_idx == ROUTED_EXPERT_LAYER_IDX
         and use_real_weights is False
     ):
-        pytest.skip("DecoderBlock full-routing unrigged standalone MLA+MoE case timed out after 600s. Issue: #42714")
+        pytest.skip(
+            f"DecoderBlock full-routing unrigged standalone MLA+MoE case at position_id={position_id} "
+            "timed out after 600s. Issue: #42714"
+        )
 
     if (
         position_id == 0

@@ -41,11 +41,18 @@ class Bucket:
 
 BUCKETS: tuple[Bucket, ...] = (
     Bucket(
-        name="pure_local_single_device",
+        name="pure_local_matmul_expert",
+        timeout=600,
+        reset_before=False,
+        targets=(f"{UNIT_TEST_DIR}/per_core_allocation/test_matmul_expert.py",),
+    ),
+    Bucket(
+        name="pure_local_single_device_remainder",
         timeout=600,
         reset_before=False,
         targets=(
-            f"{UNIT_TEST_DIR}/per_core_allocation/",
+            f"{UNIT_TEST_DIR}/per_core_allocation/test_compressed_tensor.py",
+            f"{UNIT_TEST_DIR}/per_core_allocation/test_compressed_tensor_multi_device.py",
             f"{UNIT_TEST_DIR}/test_compact_io.py",
             f"{UNIT_TEST_DIR}/test_compressed_tensor.py",
             f"{UNIT_TEST_DIR}/test_create_q_heads.py",

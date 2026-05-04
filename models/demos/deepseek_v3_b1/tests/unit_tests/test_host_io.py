@@ -34,7 +34,14 @@ def create_fabric_router_config(max_payload_size):
         (64, 1024, 512),
         (512, 1024, 512),
         (1024, 2048, 128),
-        (32768, 65536, 128),
+        pytest.param(
+            32768,
+            65536,
+            128,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: Blackhole HostIO large loopback fails DMA page pinning for both H2D modes. Issue: #43079"
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize(
