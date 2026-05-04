@@ -313,14 +313,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     // slightly awkward. we want the token dimension but the underlying shape might not represent the data layout.
     //  This is in line with the assumption that tokens are split across the entirety of the shard, regardless of
     //  number of tokens
-<<<<<<< smeydanshahiTT/moe-single-glx
-    const auto input_shards = input_tensor.memory_config().shard_spec()->grid.num_cores();
-    const auto token_expert_row_offset = input_tensor.logical_shape().volume() / input_shards /
-                                         (hidden_size / num_data_parallel_cores / experts_per_device) /
-                                         num_token_parallel_cores;
-    const auto expert_token_segment_buffer_block_size_bytes = token_segment_buffer_size_bytes * token_expert_row_offset;
-=======
->>>>>>> main
     constexpr auto double_buffer = 2;
 
     const auto input_shards = input_tensor.memory_config().shard_spec()->grid.num_cores();

@@ -419,14 +419,11 @@ def validate_matmul(
 
     logger.info(f"Checking experts in double buffer: {experts_to_check}")
 
-<<<<<<< smeydanshahiTT/moe-single-glx
     # smaller batch -> smaller dataset so PCC is less stable. A lower threshold is acceptable.
     MATMUL_PCC_THRESHOLD = 0.987 if total_tokens == 512 else 0.986
 
-=======
     # Build buffer token counts based on which experts are actually in the buffer
     reshaped_device_outputs = []
->>>>>>> main
     for d in range(devices):
         buffer_token_counts = torch.zeros(2, dtype=expert_token_counts[d].dtype)
         for expert_id, buffer_idx in experts_to_check:
@@ -1072,7 +1069,6 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
-<<<<<<< smeydanshahiTT/moe-single-glx
 # Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 or 1x8 mesh descriptor before running
 @pytest.mark.skipif(
     not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
@@ -1129,8 +1125,6 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 @pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
 @pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
-=======
->>>>>>> main
 @torch.no_grad()
 def run_moe_compute_test(
     mesh_device,
