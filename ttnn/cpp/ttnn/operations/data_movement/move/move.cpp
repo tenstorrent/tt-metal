@@ -17,6 +17,13 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
+/**
+ * @brief Creates a ghost tensor (an allocated tensor that does not own the underlying device memory)
+ * before deallocation to avoid passing deallocated tensor through the TTNN infrastructure.
+ *
+ * @param input_tensor The input tensor to create a ghost copy from.
+ * @return Tensor The created ghost tensor.
+ */
 Tensor create_ghost_tensor(const Tensor& input_tensor) {
     const auto& mesh_buffer = input_tensor.mesh_buffer();
     auto ghost_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
@@ -30,10 +37,8 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     auto input_address = input_tensor.buffer()->address();
     TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
-    // Creates a ghost tensor (an allocated tensor that does not own the underlying device memory) before deallocation
-    // to avoid passing deallocated tensor through the TTNN infrastructure.
+    // Construct a ghost tensor so we can pass an deallocated tensor through the TTNN infrastructure.
     auto ghost_input_tensor = create_ghost_tensor(input_tensor);
-
     const_cast<Tensor&>(input_tensor).deallocate(/* force = */ false);
     if (input_tensor.is_allocated()) {
         // TODO: Should this throw error?
@@ -111,8 +116,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
     auto shard_spec = input_tensor.shard_spec().value();
 
-    // Creates a ghost tensor (an allocated tensor that does not own the underlying device memory) before deallocation
-    // to avoid passing deallocated tensor through the TTNN infrastructure.
+    // Construct a ghost tensor so we can pass an deallocated tensor through the TTNN infrastructure.
     auto ghost_input_tensor = create_ghost_tensor(input_tensor);
 
     const_cast<Tensor&>(input_tensor).deallocate(/* force = */ false);
