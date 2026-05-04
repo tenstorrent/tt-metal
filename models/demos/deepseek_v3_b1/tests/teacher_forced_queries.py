@@ -69,6 +69,7 @@ def run_teacher_forced_queries(
     timeout: int = 60,
 ) -> list[dict]:
     forced_prefix = ""
+    session_id = None
     results = []
     tokens = reference_tokens[:max_steps] if max_steps is not None else reference_tokens
 
@@ -84,6 +85,9 @@ def run_teacher_forced_queries(
             # The server only supports top-1 today; keep this field so top-k can grow here later.
             "logprobs": 1,
         }
+        if session_id:
+            payload["session_id"] = session_id
+
         response = send_chat_completion_request(
             payload=payload,
             api_key=api_key,
@@ -92,6 +96,9 @@ def run_teacher_forced_queries(
         )
         if isinstance(response, Exception):
             raise response
+
+        if session_id is None:
+            session_id = response["usage"]["sessionId"]
 
         results.append(evaluate_step(index=index, reference_token=reference_token, response=response))
         forced_prefix += reference_token
