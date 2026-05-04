@@ -284,7 +284,6 @@ struct ReduceToOneB1 {
                     cb_reserve_back(CTArgs::local_cb, CTArgs::num_tiles);
                     cb_push_back(CTArgs::local_cb, CTArgs::num_tiles);
                 }
-
                 // Round 1: Wait for shard from LEAF (page 0 of received_cb)
                 cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem1_ptr =

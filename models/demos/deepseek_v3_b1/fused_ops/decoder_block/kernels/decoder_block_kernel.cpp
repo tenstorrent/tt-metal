@@ -2323,7 +2323,6 @@ void kernel_main() {
         const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
             cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 
-        // DPRINT<<"CUR_POS: "<<cur_pos<<" CUR_SLOT: "<<metadata_ptr->slot_id<<ENDL();
         if (!skip_attention) {
             // ====================================================================
             // Matmul operation
