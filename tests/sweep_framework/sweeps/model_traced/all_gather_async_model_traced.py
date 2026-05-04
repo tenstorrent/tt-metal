@@ -740,7 +740,16 @@ def run(
                             # Master had `persistent_output_buffer=None` explicitly.
                             op_kwargs["persistent_output_buffer"] = None
 
-                        tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
+                        # Master traces are mixed: some Flux call sites pass the
+                        # input positionally (recorded as ``arg0``), others as
+                        # ``input_tensor=`` kwarg. The vector remembers which
+                        # form the master used (``input_a_shape`` -> positional,
+                        # ``input_tensor_shape`` -> kwarg). Mirror it so the
+                        # sweep config_hash matches master in both cases.
+                        if input_tensor_shape is not None and input_a_shape is None:
+                            tt_out_tensor = ttnn.experimental.all_gather_async(input_tensor=tt_input, **op_kwargs)
+                        else:
+                            tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
                     else:
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,

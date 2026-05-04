@@ -126,8 +126,12 @@ def prepare_program_cache_for_comparison(device) -> None:
 
 
 def execute_test(test_module, test_vector: dict, device) -> Tuple[bool, Any, Optional[float]]:
-    # Filter 'device' from test_vector to avoid conflict with explicit device param
+    # 'device' from the master trace would collide with the fixture's `device=`
+    # injection. Preserve the traced value under `traced_device_kwarg` so
+    # sweeps can tell whether the model originally passed `device=mesh` or
+    # `device=None` (e.g. ttnn.full's traced-region path) before stripping it.
     if "device" in test_vector:
+        test_vector["traced_device_kwarg"] = test_vector["device"]
         test_vector = {k: v for k, v in test_vector.items() if k != "device"}
     # Convert "__ABSENT__" sentinel values to None (missing columns in multi-config suites)
     # Track which keys were originally absent so sweeps can distinguish "master had key: None"

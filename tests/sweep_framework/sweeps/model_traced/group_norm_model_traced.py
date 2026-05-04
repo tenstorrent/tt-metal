@@ -62,6 +62,15 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     """
     Skip test vectors that cause L1 circular buffer overflow.
     group_norm allocates internal circular buffers that can exceed L1 capacity for large tensors.
+
+    Note: the Flux VAE traces include 1M+ element tensors that the model runs
+    successfully on Galaxy via ``num_out_blocks=-1`` chunking + an 8x8 core grid.
+    Loosening this gate to admit those configs causes the existing golden
+    (``torch.nn.functional.group_norm`` on the raw shape) to diverge from the
+    sharded op output (PCC ~0.5). Closing the gap requires a mesh-aware golden
+    that mirrors the model's per-channel sharding via
+    ``ttnn.create_group_norm_weight_bias_rm`` semantics — out of scope for the
+    initial validation pass.
     """
     input_shape = test_vector.get("input_a_shape")
 

@@ -56,11 +56,16 @@ def _shard_dims_from_placement(tensor_placement):
 def _from_torch_host_with_placement(torch_tensor, dtype, tensor_placement, mesh_device, is_mesh_device):
     """Create a HOST-side ttnn.Tensor stamped with the master's mesh placement.
 
-    Master traces capture conv2d weight/bias before they are moved to device,
-    so the tensors must be HOST tensors that nevertheless carry the
-    ShardTensor2dMesh / ReplicateTensorToMesh placement metadata. Pass
-    ``mesh_mapper`` to ``from_torch`` *without* ``device=`` to avoid an
-    immediate transfer onto the mesh.
+    Master traces capture conv2d weight/bias as HOST tensors carrying
+    ShardTensor2dMesh placement metadata; the per-device ``logical_shape`` is
+    what ``ttnn.conv2d``'s prepare_conv2d_weights validates against. The
+    incoming ``torch_tensor`` is sized for the per-device shape from the
+    master vector, so we first replicate it ``mesh_axis_size`` times along the
+    sharded dim to recover the global tensor, then hand it to
+    ``ShardTensor2dMesh`` which slices it back to per-device shape on each
+    chip — preserving both the master's placement metadata *and* the
+    per-device ``logical_shape == out_channels`` invariant required by
+    prepare_conv2d_weights.
     """
     if not (is_mesh_device and tensor_placement):
         return ttnn.from_torch(torch_tensor, dtype)
@@ -72,13 +77,30 @@ def _from_torch_host_with_placement(torch_tensor, dtype, tensor_placement, mesh_
     elif isinstance(mesh_shape, (list, tuple)):
         mesh_shape = tuple(int(x) for x in mesh_shape)
 
-    has_shard = "PlacementShard" in placement_str
-    if has_shard and mesh_shape and len(mesh_shape) == 2:
+    if mesh_shape and len(mesh_shape) == 2:
         dims = _shard_dims_from_placement(tensor_placement)
         if dims is not None:
+            # Build the global tensor by replicating along each sharded dim
+            # ``mesh_axis_size`` times so ShardTensor2dMesh can re-shard it
+            # back to ``torch_tensor.shape`` per device. All-None ``dims``
+            # produces a 2D ``[Replicate, Replicate]`` placement matching
+            # master's records on a 4x8 mesh.
+            global_tensor = torch_tensor
+            for axis_idx, dim in enumerate(dims):
+                if dim is None:
+                    continue
+                axis_size = mesh_shape[axis_idx]
+                if axis_size <= 1:
+                    continue
+                d = dim if dim >= 0 else dim + global_tensor.ndim
+                if d < 0 or d >= global_tensor.ndim:
+                    continue
+                repeats = [1] * global_tensor.ndim
+                repeats[d] = axis_size
+                global_tensor = global_tensor.repeat(*repeats)
             mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=mesh_shape)
-            return ttnn.from_torch(torch_tensor, dtype, mesh_mapper=mapper)
-    # Pure-replicate placement (no Shard) or unparseable shape: replicate.
+            return ttnn.from_torch(global_tensor, dtype, mesh_mapper=mapper)
+    # 1-D / unparseable placement: fall back to ReplicateTensorToMesh.
     mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     return ttnn.from_torch(torch_tensor, dtype, mesh_mapper=mapper)
 
@@ -498,11 +520,12 @@ def run(
     if effective_weight_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
         effective_weight_dtype = ttnn.float32
 
-    # weight/bias stay as plain HOST tensors. The master trace records mesh
-    # placement metadata (e.g. PlacementShard(0)) but the underlying conv2d
-    # implementation expects per-device shapes equal to out_channels — making
-    # this match exactly would require rewriting the golden too. Leave the
-    # tensor_placement diff as an accepted coverage gap.
+    # weight/bias stay as plain HOST tensors. Reproducing the master's
+    # ``ShardTensor2dMesh`` placement on weight/bias triggers a >10-min hang
+    # inside ``ttnn.conv2d`` for the 1024x1024 input configs (the smaller
+    # ones still pass in ~3-5s, but losing those wins isn't worth the larger
+    # configs hanging on every batch). The ``tensor_placement`` diff for
+    # weight/bias remains as an accepted coverage gap.
     tt_weight = ttnn.from_torch(torch_weight, effective_weight_dtype)
 
     tt_bias = None
