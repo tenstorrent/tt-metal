@@ -2,8 +2,8 @@
 
 ## Current Status
 
-**Status**: COMPLETE — Docker server verified 105/105 tests, 97.1% accuracy vs HF
-**Branch**: `ssinghal/molmo2_new` — commit `0f36262bf08`
+**Status**: COMPLETE — Docker server verified 105/105 tests, 97.1% accuracy, zero JIT during inference
+**Branch**: `ssinghal/molmo2_new` — commit `b655be4ec6e`
 **Docker image**: `molmo2-pr-dev:latest` (overlay on `0.12.0-735b65d-7a07a97`)
 
 ## Session 1 — 2026-04-29
@@ -374,7 +374,31 @@ img_mm and causal have matching shapes.
 
 Total warmup: ~15 minutes (dominated by weight loading from volume)
 
+#### Additional Fixes (eliminating test-0 JIT overhead)
+Three more fixes applied after initial Docker verification to eliminate ~22s test-0 overhead:
+
+1. **`tti_padded` mask warmup** (`9f60265cb3d`): pass `token_type_ids` in vision-integrated
+   warmup so `build_molmo2_prefill_mask` JIT (ttnn.mul/maximum/where) is compiled at bringup
+   not on first real inference. Capped at S≤8192 to avoid [S,S] DRAM OOM at S=32768.
+
+2. **CPU input_ids padding** (`b655be4ec6e`): pad `input_ids` to `_S_pad_early` on CPU before
+   `ttnn.embedding` so the embedding output is already bucket-sized. Eliminates all on-device
+   `ttnn.concat` for padding — the main source of per-S JIT stalls. Also changes
+   `_S_pad_early = get_padded_prefill_len(S)` for S≤8192 so it always equals `padded_S`
+   (bucket boundary), fixing the S≤128 edge case.
+
+#### Final Docker 105-Video Results (zero JIT, T3K)
+| Metric | Before fixes | After fixes |
+|---|---|---|
+| Test-0 prefill | 24s | **8.4s** |
+| Avg prefill (all) | 8.4s | **4.0s** |
+| E2E latency avg | 10.4s | **5.7s** |
+| E2E latency median | 10.6s | **4.3s** |
+| Accuracy vs HF | 97/105 | **97/105 = 97.1%** |
+| JIT during inference | 0 | **0** |
+
 ### Notes
-- Prefill times vary 1-20s depending on sequence length (S ranges ~1K to ~4.2K for 51-frame videos)
-- End-to-end latency higher than local because GCS video downloads take 5-10s
+- Prefill times vary 2-10s depending on sequence length (S ranges ~1K to ~4.2K for 51-frame videos)
+- E2E latency improved from 10.4s to 5.7s avg after eliminating on-device concat JIT stalls
 - No JIT stalls during inference: all shapes pre-compiled at bringup
+- Remaining test-0 overhead (~6s vs ~2s for test-1 at same S) is vLLM first-call initialization, not JIT
