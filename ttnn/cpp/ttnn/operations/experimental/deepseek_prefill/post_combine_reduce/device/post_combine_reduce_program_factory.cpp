@@ -188,13 +188,12 @@ CreatedProgram create_at(
     tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
 
     // Compute compile-time args. The skip-mode toggle is appended last so the
-    // DeepSeek-only args (dispatch_table / indices page counts) retain stable
-    // positions across both modes (they are zero in the GPT-OSS path).
+    // DeepSeek-only arg (dispatch_table page count) retains a stable position
+    // across both modes (it is zero in the GPT-OSS path).
     std::vector<uint32_t> compute_compile_time_args = {
         num_experts,
         emb_dim_cb_tiles,
         dispatch_table_num_pages,
-        indices_pages_per_core,
         static_cast<uint32_t>(use_dispatch_table_skip ? 1 : 0),
     };
 
@@ -210,7 +209,6 @@ CreatedProgram create_at(
         dispatch_table_num_pages,
         dispatch_table_page_size_val,
         dispatch_table_aligned_page_size,
-        indices_pages_per_core,
         indices_page_size_val,
         indices_aligned_page_size,
     };

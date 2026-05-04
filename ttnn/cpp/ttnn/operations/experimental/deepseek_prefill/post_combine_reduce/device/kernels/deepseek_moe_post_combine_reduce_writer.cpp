@@ -23,11 +23,10 @@ constexpr uint32_t emb_dim_out_tiles = get_compile_time_arg_val(2);
 constexpr uint32_t dispatch_table_num_pages = get_compile_time_arg_val(3);
 constexpr uint32_t dispatch_table_page_size = get_compile_time_arg_val(4);
 constexpr uint32_t dispatch_table_aligned_page_size = get_compile_time_arg_val(5);
-constexpr uint32_t indices_pages_per_core = get_compile_time_arg_val(6);
-constexpr uint32_t indices_page_size = get_compile_time_arg_val(7);
-constexpr uint32_t indices_aligned_page_size = get_compile_time_arg_val(8);
+constexpr uint32_t indices_page_size = get_compile_time_arg_val(6);
+constexpr uint32_t indices_aligned_page_size = get_compile_time_arg_val(7);
 
-constexpr auto weight_accessor_args = TensorAccessorArgs<9>();
+constexpr auto weight_accessor_args = TensorAccessorArgs<8>();
 constexpr auto output_accessor_args = TensorAccessorArgs<weight_accessor_args.next_compile_time_args_offset()>();
 constexpr auto dispatch_table_accessor_args =
     TensorAccessorArgs<output_accessor_args.next_compile_time_args_offset()>();

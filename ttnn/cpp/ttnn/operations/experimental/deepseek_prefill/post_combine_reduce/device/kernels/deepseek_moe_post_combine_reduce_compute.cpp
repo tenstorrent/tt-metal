@@ -18,11 +18,10 @@ constexpr uint32_t cb_rowmajor = tt::CBIndex::c_17;
 
 constexpr uint32_t num_experts = get_compile_time_arg_val(0);
 constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
-// The following two CT args are only meaningful when use_dispatch_table_skip
-// is true; they carry zeros from the program factory otherwise.
+// dispatch_table_num_pages is only meaningful when use_dispatch_table_skip
+// is true; it carries zero from the program factory otherwise.
 constexpr uint32_t dispatch_table_num_pages = get_compile_time_arg_val(2);
-constexpr uint32_t indices_pages_per_core = get_compile_time_arg_val(3);
-constexpr bool use_dispatch_table_skip = get_compile_time_arg_val(4) != 0;
+constexpr bool use_dispatch_table_skip = get_compile_time_arg_val(3) != 0;
 
 void kernel_main() {
     constexpr uint32_t TOKENS_PER_CHUNK = 32;
