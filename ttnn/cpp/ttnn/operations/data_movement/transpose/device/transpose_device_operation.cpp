@@ -106,18 +106,17 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
     // transparently via NOC).
     bool native = is_native_transpose_sharding(input_tensor.tensor_spec(), output_memory_config);
 
-    uint32_t N = input_tensor.logical_shape()[0], C = input_tensor.logical_shape()[1];
-    uint32_t output_width =
-        (dim == TransposeOpDim::WH) ? input_tensor.logical_shape()[-2] : input_tensor.logical_shape()[-1];
-    uint32_t output_height =
-        (dim == TransposeOpDim::WH)
-            ? input_tensor.logical_shape()[-1]
-            : ((dim == TransposeOpDim::HC) ? input_tensor.logical_shape()[-3] : input_tensor.logical_shape()[-2]);
+    // shard_spec.shape is in padded terms; comparisons below use padded dims.
+    const auto& input_padded_shape = input_tensor.padded_shape();
+    const auto output_padded_shape = transposed_shapes(input_tensor, dim).padded;
+    uint32_t N = input_padded_shape[0], C = input_padded_shape[1];
+    uint32_t output_width = output_padded_shape[-1];
+    uint32_t output_height = output_padded_shape[-2];
 
     bool input_height_sharded = native && input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
-                                input_tensor.shard_spec()->shape[1] == input_tensor.logical_shape()[-1];
+                                input_tensor.shard_spec()->shape[1] == input_padded_shape[-1];
     bool input_width_and_height_fully_in_shard =
-        input_height_sharded && input_tensor.shard_spec()->shape[0] % input_tensor.logical_shape()[-2] == 0;
+        input_height_sharded && input_tensor.shard_spec()->shape[0] % input_padded_shape[-2] == 0;
     bool output_height_sharded = native && output_memory_config.is_sharded() &&
                                  output_memory_config.shard_spec().has_value() &&
                                  output_memory_config.shard_spec()->shape[1] == output_width;

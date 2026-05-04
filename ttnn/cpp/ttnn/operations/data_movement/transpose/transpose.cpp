@@ -86,7 +86,8 @@ inline Tensor transpose_(
                 output_padded_shape[1] = a.logical_shape()[2];
                 output_padded_shape[2] = tt::round_up(a.logical_shape()[1], tt::constants::TILE_HEIGHT);
                 auto adjusted = adjust_shard_spec_to_shape(shard_spec, input_padded_shape, output_padded_shape);
-                if (!adjusted.has_value() || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0) {
+                if (!adjusted.has_value() || adjusted->shape[0] % tt::constants::TILE_HEIGHT != 0 ||
+                    adjusted->shape[1] % tt::constants::TILE_WIDTH != 0) {
                     shard_derivation_fallback();
                 } else {
                     output_mem_constructed = output_mem_constructed.with_shard_spec(std::move(adjusted));
@@ -97,8 +98,9 @@ inline Tensor transpose_(
             // the spec. Must precede the non-native fallback below so it isn't overridden.
             output_mem_constructed = output_mem_config.value();
         } else if (a.is_sharded()) {
-            // Non-native sharded input, no user preference → default to L1 interleaved.
-            output_mem_constructed = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1);
+            // Non-native sharded input → mirror input's memory_layout (no shard_spec, device op
+            // synthesizes via adjust_shard_spec_to_shape / generate_transpose_shard_spec)
+            output_mem_constructed = MemoryConfig(a.memory_config().memory_layout(), a.memory_config().buffer_type());
         } else {
             output_mem_constructed = a.memory_config();
         }
