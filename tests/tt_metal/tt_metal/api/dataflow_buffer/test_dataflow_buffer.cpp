@@ -1056,4 +1056,213 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Bool(),
     ImplicitSyncParamName);
 
+// Runs an intra-tensix DFB program on one core.
+static void run_intra_tensix_dfb_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    uint32_t num_threads) {
+    IDevice* device = mesh_device->get_devices()[0];
+
+    experimental::dfb::DataflowBufferConfig dfb_config{
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .num_producers = num_threads,
+        .pap = dfb::AccessPattern::STRIDED,
+        .num_consumers = num_threads,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false,
+        .tensix_scope = experimental::dfb::TensixScope::INTRA};
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    CoreRangeSet core_range_set(CoreRange(logical_core, logical_core));
+
+    const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+
+    TT_FATAL(
+        num_entries % num_threads == 0,
+        "num_entries ({}) must be divisible by num_threads ({}) for intra-tensix block partitioning",
+        num_entries, num_threads);
+    const uint32_t entries_per_neo = num_entries / num_threads;
+
+    const std::string intra_kernel_path = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra.cpp";
+    std::vector<uint32_t> cta = {entries_per_neo, words_per_entry};
+
+    KernelHandle compute_kernel = CreateKernel(
+        program,
+        intra_kernel_path,
+        core_range_set,
+        experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = num_threads,
+            .compile_args = cta});
+
+    auto logical_dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range_set, dfb_config);
+    // Bind the same kernel as both producer and consumer: packer TRISC2 and unpacker TRISC0
+    // on each Neo share the Tensix-only TC allocated for that Neo.
+    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program, logical_dfb_id, compute_kernel, compute_kernel);
+
+    const uint32_t total_size = num_entries * entry_size;
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+        0, 100, total_size / sizeof(uint32_t));
+
+    const uint32_t dfb_l1_addr =
+        static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+
+    detail::WriteToDeviceL1(device, logical_core, dfb_l1_addr, input);
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+
+    // Packer increments each word by 1, then unpacker increments it by 1 → +2 per word.
+    // This holds for every Neo's ring independently, so the entire L1 region is input + 2.
+    std::vector<uint32_t> expected(input.size());
+    for (size_t i = 0; i < input.size(); i++) {
+        expected[i] = input[i] + 2;
+    }
+
+    std::vector<uint32_t> l1_data;
+    detail::ReadFromDeviceL1(device, logical_core, dfb_l1_addr, total_size, l1_data);
+    EXPECT_EQ(expected, l1_data) << "Intra-tensix DFB L1 mismatch";
+}
+
+TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1S) {
+    run_intra_tensix_dfb_program(this->devices_.at(0), /*entry_size=*/1024, /*num_entries=*/16, /*num_threads=*/1);
+}
+
+TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB4Sx4S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping intra-tensix DFB test for WH/BH until DFB is backported";
+    }
+    run_intra_tensix_dfb_program(this->devices_.at(0), /*entry_size=*/1024, /*num_entries=*/16, /*num_threads=*/4);
+}
+
+TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping combined intra-tensix + remapper DFB test for WH/BH until DFB is backported";
+    }
+
+    IDevice* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core(0, 0);
+    CoreRangeSet core_range_set(CoreRange(logical_core, logical_core));
+
+    constexpr uint32_t entry_size  = 1024;
+    constexpr uint32_t num_entries = 16;
+    constexpr uint32_t num_neos    = 4;
+    const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+    const uint32_t entries_per_neo = num_entries / num_neos;  // = 4
+
+    // dfb(0): DM->Tensix, 1Sx4B with remapper, implicit sync enabled.
+    experimental::dfb::DataflowBufferConfig remapper_dfb_config{
+        .entry_size           = entry_size,
+        .num_entries          = num_entries,
+        .num_producers        = 1,
+        .pap                  = dfb::AccessPattern::STRIDED,
+        .num_consumers        = num_neos,
+        .cap                  = dfb::AccessPattern::ALL,
+        .enable_implicit_sync = true};
+
+    // dfb(1): intra-tensix, 4 packer->unpacker pairs, hidden TCs.
+    experimental::dfb::DataflowBufferConfig intra_dfb_config{
+        .entry_size           = entry_size,
+        .num_entries          = num_entries,
+        .num_producers        = num_neos,
+        .pap                  = dfb::AccessPattern::STRIDED,
+        .num_consumers        = num_neos,
+        .cap                  = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false,
+        .tensix_scope         = experimental::dfb::TensixScope::INTRA};
+
+    const uint32_t buf_size = num_entries * entry_size;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    distributed::DeviceLocalBufferConfig local_cfg{.page_size = entry_size, .buffer_type = BufferType::DRAM};
+    auto in_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buf_size}, local_cfg, this->devices_.at(0).get());
+
+    Program program = CreateProgram();
+
+    // DM producer (1 thread, implicit sync enabled): reads DRAM in_buffer -> dfb(0) via NOC.
+    std::vector<uint32_t> dm_cta = {
+        (uint32_t)in_buffer->address(),
+        num_entries,   // num_entries_per_producer: 1 producer owns all entries
+        1u,            // implicit_sync = true
+        0u};           // consume_all = false (producer is always STRIDED)
+    tt::tt_metal::TensorAccessorArgs(in_buffer).append_to(dm_cta);
+
+    auto dm_producer_kernel = experimental::quasar::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+        core_range_set,
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = 1, .compile_args = dm_cta});
+
+    // Create DFBs: remapper first (-> logical ID 0), intra-tensix second (-> logical ID 1).
+    auto remapper_dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range_set, remapper_dfb_config);
+    auto intra_dfb_id    = experimental::dfb::CreateDataflowBuffer(program, core_range_set, intra_dfb_config);
+
+    // Combined compute kernel (4 Neo clusters):
+    //   CTA[0] = num_entries      - ALL consumer loop count (each UNPACK sees all 16 entries)
+    //   CTA[1] = entries_per_neo  - intra-tensix loop count per Neo (= 4)
+    //   CTA[2] = words_per_entry  - words per dfb(1) entry for in-place increment
+    std::vector<uint32_t> compute_cta = {num_entries, entries_per_neo, words_per_entry};
+
+    auto compute_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/dfb_intra_and_consume_all.cpp",
+        core_range_set,
+        experimental::quasar::QuasarComputeConfig{
+            .num_threads_per_cluster = num_neos, .compile_args = compute_cta});
+
+    // dfb(0): DM producer -> compute ALL consumer (remapper fans out 1 TC post to 4 UNPACK TCs).
+    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program, remapper_dfb_id, dm_producer_kernel, compute_kernel);
+    // dfb(1): compute kernel is both producer (PACK TRISC) and consumer (UNPACK TRISC).
+    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+        program, intra_dfb_id, compute_kernel, compute_kernel);
+
+    // Runtime args for DM producer (dfb_producer.cpp: [0]=producer_mask, [1]=chunk_offset).
+    auto remapper_dfb_impl = program.impl().get_dataflow_buffer(remapper_dfb_id);
+    const uint32_t dm_producer_mask = remapper_dfb_impl->config.producer_risc_mask;
+    SetRuntimeArgs(program, dm_producer_kernel, logical_core, {dm_producer_mask, 0u /*chunk_offset*/});
+
+    // L1 layout follows DFB creation order:
+    //   [l1_base + 0              ] -> dfb(0) remapper ring  (num_entries * entry_size bytes)
+    //   [l1_base + remapper_size  ] -> dfb(1) intra ring     (num_entries * entry_size bytes)
+    const uint32_t l1_base           = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t remapper_ring_size = num_entries * entry_size;
+    const uint32_t intra_l1_addr     = l1_base + remapper_ring_size;
+
+    // Pre-fill dfb(1)'s intra-tensix ring; kernel adds +2 per word.
+    auto input_intra = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+        0, 100, num_entries * words_per_entry);
+    detail::WriteToDeviceL1(device, logical_core, intra_l1_addr, input_intra);
+
+    // Fill DRAM in_buffer; DM NOC-reads this into dfb(0)'s ring.
+    auto input_remapper = tt::test_utils::generate_uniform_random_vector<uint32_t>(
+        0, 100, num_entries * words_per_entry);
+    distributed::WriteShard(this->devices_.at(0)->mesh_command_queue(), in_buffer, input_remapper, zero_coord, true);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+
+    // Verify dfb(1): packer +1, unpacker +1 -> net +2 per word.
+    {
+        std::vector<uint32_t> expected(input_intra.size());
+        for (size_t i = 0; i < input_intra.size(); i++) {
+            expected[i] = input_intra[i] + 2;
+        }
+        std::vector<uint32_t> l1_data;
+        detail::ReadFromDeviceL1(device, logical_core, intra_l1_addr, num_entries * entry_size, l1_data);
+        EXPECT_EQ(expected, l1_data) << "Intra-tensix DFB L1 mismatch";
+    }
+
+    // Verify dfb(0): DM NOC-wrote input_remapper into L1; Tensix consumed but did not overwrite.
+    {
+        std::vector<uint32_t> l1_data;
+        detail::ReadFromDeviceL1(device, logical_core, l1_base, num_entries * entry_size, l1_data);
+        EXPECT_EQ(input_remapper, l1_data) << "DM->Tensix strided x all DFB L1 mismatch";
+    }
+}
+
 }  // end namespace tt::tt_metal

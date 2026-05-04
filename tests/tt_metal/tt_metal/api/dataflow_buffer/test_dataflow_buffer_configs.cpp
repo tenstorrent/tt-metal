@@ -857,4 +857,77 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup) {
     validate_multicore_dfb_groups(program, core_range_set, /*expected_num_groups=*/1, /*expected_cores_per_group=*/4);
 }
 
+// ---------------------------------------------------------------------------
+// Intra-tensix DFB config test
+// ---------------------------------------------------------------------------
+
+// Validates an intra-tensix DFB (pack TRISC producer → unpack TRISC consumer, same Neo):
+//   - Exactly one per-risc config entry (shared Neo bit) marked is_producer=true.
+//   - The tensix-only TC (id ≥ TC_TENSIX_POOL_START) is assigned to Neo tensix_id derived from producer_risc_mask.
+void validate_intra_tensix_dfb(
+    Program& program,
+    const CoreCoord& logical_core,
+    const experimental::dfb::DataflowBufferConfig& config) {
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+    ASSERT_EQ(dfbs.size(), 1u) << "Expected exactly 1 DFB on core";
+    const auto& dfb = dfbs[0];
+
+    ASSERT_EQ(dfb->risc_mask, config.producer_risc_mask)
+        << "Intra-tensix risc_mask should equal producer_risc_mask (same Neo bit)";
+    ASSERT_FALSE(dfb->use_remapper) << "Intra-tensix DFB must not use the remapper";
+    ASSERT_FALSE(dfb->groups.empty()) << "DFB has no groups (configs not finalized?)";
+
+    const auto& hw_risc_configs = dfb->groups[0].hw_risc_configs;
+    ASSERT_EQ(hw_risc_configs.size(), 1u)
+        << "Intra-tensix DFB should have exactly 1 per-risc config entry (shared Neo)";
+
+    const auto& rc = hw_risc_configs[0];
+    EXPECT_TRUE(rc.is_producer) << "Intra-tensix per-risc entry must be marked is_producer (pack TRISC inits TC)";
+
+    uint8_t expected_tensix_id =
+        static_cast<uint8_t>(__builtin_ctz(config.producer_risc_mask >> ::dfb::TENSIX_RISC_OFFSET));
+    uint8_t expected_risc_id = static_cast<uint8_t>(::dfb::TENSIX_RISC_OFFSET + expected_tensix_id);
+    EXPECT_EQ(rc.risc_id, expected_risc_id)
+        << "Intra-tensix per-risc risc_id should match Neo bit in producer_risc_mask";
+
+    ASSERT_EQ(rc.config.num_tcs_to_rr, 1u) << "Intra-tensix DFB should have exactly 1 TC";
+    uint8_t tc_id = ::dfb::get_counter_id(rc.config.packed_tile_counter[0]);
+    uint8_t actual_tensix_id = ::dfb::get_tensix_id(rc.config.packed_tile_counter[0]);
+    EXPECT_EQ(actual_tensix_id, expected_tensix_id) << "TC tensix_id must match Neo";
+    EXPECT_GE(tc_id, ::dfb::TC_TENSIX_POOL_START)
+        << "Intra-tensix DFB must use a Tensix-only TC (id ≥ " << (int)::dfb::TC_TENSIX_POOL_START << ")";
+
+    log_info(
+        tt::LogTest,
+        "Intra-tensix DFB: Neo{} Tensix-only TC (tensix_id={}, tc_id={})",
+        expected_tensix_id, (int)actual_tensix_id, (int)tc_id);
+}
+
+TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    // Intra-tensix: pack TRISC (producer) → unpack TRISC (consumer) on Neo0.
+    // producer_risc_mask == consumer_risc_mask == bit 8 (Neo0).
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 4,
+        .producer_risc_mask = 0x100,  // bit 8 = Neo0
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x100,  // bit 8 = Neo0 (same as producer — intentional for INTRA)
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_implicit_sync = false,
+        .tensix_scope = experimental::dfb::TensixScope::INTRA};
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+
+    validate_intra_tensix_dfb(program, logical_core, config);
+}
+
 }  // end namespace tt::tt_metal

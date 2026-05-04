@@ -123,7 +123,7 @@ def _create_gemma4_model_args(hf_text_config):
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
 @parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
-def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device):
+def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds):
     """
     Full decoder layer PCC test: compares TT layer against HF reference.
 
@@ -209,7 +209,7 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device):
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-def test_layer_forward_decode(layer_idx, mesh_device):
+def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds):
     """
     Full decoder layer decode test (seq_len=1, fully on device).
 

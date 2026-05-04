@@ -70,6 +70,9 @@ struct MoEComputeMeshWorkloadFactory {
         std::vector<ttnn::Tensor>& tensor_return_value);
 };
 
-std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device);
+std::vector<ttnn::CoreCoord> get_moe_combine_cores(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores);
 
 }  // namespace ttnn::experimental::prim

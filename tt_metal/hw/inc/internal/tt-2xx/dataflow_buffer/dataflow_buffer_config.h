@@ -21,6 +21,9 @@ constexpr uint8_t MAX_ACTIVE_DFBS_PACK = 16;
 constexpr uint8_t NUM_TENSIX = 4;
 constexpr uint8_t NUM_TILE_COUNTERS_PER_TENSIX = 32;
 constexpr uint8_t NUM_TENSIX_TILE_COUNTERS_FOR_DM = 16;
+// First TC ID in the default Tensix-only pool (not accessible by DM); used for intra/inter-tensix DFBs.
+// Note: The Remapper can be programmed to expose these TCs to DMs.
+constexpr uint8_t TC_TENSIX_POOL_START = NUM_TENSIX_TILE_COUNTERS_FOR_DM;  // = 16
 constexpr uint8_t NUM_REMAPPER_PAIRINGS = 64;
 constexpr uint8_t NUM_TXN_IDS = 4;
 constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 4;
