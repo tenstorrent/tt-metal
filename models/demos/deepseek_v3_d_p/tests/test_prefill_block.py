@@ -43,9 +43,9 @@ PCC_THRESHOLD_KVPE = 0.999
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024),
-        ("abc_1k", False, 25 * 1024),
-        ("abc_1k", True, 1024),
+        ("random", False, 1024, 2),
+        ("abc_1k", False, 25 * 1024, 2),
+        ("abc_1k", True, 1024, 2),
     ],
     ids=["smoke-random", "perf-abc_1k", "pcc-abc_1k"],
 )
@@ -148,9 +148,7 @@ def test_prefill_block(
         )
         attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
         profiler.end("tokenization")
-        logger.info(
-            f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}"
-        )
+        logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
         with torch.no_grad():
             torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
         logger.info(f"Embedded input shape: {torch_input.shape}")
