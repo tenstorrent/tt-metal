@@ -16,6 +16,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 
@@ -303,12 +304,9 @@ public:
             num_iterations,
             is_mcast);
 
-        const CoreCoord first_worker = default_worker_start;
-        CoreCoord last_worker = first_worker;
-        if (is_mcast) {
-            last_worker = {first_worker.x + 1, first_worker.y + 1};
-        }
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, is_mcast);
+        const CoreCoord last_worker = worker_range.end_coord;
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
@@ -330,7 +328,6 @@ public:
         } else {
             noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
         }
-
         // PHASE 1: Generate random-sized linear write commands metadata
         auto commands_per_iteration =
             generate_linear_write_commands(worker_range, noc_xy, max_payload_per_cmd_bytes, device_data);
@@ -465,9 +462,8 @@ public:
         const uint32_t page_size_bytes_param = get_page_size();
         const bool is_dram = get_is_dram();
 
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
@@ -641,9 +637,8 @@ public:
 
         log_info(tt::LogTest, "Target total: {} bytes, Iterations: {}", total_target_bytes, num_iterations);
 
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
@@ -665,7 +660,7 @@ public:
         }
 
         if (worker_cores.empty()) {
-            worker_cores.push_back(default_worker_start);
+            worker_cores.push_back(worker_start());
         }
 
         ASSERT_LE(worker_cores.size(), packed_write_max_unicast_sub_cmds);
@@ -836,9 +831,8 @@ public:
 
         log_info(tt::LogTest, "Max transfer: {} bytes, Iterations: {}", total_target_bytes, num_iterations);
 
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
@@ -1006,9 +1000,8 @@ public:
 
         log_info(tt::LogTest, "Max transfer: {} bytes, Iterations: {}", total_target_bytes, num_iterations);
 
-        const CoreCoord first_worker = default_worker_start;
-        const CoreCoord last_worker = {first_worker.x + 1, first_worker.y + 1};
-        const CoreRange worker_range = {first_worker, last_worker};
+        const CoreCoord first_worker = worker_start();
+        const CoreRange worker_range = this->worker_range(first_worker, true);
 
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
         const uint32_t dram_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
@@ -1125,71 +1118,114 @@ public:
 
         const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
         const uint32_t l1_buf_base = memmap.dispatch_buffer_base();
+        const uint32_t cmd_cb_bytes = cmd_cb_pages * page_size;
+
+        const CoreCoord disp_logical = Common::dispatch_core(this->device_);
+        const CoreCoord phys_spoof = this->device_->worker_core_from_logical_core(Common::sd_spoof_prefetch_core);
+        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(disp_logical);
+        const bool is_quasar = (this->device_->arch() == tt::ARCH::QUASAR);
+        const bool fd_kernels_on_same_core = (phys_spoof == phys_disp);
+
+        // When both FD kernels share a core, each kernel writes into its own L1 region, so the dispatcher
+        // CB must be stacked after the spoof prefetcher CB to avoid overlap. On separate cores both CBs
+        // start at l1_buf_base independently.
+        const uint32_t dispatch_cb_base = fd_kernels_on_same_core ? (l1_buf_base + cmd_cb_bytes) : l1_buf_base;
 
         const auto& soc_desc = tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->device_->id());
-        TT_FATAL(raw.size() + l1_buf_base <= soc_desc.worker_l1_size, "SD command buffer too large for L1");
-        TT_FATAL(
-            Common::SD_DISPATCH_BUFFER_SIZE_BYTES + l1_buf_base <= soc_desc.worker_l1_size,
-            "SD dispatch buffer too large for L1");
-
-        const CoreCoord phys_spoof = this->device_->worker_core_from_logical_core(Common::sd_spoof_prefetch_core);
-        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(Common::sd_dispatch_core);
+        if (fd_kernels_on_same_core) {
+            TT_FATAL(
+                l1_buf_base + cmd_cb_bytes + Common::SD_DISPATCH_BUFFER_SIZE_BYTES <= soc_desc.worker_l1_size,
+                "SD cmd CB + dispatch CB too large for L1");
+        } else {
+            TT_FATAL(raw.size() + l1_buf_base <= soc_desc.worker_l1_size, "SD command buffer too large for L1");
+            TT_FATAL(
+                Common::SD_DISPATCH_BUFFER_SIZE_BYTES + l1_buf_base <= soc_desc.worker_l1_size,
+                "SD dispatch buffer too large for L1");
+        }
 
         tt_metal::MetalContext::instance().get_cluster().write_core(
             raw.data(), raw.size(), tt_cxy_pair(this->device_->id(), phys_spoof), l1_buf_base);
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        const uint32_t spoof_prefetch_core_sem_0_id =
+        const uint32_t spoof_prefetch_sem_id =
             tt_metal::CreateSemaphore(program, {Common::sd_spoof_prefetch_core}, dispatch_buffer_pages);
-        const uint32_t dispatch_core_sem_id = tt_metal::CreateSemaphore(program, {Common::sd_dispatch_core}, 0);
-        TT_FATAL(
-            dispatch_core_sem_id == spoof_prefetch_core_sem_0_id,
-            "Semaphore IDs must match across spoof and dispatch cores");
+        const uint32_t dispatch_core_sem_id = tt_metal::CreateSemaphore(program, {disp_logical}, 0);
         const uint32_t prefetch_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_spoof_prefetch_core}, 0);
 
         const std::vector<uint32_t> spoof_args = {
-            l1_buf_base,                                                    // 0: dispatch_cb_base
+            dispatch_cb_base,                                               // 0: dispatch_cb_base
             tt::tt_metal::DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,  // 1
             dispatch_buffer_pages,                                          // 2
-            dispatch_core_sem_id,                                           // 3
-            l1_buf_base,                                                    // 4: cmd_cb_base (same region, pre-loaded)
+            dispatch_core_sem_id,                                           // 3: downstream sem (produced-count)
+            l1_buf_base,                                                    // 4: cmd_cb_base (pre-loaded by host)
             cmd_cb_pages,                                                   // 5
             Common::SD_PREFETCHER_PAGE_BATCH_SIZE,                          // 6
+            spoof_prefetch_sem_id,                                          // 7: my sem (credit pool)
         };
         const std::map<std::string, std::string> prefetch_defines = {
             {"DISPATCH_NOC_X", std::to_string(phys_disp.x)},
             {"DISPATCH_NOC_Y", std::to_string(phys_disp.y)},
             {"FD_CORE_TYPE", "0"},
         };
-        auto sp = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
-            {Common::sd_spoof_prefetch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = spoof_args,
-                .defines = prefetch_defines});
+
+        KernelHandle sp;
+        if (is_quasar) {
+            // Quasar requires the experimental API; GetProcessorsPerClusterQuasar auto-assigns DM0.
+            // spoof must be created before dispatch so it gets DM0 and dispatch gets DM1.
+            sp = tt::tt_metal::experimental::quasar::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
+                Common::sd_spoof_prefetch_core,
+                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1,
+                    .compile_args = spoof_args,
+                    .defines = prefetch_defines,
+                    .is_legacy_kernel = true});
+        } else {
+            sp = tt_metal::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/spoof_prefetch.cpp",
+                {Common::sd_spoof_prefetch_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = spoof_args,
+                    .defines = prefetch_defines});
+        }
         tt_metal::SetRuntimeArgs(program, sp, Common::sd_spoof_prefetch_core, {1u});
 
         auto dispatch_defines = Common::make_sd_dispatch_defines(
             this->device_,
             dispatch_buffer_pages,
             dispatch_core_sem_id,
+            spoof_prefetch_sem_id,
             prefetch_sync_sem,
             phys_spoof,
             phys_disp,
-            memmap);
-        auto dispatch_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-            {Common::sd_dispatch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::NOC_0,
-                .defines = dispatch_defines});
-        tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::sd_dispatch_core, {0u, 0u, 0u});
+            memmap,
+            dispatch_cb_base);
+
+        KernelHandle dispatch_kernel;
+        if (is_quasar) {
+            // Quasar auto-assigns DM1 since spoof already occupies DM0 on this core.
+            dispatch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+                disp_logical,
+                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .defines = dispatch_defines, .is_legacy_kernel = true});
+        } else {
+            dispatch_kernel = tt_metal::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+                {disp_logical},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .defines = dispatch_defines});
+        }
+        tt_metal::SetRuntimeArgs(program, dispatch_kernel, disp_logical, {0u, 0u, 0u});
 
         device_data.overflow_check(this->device_);
         tt_metal::detail::LaunchProgram(this->device_, program);
