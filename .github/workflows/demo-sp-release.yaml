@@ -33,7 +33,7 @@ on:
         default: true
         description: "Set to false to allow write access to MLPerf mount"
       test-group:
-        description: "Select which test group to run (SP1 tests can be run between 3 and 7 AM UTC)"
+        description: "Select which test group to run (SP1/4 tests can be run between 7 and 11 AM UTC)"
         required: false
         default: "all"
         type: choice
