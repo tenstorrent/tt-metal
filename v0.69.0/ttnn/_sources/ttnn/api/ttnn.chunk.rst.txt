@@ -1,0 +1,8 @@
+﻿ttnn.chunk
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.chunk:
+
+.. autooperation:: ttnn.chunk

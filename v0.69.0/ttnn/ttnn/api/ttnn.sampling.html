@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ttnn.sampling &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.sampling.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="ttnn.std" href="ttnn.std.html" />
+    <link rel="prev" title="ttnn.prod" href="ttnn.prod.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials/tutorials/ttnn_intro.html">TT-NN Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../api.html">APIs</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../api.html#device">Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#memory-config">Memory Config</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../api.html#operations">Operations</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#quantization">Quantization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#reduction">Reduction</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.argmax.html">ttnn.argmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.cumprod.html">ttnn.cumprod</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.cumsum.html">ttnn.cumsum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.ema.html">ttnn.ema</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.manual_seed.html">ttnn.manual_seed</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.max.html">ttnn.max</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.mean.html">ttnn.mean</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.min.html">ttnn.min</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.moe.html">ttnn.moe</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.prod.html">ttnn.prod</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.sampling</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.std.html">ttnn.std</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.sum.html">ttnn.sum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.topk.html">ttnn.topk</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.var.html">ttnn.var</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#prefetcher">Prefetcher</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#generic">Generic</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#backward-operations">Backward operations</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#model-conversion">Model Conversion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#reports">Reports</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../api.html#operation-hooks">Operation Hooks</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
+      <li class="breadcrumb-item active">ttnn.sampling</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/api/ttnn.sampling.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="ttnn-sampling">
+<h1>ttnn.sampling<a class="headerlink" href="#ttnn-sampling" title="Permalink to this heading"></a>
+</h1>
+<span class="target" id="id1"></span><dl class="py function">
+<dt class="sig sig-object py" id="ttnn.sampling">
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sampling</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_values_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_indices_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">p</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">temp</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optional_output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.sampling" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Samples from the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_values_tensor</span></code> based on provided top-k and top-p constraints.</p>
+<p>This operation samples values from the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_values_tensor</span></code> based on the provided thresholds <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> (top-k sampling)
+and <code class="xref py py-attr docutils literal notranslate"><span class="pre">p</span></code> (top-p nucleus sampling). The operation uses the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_indices_tensor</span></code> for indexing and applies sampling
+under the given seed for reproducibility.</p>
+<p>The op first converts the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_values_tensor</span></code> into probabilities by doing a softmax.</p>
+<p>In top-k sampling, the op considers only the k highest-probability values from the input distribution. The remaining values are ignored, regardless of their probabilities.
+In top-p sampling, the op selects values from the input distribution such that the cumulative probability mass is less than or equal to a threshold p.
+When combining top-k and top-p sampling, the op first applies the top-k filter and then the top-p filter.</p>
+<p>Within this selected corpus, multinomial sampling is applied. Multinomial sampling selects values from a given distribution by comparing each probability with a randomly generated number between 0 and 1. Specifically, the operation identifies the largest cumulative probability that exceeds the random threshold.</p>
+<p>The op finally returns input_indices_tensor[final_index]  where final_index is the index of the largest cumulative probability &gt; random number found in the multinomial sampling.</p>
+<p>Currently, this operation supports inputs and outputs with specific memory layout and data type constraints.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>input_values_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor containing values to sample from.</p></li>
+<li><p><strong>input_indices_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor containing indices to assist with sampling.</p></li>
+<li><p><strong>k</strong> (<em>ttnn.Tensor</em>) – Top-k values for sampling.</p></li>
+<li><p><strong>p</strong> (<em>ttnn.Tensor</em>) – Top-p (nucleus) probabilities for sampling.</p></li>
+<li><p><strong>temp</strong> (<em>ttnn.Tensor</em>) – Temperature tensor for scaling (1/T).</p></li>
+<li><p><strong>seed</strong> (<em>int</em><em>, </em><em>optional</em>) – Seed for sampling randomness. Defaults to <cite>0</cite>.</p></li>
+<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – Core range set for multicore execution. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This operations only supports inputs and outputs according to the following data types and layout:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">input_values_tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id3">
+<caption>
+<span class="caption-text">input_indices_tensor</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>UINT32, INT32</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id4">
+<caption>
+<span class="caption-text">k</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>UINT32</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id5">
+<caption>
+<span class="caption-text">p, temp</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p>If no <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code> is provided, the return tensor will be as follows:</p>
+<table class="docutils align-default" id="id6">
+<caption>
+<span class="caption-text">output_tensor (default)</span><a class="headerlink" href="#id6" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>UINT32</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p>If <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_tensor</span></code> is provided, the supported data types and layout are:</p>
+<table class="docutils align-default" id="id7">
+<caption>
+<span class="caption-text">output_tensor (if provided)</span><a class="headerlink" href="#id7" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>INT32, UINT32</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<dl class="simple">
+<dt>Returns:</dt>
+<dd>
+<p>ttnn.Tensor: The output tensor containing sampled indices.</p>
+</dd>
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+</ul>
+</dd>
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.</p></li>
+<li><p>The input tensors must represent exactly <cite>32 users</cite> based on their shape (i.e. N*C*H = 32).</p></li>
+<li><p>The last dimension of:attr:<cite>input_values_tensor</cite> must be padded to a multiple of 32</p></li>
+<li><p>The overall shape of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_values_tensor</span></code> must match that of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_indices_tensor</span></code>.</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code>: Must contain 32 values, in the range  ‘(0,32]’.</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">p</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">temp</span></code>: Must contain 32 values in the range <cite>[0.0, 1.0]</cite>.</p></li>
+<li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">sub_core_grids</span></code> (if provided): number of cores must equal the number of users (which is constrained to 32).</p></li>
+</ul>
+</dd>
+</dl>
+</div>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Input values tensor for N*C*H = 32 users</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Input indices tensor: this example uses sequential indices [0, 1, 2, ..., W-1] for each of the 32 users</span>
+<span class="c1"># Resulting in a final shape of [1, 1, 32, 64]</span>
+<span class="n">indices_1d</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">indices_reshaped</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">indices_1d</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">])</span>
+<span class="n">input_indices_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">indices_reshaped</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+
+<span class="c1"># k tensor: 32 values in range (0, 32] for top-k sampling</span>
+<span class="n">k_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">([</span><span class="mi">32</span><span class="p">],</span> <span class="n">fill_value</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint32</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># p tensor: 32 values in range [0.0, 1.0] for top-p sampling</span>
+<span class="n">p_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">([</span><span class="mi">32</span><span class="p">],</span> <span class="n">fill_value</span><span class="o">=</span><span class="mf">0.9</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># temp tensor: 32 temperature values in range [0.0, 1.0]</span>
+<span class="n">temp_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ones</span><span class="p">([</span><span class="mi">32</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sampling</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">input_indices_tensor</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="n">k_tensor</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="n">p_tensor</span><span class="p">,</span> <span class="n">temp</span><span class="o">=</span><span class="n">temp_tensor</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Sampling result: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</dd>
+</dl>
+
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn.prod.html" class="btn btn-neutral float-left" title="ttnn.prod" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.std.html" class="btn btn-neutral float-right" title="ttnn.std" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
