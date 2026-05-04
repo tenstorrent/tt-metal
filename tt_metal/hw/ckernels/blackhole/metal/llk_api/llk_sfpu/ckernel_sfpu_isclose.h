@@ -5,35 +5,31 @@
 #pragma once
 
 #include "ckernel_sfpu_binary_comp.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
-
-#ifndef ISCLOSE_ATOL_VAL
-#define ISCLOSE_ATOL_VAL 1e-8f
-#endif
-#ifndef ISCLOSE_RTOL_VAL
-#define ISCLOSE_RTOL_VAL 1e-5f
-#endif
-#ifndef ISCLOSE_EQUAL_NAN
-#define ISCLOSE_EQUAL_NAN 0
-#endif
 
 namespace ckernel::sfpu {
 
 // Compute isclose element-wise: result = |a - b| <= atol + rtol * |b|
 //
-// ISCLOSE_RTOL_VAL and ISCLOSE_ATOL_VAL are injected as compile-time float
-// literal defines by the host program factory (e.g. "1.000000000e-05f").
+// rtol_bits and atol_bits are the IEEE-754 bit-patterns of the tolerance
+// scalars, passed as runtime uint32 arguments from the compute kernel and
+// converted to float via Converter::as_float().
 //
 // EQUAL_NAN controls NaN semantics, matching torch.isclose:
-//   false (default): any NaN input ⇒ result = 0
-//   true:            both NaN     ⇒ result = 1; one NaN ⇒ result = 0
+//   false (default): any NaN input => result = 0
+//   true:            both NaN      => result = 1; one NaN => result = 0
 //
 // Inputs are expected to be float32 or bfloat16. INT32 tensors must be
 // promoted to FLOAT32 before reaching this kernel; invoke_binary_ng_isclose
 // handles this via explicit ttnn::typecast calls before dispatch.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool EQUAL_NAN>
-inline void calculate_sfpu_isclose(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_sfpu_isclose(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out, uint rtol_bits, uint atol_bits) {
     constexpr uint dst_tile_size_sfpi = 32;
+
+    const sfpi::vFloat atol = Converter::as_float(atol_bits);
+    const sfpi::vFloat rtol = Converter::as_float(rtol_bits);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -51,7 +47,7 @@ inline void calculate_sfpu_isclose(const uint dst_index_in0, const uint dst_inde
         sfpi::vFloat abs_b = sfpi::reinterpret<sfpi::vFloat>(b_abs_bits);
 
         // tolerance = atol + rtol * |b|
-        sfpi::vFloat tol = ISCLOSE_ATOL_VAL + ISCLOSE_RTOL_VAL * abs_b;
+        sfpi::vFloat tol = atol + rtol * abs_b;
 
         // |a - b| <= atol + rtol * |b|
         sfpi::vFloat result = sfpi::vConst0;

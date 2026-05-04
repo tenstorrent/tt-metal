@@ -549,12 +549,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                                                                      : "Float16_b";
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
-        case ISCLOSE:
-            // rtol, atol (ISCLOSE_RTOL_VAL / ISCLOSE_ATOL_VAL) and equal_nan
-            // (ISCLOSE_EQUAL_NAN) are injected as compile-time defines by the
-            // program factory so the same kernel object can be cached across
-            // calls with identical (rtol, atol, equal_nan) tuples.
-            return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
+        case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }

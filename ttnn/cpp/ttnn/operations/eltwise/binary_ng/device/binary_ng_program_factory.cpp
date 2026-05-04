@@ -13,6 +13,8 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 using namespace tt::tt_metal;
 
 namespace {
@@ -430,21 +432,22 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
-    // Inject isclose compile-time defines: rtol, atol and equal_nan are baked into the kernel
-    // binary so that the SFPU function can use them as scalar constants without needing additional
-    // runtime arguments.  The program hash already accounts for these values (see to_hash()), so
-    // each unique (rtol, atol, equal_nan) triple maps to a distinct cached kernel.
+    // For isclose: rtol and atol are passed as runtime args (IEEE-754 bit-patterns) so that
+    // a single cached kernel binary handles all tolerance values.  Only equal_nan is a
+    // compile-time template parameter because it controls distinct code paths.
+    // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits;
     if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
-        // Represent rtol/atol as hex-float literals (printf "%a") for an exact
-        // round-trip through the compiler.  9 significant digits is the minimum
-        // for faithful float32 representation.  The trailing "f" makes the
-        // literal a float rather than a double.
-        char rtol_buf[48], atol_buf[48];
-        std::snprintf(rtol_buf, sizeof(rtol_buf), "%a", static_cast<double>(operation_attributes.rtol));
-        std::snprintf(atol_buf, sizeof(atol_buf), "%a", static_cast<double>(operation_attributes.atol));
-        compute_kernel_defines["ISCLOSE_RTOL_VAL"] = std::string(rtol_buf) + "f";
-        compute_kernel_defines["ISCLOSE_ATOL_VAL"] = std::string(atol_buf) + "f";
         compute_kernel_defines["ISCLOSE_EQUAL_NAN"] = operation_attributes.equal_nan ? "1" : "0";
+        compute_kernel_defines["ISCLOSE_RTOL_RT_ARG_IDX"] = "3";
+        compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
+        // Replace the object-like BINARY_SFPU_OP with a function-like macro that appends
+        // the runtime-arg reads for rtol and atol to the three DST-index arguments.
+        compute_kernel_defines.erase("BINARY_SFPU_OP");
+        compute_kernel_defines["BINARY_SFPU_OP(a,b,c)"] =
+            "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"
+            "(a, b, c, "
+            "get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX), "
+            "get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX))";
     }
 
     {
@@ -1113,7 +1116,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                     freq = 1;
                     counter = 0;
                 }
-                std::array compute_runtime_args = {compute_tiles, freq, counter, compute_scalar_value};
+                std::vector<uint32_t> compute_runtime_args = {compute_tiles, freq, counter, compute_scalar_value};
+                if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
+                    compute_runtime_args[3] = std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.rtol));
+                    compute_runtime_args.push_back(
+                        std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.atol)));
+                }
                 compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
             } else {
                 const auto scalar = *operation_attributes.scalar;

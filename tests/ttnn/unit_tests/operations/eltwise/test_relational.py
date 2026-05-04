@@ -322,24 +322,34 @@ def test_isclose_int32(device, input_shapes, rtol, atol):
         torch.Size([1, 1, 320, 384]),
     ],
 )
-@pytest.mark.parametrize("a_dtype, b_dtype", [(ttnn.int32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.int32)])
+@pytest.mark.parametrize(
+    "a_dtype, b_dtype",
+    [
+        (ttnn.int32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.int32),
+    ],
+)
 def test_isclose_int32_mixed_dtype(device, input_shapes, rtol, atol, a_dtype, b_dtype):
-    """Mixed-dtype case: when either input is INT32, the device op promotes both
-    inputs to FLOAT32 internally and produces matching results to torch.isclose."""
+    """Mixed-dtype coverage: verifies that every (int32 / bfloat16) pairing
+    that flows through invoke_binary_ng_isclose produces results matching a
+    float-based torch.isclose reference. Pairs containing INT32 exercise the
+    INT32->FLOAT32 pre-promotion path; pure-float pairs verify the no-promotion
+    fast path."""
     torch.manual_seed(0)
+
+    ttnn_to_torch_dtype = {
+        ttnn.int32: torch.int32,
+        ttnn.bfloat16: torch.bfloat16,
+    }
 
     x_int = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
     delta = torch.randint(-3, 3, input_shapes, dtype=torch.int32)
     y_int = x_int + delta
 
-    if a_dtype == ttnn.int32:
-        a_torch, b_torch = x_int, y_int.to(torch.bfloat16).to(torch.bfloat16)
-    else:
-        a_torch, b_torch = x_int.to(torch.bfloat16).to(torch.bfloat16), y_int
+    a_torch = x_int.to(ttnn_to_torch_dtype[a_dtype])
+    b_torch = y_int.to(ttnn_to_torch_dtype[b_dtype])
 
-    a_ref = a_torch.float()
-    b_ref = b_torch.float()
-    z_torch = torch.isclose(a_ref, b_ref, rtol=rtol, atol=atol)
+    z_torch = torch.isclose(a_torch.float(), b_torch.float(), rtol=rtol, atol=atol)
 
     a_tt = ttnn.from_torch(a_torch, dtype=a_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     b_tt = ttnn.from_torch(b_torch, dtype=b_dtype, layout=ttnn.TILE_LAYOUT, device=device)

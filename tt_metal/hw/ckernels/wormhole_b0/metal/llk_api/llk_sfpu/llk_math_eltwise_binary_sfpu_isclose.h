@@ -15,15 +15,22 @@ inline void llk_math_eltwise_binary_sfpu_isclose_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::isclose>();
 }
 
-template <bool APPROXIMATE, bool EQUAL_NAN, int ITERATIONS = 8>
+template <bool APPROXIMATE, bool EQUAL_NAN = false, int ITERATIONS = 8>
 inline void llk_math_eltwise_binary_sfpu_isclose(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0,
+    uint32_t dst_index1,
+    uint32_t odst,
+    uint rtol_bits,
+    uint atol_bits,
+    int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_sfpu_isclose<APPROXIMATE, ITERATIONS, EQUAL_NAN>,
         dst_index0,
         dst_index1,
         odst,
-        vector_mode);
+        vector_mode,
+        rtol_bits,
+        atol_bits);
 }
 
 }  // namespace ckernel

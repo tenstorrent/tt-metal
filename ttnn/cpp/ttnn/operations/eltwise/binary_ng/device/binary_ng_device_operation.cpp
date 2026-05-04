@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <bit>
+#include <cmath>
 
 using namespace tt::tt_metal;
 
@@ -230,9 +231,7 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
 ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
     // TODO: a more generalized way to skip the hashing of an EltwiseUnaryWithParam?
     // Don't hash the quantization scale, otherwise we build the kernel for each different scale.
-    // For isclose, rtol/atol/equal_nan ARE included in the hash because they are baked into the
-    // compiled kernel as compile-time defines — a different (rtol, atol, equal_nan) triple must
-    // compile a different kernel binary.
+    // Only equal_nan selects a compile-time template specialization and therefore must be hashed.
     auto base_hash = ttsl::hash::hash_objects_with_default_seed(
         binary_op_type,
         lhs_activations,
@@ -250,8 +249,7 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() co
         input_layout_b,
         output_layout);
     if (binary_op_type == BinaryOpType::ISCLOSE) {
-        base_hash = ttsl::hash::hash_objects(
-            base_hash, std::bit_cast<uint32_t>(rtol), std::bit_cast<uint32_t>(atol), equal_nan);
+        base_hash = ttsl::hash::hash_objects(base_hash, equal_nan);
     }
     return base_hash;
 }
@@ -286,6 +284,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
     }
+
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
@@ -376,6 +375,16 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
                 a_dim,
                 b_dim);
         }
+    }
+    if (attributes.binary_op_type == BinaryOpType::ISCLOSE) {
+        TT_FATAL(
+            std::isfinite(attributes.rtol) && attributes.rtol >= 0.0f,
+            "isclose: rtol must be a finite, non-negative value, got {}",
+            attributes.rtol);
+        TT_FATAL(
+            std::isfinite(attributes.atol) && attributes.atol >= 0.0f,
+            "isclose: atol must be a finite, non-negative value, got {}",
+            attributes.atol);
     }
 }
 
