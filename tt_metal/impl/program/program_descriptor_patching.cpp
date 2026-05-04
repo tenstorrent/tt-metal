@@ -101,7 +101,17 @@ ResolvedBindings resolve_bindings(
     // buffer's address but no binding was declared at that position, the factory called
     // push_back(buf->address()) instead of push_back(buf).  On cache hits the fast path
     // would skip that arg and leave it stale.
-    if (!registered_addresses.empty()) {
+    //
+    // DISABLED: produces false positives in two cases that we hit during the family
+    // migration rollout:
+    //   1) graph-capture mode populates buffer->address() with placeholder/sentinel
+    //      values that legitimately collide with small uint32_t scalars in arg lists.
+    //   2) buffers allocated at low addresses (e.g. 0x20) collide with literal scalar
+    //      args (loop counters, shape dims) that happen to share the same value.
+    // The check was meant to catch a specific factory mistake, but the false-positive
+    // rate makes it unusable as a hard TT_FATAL. Re-enable only if rewritten as a
+    // structural check that doesn't rely on numeric value match.
+    if (false && !registered_addresses.empty()) {
         for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
             for (const auto& [core, args] : desc.kernels[k].runtime_args) {
                 for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
