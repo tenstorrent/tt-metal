@@ -474,6 +474,7 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: fd
       enable-llk-asserts: true
+      gtest-filter: '-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
       gtest-shard-total: 2
       gtest-shard-index: ${{ matrix.shard }}
 
@@ -503,7 +504,7 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: sd
       enable-llk-asserts: true
-      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
 
   llk-sd-unit-tests-blackhole:
     needs: [ build, find-changes ]
