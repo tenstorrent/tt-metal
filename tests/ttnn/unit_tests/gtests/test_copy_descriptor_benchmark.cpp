@@ -114,8 +114,7 @@ TEST_F(CopyDescriptorBenchmark, DispatchPerformance) {
     auto host_data = std::make_shared<std::vector<uint16_t>>(count, 42);
     const ttnn::QueueId cq{0};
     ttnn::write_buffer(cq, input, {host_data});
-
-    constexpr int k_iters = 50000;
+    ` constexpr int k_iters = 50000;
 
     const auto start_new = std::chrono::steady_clock::now();
     for (int i = 0; i < k_iters; ++i) {
