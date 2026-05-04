@@ -237,7 +237,8 @@ class WhisperGenerator:
             max_batch_size: Maximum supported global batch size for pre-allocated tensors (default 2)
             enable_encoder_trace: If True (default), capture/replay ``encoder()`` per ``batch_size_per_device``
                 after the first occurrence; set False to always run eager encoder.
-            use_2cq: If True, use CQ 1 for decode trace token reads/writes while CQ 0 runs traces.
+            use_2cq: If True, run decode traces and sampled-token reads on CQ 0 while CQ 1
+                handles forced-token writes (input).
         """
         self.config = config
         self.mesh_device = mesh_device
@@ -526,12 +527,13 @@ class WhisperGenerator:
 
     def _execute_decode_trace(self, trace_key, blocking: bool = True):
         """
-        Execute the on-device sampling trace.
+        Execute the on-device sampling trace on CQ 0.
 
         Args:
             trace_key: Batch size per device key for trace lookup
             blocking: If True, wait for trace completion and return the sampled token.
-                If False, enqueue the trace on CQ 0 and record an event for CQ 1 reads/writes.
+                If False, enqueue the trace on CQ 0 and record an event so that
+                CQ 1 forced-token writes can fence against the trace's argmax output.
 
         Returns:
             The sampled token as a torch tensor for blocking execution; otherwise ``None``.
@@ -553,44 +555,46 @@ class WhisperGenerator:
 
         return sampled_token
 
-    def _read_token_async(self, trace_key, op_event):
-        """Read the sampled token from device on CQ 1 after CQ 0 trace completion."""
-        ttnn.wait_for_event(1, op_event)
-        token_host = ttnn.from_device(self.token_id_device[trace_key], blocking=False, cq_id=1)
-        self._read_event = ttnn.record_event(self.mesh_device, 1)
+    def _read_token_async(self, trace_key):
+        """Read the sampled token from device on CQ 0 (same queue as the trace).
+
+        No cross-CQ fence is needed because the read is enqueued on the compute CQ
+        and is therefore automatically ordered after the trace's argmax write.
+        """
+        token_host = ttnn.from_device(self.token_id_device[trace_key], blocking=False, cq_id=0)
+        self._read_event = ttnn.record_event(self.mesh_device, 0)
         return token_host, self._read_event
 
     def _write_forced_token_async(self, trace_key, forced_host, op_event):
-        """Write a forced token on CQ 1 after CQ 0 trace completion."""
+        """Write a forced token on CQ 1 after the CQ 0 trace finishes producing the
+        argmax output it would otherwise overwrite."""
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(forced_host, self.token_id_device[trace_key], 1)
         self._write_event = ttnn.record_event(self.mesh_device, 1)
 
     def _enqueue_traced_decode_step(self, trace_key, iter_idx, forced_tokens_dict, batch_size):
         """
-        Launch one on-device decode step on CQ 0 and enqueue the matching CQ 1 I/O
-        (async read of the sampled token, or write of a forced token) without blocking
-        the host.
+        Launch one on-device decode step on CQ 0 and enqueue the matching async I/O
+        (CQ 0 read of the sampled token, or CQ 1 write of a forced token) without
+        blocking the host.
 
-        Device-side fences on ``self._read_event`` / ``self._write_event`` ensure that
-        the trace on CQ 0 does not race with the previous iteration's CQ 1 read or
-        forced write of ``token_id_device``. The pending result is stashed in
-        ``self._pending_token_host`` (async-read path) or ``self._pending_forced_tokens``
-        (forced path) for later consumption via ``_consume_pending_decode_token``.
+        Cross-CQ fences ensure ``token_id_device`` is not raced: the next trace on
+        CQ 0 waits on any in-flight CQ 1 forced write before reading the previous
+        token as input. The previous CQ 0 read (if any) needs no fence — it shares
+        a queue with the next trace and is therefore implicitly ordered. The pending
+        result is stashed in ``self._pending_token_host`` (async-read path) or
+        ``self._pending_forced_tokens`` (forced path) for later consumption via
+        ``_consume_pending_decode_token``.
         """
         assert (
             self._pending_token_host is None and self._pending_forced_tokens is None
         ), "Pending decode token must be consumed before enqueuing the next step"
 
-        # Fence CQ 0 on previous CQ 1 ops so the next trace doesn't clobber in-flight I/O.
-        # Both events resolve on device, so these are free once the read/write has already
-        # completed (which is the common case with lookahead overlap).
+        # Fence CQ 0 on the previous CQ 1 forced write so the next trace doesn't
+        # read stale input while the host-to-device copy is still in flight.
         if self._write_event is not None:
             ttnn.wait_for_event(0, self._write_event)
             self._write_event = None
-        if self._read_event is not None:
-            ttnn.wait_for_event(0, self._read_event)
-            self._read_event = None
 
         self._execute_decode_trace(trace_key, blocking=False)
         op_event = self._op_event
@@ -606,7 +610,7 @@ class WhisperGenerator:
             self._write_forced_token_async(trace_key, forced_host, op_event)
             self._pending_forced_tokens = forced_val
         else:
-            token_host, _ = self._read_token_async(trace_key, op_event)
+            token_host, _ = self._read_token_async(trace_key)
             self._pending_token_host = token_host
 
     def _consume_pending_decode_token(self):
@@ -614,10 +618,10 @@ class WhisperGenerator:
         Consume the token result launched by ``_enqueue_traced_decode_step``.
 
         For the forced path the token value is already known on host and is returned
-        directly. For the async-read path this host-synchronizes on the CQ 1 read event
+        directly. For the async-read path this host-synchronizes on the CQ 0 read event
         that was recorded at enqueue time, then pulls the token to torch. When the
         lookahead prefetch happened at the end of the previous iteration, the read has
-        typically already completed by the time this runs (CQ 0 trace + CQ 1 read were
+        typically already completed by the time this runs (CQ 0 trace + CQ 0 read were
         overlapping with the host post-processing of the previous token), so the
         host-side synchronize is ~0 cost.
         """
@@ -1131,10 +1135,10 @@ class WhisperGenerator:
                 if self.use_2cq:
                     # One-iteration-ahead pipeline. By the time we get here, the previous
                     # iteration's end-of-loop prefetch (see below) has already issued trace N
-                    # on CQ 0 and the matching async read / forced write on CQ 1, overlapped
-                    # with the previous iteration's host post-processing (EOS check, tokenizer
-                    # decode, streaming yield). The very first traced-2CQ iteration has no
-                    # pending state yet, so we enqueue synchronously here to seed the pipeline.
+                    # plus its sampled-token read on CQ 0 (or its forced-token write on CQ 1),
+                    # overlapped with the previous iteration's host post-processing (EOS check,
+                    # tokenizer decode, streaming yield). The very first traced-2CQ iteration
+                    # has no pending state yet, so we enqueue synchronously here to seed the pipeline.
                     if self._pending_token_host is None and self._pending_forced_tokens is None:
                         self._enqueue_traced_decode_step(trace_key, i, forced_tokens_dict, input_features.shape[0])
 
@@ -1294,11 +1298,12 @@ class WhisperGenerator:
                 if prompt_is_done[user_id]:
                     next_tokens[user_id] = self.config.eos_token_id
 
-            # 2CQ lookahead prefetch: launch the next iteration's trace on CQ 0 and the
-            # matching read / forced write on CQ 1 now, so that they execute concurrently
-            # with the host-side tokenizer decode and streaming yield below. The next
-            # iteration will consume the result at the top of its loop body, where the
-            # host-side event_synchronize is expected to be a no-op in the steady state.
+            # 2CQ lookahead prefetch: launch the next iteration's trace + sampled-token
+            # read on CQ 0 (or forced-token write on CQ 1) now, so that they execute
+            # concurrently with the host-side tokenizer decode and streaming yield below.
+            # The next iteration will consume the result at the top of its loop body,
+            # where the host-side event_synchronize is expected to be a no-op in the
+            # steady state.
             # Guards: only prefetch when the traced branch would otherwise run (trace
             # captured, cross-attn cache valid), when there is at least one more decode
             # iteration to consume it, and when EOS has not yet terminated the batch
@@ -1349,7 +1354,7 @@ class WhisperGenerator:
         # Drain any lookahead state left by the decode loop. Under the normal invariants
         # the end-of-loop prefetch guard prevents us from breaking out with an unconsumed
         # pending, but we defensively drain here so that an early break (EOS) cannot leak
-        # in-flight CQ 1 reads/writes into the next temperature attempt or generate() call.
+        # in-flight CQ 0 reads or CQ 1 writes into the next temperature attempt or generate() call.
         if self._pending_token_host is not None or self._pending_forced_tokens is not None:
             self._consume_pending_decode_token()
         if self._read_event is not None:
