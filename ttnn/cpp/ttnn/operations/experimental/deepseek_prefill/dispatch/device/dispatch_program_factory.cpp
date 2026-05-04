@@ -39,11 +39,17 @@ void create_tensor_cb(
     const ttnn::Tensor& tensor,
     uint32_t buffering_factor,
     tt::CBIndex cb_id,
-    const std::string& tensor_name = "tensor") {
+    const std::string& tensor_name = "tensor",
+    std::optional<uint32_t> fp8_hidden_size = std::nullopt) {
     auto page_size = get_page_size(tensor);
     auto num_pages = detail::get_num_pages(tensor);
     auto aligned_page_size = get_aligned_page_size(tensor);
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+
+    if (fp8_hidden_size.has_value()) {
+        aligned_page_size = tt::round_up(*fp8_hidden_size, tt::tt_metal::hal::get_l1_alignment());
+        data_format = tt::DataFormat::Fp8_e4m3;
+    }
 
     uint32_t cb_size = buffering_factor * aligned_page_size;
 
@@ -271,23 +277,15 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, signal_cb_config);
     }
     // c_11: untilize output (compute → writer)
-    // FP8 path: configure as Fp8_e4m3 so pack_untilize converts BF16 tiles → FP8 row-major.
-    if (operation_attributes.use_fp8_dispatch) {
-        uint32_t fp8_page_size = tt::round_up((uint32_t)hidden_size, l1_alignment);
-        tt::tt_metal::CircularBufferConfig fp8_cb_config =
-            tt::tt_metal::CircularBufferConfig(
-                read_batch_size * fp8_page_size, {{tt::CBIndex::c_11, tt::DataFormat::Fp8_e4m3}})
-                .set_page_size(tt::CBIndex::c_11, fp8_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, idle_core_grid, fp8_cb_config);
-    } else {
-        detail::create_tensor_cb(
-            program,
-            idle_core_grid,
-            output_tensor,
-            /*buffering_factor=*/read_batch_size,
-            /*cb_id=*/tt::CBIndex::c_11,
-            "idle_untilize_output");
-    }
+    // FP8 path: pack_untilize converts BF16 tiles → FP8 row-major; page size is one aligned FP8 row.
+    detail::create_tensor_cb(
+        program,
+        idle_core_grid,
+        output_tensor,
+        /*buffering_factor=*/read_batch_size,
+        /*cb_id=*/tt::CBIndex::c_11,
+        "idle_untilize_output",
+        operation_attributes.use_fp8_dispatch ? std::optional<uint32_t>(hidden_size) : std::nullopt);
     // c_12: route table mailbox (sender writes before start_semaphore; writer reads after)
     // Layout: [entry_count u32] [entry_0..N × 6 u32s each]
     {
@@ -402,23 +400,15 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         /*cb_id=*/tt::CBIndex::c_9,
         "dispatch_table_tensor");
     // c_18: receive buffer for untilized data from idle cores (also sender self-untilize output)
-    // FP8 path: configure as Fp8_e4m3 so pack_untilize on the sender converts BF16 tiles → FP8.
-    if (operation_attributes.use_fp8_dispatch) {
-        uint32_t fp8_page_size = tt::round_up((uint32_t)hidden_size, l1_alignment);
-        tt::tt_metal::CircularBufferConfig fp8_cb_config =
-            tt::tt_metal::CircularBufferConfig(
-                read_batch_size * fp8_page_size, {{tt::CBIndex::c_18, tt::DataFormat::Fp8_e4m3}})
-                .set_page_size(tt::CBIndex::c_18, fp8_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, fp8_cb_config);
-    } else {
-        detail::create_tensor_cb(
-            program,
-            sender_core_grid,
-            output_tensor,
-            /*buffering_factor=*/read_batch_size,
-            /*cb_id=*/tt::CBIndex::c_18,
-            "receive_untilized");
-    }
+    // FP8 path: pack_untilize converts BF16 tiles → FP8 row-major; page size is one aligned FP8 row.
+    detail::create_tensor_cb(
+        program,
+        sender_core_grid,
+        output_tensor,
+        /*buffering_factor=*/read_batch_size,
+        /*cb_id=*/tt::CBIndex::c_18,
+        "receive_untilized",
+        operation_attributes.use_fp8_dispatch ? std::optional<uint32_t>(hidden_size) : std::nullopt);
     // c_19: route table scratch (sender builds local-expert route table here before NOC-writing to idle)
     {
         uint32_t max_route_entries = read_batch_size * operation_attributes.num_experts_per_tok;

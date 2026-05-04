@@ -51,10 +51,11 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         tensor_args.expert_dispatch_table_tensor.dtype());
 
     // FP8 output requires tiled input (untilize+typecast is fused in compute; row-major path has no compute kernel)
-    TT_FATAL(
-        !(operation_attributes.use_fp8_dispatch &&
-          tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR),
-        "FP8 output is not supported with ROW_MAJOR input layout; use TILE layout when fp8_output=True");
+    if (operation_attributes.use_fp8_dispatch) {
+        TT_FATAL(
+            tensor_args.input_tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR,
+            "FP8 output is not supported with ROW_MAJOR input layout; use TILE layout when fp8_output=True");
+    }
 
     // Validate output memory config is DRAM interleaved (not sharded)
     TT_FATAL(
