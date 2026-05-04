@@ -38,8 +38,6 @@ void kernel_main() {
 
     binary_op_init_common(cb_combine_input, cb_weights, cb_output);
 
-    using namespace compute_kernel_lib::tilize_config;
-
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         cb_reserve_back(cb_rowmajor, total_token_tiles);
 
@@ -116,18 +114,6 @@ void kernel_main() {
         }
         cb_push_back(cb_rowmajor, total_token_tiles);
 
-        // Avoid redundant tilize init/uninit on every chunk: init once on the first,
-        // skip both on middle chunks, uninit once on the last.
-        const bool is_first = (chunk == 0);
-        const bool is_last_chunk = (chunk == num_chunks - 1);
-        if (num_chunks == 1) {
-            compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output, InitUninitMode::InitAndUninit>(1);
-        } else if (is_first) {
-            compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output, InitUninitMode::InitOnly>(1);
-        } else if (is_last_chunk) {
-            compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output, InitUninitMode::UninitOnly>(1);
-        } else {
-            compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output, InitUninitMode::Neither>(1);
-        }
+        compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output>(1);
     }
 }

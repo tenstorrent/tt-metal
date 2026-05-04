@@ -201,7 +201,6 @@ def test_sparse_weights(device, k_active):
 # ============================================================================
 
 
-@run_for_blackhole(reason_str="DeepSeek-V3 dimensions require 100 cores (3200 tokens / 32 per core); WH has only 72")
 def test_skip_nonlocal_experts(device):
     """Verify that marking experts as non-local (-1 in dispatch table) produces
     the same result when those experts' combine_output is zero (as in real MoE)."""
@@ -291,7 +290,7 @@ def test_multi_chunk_structured(device, num_tokens):
     )
 
     ref = pytorch_reference(combine, weights)
-    result = ttnn.to_torch(new_implementation(to_device(combine, device), to_device(weights, device)))
+    result = ttnn.to_torch(new_implementation(to_device(combine, device), to_device(weights, device), None, None))
     assert_pcc(result, ref, threshold=0.998, label=f"multi_chunk_structured_{num_tokens}")
 
 
@@ -303,7 +302,7 @@ def test_multi_chunk_random(device, num_tokens):
     weights = torch.randn(1, num_tokens, NUM_EXPERTS, 1, dtype=torch.bfloat16)
 
     ref = pytorch_reference(combine, weights)
-    result = ttnn.to_torch(new_implementation(to_device(combine, device), to_device(weights, device)))
+    result = ttnn.to_torch(new_implementation(to_device(combine, device), to_device(weights, device), None, None))
     assert_pcc(result, ref, label=f"multi_chunk_random_{num_tokens}")
 
 
