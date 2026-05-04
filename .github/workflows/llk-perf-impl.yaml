@@ -98,19 +98,19 @@ jobs:
           ${{ matrix.test-group.cmd }}
 
       - name: Zip performance data
-        if: always() && hashFiles('tt_metal/tt-llk/tests/python_tests/perf_data/**') != ''
+        if: always() && hashFiles('tt_metal/tt-llk/perf_data/**') != ''
         shell: bash
-        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        working-directory: ${{ env.LLK_PATH }}
         run: |
           zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip perf_data/
           echo "Performance data zipped successfully"
 
       - name: Upload performance data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: always() && hashFiles(format('tt_metal/tt-llk/tests/python_tests/perf_data-{0}-{1}.zip', env.CHIP_ARCH, matrix.test-group.split_group)) != ''
+        if: always() && hashFiles(format('tt_metal/tt-llk/perf_data-{0}-{1}.zip', env.CHIP_ARCH, matrix.test-group.split_group)) != ''
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip
+          path: ${{ env.LLK_PATH }}/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -211,19 +211,19 @@ jobs:
           ${{ matrix.test-group.cmd }}
 
       - name: Zip performance data
-        if: always() && hashFiles('tt_metal/tt-llk/tests/python_tests/perf_data/**') != ''
+        if: always() && hashFiles('tt_metal/tt-llk/perf_data/**') != ''
         shell: bash
-        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        working-directory: ${{ env.LLK_PATH }}
         run: |
           zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip perf_data/
           echo "Performance data zipped successfully"
 
       - name: Upload performance data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: always() && hashFiles(format('tt_metal/tt-llk/tests/python_tests/perf_data-{0}-{1}.zip', env.CHIP_ARCH, matrix.test-group.split_group)) != ''
+        if: always() && hashFiles(format('tt_metal/tt-llk/perf_data-{0}-{1}.zip', env.CHIP_ARCH, matrix.test-group.split_group)) != ''
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip
+          path: ${{ env.LLK_PATH }}/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
