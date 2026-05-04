@@ -87,7 +87,7 @@ jobs:
   preflight:
     name: "Calculate Tags"
     needs: [check-harbor]
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: ubuntu-latest
     outputs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       tool-data: ${{ steps.tool-data.outputs.data }}
