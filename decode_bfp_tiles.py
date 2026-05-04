@@ -117,7 +117,9 @@ _LINE_RE = re.compile(
 
 _CB_IN0_RE = re.compile(r"^(?P<dev>\d+):\([^)]*\):TR\d:\s*\[exp_i=0\]\s+cb_in0\s+K=(?P<k>\d+):\s*(?P<words>.*)$")
 
-_POST_HDR_RE = re.compile(r"^(?P<dev>\d+):\([^)]*\):TR1:\s*\[exp_i=0 ng=0 POST-FINALIZE N=2\]:\s*$")
+_POST_HDR_RE = re.compile(
+    r"^(?P<dev>\d+):\([^)]*\):TR1:\s*" r"\[exp_i=0 ng=0 POST-FINALIZE(?: N=2)?\](?:\s+dst\[2\])?:\s*$"
+)
 _POST_ROW_RE = re.compile(r"^(?P<dev>\d+):\([^)]*\):TR1:\s+(?P<vals>(\s*-?\d+\.\d+){8,})\s*$")
 
 
