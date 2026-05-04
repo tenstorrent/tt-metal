@@ -85,6 +85,7 @@ class TtDispatchModule(LightweightModule):
             cluster_axis: Mesh axis along which dispatch communicates (0 = SP/dispatch axis).
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
+            fp8_output: Output dtype for the dispatched buffer.
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")

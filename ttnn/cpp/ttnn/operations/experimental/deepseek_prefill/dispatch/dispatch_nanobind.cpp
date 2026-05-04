@@ -69,6 +69,8 @@ void bind_dispatch(nb::module_& mod) {
                 Defaults to 1.
             topology (ttnn.Topology, optional): Fabric topology for remote writes.
                 Defaults to Linear.
+            fp8_output (bool, optional): Output dtype for the dispatched buffer.
+                Defaults to False.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:

@@ -658,11 +658,6 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
                 .compile_args = idle_writer_compile_args}));
     }
 
-    std::map<std::string, std::string> compute_defines;
-    if (operation_attributes.use_fp8_dispatch) {
-        compute_defines["USE_FP8_DISPATCH"] = "1";
-    }
-
     // Compute kernel on idle cores
     tt::tt_metal::CreateKernel(
         program,
@@ -671,15 +666,13 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         idle_core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .compile_args =
-                {
-                    static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
-                    static_cast<uint32_t>(tt::CBIndex::c_11),  // cb_untilize_id
-                    static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
-                    (uint32_t)hidden_size,
-                    read_batch_size,
-                },
-            .defines = compute_defines});
+            .compile_args = {
+                static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
+                static_cast<uint32_t>(tt::CBIndex::c_11),  // cb_untilize_id
+                static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
+                (uint32_t)hidden_size,
+                read_batch_size,
+            }});
 
     // Compute kernel on sender cores for self-untilize (output goes to c_18)
     tt::tt_metal::CreateKernel(
@@ -689,15 +682,13 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         sender_core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .compile_args =
-                {
-                    static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
-                    static_cast<uint32_t>(tt::CBIndex::c_18),  // cb_untilize_id (reuse receive buffer)
-                    static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
-                    (uint32_t)hidden_size,
-                    read_batch_size,
-                },
-            .defines = compute_defines});
+            .compile_args = {
+                static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
+                static_cast<uint32_t>(tt::CBIndex::c_18),  // cb_untilize_id (reuse receive buffer)
+                static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
+                (uint32_t)hidden_size,
+                read_batch_size,
+            }});
 
     // ==================== Pre-compute NOC coordinates ====================
     std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;
