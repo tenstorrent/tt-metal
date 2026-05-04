@@ -342,6 +342,9 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _warmup_model_decode_demo(self, enable_trace: bool, sample_on_device: bool):
         warmup_tokens = torch.zeros(self.batch_size, dtype=torch.int32)
         warmup_start_pos = torch.zeros(self.batch_size, dtype=torch.int32)
+        signpost_decode_warmup = self.signpost and not enable_trace
+        if signpost_decode_warmup:
+            signpost(header="decode_warmup")
         decode_logits = self.decode_forward(
             tokens=warmup_tokens,
             start_pos=warmup_start_pos,
@@ -349,6 +352,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             page_table=None,
             sample_on_device=sample_on_device,
         )
+        if signpost_decode_warmup:
+            ttnn.synchronize_device(self.mesh_device)
+            signpost(header="decode_warmup")
 
         if sample_on_device:
             self._sample_tokens_device(decode_logits, enable_trace=enable_trace)

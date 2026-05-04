@@ -486,6 +486,13 @@ def process_profile_stats(filtered_csv_path, merged_csv_path):
     """
     rows = _read_filtered_csv(filtered_csv_path)
     reference = _get_warmup_reference(rows)
+    if not reference:
+        num_trace_executions = _get_num_trace_executions(rows)
+        raise ValueError(
+            "No warmup reference ops found in the filtered DeepSeek decode profile CSV. "
+            "Check that decode_warmup signposts bracket the untraced decode warmup "
+            f"(trace executions found: {num_trace_executions})."
+        )
 
     level_counts = defaultdict(int)
     for op_info in reference:
