@@ -135,10 +135,16 @@ class MLP(LightweightModule):
         )
 
         # Batched prefill can make total seq_len = batch * per_user_seq (e.g. 25*512=12800) which may not
-        # divide prefill_len_cutoff (1024 on WH). Pad to a multiple before chunk reshape; slice at end.
+        # divide prefill_len_cutoff. Pad to a multiple before chunk reshape; slice at end.
+        #
+        # prefill_len_cutoff (see model_config.ModelArgs.__init__): 1024 on Wormhole, 512 on Blackhole.
+        # It is the max sequence tokens per MLP prefill chunk after reshape. Matmul program configs use
+        # m ≈ min(seq_len, cutoff); larger m raises per_core_M and L1 circular-buffer footprint. WH fits
+        # 1024-token chunks; BH uses a smaller default L1 budget / grid shape, so 512 avoids CB overalloc
+        # (same motivation as WH device-specific overrides that drop 1024→512 on tight L1 models).
         mlp_prefill_pad = 0
         cutoff = self.args.prefill_len_cutoff
-        if mode == Mode.PREFILL and seq_len >= cutoff:  # 512 if Blackhole, 1024 if Wormhole
+        if mode == Mode.PREFILL and seq_len >= cutoff:
             if seq_len % cutoff != 0:
                 mlp_prefill_pad = cutoff - (seq_len % cutoff)
                 x = ttnn.pad(
