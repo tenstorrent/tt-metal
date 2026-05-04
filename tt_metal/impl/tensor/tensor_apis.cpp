@@ -932,6 +932,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                 case DataType::UINT16: return with_src_and_dst.operator()<SrcType, uint16_t>();
                 case DataType::UINT32: return with_src_and_dst.operator()<SrcType, uint32_t>();
                 case DataType::INT32: return with_src_and_dst.operator()<SrcType, int32_t>();
+                case DataType::FP8_E4M3: TT_THROW("to_dtype: FP8_E4M3 destination conversion is not yet implemented");
                 case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
             }
             TT_THROW("Unreachable");
@@ -946,6 +947,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
             case DataType::UINT16: return with_src.operator()<uint16_t>();
             case DataType::UINT32: return with_src.operator()<uint32_t>();
             case DataType::INT32: return with_src.operator()<int32_t>();
+            case DataType::FP8_E4M3: TT_THROW("to_dtype: FP8_E4M3 source conversion is not yet implemented");
             case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
         }
         TT_THROW("Unreachable");

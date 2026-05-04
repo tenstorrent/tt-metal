@@ -225,6 +225,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
             case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
+            case DataType::FP8_E4M3: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
             case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(buffer);
             case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(buffer);
             case DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(buffer);
@@ -277,6 +278,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
 
     switch (tt_tensor.dtype()) {
         case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tt_tensor);
+        case DataType::FP8_E4M3: return dispatch_to_concrete.template operator()<uint8_t>(tt_tensor);
         case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tt_tensor);
         case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tt_tensor);
         case DataType::UINT32: return dispatch_to_concrete.template operator()<uint32_t>(tt_tensor);
@@ -850,6 +852,10 @@ void pytensor_module(nb::module_& mod) {
                     case DataType::UINT32: return nb::cast(self.to_vector<uint32_t>()[0]);
                     case DataType::UINT16: return nb::cast(self.to_vector<uint16_t>()[0]);
                     case DataType::UINT8: return nb::cast(self.to_vector<uint8_t>()[0]);
+                    case DataType::FP8_E4M3:
+                        TT_THROW(
+                            "tensor.item() on FP8_E4M3 not yet supported; "
+                            "use .to_torch().view(torch.float8_e4m3fn).item() to decode");
                     case DataType::INVALID: TT_THROW("Unsupported DataType");
                 }
                 TT_THROW("Unreachable");
