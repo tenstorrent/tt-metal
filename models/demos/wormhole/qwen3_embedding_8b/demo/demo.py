@@ -19,7 +19,7 @@ Usage (standalone, single device):
     export HF_MODEL=Qwen/Qwen3-Embedding-0.6B
     python models/demos/wormhole/qwen3_embedding_8b/demo/demo.py
 
-Usage (pytest, picks device from MESH_DEVICE env):
+Usage (pytest, ``MESH_DEVICE`` env or default from ``ttnn.cluster.get_cluster_type()`` / device count):
     export HF_MODEL=Qwen/Qwen3-Embedding-4B   # HuggingFace id for weights/tokenizer (required by model_config)
     pytest models/demos/wormhole/qwen3_embedding_8b/demo/demo.py -sv -k "dp32"
     pytest .../demo.py -sv -k "dp1-batch1-seq256"    # synthetic tokens, ISL=max_seq_len=256 (<512 short-seq path)
@@ -135,9 +135,25 @@ SAMPLE_TEXTS = [
 MESH_SHAPES = {
     1: (1, 1),
     2: (1, 2),
+    4: (2, 2),
     8: (1, 8),
     32: (8, 4),
 }
+
+ClusterType = ttnn.cluster.ClusterType
+# Same targets as ``MESH_DEVICE`` / historical wormhole support, plus Blackhole. Other ``ClusterType`` values
+# use ``MESH_SHAPES`` by device count (``cluster.hpp``); ``P150_X8`` is listed because eight devices are (2, 4)
+# here vs T3K (1, 8).
+_CLUSTER_TYPE_TO_MESH_SHAPE: dict[ClusterType, tuple[int, int]] = {
+    ClusterType.N150: (1, 1),
+    ClusterType.N300: (1, 2),
+    ClusterType.T3K: (1, 8),
+    ClusterType.TG: (8, 4),
+    ClusterType.P150: (1, 1),
+}
+
+# Optional pytest ``MESH_DEVICE`` override; default comes from ``get_default_mesh_device_param()``.
+_MESH_DEVICE_ENV_TO_SHAPE = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150": (1, 1)}
 
 _DEFAULT_EMBEDDING_PERF_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "embedding_perf_results.csv")
 
@@ -173,6 +189,8 @@ def load_input_texts(input_file, batch_size):
 
 
 def get_default_mesh_device_param():
+    if (mesh := _CLUSTER_TYPE_TO_MESH_SHAPE.get(ttnn.cluster.get_cluster_type())) is not None:
+        return mesh
     if ttnn.using_distributed_env():
         try:
             n = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
@@ -540,14 +558,7 @@ def clear_all_kv_caches(generator):
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "T3K": (1, 8),
-            "TG": (8, 4),
-        }.get(os.environ.get("MESH_DEVICE"), get_default_mesh_device_param())
-    ],
+    [_MESH_DEVICE_ENV_TO_SHAPE.get(os.environ.get("MESH_DEVICE"), get_default_mesh_device_param())],
     indirect=True,
 )
 def test_embedding_perf(
