@@ -8,11 +8,10 @@ set(UNIT_TESTS_LLK_SRC
     test_cumsum.cpp
     test_dropout_sfpu_compute.cpp
     test_fp8_typecast.cpp
-    test_mxfp4_typecast.cpp
-    test_mxfp8_typecast.cpp
     test_golden_impls.cpp
     test_mul_reduce_scalar.cpp
     test_mxfp4_typecast.cpp
+    test_mxfp8_typecast.cpp
     test_pack_rows.cpp
     test_reconfig.cpp
     test_reduce.cpp

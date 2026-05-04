@@ -237,8 +237,16 @@ static double compute_pcc(const vector<float>& a, const vector<float>& b) {
     }
     double denom_a = (n * sum_a2) - (sum_a * sum_a);
     double denom_b = (n * sum_b2) - (sum_b * sum_b);
+    if (denom_a == 0.0 && denom_b == 0.0) {
+        // Both vectors are constant. Perfect correlation only if they're the
+        // same constant — a constant device output that doesn't match a
+        // constant input is exactly the failure mode this check guards.
+        return (a[0] == b[0]) ? 1.0 : 0.0;
+    }
     if (denom_a == 0.0 || denom_b == 0.0) {
-        return 1.0;
+        // One side is constant, the other varies — PCC is undefined; treat as
+        // failure so a stuck/constant device output cannot silently pass.
+        return 0.0;
     }
     return (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
 }
@@ -252,6 +260,53 @@ static bool check_pcc(const vector<float>& a, const vector<float>& b, double min
     return true;
 }
 
+// --- Random typecast test driver ---
+//
+// Shared parameters for the random-input typecast tests below. Centralized so
+// changing num_tiles / seed / range happens in one place.
+constexpr uint32_t kDefaultNumTiles = 64;
+constexpr int kRandMaxFloat = 20;
+constexpr int kSeed = 42;
+constexpr float kOffset = -10.0f;  // U(0, kRandMaxFloat) + kOffset = U(-10, 10)
+
+static vector<uint32_t> generate_random_src(tt::DataFormat fmt, uint32_t num_tiles) {
+    uint32_t bytes = tt::tile_size(fmt) * num_tiles;
+    switch (fmt) {
+        case tt::DataFormat::MxFp8R: return create_random_vector_of_mxfp8_e5m2(bytes, kRandMaxFloat, kSeed, kOffset);
+        case tt::DataFormat::MxFp8P: return create_random_vector_of_mxfp8_e4m3(bytes, kRandMaxFloat, kSeed, kOffset);
+        case tt::DataFormat::Float16_b: return create_random_vector_of_bfloat16(bytes, kRandMaxFloat, kSeed, kOffset);
+        default: TT_THROW("Unsupported source DataFormat for mxfp8 typecast test: {}", static_cast<int>(fmt));
+    }
+}
+
+static vector<float> unpack_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
+    switch (fmt) {
+        case tt::DataFormat::MxFp8R: return mxfp8_e5m2_to_floats(packed);
+        case tt::DataFormat::MxFp8P: return mxfp8_e4m3_to_floats(packed);
+        case tt::DataFormat::Float16_b: return bf16_to_floats(packed);
+        default: TT_THROW("Unsupported DataFormat for mxfp8 unpack: {}", static_cast<int>(fmt));
+    }
+}
+
+// Drive one random typecast test: generate U(-10, 10) data in input_fmt, run
+// the device, unpack both sides to floats, and check element-wise tolerance
+// + PCC. Used by all random-input TEST_F bodies below.
+static void run_random_typecast_test(
+    IDevice* dev,
+    tt::DataFormat input_fmt,
+    tt::DataFormat output_fmt,
+    float rtol,
+    float atol,
+    double min_pcc,
+    bool fp32_dest_acc_en) {
+    auto src_vec = generate_random_src(input_fmt, kDefaultNumTiles);
+    auto result_vec = run_mxfp8_typecast(dev, input_fmt, output_fmt, src_vec, kDefaultNumTiles, fp32_dest_acc_en);
+    auto src_floats = unpack_to_floats(input_fmt, src_vec);
+    auto dst_floats = unpack_to_floats(output_fmt, result_vec);
+    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, rtol, atol));
+    EXPECT_TRUE(check_pcc(src_floats, dst_floats, min_pcc));
+}
+
 // --- Special-case rule testing infrastructure ---
 //
 // Helpers for hand-crafting raw MXFP8 tile bytes and reading raw BF16 outputs,
@@ -263,8 +318,6 @@ struct TileLayout {
     size_t exp_bytes = 0;  // byte offset where the elem region begins
 };
 
-// Pack an all-zero tile to discover the runtime tile layout (which depends on
-// HAL L1 alignment), then derive exp_bytes from the resulting word count.
 static TileLayout get_e5m2_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
@@ -292,10 +345,6 @@ struct ElemPatch {
     uint8_t elem_byte;
 };
 
-// Build a single-tile packed MXFP8 buffer: all 32 scale bytes set to
-// scale_default, all 1024 elem bytes set to elem_default, then patches applied.
-// elem_idx is in face-major order (the natural ordering produced by the
-// pack helper), so block b covers elem indices [b*32, (b+1)*32).
 static vector<uint32_t> build_mxfp8_tile_raw(
     const TileLayout& layout,
     uint8_t scale_default,
@@ -345,6 +394,78 @@ static Bf16Class classify_bf16(uint16_t bits) {
     return Bf16Class::Normal;
 }
 
+// MXFP8 element-byte classifier. Values reflect the *element-only* class
+// (ignoring the per-block scale). Combine with the scale byte via
+// effective_*_class below: a NaN-scale block reads as NaN regardless of the
+// element bits per the OCP MX rule.
+enum class MxFp8Class { Zero, Subnormal, Normal, MaxNormalPos, MaxNormalNeg, PosInf, NegInf, NaN };
+
+// E5M2: 1 sign / 5 exp / 2 mantissa, IEEE-style Inf/NaN.
+//   Inf:        0_11111_00 / 1_11111_00 = 0x7C / 0xFC
+//   NaN:        S_11111_xx with mant != 0
+//   Max normal: 0_11110_11 / 1_11110_11 = 0x7B / 0xFB
+static MxFp8Class classify_e5m2(uint8_t bits) {
+    uint8_t sign = (bits >> 7) & 0x1u;
+    uint8_t exp = (bits >> 2) & 0x1Fu;
+    uint8_t mant = bits & 0x3u;
+    if (exp == 0x1F) {
+        if (mant == 0) {
+            return sign ? MxFp8Class::NegInf : MxFp8Class::PosInf;
+        }
+        return MxFp8Class::NaN;
+    }
+    if (exp == 0) {
+        return mant == 0 ? MxFp8Class::Zero : MxFp8Class::Subnormal;
+    }
+    if (exp == 0x1E && mant == 0x3) {
+        return sign ? MxFp8Class::MaxNormalNeg : MxFp8Class::MaxNormalPos;
+    }
+    return MxFp8Class::Normal;
+}
+
+// E4M3FN (finite): 1 sign / 4 exp / 3 mantissa. No Inf encoding.
+//   NaN:        S_1111_111 = 0x7F / 0xFF
+//   Max normal: 0_1111_110 / 1_1111_110 = 0x7E / 0xFE
+static MxFp8Class classify_e4m3(uint8_t bits) {
+    uint8_t sign = (bits >> 7) & 0x1u;
+    uint8_t exp = (bits >> 3) & 0xFu;
+    uint8_t mant = bits & 0x7u;
+    if (exp == 0xF && mant == 0x7) {
+        return MxFp8Class::NaN;
+    }
+    if (exp == 0) {
+        return mant == 0 ? MxFp8Class::Zero : MxFp8Class::Subnormal;
+    }
+    if (exp == 0xF && mant == 0x6) {
+        return sign ? MxFp8Class::MaxNormalNeg : MxFp8Class::MaxNormalPos;
+    }
+    return MxFp8Class::Normal;
+}
+
+static uint8_t mxfp8_elem_byte_at(const vector<uint32_t>& packed, const TileLayout& layout, uint32_t i) {
+    return reinterpret_cast<const uint8_t*>(packed.data())[layout.exp_bytes + i];
+}
+
+static uint8_t mxfp8_scale_byte_at(const vector<uint32_t>& packed, uint32_t block_idx) {
+    return reinterpret_cast<const uint8_t*>(packed.data())[block_idx];
+}
+
+// Apply the OCP MX block-level rule: a block with scale = 0xFF reads as NaN
+// for every element. Otherwise the element class stands.
+static MxFp8Class effective_e5m2_class(uint8_t scale_byte, uint8_t elem_byte) {
+    if (scale_byte == 0xFF) {
+        return MxFp8Class::NaN;
+    }
+    return classify_e5m2(elem_byte);
+}
+
+static MxFp8Class effective_e4m3_class(uint8_t scale_byte, uint8_t elem_byte) {
+    if (scale_byte == 0xFF) {
+        return MxFp8Class::NaN;
+    }
+    return classify_e4m3(elem_byte);
+}
+
 }  // namespace unit_tests::llk::mxfp8_typecast
 
 namespace mxfp8_tc = unit_tests::llk::mxfp8_typecast;
@@ -357,29 +478,25 @@ namespace mxfp8_tc = unit_tests::llk::mxfp8_typecast;
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16b) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = mxfp8_tc::create_random_vector_of_mxfp8_e5m2(
-        tt::tile_size(tt::DataFormat::MxFp8R) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::MxFp8R, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
-    auto src_floats = mxfp8_tc::mxfp8_e5m2_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::bf16_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::MxFp8R,
+        tt::DataFormat::Float16_b,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
+        /*min_pcc=*/1.0,
+        /*fp32_dest_acc_en=*/false);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = mxfp8_tc::create_random_vector_of_mxfp8_e5m2(
-        tt::tile_size(tt::DataFormat::MxFp8R) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::MxFp8R, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-    auto src_floats = mxfp8_tc::mxfp8_e5m2_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::bf16_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::MxFp8R,
+        tt::DataFormat::Float16_b,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
+        /*min_pcc=*/1.0,
+        /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
@@ -390,95 +507,81 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToFloat16bFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16b) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = mxfp8_tc::create_random_vector_of_mxfp8_e4m3(
-        tt::tile_size(tt::DataFormat::MxFp8P) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::MxFp8P, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
-    auto src_floats = mxfp8_tc::mxfp8_e4m3_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::bf16_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::MxFp8P,
+        tt::DataFormat::Float16_b,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
+        /*min_pcc=*/1.0,
+        /*fp32_dest_acc_en=*/false);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToFloat16bFp32Dest) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = mxfp8_tc::create_random_vector_of_mxfp8_e4m3(
-        tt::tile_size(tt::DataFormat::MxFp8P) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::MxFp8P, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-    auto src_floats = mxfp8_tc::mxfp8_e4m3_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::bf16_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::MxFp8P,
+        tt::DataFormat::Float16_b,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
+        /*min_pcc=*/1.0,
+        /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
 // Float16_b → MXFP8 (E5M2)
 // Narrowing conversion: BF16 → MXFP8 E5M2 introduces quantization. E5M2
-// has 2 mantissa bits, so the worst-case relative error is ~1/4. Tolerances
-// are loose to account for block-scaling behavior.
+// has 2 mantissa bits. Tolerances are loose to account for block-scaling behavior.
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8R) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_bfloat16(
-        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::Float16_b, tt::DataFormat::MxFp8R, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
-    auto src_floats = mxfp8_tc::bf16_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::mxfp8_e5m2_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.25f, /*atol=*/0.1f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.999));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::MxFp8R,
+        /*rtol=*/0.25f,
+        /*atol=*/0.1f,
+        /*min_pcc=*/0.995,
+        /*fp32_dest_acc_en=*/false);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RFp32Dest) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_bfloat16(
-        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::Float16_b, tt::DataFormat::MxFp8R, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-    auto src_floats = mxfp8_tc::bf16_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::mxfp8_e5m2_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.25f, /*atol=*/0.1f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.999));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::MxFp8R,
+        /*rtol=*/0.25f,
+        /*atol=*/0.1f,
+        /*min_pcc=*/0.995,
+        /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
 // Float16_b → MXFP8 (E4M3)
 // Narrowing conversion: BF16 → MXFP8 E4M3 introduces quantization. E4M3
-// has 3 mantissa bits, so the worst-case relative error is ~1/8 — tighter
-// than E5M2.
+// has 3 mantissa bits. Tolerances are tighter than E5M2.
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8P) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_bfloat16(
-        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::Float16_b, tt::DataFormat::MxFp8P, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
-    auto src_floats = mxfp8_tc::bf16_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::mxfp8_e4m3_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.125f, /*atol=*/0.05f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.999));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::MxFp8P,
+        /*rtol=*/0.125f,
+        /*atol=*/0.05f,
+        /*min_pcc=*/0.999,
+        /*fp32_dest_acc_en=*/false);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_bfloat16(
-        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::Float16_b, tt::DataFormat::MxFp8P, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-    auto src_floats = mxfp8_tc::bf16_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::mxfp8_e4m3_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.125f, /*atol=*/0.05f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.999));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::MxFp8P,
+        /*rtol=*/0.125f,
+        /*atol=*/0.05f,
+        /*min_pcc=*/0.999,
+        /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
@@ -487,29 +590,25 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8R) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = mxfp8_tc::create_random_vector_of_mxfp8_e5m2(
-        tt::tile_size(tt::DataFormat::MxFp8R) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::MxFp8R, tt::DataFormat::MxFp8R, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
-    auto src_floats = mxfp8_tc::mxfp8_e5m2_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::mxfp8_e5m2_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::MxFp8R,
+        tt::DataFormat::MxFp8R,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
+        /*min_pcc=*/1.0,
+        /*fp32_dest_acc_en=*/false);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = mxfp8_tc::create_random_vector_of_mxfp8_e5m2(
-        tt::tile_size(tt::DataFormat::MxFp8R) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::MxFp8R, tt::DataFormat::MxFp8R, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-    auto src_floats = mxfp8_tc::mxfp8_e5m2_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::mxfp8_e5m2_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::MxFp8R,
+        tt::DataFormat::MxFp8R,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
+        /*min_pcc=*/1.0,
+        /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
@@ -518,29 +617,25 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8RToMxFp8RFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8P) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = mxfp8_tc::create_random_vector_of_mxfp8_e4m3(
-        tt::tile_size(tt::DataFormat::MxFp8P) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::MxFp8P, tt::DataFormat::MxFp8P, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
-    auto src_floats = mxfp8_tc::mxfp8_e4m3_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::mxfp8_e4m3_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::MxFp8P,
+        tt::DataFormat::MxFp8P,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
+        /*min_pcc=*/1.0,
+        /*fp32_dest_acc_en=*/false);
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToMxFp8PFp32Dest) {
-    IDevice* dev = devices_[0]->get_devices()[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = mxfp8_tc::create_random_vector_of_mxfp8_e4m3(
-        tt::tile_size(tt::DataFormat::MxFp8P) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = mxfp8_tc::run_mxfp8_typecast(
-        dev, tt::DataFormat::MxFp8P, tt::DataFormat::MxFp8P, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-    auto src_floats = mxfp8_tc::mxfp8_e4m3_to_floats(src_vec);
-    auto dst_floats = mxfp8_tc::mxfp8_e4m3_to_floats(result_vec);
-    EXPECT_TRUE(mxfp8_tc::check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(mxfp8_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+    mxfp8_tc::run_random_typecast_test(
+        devices_[0]->get_devices()[0],
+        tt::DataFormat::MxFp8P,
+        tt::DataFormat::MxFp8P,
+        /*rtol=*/0.0f,
+        /*atol=*/0.0f,
+        /*min_pcc=*/1.0,
+        /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
@@ -638,6 +733,159 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp8PToBf16SpecialCases) {
     EXPECT_EQ(mxfp8_tc::classify_bf16(mxfp8_tc::bf16_raw_at(result, 64)), Cls::PosInf);
     EXPECT_EQ(mxfp8_tc::classify_bf16(mxfp8_tc::bf16_raw_at(result, 65)), Cls::NegInf);
     EXPECT_EQ(mxfp8_tc::bf16_raw_at(result, 96), 0x3F80u);  // BF16 +1.0
+}
+
+// ============================================================================
+// Device special-case tests for hardware BF16 → MXFP8 typecast (the narrowing
+// direction). Each block of 32 BF16 inputs is filled with a single edge-case
+// value so the per-block scale derivation is well defined; we then inspect
+// the raw MXFP8 element bytes (combined with the block scale) since the
+// random typecast tests above never exercise NaN, Inf, or block-scale rules.
+// ============================================================================
+
+namespace unit_tests::llk::mxfp8_typecast {
+
+// Build a 1-tile BF16 input as raw bytes. Each block of 32 face-major BF16
+// elements is filled with `block_values[b]`; defaults to BF16 +0 elsewhere.
+// BF16 ordering matches the unpacker: two values per uint32, LSB = lower
+// face-major index. Returns the packed uint32 vector ready for WriteToBuffer.
+static vector<uint32_t> build_bf16_tile_with_block_values(std::initializer_list<uint16_t> block_values) {
+    constexpr uint32_t kBf16PerTile = 1024;
+    constexpr uint32_t kBlockSize = 32;
+    uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    TT_FATAL(bf16_tile_bytes == kBf16PerTile * sizeof(uint16_t), "Unexpected BF16 tile size {} bytes", bf16_tile_bytes);
+    vector<uint32_t> packed(bf16_tile_bytes / sizeof(uint32_t), 0);
+    auto* bf16 = reinterpret_cast<uint16_t*>(packed.data());
+    uint32_t block = 0;
+    for (uint16_t val : block_values) {
+        TT_FATAL(block < kBf16PerTile / kBlockSize, "Too many block values");
+        for (uint32_t i = 0; i < kBlockSize; ++i) {
+            bf16[block * kBlockSize + i] = val;
+        }
+        ++block;
+    }
+    return packed;
+}
+
+}  // namespace unit_tests::llk::mxfp8_typecast
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+
+    // Block layout (32 BF16 elements per block):
+    //   0: all +NaN  → block must read as NaN (NaN propagation).
+    //   1: all +Inf  → +Inf, NaN, or +max-normal (saturation when ovf_en=0).
+    //   2: all -Inf  → symmetric.
+    //   3: all +1.0  → sanity, must round-trip exactly to E5M2 1.0.
+    constexpr uint16_t kBf16PosNaN = 0x7FC0;
+    constexpr uint16_t kBf16PosInf = 0x7F80;
+    constexpr uint16_t kBf16NegInf = 0xFF80;
+    constexpr uint16_t kBf16PosOne = 0x3F80;
+
+    auto src = mxfp8_tc::build_bf16_tile_with_block_values({kBf16PosNaN, kBf16PosInf, kBf16NegInf, kBf16PosOne});
+
+    auto result = mxfp8_tc::run_mxfp8_typecast(
+        dev,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::MxFp8R,
+        src,
+        /*num_tiles=*/1,
+        /*fp32_dest_acc_en=*/false);
+
+    auto layout = mxfp8_tc::get_e5m2_tile_layout();
+    using Cls = mxfp8_tc::MxFp8Class;
+
+    // Block 0: NaN BF16 in → NaN out (per OCP MX, NaN forces scale=0xFF which
+    // makes the entire block read as NaN).
+    uint8_t scale0 = mxfp8_tc::mxfp8_scale_byte_at(result, 0);
+    for (uint32_t i = 0; i < 32; ++i) {
+        EXPECT_EQ(mxfp8_tc::effective_e5m2_class(scale0, mxfp8_tc::mxfp8_elem_byte_at(result, layout, i)), Cls::NaN)
+            << "block 0 (BF16 NaN in) elem " << i;
+    }
+
+    // Block 1: +Inf BF16 in → +Inf, NaN, or +max-normal. E5M2 has Inf encoding,
+    // but the OCP MX overflow policy is configurable (ovf_en): with ovf_en=0
+    // (the hardware default) Inf saturates to +max-normal; with ovf_en=1 it
+    // round-trips as +Inf. NaN-scale fallback also accepted.
+    uint8_t scale1 = mxfp8_tc::mxfp8_scale_byte_at(result, 1);
+    for (uint32_t i = 32; i < 64; ++i) {
+        auto cls = mxfp8_tc::effective_e5m2_class(scale1, mxfp8_tc::mxfp8_elem_byte_at(result, layout, i));
+        EXPECT_TRUE(cls == Cls::PosInf || cls == Cls::NaN || cls == Cls::MaxNormalPos)
+            << "block 1 (BF16 +Inf in) elem " << i << " cls=" << static_cast<int>(cls);
+    }
+
+    // Block 2: -Inf BF16 in → -Inf, NaN, or -max-normal (symmetric to block 1).
+    uint8_t scale2 = mxfp8_tc::mxfp8_scale_byte_at(result, 2);
+    for (uint32_t i = 64; i < 96; ++i) {
+        auto cls = mxfp8_tc::effective_e5m2_class(scale2, mxfp8_tc::mxfp8_elem_byte_at(result, layout, i));
+        EXPECT_TRUE(cls == Cls::NegInf || cls == Cls::NaN || cls == Cls::MaxNormalNeg)
+            << "block 2 (BF16 -Inf in) elem " << i << " cls=" << static_cast<int>(cls);
+    }
+
+    // Block 3: +1.0 sanity — verify each element round-trips exactly via the
+    // float unpack (1.0 is exactly representable in E5M2 with scale=2^0).
+    auto floats = mxfp8_tc::mxfp8_e5m2_to_floats(result);
+    for (uint32_t i = 96; i < 128; ++i) {
+        EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
+    }
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+
+    // Block layout, mirroring the E5M2 test. E4M3 has no Inf encoding, so the
+    // ±Inf blocks must produce either NaN or saturate to ±max-normal.
+    //   0: all +NaN  → block must read as NaN.
+    //   1: all +Inf  → NaN or +max-normal (E4M3 cannot represent Inf).
+    //   2: all -Inf  → NaN or -max-normal.
+    //   3: all +1.0  → sanity, must round-trip exactly to E4M3 1.0.
+    constexpr uint16_t kBf16PosNaN = 0x7FC0;
+    constexpr uint16_t kBf16PosInf = 0x7F80;
+    constexpr uint16_t kBf16NegInf = 0xFF80;
+    constexpr uint16_t kBf16PosOne = 0x3F80;
+
+    auto src = mxfp8_tc::build_bf16_tile_with_block_values({kBf16PosNaN, kBf16PosInf, kBf16NegInf, kBf16PosOne});
+
+    auto result = mxfp8_tc::run_mxfp8_typecast(
+        dev,
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::MxFp8P,
+        src,
+        /*num_tiles=*/1,
+        /*fp32_dest_acc_en=*/false);
+
+    auto layout = mxfp8_tc::get_e4m3_tile_layout();
+    using Cls = mxfp8_tc::MxFp8Class;
+
+    // Block 0: NaN BF16 in → NaN out.
+    uint8_t scale0 = mxfp8_tc::mxfp8_scale_byte_at(result, 0);
+    for (uint32_t i = 0; i < 32; ++i) {
+        EXPECT_EQ(mxfp8_tc::effective_e4m3_class(scale0, mxfp8_tc::mxfp8_elem_byte_at(result, layout, i)), Cls::NaN)
+            << "block 0 (BF16 NaN in) elem " << i;
+    }
+
+    // Block 1: +Inf BF16 in → NaN or +max-normal (saturation, since E4M3 has
+    // sat_supported=true and elem_sat_pos_bits=0x7E).
+    uint8_t scale1 = mxfp8_tc::mxfp8_scale_byte_at(result, 1);
+    for (uint32_t i = 32; i < 64; ++i) {
+        auto cls = mxfp8_tc::effective_e4m3_class(scale1, mxfp8_tc::mxfp8_elem_byte_at(result, layout, i));
+        EXPECT_TRUE(cls == Cls::NaN || cls == Cls::MaxNormalPos)
+            << "block 1 (BF16 +Inf in) elem " << i << " cls=" << static_cast<int>(cls);
+    }
+
+    // Block 2: -Inf → NaN or -max-normal.
+    uint8_t scale2 = mxfp8_tc::mxfp8_scale_byte_at(result, 2);
+    for (uint32_t i = 64; i < 96; ++i) {
+        auto cls = mxfp8_tc::effective_e4m3_class(scale2, mxfp8_tc::mxfp8_elem_byte_at(result, layout, i));
+        EXPECT_TRUE(cls == Cls::NaN || cls == Cls::MaxNormalNeg)
+            << "block 2 (BF16 -Inf in) elem " << i << " cls=" << static_cast<int>(cls);
+    }
+
+    // Block 3: +1.0 sanity.
+    auto floats = mxfp8_tc::mxfp8_e4m3_to_floats(result);
+    for (uint32_t i = 96; i < 128; ++i) {
+        EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
+    }
 }
 
 }  // namespace tt::tt_metal

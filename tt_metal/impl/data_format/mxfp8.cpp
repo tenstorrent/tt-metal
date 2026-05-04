@@ -93,9 +93,17 @@ std::vector<uint32_t> pack_as_mxfp8_tiles_impl(
 
     size_t linear_index = 0;
 
+    std::vector<float> tile_values;
+    tile_values.reserve(tile_HW);
+    std::vector<uint8_t> exps;
+    exps.reserve(exp_count);
+    std::vector<uint8_t> elems;
+    elems.reserve(tile_HW);
+
     for (uint32_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        std::vector<float> tile_values;
-        tile_values.reserve(tile_HW);
+        tile_values.clear();
+        exps.clear();
+        elems.clear();
 
         if (row_major_input) {
             for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
@@ -116,12 +124,9 @@ std::vector<uint32_t> pack_as_mxfp8_tiles_impl(
             }
         }
 
-        std::vector<uint8_t> exps;
-        exps.reserve(exp_count);
-        std::vector<uint8_t> elems;
-        elems.reserve(tile_HW);
-
         for (uint32_t blk_idx = 0; blk_idx < exp_count; ++blk_idx) {
+            // TODO: once we start testing stochastic rounding for exponents,
+            // add a mechanism that passes exp_rnd_en to compute_block_scale.
             auto block_scale = tt::tt_metal::mx::compute_block_scale(
                 tt::stl::Span<const float>(tile_values.data(), tile_values.size()),
                 blk_idx * params.block_size,
@@ -129,8 +134,9 @@ std::vector<uint32_t> pack_as_mxfp8_tiles_impl(
             exps.push_back(block_scale.shared_exp_biased);
 
             int scale_exp = block_scale.shared_exp_adj;
+            uint32_t base = blk_idx * params.block_size;
             for (uint32_t i = 0; i < params.block_size; ++i) {
-                float v = tile_values[blk_idx * params.block_size + i];
+                float v = tile_values[base + i];
                 float scaled = std::ldexp(v, -scale_exp);
                 elems.push_back(static_cast<uint8_t>(tt::tt_metal::mx::convert_to_mx_elem_bits(scaled, params)));
             }
@@ -173,21 +179,27 @@ std::vector<float> unpack_mxfp8_tiles_into_float_vec_impl(
     size_t linear_index = 0;
 
     size_t word_offset = 0;
-    for (uint32_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        std::vector<uint8_t> exps;
-        tt::tt_metal::mx::unpack_exp_words(mxfp8_tiles, word_offset, exp_words, exp_count, exps);
 
-        std::vector<uint8_t> elems;
+    std::vector<uint8_t> exps;
+    exps.reserve(exp_count);
+    std::vector<uint8_t> elems;
+    elems.reserve(tile_HW);
+    std::vector<float> tile_values;
+    tile_values.resize(tile_HW);
+
+    for (uint32_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
+        tt::tt_metal::mx::unpack_exp_words(mxfp8_tiles, word_offset, exp_words, exp_count, exps);
         tt::tt_metal::mx::unpack_elem_words(mxfp8_tiles, word_offset, elem_words, tile_HW, params, elems);
 
-        std::vector<float> tile_values;
-        tile_values.resize(tile_HW);
-        for (uint32_t i = 0; i < tile_HW; ++i) {
-            uint8_t scale_exp_biased = exps[i / params.block_size];
+        for (uint32_t blk = 0; blk < exp_count; ++blk) {
+            uint8_t scale_exp_biased = exps[blk];
             int scale_exp_unbiased = static_cast<int>(scale_exp_biased) - params.scale_bias;
-            float elem_pre_scale = tt::tt_metal::mx::convert_from_mx_elem_bits(elems[i], scale_exp_biased, params);
-            float scale = std::ldexp(1.0f, scale_exp_unbiased);
-            tile_values[i] = elem_pre_scale * scale;
+            uint32_t base = blk * params.block_size;
+            for (uint32_t j = 0; j < params.block_size; ++j) {
+                uint32_t i = base + j;
+                float elem_pre_scale = tt::tt_metal::mx::convert_from_mx_elem_bits(elems[i], scale_exp_biased, params);
+                tile_values[i] = std::ldexp(elem_pre_scale, scale_exp_unbiased);
+            }
         }
 
         if (row_major_output) {
