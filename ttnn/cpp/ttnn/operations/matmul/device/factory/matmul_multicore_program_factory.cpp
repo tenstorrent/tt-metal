@@ -79,10 +79,6 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     uint32_t MtKt = Mt * Kt;
     uint32_t MtNt = Mt * Nt;
 
-    uint32_t src0_addr = src0_buffer->address();
-    uint32_t src1_addr = src1_buffer->address();
-    uint32_t dst_addr = dst_buffer->address();
-
     ProgramDescriptor desc;
 
     // Circular buffers
@@ -158,23 +154,21 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src0_addr,
-                src1_addr,
-                Mt,
-                Kt,
-                Nt,
-                MtKt,
-                KtNt,
-                B,
-                uint32_t(bcast_batch),
-                num_tiles_written,
-                num_output_tiles_per_core,
-                MtNt});
-        writer_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{dst_addr, num_output_tiles_per_core, num_tiles_written});
+            {src0_buffer,
+             src1_buffer,
+             Mt,
+             Kt,
+             Nt,
+             MtKt,
+             KtNt,
+             B,
+             uint32_t(bcast_batch),
+             num_tiles_written,
+             num_output_tiles_per_core,
+             MtNt});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_output_tiles_per_core, num_tiles_written});
         num_tiles_written += num_output_tiles_per_core;
     }
 
@@ -211,82 +205,6 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     }
 
     return desc;
-}
-
-void MatmulMultiCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ttnn::prim::MatmulParams& /*operation_attributes*/,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-    auto reader_kernel_id = shared_variables.reader_kernel_id;
-    auto writer_kernel_id = shared_variables.writer_kernel_id;
-    auto num_cores = shared_variables.num_cores;
-    auto num_cores_y = shared_variables.num_cores_y;
-
-    auto* src_dram_buffer_a = tensor_args.input_tensors.at(0).buffer();
-    auto* src_dram_buffer_b = tensor_args.input_tensors.at(1).buffer();
-    auto* dst_dram_buffer = tensor_return_value.at(0).buffer();
-
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer_a->address();
-            runtime_args[1] = src_dram_buffer_b->address();
-        }
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-        }
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////
-//                      Mesh Workload Setup
-////////////////////////////////////////////////////////////////////////////
-
-MatmulMeshWorkloadMultiCoreFactory::cached_mesh_workload_t MatmulMeshWorkloadMultiCoreFactory::create_mesh_workload(
-    const ttnn::prim::MatmulParams& attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& output) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            ProgramDescriptor descriptor =
-                MatmulMultiCoreProgramFactory::create_descriptor(attributes, tensor_args, output);
-            tt_metal::Program program{descriptor};
-            const auto& a = tensor_args.input_tensors.at(0);
-            auto& out_tensor = output.at(0);
-            auto* device = a.device();
-            auto grid_size = device->compute_with_storage_grid_size();
-            uint32_t num_cores_y = grid_size.y;
-            const auto& cshape = out_tensor.padded_shape();
-            auto num_output_tiles_total = get_batch_size(cshape) * cshape[-2] * cshape[-1] / TILE_HW;
-            auto [num_cores, all_cores, cg1, cg2, n1, n2] =
-                tt::tt_metal::split_work_to_cores(grid_size, num_output_tiles_total);
-            shared_variables[mesh_coord_range] = {0, 1, num_cores, num_cores_y};
-            workload.add_program(mesh_coord_range, std::move(program));
-        }
-    }
-    return {std::move(workload), std::move(shared_variables)};
-}
-
-void MatmulMeshWorkloadMultiCoreFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const ttnn::prim::MatmulParams& attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto cached_program_proxy = MatmulMultiCoreProgramFactory::cached_program_t::proxy(
-            program, cached_workload.shared_variables.at(mesh_coord_range));
-        MatmulMultiCoreProgramFactory::override_runtime_arguments(
-            cached_program_proxy, attributes, tensor_args, tensor_return_value);
-    }
 }
 
 }  // namespace ttnn::prim

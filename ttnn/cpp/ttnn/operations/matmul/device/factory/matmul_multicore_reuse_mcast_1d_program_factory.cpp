@@ -3183,6 +3183,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
             (std::uint32_t)B,      // batch
+            (std::uint32_t)false,  // reuse_in0_in_CB
             // sparsity args
             (std::uint32_t)0,     // batchB
             (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -3774,7 +3775,12 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
-            in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
+            {
+                std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in0_sender_variant(
+                    mm_in0_sender_args.begin(), mm_in0_sender_args.end());
+                in0_sender_variant[0] = in0_buffer;
+                in0_sender_kernel_desc.emplace_runtime_args(core, in0_sender_variant);
+            }
         }
         // in0 receiver and in 1 sender
         else {
@@ -3850,7 +3856,16 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
             }
 
-            in1_sender_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_sender_writer_args);
+            {
+                std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in1_sender_variant(
+                    mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
+                in1_sender_variant[0] = in1_buffer;
+                in1_sender_variant[7] = out_buffer;
+                if (bias_buffer != nullptr) {
+                    in1_sender_variant[18] = bias_buffer;
+                }
+                in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
+            }
         }
     }
 
@@ -4078,6 +4093,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)M * K,  // MtKt
         (std::uint32_t)in0_B,  // batch
         (std::uint32_t)in1_B,  // batch
+        (std::uint32_t)false,  // reuse_in0_in_CB
 
         // sparsity args
         (std::uint32_t)0,     // batchB
@@ -4613,7 +4629,16 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 mm_in1_sender_writer_args.push_back(out_num_blocks_x);
             }
 
-            in1_sender_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_sender_writer_args);
+            {
+                std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in1_sender_variant(
+                    mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
+                in1_sender_variant[0] = in1_buffer;
+                in1_sender_variant[7] = out_buffer;
+                if (bias_buffer != nullptr) {
+                    in1_sender_variant[18] = bias_buffer;
+                }
+                in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
+            }
         }
         // in0 sender and in1 receiver
         else {
@@ -4663,7 +4688,12 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
                 }
             }
 
-            in1_receiver_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_receiver_writer_args);
+            {
+                std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in1_recv_variant(
+                    mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
+                in1_recv_variant[2] = out_buffer;
+                in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
+            }
         }
         std::vector<uint32_t> mm_in0_sender_args = {
             // in0 tensor args
@@ -4681,7 +4711,12 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             // sparsity args
             (std::uint32_t)0,  // sparsity_addr
         };
-        in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
+        {
+            std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in0_sender_variant(
+                mm_in0_sender_args.begin(), mm_in0_sender_args.end());
+            in0_sender_variant[0] = in0_buffer;
+            in0_sender_kernel_desc.emplace_runtime_args(core, in0_sender_variant);
+        }
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -5013,19 +5048,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
 }
 
 void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ttnn::prim::MatmulParams& operation_attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    reuse_mcast_1d_optimized_helpers::override_program_parameters(
-        cached_program.shared_variables,
-        operation_attributes.global_cb,
-        cached_program.program,
-        tensor_args,
-        tensor_return_value);
-}
-
-void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const shared_variables_t& shared_variables,
     const ttnn::prim::MatmulParams& operation_attributes,
@@ -5326,14 +5348,17 @@ void MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::override_runtime_arg
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto cached_program_proxy = MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t::proxy(
-            program, cached_workload.shared_variables.at(mesh_coord_range));
         MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
-            cached_program_proxy, attributes, tensor_args, tensor_return_value);
+            program,
+            cached_workload.shared_variables.at(mesh_coord_range),
+            attributes,
+            tensor_args,
+            tensor_return_value);
     }
 }
 
-MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
+ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t>
+matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,

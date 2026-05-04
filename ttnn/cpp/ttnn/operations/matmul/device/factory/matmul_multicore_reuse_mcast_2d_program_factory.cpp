@@ -427,6 +427,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
             (std::uint32_t)B,      // batch
+            (std::uint32_t)false,  // reuse_in0_in_CB
 
             // sparsity args
             (std::uint32_t)0,      // batchB
@@ -1223,7 +1224,12 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
-            in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
+            {
+                std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in0_args(
+                    mm_in0_sender_args.begin(), mm_in0_sender_args.end());
+                in0_args[0] = in0_buffer;
+                in0_sender_kernel_desc.emplace_runtime_args(core, in0_args);
+            }
 
             // in0 receiver
         } else {
@@ -1380,7 +1386,16 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                         TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
                     }
                 }
-                in1_sender_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_sender_writer_args);
+                {
+                    std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in1_sender_variant(
+                        mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
+                    in1_sender_variant[0] = in1_buffer;
+                    in1_sender_variant[7] = out_buffer;
+                    if (bias_buffer != nullptr) {
+                        in1_sender_variant[18] = bias_buffer;
+                    }
+                    in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
+                }
 
                 // in1 receiver
             } else {
@@ -1462,13 +1477,18 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
                 }
 
-                // left half
-                if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
-                    in1_receiver_writer_kernel_desc.runtime_args.emplace_back(core, mm_in1_receiver_writer_args);
-                }
-                // right half
-                else {
-                    in1_receiver_writer_other_kernel_desc.runtime_args.emplace_back(core, mm_in1_receiver_writer_args);
+                {
+                    std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> in1_recv_variant(
+                        mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
+                    in1_recv_variant[2] = out_buffer;
+                    // left half
+                    if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
+                        in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
+                    }
+                    // right half
+                    else {
+                        in1_receiver_writer_other_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
+                    }
                 }
             }
         }
@@ -1500,7 +1520,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     return desc;
 }
 
-MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast_in0_in1(
+ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
+create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
     tt::tt_metal::IDevice* device,
     MathFidelity math_fidelity,
@@ -3022,7 +3043,8 @@ void override_runtime_arguments_impl(
 }
 }  // namespace reuse_mcast_optimized_helpers
 
-static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_2d_optimized_(
+static ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
+matmul_multi_core_reuse_mcast_2d_optimized_(
     tt::tt_metal::Program& program,
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
@@ -3253,15 +3275,6 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
 }
 
 void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ttnn::prim::MatmulParams& /*operation_attributes*/,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    reuse_mcast_optimized_helpers::override_runtime_arguments_impl(
-        cached_program.shared_variables, cached_program.program, tensor_args, tensor_return_value);
-}
-
-void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const shared_variables_t& shared_variables,
     const ttnn::prim::MatmulParams& /*operation_attributes*/,
@@ -3408,42 +3421,8 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
         sub_device_start_core);
 }
 
-MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::cached_mesh_workload_t
-MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::create_mesh_workload(
-    const ttnn::prim::MatmulParams& attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            tt::tt_metal::Program program{};
-            std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
-            auto single_device_program = matmul_multi_core_reuse_mcast_2d_optimized_(
-                program, attributes, tensor_args, tensor_return_value, fused_op_signaler);
-            shared_variables[mesh_coord_range] = std::move(single_device_program.shared_variables);
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
-        }
-    }
-    return {std::move(workload), std::move(shared_variables)};
-}
-
-void MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const ttnn::prim::MatmulParams& attributes,
-    const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto cached_program_proxy = MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t::proxy(
-            program, cached_workload.shared_variables.at(mesh_coord_range));
-        MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
-            cached_program_proxy, attributes, tensor_args, tensor_return_value);
-    }
-}
-
-MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_2d_optimized_helper(
+ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
+matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::Program& program, /* Take programa as input by reference */
     const Tensor& a,
     const Tensor& b,
