@@ -289,3 +289,41 @@ TP layout is required for large video inputs.
 | **After optimization** | **99/100** | **5.67s/test** |
 
 Remaining failure: idx=22 (C vs B, logit margin=0.17 — borderline)
+
+## Session 9 — 2026-05-03/04
+
+**Status**: Docker server integration complete
+**Accuracy**: 97/100 (local server, 105-video suite, local files)
+
+### Work Done
+
+#### Docker Server Fixes
+1. **VLLM_TARGET_DEVICE=empty** at install time — vLLM `setup.py` has no "tt" device case; `empty` reads `common.txt` deps only (no torch reinstall)
+2. **tt-vllm-plugin** copied and installed in Docker image — TT platform not registered without it
+3. **transformers==4.57.1** pinned — vLLM allowed 5.7.0 which removed `ROPE_INIT_FUNCTIONS['default']` used by `modeling_molmo2.py`
+4. **HF_HUB_OFFLINE=1** in `run_vllm_api_server.py` — prevents downloading newer incompatible model code files
+5. **HF_MODEL env var** in `generator_vllm.py` — uses local symlink instead of HF ID, works with offline mode
+6. **TT_CACHE_PATH** used for TTNN weight cache — persists across container restarts
+
+#### Server Warmup (no JIT/trace during inference)
+All JIT compilation done at server bringup:
+1. `warmup_all_buckets(PREFILL_BUCKETS)` — 9 buckets [128..32768] JIT'd (~13s)
+2. `forward_decode_step` — decode kernel JIT'd (~1s)
+3. `warmup_vision_compile()` — ViT+pooling+projector JIT'd (~15s)
+
+#### Performance (105-video, local files, T3K)
+| Metric | Value |
+|---|---|
+| Server latency avg | **4.57s** |
+| Server latency median | **3.90s** |
+| Direct TTNN inference avg | **3.87s** |
+| Server overhead | **0.42s** (HTTP + vLLM) |
+| JIT during inference | **0 events** |
+| Accuracy | **97/100 = 97%** |
+| Total 105-test time | **479s (8.0 min)** |
+
+Timing breakdown (direct TTNN):
+- Vision prep (ViT+pool+proj): 0.65s
+- Text gen (prefill+decode): 3.30s
+
+Server overhead vs direct TTNN: +0.42s only (HTTP + vLLM scheduler)
