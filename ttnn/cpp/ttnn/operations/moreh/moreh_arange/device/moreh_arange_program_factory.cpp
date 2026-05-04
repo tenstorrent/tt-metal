@@ -57,7 +57,7 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
         case DataType::BFLOAT16: writer_defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
         case DataType::INT32: writer_defines.emplace_back("OUTPUT_DTYPE_INT32", "1"); break;
         case DataType::FLOAT32: writer_defines.emplace_back("OUTPUT_DTYPE_FLOAT32", "1"); break;
-        default: TT_THROW("moreh_arange: unsupported output dtype {}", dtype);
+        default: TT_FATAL("moreh_arange: unsupported output dtype {}", dtype);
     }
 
     KernelDescriptor::CompileTimeArgs writer_ct_args;
