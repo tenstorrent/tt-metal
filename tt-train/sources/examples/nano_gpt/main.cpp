@@ -3,13 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <CLI/CLI.hpp>
-#include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <csignal>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -137,138 +133,6 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
 
     return num_params;
 }
-
-// ---------------------------------------------------------------------------
-// Diagnostic dump helpers (gated by env var TTML_DEBUG_DUMP=1).
-// Used to compare Python vs C++ trainers at the same checkpoints.
-// Set TTML_DEBUG_EXIT=1 to std::exit(0) after first optimizer step.
-// ---------------------------------------------------------------------------
-namespace dbg {
-
-static const std::vector<std::string> kFilter = {
-    "tok_emb/weight",
-    // first block — both Python ("blocks/0/...") and C++ ("llama_block_0/...") naming:
-    "blocks/0/attention/q_linear/weight",
-    "llama_block_0/attention/q_linear/weight",
-    "blocks/0/mlp/w1/weight",
-    "llama_block_0/mlp/w1/weight",
-    "blocks/0/mlp/w2/weight",
-    "llama_block_0/mlp/w2/weight",
-    "ln_fc/gamma",
-    "/fc/weight",
-};
-
-inline bool enabled() {
-    const char *v = std::getenv("TTML_DEBUG_DUMP");
-    return v != nullptr && std::string(v) == "1";
-}
-
-inline bool name_matches(const std::string &name) {
-    for (const auto &kw : kFilter) {
-        if (name.find(kw) != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
-}
-
-inline std::string stats_str(const ttnn::Tensor &tensor) {
-    auto *device = &ttml::autograd::ctx().get_device();
-    auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, /*dim=*/0);
-    auto arr = ttml::core::to_xtensor<float>(tensor, *composer);
-    const size_t n = arr.size();
-    if (n == 0) {
-        return fmt::format("shape=[] n=0");
-    }
-    double s = 0.0;
-    double abs_max = 0.0;
-    for (auto v : arr) {
-        s += static_cast<double>(v);
-        abs_max = std::max(abs_max, std::abs(static_cast<double>(v)));
-    }
-    double m = s / static_cast<double>(n);
-    double sq = 0.0;
-    for (auto v : arr) {
-        double d = static_cast<double>(v) - m;
-        sq += d * d;
-    }
-    double stddev = std::sqrt(sq / static_cast<double>(n));
-    std::string shape_str = "[";
-    for (size_t i = 0; i < arr.shape().size(); ++i) {
-        if (i > 0)
-            shape_str += ", ";
-        shape_str += std::to_string(arr.shape()[i]);
-    }
-    shape_str += "]";
-    return fmt::format(
-        "shape={} n={} sum={:+.6e} mean={:+.6e} std={:.6e} abs_max={:.6e}", shape_str, n, s, m, stddev, abs_max);
-}
-
-inline void dump(const std::string &label, Model &model) {
-    if (!enabled())
-        return;
-    auto params = get_model_parameters(model);
-    // sort keys for stable output
-    std::vector<std::string> names;
-    names.reserve(params.size());
-    for (const auto &kv : params) names.push_back(kv.first);
-    std::sort(names.begin(), names.end());
-    for (const auto &name : names) {
-        if (!name_matches(name))
-            continue;
-        const auto &tp = params.at(name);
-        try {
-            auto s = stats_str(tp->get_value());
-            fmt::println("[DBG {}] PARAM {}: {}", label, name, s);
-        } catch (const std::exception &e) {
-            fmt::println("[DBG {}] PARAM {}: ERROR {}", label, name, e.what());
-        }
-        if (tp->is_grad_initialized()) {
-            try {
-                auto s = stats_str(tp->get_grad());
-                fmt::println("[DBG {}] GRAD  {}: {}", label, name, s);
-            } catch (const std::exception &e) {
-                fmt::println("[DBG {}] GRAD  {}: ERROR {}", label, name, e.what());
-            }
-        } else {
-            fmt::println("[DBG {}] GRAD  {}: <uninitialized>", label, name);
-        }
-    }
-    std::fflush(stdout);
-}
-
-inline void dump_loss(const std::string &label, const ttml::autograd::TensorPtr &loss) {
-    if (!enabled())
-        return;
-    try {
-        auto *device = &ttml::autograd::ctx().get_device();
-        auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, /*dim=*/0);
-        auto arr = ttml::core::to_xtensor<float>(loss->get_value(), *composer);
-        std::string vals = "[";
-        double s = 0.0;
-        bool first = true;
-        for (auto it = arr.cbegin(); it != arr.cend(); ++it) {
-            if (!first)
-                vals += ", ";
-            first = false;
-            vals += fmt::format("{:+.6e}", static_cast<double>(*it));
-            s += static_cast<double>(*it);
-        }
-        vals += "]";
-        double m = arr.size() > 0 ? s / static_cast<double>(arr.size()) : 0.0;
-        fmt::println("[DBG {}] LOSS per-device-after-concat: {} mean={:+.6e}", label, vals, m);
-    } catch (const std::exception &e) {
-        fmt::println("[DBG {}] LOSS: ERROR {}", label, e.what());
-    }
-    std::fflush(stdout);
-}
-
-inline bool exit_requested() {
-    const char *v = std::getenv("TTML_DEBUG_EXIT");
-    return v != nullptr && std::string(v) == "1";
-}
-
-}  // namespace dbg
 
 using ttml::autograd::TensorPtr;
 using SocketManager = ttml::core::distributed::SocketManager;
@@ -798,7 +662,6 @@ int main(int argc, char **argv) {
         model_config.transformer_config);
 
     fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
-    dbg::dump("POST_INIT", model);
     if (track_memory) {
         ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
     }
@@ -914,9 +777,6 @@ int main(int argc, char **argv) {
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
 
-    uint32_t dbg_microbatch_counter = 0;
-    uint32_t dbg_optstep_counter = 0;
-
     // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
@@ -929,21 +789,16 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
             }
-            ++dbg_microbatch_counter;
-            const uint32_t dbg_mb = dbg_microbatch_counter;
             auto output = run_model(model, features, masks);
             float loss_float = 0.0F;
             if (needs_to_call_loss) {
                 auto loss = ttml::ops::cross_entropy_loss(output, target);
-                dbg::dump_loss(fmt::format("MB{}_LOSS_PRE_SCALE", dbg_mb), loss);
                 loss = gradient_accumulator_helper.scale(loss);
-                dbg::dump_loss(fmt::format("MB{}_LOSS_POST_SCALE", dbg_mb), loss);
                 loss_float = get_loss_value(loss);
                 ttml::autograd::ctx().get_profiler().read_results(device, "forward_pass_done");
 
                 memory_snapshot("FORWARD_PASS");
                 loss->backward();
-                dbg::dump(fmt::format("POST_BACKWARD_MB{}", dbg_mb), model);
                 ttml::autograd::ctx().get_profiler().read_results(device, "backward_pass_done");
                 memory_snapshot("BACKWARD_PASS");
             } else {
@@ -966,7 +821,6 @@ int main(int argc, char **argv) {
                     !is_three_tier_training(multihost_config)) {
                     ttml::core::distributed::synchronize_gradients(parameters);
                 }
-                dbg::dump("POST_SYNC", model);
                 ttml::autograd::ctx().get_profiler().read_results(device, "gradient_sync_done");
 
                 if (training_config.use_clip_grad_norm) {
@@ -976,13 +830,6 @@ int main(int argc, char **argv) {
                     ttml::core::clip_grad_norm(parameters, training_config.clip_grad_norm_max_norm);
                 }
                 optimizer->step();
-                ++dbg_optstep_counter;
-                dbg::dump(fmt::format("POST_STEP{}", dbg_optstep_counter), model);
-                if (dbg::enabled() && dbg::exit_requested()) {
-                    fmt::println("[DBG] EXIT after optimizer step #{}", dbg_optstep_counter);
-                    std::fflush(stdout);
-                    std::exit(0);
-                }
                 scheduler->step();
                 ttml::autograd::ctx().get_profiler().read_results(device, "optimizer_step_done");
                 auto global_step = optimizer->get_steps();

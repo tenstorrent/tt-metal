@@ -67,88 +67,6 @@ Model = Union[NanoGPT, Llama, DeepSeek]
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 
-# ---------------------------------------------------------------------------
-# Diagnostic dump helpers (gated by env var TTML_DEBUG_DUMP=1).
-# Used to compare Python vs C++ trainers at the same checkpoints.
-# Set TTML_DEBUG_EXIT=1 to os._exit(0) after first optimizer step.
-# ---------------------------------------------------------------------------
-_DBG_PARAM_FILTER = [
-    "tok_emb/weight",
-    # first block — both Python ("blocks/0/...") and C++ ("llama_block_0/...") naming:
-    "blocks/0/attention/q_linear/weight",
-    "llama_block_0/attention/q_linear/weight",
-    "blocks/0/mlp/w1/weight",
-    "llama_block_0/mlp/w1/weight",
-    "blocks/0/mlp/w2/weight",
-    "llama_block_0/mlp/w2/weight",
-    "ln_fc/gamma",
-    "/fc/weight",
-]
-
-
-def _dbg_enabled() -> bool:
-    return os.environ.get("TTML_DEBUG_DUMP") == "1"
-
-
-def _dbg_stats(arr) -> str:
-    n = arr.size
-    s = float(arr.sum())
-    m = float(arr.mean())
-    std = float(arr.std())
-    absmax = float(np.abs(arr).max())
-    return f"shape={list(arr.shape)} n={n} sum={s:+.6e} mean={m:+.6e} std={std:.6e} abs_max={absmax:.6e}"
-
-
-def _dbg_concat_composer():
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    return ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-
-
-def _dbg_dump(label, model):
-    """Print scalar fingerprint of a small set of parameters and their grads."""
-    if not _dbg_enabled():
-        return
-    composer = _dbg_concat_composer()
-    params = model.parameters()
-    for name in sorted(params.keys()):
-        if not any(kw in name for kw in _DBG_PARAM_FILTER):
-            continue
-        param = params[name]
-        try:
-            arr = param.get_value().to_numpy(ttnn.DataType.FLOAT32, composer=composer)
-            print(f"[DBG {label}] PARAM {name}: {_dbg_stats(arr)}", flush=True)
-        except Exception as e:
-            print(f"[DBG {label}] PARAM {name}: ERROR {e}", flush=True)
-        if param.is_grad_initialized():
-            try:
-                grad_t = ttml.autograd.create_tensor(param.get_grad())
-                arr = grad_t.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
-                print(f"[DBG {label}] GRAD  {name}: {_dbg_stats(arr)}", flush=True)
-            except Exception as e:
-                print(f"[DBG {label}] GRAD  {name}: ERROR {e}", flush=True)
-        else:
-            print(f"[DBG {label}] GRAD  {name}: <uninitialized>", flush=True)
-
-
-def _dbg_dump_loss(loss_tensor, label):
-    """Print the per-device loss values and their mean."""
-    if not _dbg_enabled():
-        return
-    composer = _dbg_concat_composer()
-    try:
-        arr = loss_tensor.to_numpy(ttnn.DataType.FLOAT32, composer=composer).flatten()
-        print(
-            f"[DBG {label}] LOSS per-device-after-concat: {arr.tolist()} mean={float(arr.mean()):+.6e}",
-            flush=True,
-        )
-    except Exception as e:
-        print(f"[DBG {label}] LOSS: ERROR {e}", flush=True)
-
-
-_DBG_MICROBATCH_COUNTER = [0]
-_DBG_OPTSTEP_COUNTER = [0]
-
-
 def get_device_peak_tflops_bf16() -> float:
     """Get theoretical peak BF16 TFLOPS for the current TT device.
 
@@ -527,20 +445,15 @@ def train_step(
     if gradient_accumulator.should_zero_grad():
         optimizer.zero_grad()
 
-    _DBG_MICROBATCH_COUNTER[0] += 1
-    _dbg_mb = _DBG_MICROBATCH_COUNTER[0]
-
     # Forward pass
     # When mask is None, SDPA kernel uses native causal masking (AttentionMaskType::Causal)
     logits = model(input_tokens, mask)
 
     # Compute loss
     loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
-    _dbg_dump_loss(loss, f"MB{_dbg_mb}_LOSS_PRE_SCALE")
 
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
-    _dbg_dump_loss(loss, f"MB{_dbg_mb}_LOSS_POST_SCALE")
 
     # Under DDP each rank produced loss on its own microbatch, so the
     # printed/accumulated value must be the mean across the "dp" axis.
@@ -561,7 +474,6 @@ def train_step(
 
     # Backward pass
     loss.backward(False)
-    _dbg_dump(f"POST_BACKWARD_MB{_dbg_mb}", model)
 
     profiler_marker(None, "backward_pass_done")
 
@@ -586,7 +498,6 @@ def train_step(
         # All-reduce gradients across the "dp" axis (no-op when there is no
         # mesh, no "dp" axis, or dp size == 1). Mirrors main.cpp:817-823.
         ttml.sync_gradients(model.parameters())
-        _dbg_dump("POST_SYNC", model)
 
         # Gradient clipping. clip_grad_norm is incorrect under TP because
         # parameters are sharded across the "tp" axis and the per-rank norm
@@ -607,11 +518,6 @@ def train_step(
 
         # Optimizer step
         optimizer.step()
-        _DBG_OPTSTEP_COUNTER[0] += 1
-        _dbg_dump(f"POST_STEP{_DBG_OPTSTEP_COUNTER[0]}", model)
-        if _dbg_enabled() and os.environ.get("TTML_DEBUG_EXIT") == "1":
-            print(f"[DBG] EXIT after optimizer step #{_DBG_OPTSTEP_COUNTER[0]}", flush=True)
-            os._exit(0)
 
         profiler_marker(None, "optimizer_step_done")
 
@@ -1543,7 +1449,6 @@ def main():
             # against the "tp" axis of the active mesh (no-op for non-Llama and
             # an error for non-Llama with TP).
             model = create_model_from_config(model_config, use_tp=device_config.enable_tp)
-            _dbg_dump("POST_INIT", model)
             if args.print_summary:
                 summary(model)
 
