@@ -122,6 +122,7 @@ jobs:
           - name: bh_lb_DeepSeek_PREFILL_PERF
             cmd: |
               exit_code=0
+              TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml || exit_code=$?
               pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$?
               pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short || exit_code=$?
               pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py -vvv --tb=short || exit_code=$?
