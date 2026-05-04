@@ -595,7 +595,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
         .eltwise_op = k_op,
         .broadcast_dim = k_dim,
         .tile_shape = TileShape::FULL_TILE,
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = MathFidelity::LoFi,
         .bcast_row_idx = 0,
     };
     log_info(

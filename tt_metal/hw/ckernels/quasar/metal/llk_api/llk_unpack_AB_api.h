@@ -29,12 +29,10 @@ inline void llk_unpack_AB_init(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    // num_tiles set to 1 for back-compatibility with existing APIs, can be increased in the future for better
-    // performance.
     if constexpr (BType == BroadcastType::NONE) {
-        _llk_unpack_binary_operands_init_(operandA_id, operandB_id, 1);
+        _llk_unpack_binary_operands_init_(operandA_id, operandB_id);
     } else {
-        _llk_unpack_binary_broadcast_operands_init_<BType>(operandA_id, operandB_id, 1);
+        _llk_unpack_binary_broadcast_operands_init_<BType>(operandA_id, operandB_id);
     }
 }
 

@@ -64,11 +64,12 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     if (enable_unpack_to_dest) {
-        UNPACK((llk_unpack_A_init<false, true>(icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, true>(icb)));
+        static_assert(false, "Quasar: unpack_to_dest not supported on this path");
+        UNPACK((llk_unpack_A_init<false /* TRANSPOSE_EN */, true /* IS_32b_DEST_EN */>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, true /* IS_32b_DEST_EN */>(icb)));
     } else {
-        UNPACK((llk_unpack_A_init<false, false>(icb)));
-        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, false>(icb)));
+        UNPACK((llk_unpack_A_init<false /* TRANSPOSE_EN */, false /* IS_32b_DEST_EN */>(icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, false /* IS_32b_DEST_EN */>(icb)));
     }
 #endif
     MATH((llk_math_pack_sync_init()));
@@ -128,9 +129,6 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, false>()));
     }
 #endif
-#else
-    // Quasar llk_api: no llk_unpack_A_uninit / llk_math_eltwise_unary_datacopy_uninit wrappers yet.
-    (void)icb;
 #endif
 }
 
@@ -168,50 +166,6 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
 #endif
 
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(old_ocb, new_ocb)));
-#else
-#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
-    constexpr DataCopyType data_copy_type =
-        (new_bcast_type == BroadcastType::NONE) ? DataCopyType::A2D : DataCopyType::B2D;
-    constexpr bool enable_unpack_to_dest = (data_copy_type == DataCopyType::A2D);
-    const std::uint32_t new_operand_id = get_operand_id(new_icb);
-    const std::uint32_t old_operand_id = get_operand_id(old_icb);
-    const bool unpacker_src_format_change = unpack_src_format[new_operand_id] != unpack_src_format[old_operand_id];
-    const bool unpacker_dst_format_change = unpack_dst_format[new_operand_id] != unpack_dst_format[old_operand_id];
-    const bool bcast_type_change = (old_bcast_type != new_bcast_type);
-
-    if (unpacker_src_format_change || unpacker_dst_format_change) {
-        UNPACK((llk_unpack_hw_configure(new_icb)));
-    }
-
-    if (unpacker_src_format_change || unpacker_dst_format_change || bcast_type_change) {
-        if (enable_unpack_to_dest) {
-            UNPACK((llk_unpack_A_init<false, true>(new_icb)));
-        } else {
-            UNPACK((llk_unpack_A_init<false, false>(new_icb)));
-        }
-    }
-
-    if (unpacker_dst_format_change) {
-        MATH((llk_math_hw_configure<DST_ACCUM_MODE>(new_icb, new_icb)));
-    }
-
-    if (unpacker_dst_format_change || bcast_type_change) {
-        MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, enable_unpack_to_dest>(new_icb)));
-    }
-#endif
-
-#ifdef TRISC_PACK
-    // Re-run pack HW configure and init when the output operand id or pack source/dest formats change.
-    const std::uint32_t old_out_id = get_output_id(old_ocb);
-    const std::uint32_t new_out_id = get_output_id(new_ocb);
-    const bool pack_operand_change = (old_ocb != new_ocb);
-    const bool pack_format_change = (pack_src_format[old_out_id] != pack_src_format[new_out_id]) ||
-                                    (pack_dst_format[old_out_id] != pack_dst_format[new_out_id]);
-    if (pack_operand_change || pack_format_change) {
-        PACK((llk_pack_hw_configure(new_ocb)));
-        PACK((llk_pack_init(new_ocb)));
-    }
-#endif
 #endif
 }
 
@@ -350,11 +304,7 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line =
 
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
-    if constexpr (tBcastOp == EltwiseBinaryType::ELWMUL) {
-        MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>()));
-    } else {
-        MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MathFidelity::LoFi>()));
-    }
+    MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>()));
 #endif
 }
 
