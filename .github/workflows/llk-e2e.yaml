@@ -9,7 +9,7 @@ on:
       pytest_markers:
         description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
         required: false
-        default: "not perf"
+        default: "not perf and not quasar"
         type: string
 
 permissions:
@@ -30,7 +30,7 @@ jobs:
     with:
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
       enabled-skus: ALL_SKUS_IN_TESTS
-      pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
+      pytest-markers: ${{ inputs.pytest_markers }}
       coverage: true
 
   llk-e2e-summary:
