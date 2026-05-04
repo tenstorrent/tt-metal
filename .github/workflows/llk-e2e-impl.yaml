@@ -39,7 +39,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_nightly_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_e2e_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
