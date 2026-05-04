@@ -786,24 +786,29 @@ class Attention(LightweightModule):
         # k_norm gamma up to 68 amplifies K to ~260; bfloat16 SDPA loses enough
         # precision to cause completely wrong token predictions (no EOS, model loops).
         q_f32 = ttnn.typecast(q, dtype=ttnn.float32)
-        k_f32 = ttnn.typecast(k_for_attn, dtype=ttnn.float32)
-        v_f32 = ttnn.typecast(v_for_attn, dtype=ttnn.float32)
         ttnn.deallocate(q)
-        # Only deallocate k_for_attn/v_for_attn when they are TEMPORARY tensors
-        # (not aliases of the persistent KV cache).
-        if not k_is_cache_alias:
-            ttnn.deallocate(k_for_attn)
-            ttnn.deallocate(v_for_attn)
 
         # GQA expansion: replicate each KV head num_kv_groups times.
+        # Order: repeat_interleave on bf16 first (half the bandwidth of fp32),
+        # then typecast the expanded tensor. Same math as cast-then-expand but
+        # the layout-bound repeat_interleave moves 2-byte bf16 instead of
+        # 4-byte fp32 elements.
         if self.num_kv_groups > 1:
-            k_exp = ttnn.repeat_interleave(k_f32, self.num_kv_groups, dim=1)
-            v_exp = ttnn.repeat_interleave(v_f32, self.num_kv_groups, dim=1)
-            ttnn.deallocate(k_f32)
-            ttnn.deallocate(v_f32)
+            k_exp_bf16 = ttnn.repeat_interleave(k_for_attn, self.num_kv_groups, dim=1)
+            v_exp_bf16 = ttnn.repeat_interleave(v_for_attn, self.num_kv_groups, dim=1)
+            if not k_is_cache_alias:
+                ttnn.deallocate(k_for_attn)
+                ttnn.deallocate(v_for_attn)
+            k_exp = ttnn.typecast(k_exp_bf16, dtype=ttnn.float32)
+            v_exp = ttnn.typecast(v_exp_bf16, dtype=ttnn.float32)
+            ttnn.deallocate(k_exp_bf16)
+            ttnn.deallocate(v_exp_bf16)
         else:
-            k_exp = k_f32
-            v_exp = v_f32
+            k_exp = ttnn.typecast(k_for_attn, dtype=ttnn.float32)
+            v_exp = ttnn.typecast(v_for_attn, dtype=ttnn.float32)
+            if not k_is_cache_alias:
+                ttnn.deallocate(k_for_attn)
+                ttnn.deallocate(v_for_attn)
 
         # Float32 scaled dot-product attention via ttnn.matmul + ttnn.softmax
         q_seq = q_f32.shape[2]
