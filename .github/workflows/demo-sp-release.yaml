@@ -46,8 +46,8 @@ on:
           - sp4_deepseek
 
   schedule:
-    # Run daily at 3 AM UTCP_a
-    - cron: "0 3 * * 1-5"
+    # Run daily at 6 AM UTCP_a
+    - cron: "0 6 * * 1-5"
 
 permissions:
   contents: write
