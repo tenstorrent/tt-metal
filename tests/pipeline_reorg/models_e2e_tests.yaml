@@ -23,10 +23,10 @@
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 7
+      timeout: 11
       tier: 1
     wh_llmbox_perf:
-      timeout: 7
+      timeout: 11
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
