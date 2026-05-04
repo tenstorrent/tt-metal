@@ -955,13 +955,17 @@ FIX_TM_FIRES=$(grep -cE 'FIX TM.*cluster too degraded' "$CLEAN" 2>/dev/null; :)
 FIX_TH2_FIRES=$(grep -cE 'FIX TH2.*extending fabric_router_sync_timeout' "$CLEAN" 2>/dev/null; :)
 # FIX TH3 (#42429): extends ring-sync timeout from 30s (3x) to 120s (12x) for base-UMD channels.
 FIX_TH3_FIRES=$(grep -cE 'FIX TH3.*extending fabric_router_sync_timeout' "$CLEAN" 2>/dev/null; :)
-# FIX TG L1-clear (#42429): fabric_init.cpp configure_fabric_cores() — skip L1 clear for
-# base-UMD relay channels to preserve the 0x49706550 sentinel.  Without this, L1 clear zeroes
-# edm_status_address, and the next session's terminate_stale_erisc_routers() reads 0 → classifies
-# channel as corrupted/dead → adds to pre_known_dead_channels → skips FIX M launch_msg →
-# ERISC stuck in base-UMD → fabric operations hang indefinitely.
-# Log: "configure_fabric_cores: device N channel N base-UMD relay — skipping L1 clear to preserve 0x49706550 sentinel [FIX TG #42429]"
-FIX_TG_L1_FIRES=$(grep -cE 'skipping L1 clear.*preserve 0x49706550.*FIX TG' "$CLEAN" 2>/dev/null; :)
+# FIX TG L1-clear (#42429): fabric_init.cpp configure_fabric_cores() — preserve edm_status_address
+# (0x49706550 sentinel) for base-UMD relay channels so the next session's
+# terminate_stale_erisc_routers() correctly identifies base-UMD state and fires FIX M.
+# FIX TG2 (#42429): partial L1 clear — zeros sync-critical addresses (edm_local_sync_address,
+# edm_local_tensix_sync_address, termination_signal_address) while preserving edm_status_address.
+# Original FIX TG skipped ALL clears, leaving stale handshake state that caused REMOTE_HANDSHAKE_COMPLETE
+# stalls across smi-reset cycles (runs 25293661493 + 25294660215).
+# Log (FIX TG2 preserve): "configure_fabric_cores: device N channel N base-UMD relay — preserving edm_status_address (0x49706550 sentinel) [FIX TG #42429]"
+# Log (FIX TG2 clear):    "configure_fabric_cores: device N channel N base-UMD relay — clearing sync address 0xNNNNNNNN to prevent stale handshake state [FIX TG2 #42429]"
+FIX_TG_L1_FIRES=$(grep -cE 'preserving edm_status_address.*0x49706550.*FIX TG' "$CLEAN" 2>/dev/null; :)
+FIX_TG2_SYNC_CLEARS=$(grep -cE 'clearing sync address.*stale handshake.*FIX TG2' "$CLEAN" 2>/dev/null; :)
 # FIX TI ring-sync (#42429): fabric_firmware_initializer.cpp verify_all_fabric_channels_healthy() —
 # skip health check for devices whose ring barrier timed out while base-UMD channels were present.
 # Sets fabric_channels_not_ready_for_traffic_ + fabric_ring_sync_timed_out_ so test fixtures SKIP
@@ -1633,6 +1637,7 @@ echo "  FIX_UP_FIRES:              ${FIX_UP_FIRES:-0}  (ring-sync timeout in war
 echo "  FIX_UP2_FIRES:             ${FIX_UP2_FIRES:-0}  (pre-test-loop ring-sync health gate)"
 echo "  FIX_TM2_FIRES:             ${FIX_TM2_FIRES:-0}  (ring-sync timeout in post-TL warm-up)"
 echo "  FIX_TH3_FIRES:             ${FIX_TH3_FIRES:-0}  (120s/12x ring-sync timeout extension)"
+echo "  FIX_TG2_SYNC_CLEARS:       ${FIX_TG2_SYNC_CLEARS:-0}  (stale sync-address clears for base-UMD channels)"
 echo ""
 if [ "${FIX_TH3_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TH3] fabric_router_sync_timeout extended from 10s to 120s (12x) (${FIX_TH3_FIRES} occurrence(s))."
@@ -1646,10 +1651,11 @@ elif [ "${HEALTH_CHECK_FAILED:-0}" -gt 0 ] && [ "${STILL_INITIALIZING_COUNT:-0}"
     echo "     Channels stuck at REMOTE_HANDSHAKE_COMPLETE (ring barrier incomplete within timeout)."
     echo "     FIX TH2 extends timeout 3x when has_base_umd_channels_ is true. Check commit 9798a110021."
 fi
-if [ "${FIX_TG_L1_FIRES:-0}" -gt 0 ]; then
-    echo "  => [FIX TG L1] configure_fabric_cores: skipped L1 clear for ${FIX_TG_L1_FIRES} base-UMD channel(s)."
-    echo "     Preserves 0x49706550 sentinel so next session correctly identifies base-UMD state."
-    echo "     Before FIX TG: L1 clear zeroed sentinel → channel classified as dead → FIX M skipped → hang."
+if [ "${FIX_TG_L1_FIRES:-0}" -gt 0 ] || [ "${FIX_TG2_SYNC_CLEARS:-0}" -gt 0 ]; then
+    echo "  => [FIX TG/TG2 L1] configure_fabric_cores: ${FIX_TG_L1_FIRES} edm_status preserves, ${FIX_TG2_SYNC_CLEARS} sync-address clears."
+    echo "     FIX TG2: partial L1 clear — zeros stale sync addrs (edm_local_sync, edm_local_tensix_sync,"
+    echo "     termination_signal) while preserving edm_status_address (0x49706550 sentinel)."
+    echo "     Before FIX TG2: stale REMOTE_HANDSHAKE_COMPLETE (0xa1b1c1d1) survived smi resets → hang."
 fi
 if [ "${FIX_TI_RING_FIRES:-0}" -gt 0 ] || [ "${FIX_TJ_RING_FIRES:-0}" -gt 0 ] || [ "${FIX_TI_FIRST_TIMEOUT:-0}" -gt 0 ]; then
     echo "  => [FIX TI/TJ/TK ring-sync] base-UMD ring barrier timeout cascade detected:"
