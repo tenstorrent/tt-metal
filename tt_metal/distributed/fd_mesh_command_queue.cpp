@@ -369,7 +369,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         get_config_buffer_mgr(*sub_device_id).mark_completely_full(0);
         for (auto* device : mesh_device_->get_devices()) {
             program_dispatch::reset_expected_num_workers_completed_on_device(
-                static_cast<Device*>(device), sub_device_id, expected_num_workers_completed, id());
+                static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+                sub_device_id,
+                expected_num_workers_completed,
+                id());
         }
     }
 
@@ -1053,7 +1056,10 @@ void FDMeshCommandQueue::reset_worker_state(
         program_dispatch::set_go_signal_noc_data_on_dispatch(go_signal_noc_data, device->sysmem_manager(), id_);
         if (reset_launch_msg_state) {
             program_dispatch::set_core_go_message_mapping_on_device(
-                static_cast<Device*>(device), core_go_message_mapping, device->sysmem_manager(), id_);
+                static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+                core_go_message_mapping,
+                device->sysmem_manager(),
+                id_);
         }
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
