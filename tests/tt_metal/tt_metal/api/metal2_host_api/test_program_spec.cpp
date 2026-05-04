@@ -29,6 +29,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <optional>
 #include <type_traits>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -56,6 +57,7 @@ using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ScopedSlowDispatchOverride;
 
 // ============================================================================
 // Test Fixtures
@@ -69,7 +71,7 @@ using test_helpers::MakeMinimalWorkUnit;
 class ProgramSpecTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
-        setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", /*overwrite=*/1);
+        slow_dispatch_override_.emplace();
         //  Configure global mock mode for Quasar
         //  This way, the HAL is initialized for arch check and Program creation.
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
@@ -81,10 +83,11 @@ protected:
             mesh_device_.reset();
         }
         experimental::disable_mock_mode();
-        unsetenv("TT_METAL_SLOW_DISPATCH_MODE");
+        slow_dispatch_override_.reset();
     }
 
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
 // ============================================================================
@@ -1829,7 +1832,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
 class ProgramSpecTestGen1 : public ::testing::Test {
 protected:
     void SetUp() override {
-        setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", /*overwrite=*/1);
+        slow_dispatch_override_.emplace();
         experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
         mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
     }
@@ -1839,10 +1842,11 @@ protected:
             mesh_device_.reset();
         }
         experimental::disable_mock_mode();
-        unsetenv("TT_METAL_SLOW_DISPATCH_MODE");
+        slow_dispatch_override_.reset();
     }
 
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
 TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecSucceeds) {

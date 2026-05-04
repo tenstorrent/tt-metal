@@ -28,6 +28,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <optional>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -49,6 +50,7 @@ using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ScopedSlowDispatchOverride;
 
 // Shorthand for the per-node-override vararg type (needed at call sites because
 // std::optional<T> can't be brace-init from an initializer-list of T's elements).
@@ -66,7 +68,7 @@ using NumVarargsPerNode = KernelSpec::RuntimeArgSchema::NumVarargsPerNode;
 class ProgramRunParamsTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
-        setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", /*overwrite=*/1);
+        slow_dispatch_override_.emplace();
         //  Configure global mock mode for Quasar
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
         mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
@@ -77,10 +79,11 @@ protected:
             mesh_device_.reset();
         }
         experimental::disable_mock_mode();
-        unsetenv("TT_METAL_SLOW_DISPATCH_MODE");
+        slow_dispatch_override_.reset();
     }
 
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
 // ============================================================================
@@ -939,7 +942,7 @@ TEST_F(ProgramRunParamsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
 class ProgramRunParamsTestGen1 : public ::testing::Test {
 protected:
     void SetUp() override {
-        setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", /*overwrite=*/1);
+        slow_dispatch_override_.emplace();
         experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
         mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
     }
@@ -949,10 +952,11 @@ protected:
             mesh_device_.reset();
         }
         experimental::disable_mock_mode();
-        unsetenv("TT_METAL_SLOW_DISPATCH_MODE");
+        slow_dispatch_override_.reset();
     }
 
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
 // Create a gen1 ProgramSpec with a specified RTA schema on the DM kernel
