@@ -1992,6 +1992,53 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     }
     log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
 
+    // FIX SB2 (#42429): When FIX M fires on any MMIO relay channel, that channel transitions
+    // from UMD relay firmware to fabric EDM firmware via launch_msg without soft-reset.
+    // After PHASE 2, the MMIO ERISC now runs fabric EDM firmware — it no longer serves the
+    // UMD relay protocol.  Any subsequent relay read/write from non-MMIO devices through that
+    // MMIO host will HANG indefinitely (the ERISC accepts the relay handshake but routes the
+    // request as EDM traffic, so the read never completes).
+    //
+    // The ENTRY snapshot 6-second deadline in quiesce_and_restart_fabric_workers() only fires
+    // if relay reads THROW exceptions.  A blocking (hanging) read is NOT caught by try/catch
+    // and is NOT bounded by a deadline check — the thread is simply blocked.
+    //
+    // Proactively mark all non-MMIO devices behind affected MMIO hosts as relay-broken so
+    // the ENTRY snapshot, Phase 2.5, and Phase 3 all skip their relay reads (FIX R guard:
+    // fabric_relay_path_broken_ && !is_mmio_capable()).
+    for (auto& [mmio_id, base_umd_chans] : base_umd_channels_map) {
+        if (base_umd_chans.empty()) {
+            continue;
+        }
+        // This MMIO host had FIX M channels — its ERISC now runs EDM firmware, not UMD relay.
+        for (auto* dev : compiled_devices) {
+            if (!dev) {
+                continue;
+            }
+            // Only non-MMIO devices are affected; MMIO reads its own L1 via PCIe directly.
+            if (cluster_.get_associated_mmio_device(dev->id()) != mmio_id) {
+                continue;
+            }
+            if (dev->id() == mmio_id) {
+                continue;  // skip the MMIO host itself
+            }
+            if (dead_relay_devices_.count(dev->id()) > 0) {
+                continue;  // already marked broken via other mechanism
+            }
+            dev->set_fabric_relay_path_broken();
+            log_warning(
+                tt::LogMetal,
+                "compile_and_configure_fabric: Device {} (non-MMIO) relay path marked broken — "
+                "MMIO host {} had {} FIX M channel(s): base-UMD relay ERISC transitioned to EDM "
+                "firmware via launch_msg without soft-reset. UMD relay reads through this MMIO "
+                "host will HANG. ENTRY snapshot / Phase 2.5 / Phase 3 relay reads skipped. "
+                "(#42429 FIX SB2)",
+                dev->id(),
+                mmio_id,
+                base_umd_chans.size());
+        }
+    }
+
     // FIX I (#42429): Identify MMIO devices whose master router ETH channel connects to a
     // dead-relay non-MMIO device.  Those channels have fabric firmware loaded but their ETH
     // peer (on the non-MMIO device) will never complete the startup handshake — the relay
