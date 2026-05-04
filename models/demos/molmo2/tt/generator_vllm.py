@@ -160,6 +160,26 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         _ = model.forward_decode_step(0, PREFILL_BUCKETS[-1])
         logger.info("Pre-compiling vision JIT kernels...")
         model.warmup_vision_compile()
+
+        # warmup_all_buckets runs text-only (pixel_values=None), which skips the vision
+        # feature injection path (ttnn.add for image patches). Run one forward_prefill
+        # with dummy vision inputs to JIT that path and avoid the first-inference stall.
+        logger.info("Pre-compiling vision-integrated prefill (image feature injection)...")
+        _n_patches, _k_pool = 729, 9
+        _n_pooled = model._POOL_CHUNK_WINDOWS  # 4096 — same as warmup_vision_compile
+        _dummy_pv = torch.zeros(1, 8, _n_patches, 588)  # 8 crops (max batch)
+        _dummy_pool_idx = torch.zeros(1, _n_pooled, _k_pool, dtype=torch.long)
+        # S = 128 (smallest bucket): 81 image-patch tokens + 47 text tokens
+        _S_warmup = PREFILL_BUCKETS[0]  # 128
+        _dummy_ids = torch.zeros(1, _S_warmup, dtype=torch.long)
+        _dummy_ids[0, :81] = cfg.image_patch_id  # mark first 81 as image patches
+        _ = model.forward_prefill(
+            input_ids=_dummy_ids,
+            pixel_values=_dummy_pv,
+            pooled_patches_idx=_dummy_pool_idx,
+            token_type_ids=None,
+            user_id=0,
+        )
         logger.info("JIT warmup complete — server ready to serve")
 
         return cls(model=model, cfg=cfg, mesh_device=mesh_device, processor=processor)
