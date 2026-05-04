@@ -60,7 +60,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
     m.def_submodule("unary");
-    m.def_submodule("metal_ops");
+    m.def_submodule("metal");
 }
 
 void py_module(nb::module_& m) {
@@ -414,7 +414,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_metal = m.def_submodule("metal_ops");
+        auto py_metal = m.def_submodule("metal");
         py_metal.def(
             "moe_group",
             [](const ttnn::Tensor& dispatched,

@@ -480,7 +480,7 @@ class TestMoeGroupDevice:
 
         device = ttml.autograd.AutoContext.get_instance().get_device()
         ttnn.synchronize_device(device)
-        grouped, grouped_scores, k_slot, counts, offsets, plan = ttml.ops.metal_ops.moe_group(
+        grouped, grouped_scores, k_slot, counts, offsets, plan = ttml.ops.metal.moe_group(
             d_tt, md_tt, sc_tt, le_tt, int(E_local), int(k)
         )
         ttnn.synchronize_device(device)
@@ -807,7 +807,7 @@ class TestMoeGroupProfile:
 
         device = ttml.autograd.AutoContext.get_instance().get_device()
         for _ in range(warmup):
-            ttml.ops.metal_ops.moe_group(d_tt, md_tt, sc_tt, le_tt, int(E_local), int(K))
+            ttml.ops.metal.moe_group(d_tt, md_tt, sc_tt, le_tt, int(E_local), int(K))
         ttnn.synchronize_device(device)
 
         # Run N iters with per-iter profiler flush so the Tracy device CSV gets
@@ -816,7 +816,7 @@ class TestMoeGroupProfile:
         # misleading next to the DRAM roofline. The summary table produced by
         # parse_profile_results.py uses device-kernel-only times from the CSV.
         for _ in range(num_iters):
-            ttml.ops.metal_ops.moe_group(d_tt, md_tt, sc_tt, le_tt, int(E_local), int(K))
+            ttml.ops.metal.moe_group(d_tt, md_tt, sc_tt, le_tt, int(E_local), int(K))
             ttnn.synchronize_device(device)
             ttnn.ReadDeviceProfiler(device)  # flush device zones for this op
         _signpost(f"moe_group_end_{routing}")
