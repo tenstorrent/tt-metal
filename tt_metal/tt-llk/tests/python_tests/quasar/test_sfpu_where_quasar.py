@@ -173,6 +173,11 @@ def _prepare_where_value(
     return vals.to(torch_format)
 
 
+def _is_unpack_to_dest(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
+    """UNPACK→DEST is selected only for 32-bit inputs with dest_acc=Yes."""
+    return fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+
+
 def _build_condition_for_test_case(
     base: torch.Tensor, input_format: DataFormat, test_case: str
 ) -> torch.Tensor:
@@ -262,9 +267,7 @@ def test_sfpu_where_quasar(formats_dest_acc_implied_test_case_input_dims):
     torch_format_out = format_dict[formats.output_format]
     golden_tensor = golden_tensor.to(torch_format_out)
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
 
     # src_B is unused by the where kernel but StimuliConfig requires a non-None
     # buffer_B tensor. Supply a dummy tensor of matching shape.
@@ -366,9 +369,7 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc_implied_test_case_input_dims):
     torch_format_out = format_dict[formats.output_format]
     golden_tensor = golden_tensor.to(torch_format_out)
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
 
     src_B_dummy = torch.zeros_like(condition)
 

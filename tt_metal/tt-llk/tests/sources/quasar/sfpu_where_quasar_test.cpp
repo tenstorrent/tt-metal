@@ -26,15 +26,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t buf_desc_id          = 0;
     const std::uint32_t num_tiles_per_unpack = params.TILE_CNT;
 
-    if (unpack_to_dest)
+    // UNPACK-to-DEST path: UNPACK writes DEST; SFPU reads/writes DEST; PACK reads DEST.
+    // FPU path: UNPACK writes SrcA; FPU datacopy writes DEST; SFPU reads/writes DEST; PACK reads DEST.
+    constexpr auto unpack_dest = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
+    set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({unpack_dest, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
+
+    if constexpr (unpack_to_dest)
     {
-        // Direct UNPACK-to-DEST path: UNPACK writes DEST; SFPU reads/writes DEST; PACK reads DEST.
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
         _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
-    }
-    else
-    {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
     buffer_descriptor_u bd_val = {0};
@@ -50,7 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
-    if (is_fp32_dest_acc_en && !unpack_to_dest)
+    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
     {
         // If Dst is 32b and MATH uses FPU datacopy (MOVA2D → ELWADD fallback), we need both SrcA and SrcB formats configured.
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
@@ -61,9 +60,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0);
+    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
@@ -101,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         // Chain: UNPACK (writes DEST) → SFPU (reads/writes DEST) → PACK (reads DEST).
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
@@ -116,7 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format = static_cast<DataFormat>(formats.math);
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
-    if (!unpack_to_dest)
+    if constexpr (!unpack_to_dest)
     {
         // FPU path: datacopy all 3 tiles from SrcA into DEST at tile indices 0, 1, 2.
         const std::uint32_t num_rows = params.num_faces * params.TEST_FACE_R_DIM;
@@ -181,17 +180,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = 1;
 
-    if (unpack_to_dest)
-    {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-    }
-    else
-    {
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-    }
+    constexpr auto unpack_dest = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
+    set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({unpack_dest, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B       = params.buffer_Res[0] / 16;
+    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_Res[0]);
     bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
     bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
     bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
