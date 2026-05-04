@@ -111,8 +111,30 @@ def create_mesh_device(
 
     Returns:
         ttnn.MeshDevice instance
+
+    Dispatch axis selection (in priority order):
+      1. `TTNN_DISPATCH_AXIS=col|row` env var — explicit override. Used by
+         the two-pass workflow when a single op has master configs that
+         straddle both axes (e.g. linear has both y=9 and x=7 masters).
+      2. Auto-detect from master JSON (legacy behaviour) — works when an
+         op's masters all need the same axis.
+      3. Default to COL.
     """
-    # Pick dispatch axis based on what the op's master configs need.
+    # 1. Env-var override takes precedence over auto-detect.
+    _env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
+    if _env_axis in ("col", "row"):
+        _override_axis = ttnn.DispatchCoreAxis.COL if _env_axis == "col" else ttnn.DispatchCoreAxis.ROW
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(axis=_override_axis),
+            )
+        except Exception:
+            # Fall through to auto-detect on error (e.g. axis unsupported on this mesh shape).
+            pass
+
+    # 2. Auto-detect from master configs (legacy path).
     # ROW dispatch gives compute_with_storage_grid_size = (8, 9): valid y in [0, 8].
     # COL dispatch gives (7, 10): valid y in [0, 9], valid x in [0, 6].
     # Master traces from deepseek_v3 use either layout depending on which dispatch
@@ -431,39 +453,30 @@ def replicate_with_topology(
     return tensor
 
 
-def maybe_swap_dispatch_axis(device, op_kwargs, named_mcs=None):
-    """Per-config dispatch-axis swap shared by linear / SDPA / paged-SDPA tests.
+def vector_required_axis(op_kwargs, named_mcs=None):
+    """Return 'col' / 'row' / None for the dispatch axis a single sweep
+    vector logically needs.
 
-    Master traces lead-models on Galaxy default COL dispatch (compute 7x10).
-    Some configs need ROW (compute 8x9) because their L1 shard_specs include
-    x=7 cores. If the current device axis doesn't match what this config
-    needs, close+reopen the device with the right axis and patch the
-    framework runner closure cell so subsequent vectors see the new handle.
-
-    Args:
-        device: Current ttnn mesh device.
-        op_kwargs: Test vector kwargs (memory_config dicts/objects live under
-            keys containing "memory_config").
-        named_mcs: Extra (name, value) pairs from function-signature params
-            (e.g. input_a_memory_config) that don't live in op_kwargs.
-
-    Returns:
-        Possibly-new device handle. If a swap fired, the framework runner
-        closure has also been patched and the returned device is what the
-        kernel sees for this and subsequent vectors.
+    Detection scans every memory_config (kwarg or function-named param) and
+    looks at its shard_spec grid:
+      - any L1 shard_spec core at y=9 -> needs COL (only COL exposes y=9)
+      - any L1 shard_spec core at x=7 -> needs ROW (only ROW exposes x=7)
+      - program_config compute_with_storage_grid_size with x>=8 -> ROW
+      - program_config compute_with_storage_grid_size with y>=10 -> COL
+    Returns None if neither axis is required (vector fits both).
     """
     import re as _re_a
-    import sys as _sys_d
-    import gc as _gc_d
 
     _y9_pat = _re_a.compile(r"""['"]y['"]\s*:\s*9(?!\d)""")
     _x7_pat = _re_a.compile(r"""['"]x['"]\s*:\s*7(?!\d)""")
+    _grid_x_pat = _re_a.compile(r"x\s*=\s*(\d+)")
+    _grid_y_pat = _re_a.compile(r"y\s*=\s*(\d+)")
 
-    _needs_y9 = False
-    _needs_x7 = False
+    needs_y9 = False
+    needs_x7 = False
 
-    def _walk(_obj):
-        nonlocal _needs_y9, _needs_x7
+    def _walk_mc(_obj):
+        nonlocal needs_y9, needs_x7
         if _obj is None:
             return
         if isinstance(_obj, dict):
@@ -475,9 +488,9 @@ def maybe_swap_dispatch_axis(device, op_kwargs, named_mcs=None):
                 return
             _r = repr(_ss)
             if _y9_pat.search(_r):
-                _needs_y9 = True
+                needs_y9 = True
             if _x7_pat.search(_r):
-                _needs_x7 = True
+                needs_x7 = True
             return
         _r = repr(_obj)
         if "BufferType::DRAM" in _r:
@@ -485,9 +498,9 @@ def maybe_swap_dispatch_axis(device, op_kwargs, named_mcs=None):
         if "shard_spec" not in _r:
             return
         if _y9_pat.search(_r):
-            _needs_y9 = True
+            needs_y9 = True
         if _x7_pat.search(_r):
-            _needs_x7 = True
+            needs_x7 = True
 
     _all_mcs = dict(op_kwargs) if op_kwargs else {}
     for _name, _val in named_mcs or []:
@@ -496,99 +509,59 @@ def maybe_swap_dispatch_axis(device, op_kwargs, named_mcs=None):
     for _key, _v in _all_mcs.items():
         if "memory_config" not in _key:
             continue
-        _walk(_v)
+        _walk_mc(_v)
 
-    # Also probe program_config for an embedded compute_with_storage_grid_size:
-    # SDPA-style configs require a (x=8, y=*) grid that COL dispatch cannot
-    # supply (COL caps x at 7). Detect from either the parsed object's repr
-    # or the master's {"type":"...","value":"...(x=8,y=9)..."} dict form.
-    _grid_x_pat = _re_a.compile(r"x\s*=\s*(\d+)")
-    _grid_y_pat = _re_a.compile(r"y\s*=\s*(\d+)")
-    for _key in ("program_config",):
-        _pc = (op_kwargs or {}).get(_key)
-        if _pc is None:
-            continue
+    # program_config grid (SDPA-style): x>=8 -> ROW, y>=10 -> COL.
+    _pc = (op_kwargs or {}).get("program_config")
+    if _pc is not None:
         _pc_text = ""
         if isinstance(_pc, dict):
             _pc_text = str(_pc.get("value", "")) or str(_pc.get("repr", ""))
         else:
             _pc_text = repr(_pc)
-        if "compute_with_storage_grid_size" not in _pc_text:
-            continue
-        # Only inspect the cwgs portion to avoid catching unrelated x=/y= numbers.
-        _idx = _pc_text.find("compute_with_storage_grid_size")
-        _section = _pc_text[_idx : _idx + 80]
-        _xm = _grid_x_pat.search(_section)
-        _ym = _grid_y_pat.search(_section)
-        if _xm and int(_xm.group(1)) >= 8:
-            _needs_x7 = True  # needs ROW (compute x up to 7 required)
-        if _ym and int(_ym.group(1)) >= 10:
-            _needs_y9 = True  # needs COL (compute y up to 9 required)
+        if "compute_with_storage_grid_size" in _pc_text:
+            _idx = _pc_text.find("compute_with_storage_grid_size")
+            _section = _pc_text[_idx : _idx + 80]
+            _xm = _grid_x_pat.search(_section)
+            _ym = _grid_y_pat.search(_section)
+            if _xm and int(_xm.group(1)) >= 8:
+                needs_x7 = True
+            if _ym and int(_ym.group(1)) >= 10:
+                needs_y9 = True
 
-    try:
-        _current_grid = (
-            device.compute_with_storage_grid_size() if hasattr(device, "compute_with_storage_grid_size") else None
-        )
-    except Exception:
-        _current_grid = None
-    _is_col = _current_grid is not None and _current_grid.x == 7 and _current_grid.y == 10
+    if needs_y9:
+        return "col"
+    if needs_x7:
+        return "row"
+    return None
 
-    if _needs_x7 and not _needs_y9:
-        _wanted_axis_col = False
-    else:
-        _wanted_axis_col = True
-    if _wanted_axis_col == _is_col:
-        return device
 
-    _cid = (op_kwargs.get("config_hash", "") or "") if op_kwargs else ""
-    print(
-        f"[DISPATCH-SWAP] cid={_cid[:8]} y9={_needs_y9} x7={_needs_x7} is_col={_is_col} -> {'COL' if _wanted_axis_col else 'ROW'}",
-        file=_sys_d.stderr,
-        flush=True,
-    )
-    _ms = (4, 8)
+def current_device_axis(device):
+    """Return 'col' / 'row' / None inferred from the device's
+    compute_with_storage_grid_size."""
     try:
-        _shape = device.shape if hasattr(device, "shape") else None
-        if _shape is not None and hasattr(_shape, "__iter__"):
-            _ms = tuple(_shape)
+        g = device.compute_with_storage_grid_size() if hasattr(device, "compute_with_storage_grid_size") else None
     except Exception:
-        # Fall back to Galaxy default 4x8 shape if shape probe fails.
-        pass
-    try:
-        ttnn.close_mesh_device(device)
-    except Exception:
-        # Device may already be closed; the open_mesh_device below recovers.
-        pass
-    try:
-        _new_axis = ttnn.DispatchCoreAxis.COL if _wanted_axis_col else ttnn.DispatchCoreAxis.ROW
-        device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(*_ms),
-            l1_small_size=79104,
-            dispatch_core_config=ttnn.DispatchCoreConfig(axis=_new_axis),
-        )
-        _patched = 0
-        for _obj in _gc_d.get_objects():
-            try:
-                if (
-                    callable(_obj)
-                    and getattr(_obj, "__name__", "") == "runner"
-                    and getattr(_obj, "__code__", None) is not None
-                    and "device" in _obj.__code__.co_freevars
-                    and _obj.__closure__ is not None
-                ):
-                    _idx = _obj.__code__.co_freevars.index("device")
-                    _obj.__closure__[_idx].cell_contents = device
-                    _patched += 1
-            except Exception:
-                continue
-        print(
-            f"[DISPATCH-SWAP] reopened with {'COL' if _wanted_axis_col else 'ROW'} axis (patched {_patched} runner closures)",
-            file=_sys_d.stderr,
-            flush=True,
-        )
-    except Exception as _e:
-        print(f"[DISPATCH-SWAP] reopen failed: {_e}", file=_sys_d.stderr)
-    return device
+        return None
+    if g is None:
+        return None
+    # COL -> (7, 10); ROW -> (8, 9). Other meshes (N150 etc.) return None.
+    if g.x == 7 and g.y == 10:
+        return "col"
+    if g.x == 8 and g.y == 9:
+        return "row"
+    return None
+
+
+def vector_axis_matches(device, op_kwargs, named_mcs=None):
+    """True if the vector either has no required axis or matches the device."""
+    required = vector_required_axis(op_kwargs, named_mcs)
+    if required is None:
+        return True
+    actual = current_device_axis(device)
+    if actual is None:
+        return True  # unknown / non-Galaxy mesh — let the test run.
+    return required == actual
 
 
 def create_tensor_on_mesh(

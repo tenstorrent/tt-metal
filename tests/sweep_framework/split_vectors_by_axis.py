@@ -1,0 +1,157 @@
+"""Updated splitter that also regenerates generation_manifest.json per axis."""
+import json, os, re, sys
+from pathlib import Path
+
+_Y9 = re.compile(r"""['"]y['"]\s*:\s*9(?!\d)""")
+_X7 = re.compile(r"""['"]x['"]\s*:\s*7(?!\d)""")
+_GRID_X = re.compile(r"x\s*=\s*(\d+)")
+_GRID_Y = re.compile(r"y\s*=\s*(\d+)")
+
+
+def _scan_mc(obj, state):
+    if obj is None or obj == "__ABSENT__":
+        return
+    if isinstance(obj, dict):
+        data = obj.get("data") if "type" in obj and "data" in obj else obj
+        if not isinstance(data, dict):
+            return
+        bt = str(data.get("buffer_type", ""))
+        if "DRAM" in bt:
+            return
+        ss = data.get("shard_spec")
+        if not ss or ss == "None":
+            return
+        if isinstance(ss, dict):
+            grid = ss.get("grid", [])
+            for cr in grid:
+                for key in ("start", "end"):
+                    p = cr.get(key, {}) if isinstance(cr, dict) else {}
+                    if p.get("y") == 9:
+                        state["needs_col"] = True
+                    if p.get("x") == 7:
+                        state["needs_row"] = True
+            return
+        rep = repr(ss)
+        if _Y9.search(rep):
+            state["needs_col"] = True
+        if _X7.search(rep):
+            state["needs_row"] = True
+
+
+def _scan_pc(obj, state):
+    if obj is None or obj == "__ABSENT__":
+        return
+    pc_text = ""
+    if isinstance(obj, dict):
+        pc_text = str(obj.get("value", "")) or str(obj.get("repr", ""))
+    else:
+        pc_text = repr(obj)
+    if "compute_with_storage_grid_size" not in pc_text:
+        return
+    idx = pc_text.find("compute_with_storage_grid_size")
+    section = pc_text[idx : idx + 80]
+    xm = _GRID_X.search(section)
+    ym = _GRID_Y.search(section)
+    if xm and int(xm.group(1)) >= 8:
+        state["needs_row"] = True
+    if ym and int(ym.group(1)) >= 10:
+        state["needs_col"] = True
+
+
+def vector_axis(vec):
+    state = {"needs_col": False, "needs_row": False}
+    for k, v in vec.items():
+        if "memory_config" in k:
+            _scan_mc(v, state)
+        if k == "program_config":
+            _scan_pc(v, state)
+    if state["needs_col"]:
+        return "col"
+    if state["needs_row"]:
+        return "row"
+    return "col"
+
+
+def split_file(in_path: Path, out_col: Path, out_row: Path):
+    with in_path.open() as f:
+        data = json.load(f)
+    col_out = {}
+    row_out = {}
+    for suite, vectors in data.items():
+        col_vec = {}
+        row_vec = {}
+        if not isinstance(vectors, dict):
+            col_out[suite] = vectors
+            continue
+        for cid, vec in vectors.items():
+            axis = vector_axis(vec) if isinstance(vec, dict) else "col"
+            if axis == "row":
+                row_vec[cid] = vec
+            else:
+                col_vec[cid] = vec
+        if col_vec:
+            col_out[suite] = col_vec
+        if row_vec:
+            row_out[suite] = row_vec
+    out_col.parent.mkdir(parents=True, exist_ok=True)
+    out_row.parent.mkdir(parents=True, exist_ok=True)
+    wrote_col = wrote_row = False
+    if col_out:
+        with out_col.open("w") as f:
+            json.dump(col_out, f, indent=2)
+        wrote_col = True
+    if row_out:
+        with out_row.open("w") as f:
+            json.dump(row_out, f, indent=2)
+        wrote_row = True
+    n_col = sum(len(v) for v in col_out.values() if isinstance(v, dict))
+    n_row = sum(len(v) for v in row_out.values() if isinstance(v, dict))
+    return n_col, n_row, wrote_col, wrote_row
+
+
+def main():
+    src = Path(sys.argv[1] if len(sys.argv) > 1 else "tests/sweep_framework/vectors_export")
+    dst_col = Path(sys.argv[2] if len(sys.argv) > 2 else "tests/sweep_framework/vectors_export_col")
+    dst_row = Path(sys.argv[3] if len(sys.argv) > 3 else "tests/sweep_framework/vectors_export_row")
+
+    # Clean dst dirs to avoid stale files from prior runs.
+    for d in (dst_col, dst_row):
+        if d.exists():
+            for f in d.iterdir():
+                f.unlink()
+            d.rmdir()
+
+    files_in_col = []
+    files_in_row = []
+    total_col = total_row = 0
+    for f in sorted(src.glob("*.json")):
+        if f.name == "generation_manifest.json":
+            continue
+        n_col, n_row, wc, wr = split_file(f, dst_col / f.name, dst_row / f.name)
+        total_col += n_col
+        total_row += n_row
+        if wc:
+            files_in_col.append(f.name)
+        if wr:
+            files_in_row.append(f.name)
+
+    # Regenerate per-axis generation_manifest.json so the loader only references
+    # files that actually exist in that axis directory.
+    src_manifest_path = src / "generation_manifest.json"
+    if src_manifest_path.exists():
+        with src_manifest_path.open() as f:
+            base_manifest = json.load(f)
+    else:
+        base_manifest = {}
+    for dst, files in [(dst_col, files_in_col), (dst_row, files_in_row)]:
+        m = dict(base_manifest)
+        m["vector_files"] = sorted(files)
+        with (dst / "generation_manifest.json").open("w") as f:
+            json.dump(m, f, indent=2)
+
+    print(f"col: {len(files_in_col)} files, {total_col} vectors")
+    print(f"row: {len(files_in_row)} files, {total_row} vectors")
+
+
+if __name__ == "__main__":
+    main()

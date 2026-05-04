@@ -17,7 +17,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
     get_mesh_composer,
     reconcile_golden_to_actual,
-    maybe_swap_dispatch_axis,
 )
 
 # Import master config loader for traced model configurations
@@ -162,19 +161,6 @@ def run(
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
-
-    # Per-config dispatch-axis swap: pick the axis the master traced this
-    # config on (COL by default; ROW when shard_spec exposes x=7 cores).
-    device = maybe_swap_dispatch_axis(
-        device,
-        kwargs,
-        named_mcs=[
-            ("input_a_memory_config", input_a_memory_config),
-            ("input_b_memory_config", input_b_memory_config),
-            ("input_c_memory_config", input_c_memory_config),
-            ("output_memory_config", output_memory_config),
-        ],
-    )
 
     raw_placement_a = kwargs.get("input_a_tensor_placement", None)
     input_a_tensor_placement = raw_placement_a
