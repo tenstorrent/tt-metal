@@ -1170,19 +1170,18 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     return {
         std::move(program),
-            {.tilize_kernel_handles = {tilize_reader_kernel_id, tilize_compute_kernel_id, tilize_writer_kernel_id},
-             .tilize_cores = tilize_cores,
-             .matmul_kernel_handles =
-                 {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
-             .matmul_cores = matmul_cores,
-             .indices_cb_handle = indices_cb_handle,
-             .scores_cb_handle = scores_cb_handle,
-             .sharded_output_cb_handle = sharded_output_cb_handle,
-             .matmul_writer_cb_handle = matmul_writer_cb_handle,
-             .combine_kernel_handles = {combine_reader_kernel_id, combine_writer_kernel_id},
-             .combine_data_cb_handle = combine_data_cb_handle,
-             .combine_cores = combine_cores,
-             .combine_global_semaphores = {init_barrier_semaphore, final_barrier_semaphore}};
+        {.tilize_kernel_handles = {tilize_reader_kernel_id, tilize_compute_kernel_id, tilize_writer_kernel_id},
+         .tilize_cores = tilize_cores,
+         .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
+         .matmul_cores = matmul_cores,
+         .indices_cb_handle = indices_cb_handle,
+         .scores_cb_handle = scores_cb_handle,
+         .sharded_output_cb_handle = sharded_output_cb_handle,
+         .matmul_writer_cb_handle = matmul_writer_cb_handle,
+         .combine_kernel_handles = {combine_reader_kernel_id, combine_writer_kernel_id},
+         .combine_data_cb_handle = combine_data_cb_handle,
+         .combine_cores = combine_cores,
+         .combine_global_semaphores = {init_barrier_semaphore, final_barrier_semaphore}}};
 }
 
 void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
