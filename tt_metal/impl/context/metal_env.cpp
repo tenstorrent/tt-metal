@@ -136,10 +136,26 @@ void MetalEnvImpl::release() { use_count_.fetch_sub(1, std::memory_order_acq_rel
 bool MetalEnvImpl::check_use_count_zero() const {
     const int use_count = use_count_.load(std::memory_order_acquire);
     if (use_count > 0) {
-        log_error(
-            tt::LogMetal,
+        // GAP-78: Dispatch still active during fabric teardown — dispatch threads hold Device
+        // references (use_count > 0) while fabric teardown proceeds.  Continuing with teardown
+        // under this condition allows dispatch worker threads to issue L1 writes to ETH cores
+        // that are simultaneously being reset/reconfigured by teardown_fabric_config(), causing
+        // silent ETH L1 corruption.  The corruption manifests as stale handshake state
+        // (REMOTE_HANDSHAKE_COMPLETE 0xa1b1c1d1) that persists across tt-smi -r resets and
+        // triggers ring-sync timeouts in subsequent sessions.
+        //
+        // Must TT_THROW rather than log_error + continue: a continued teardown with active
+        // dispatch is not recoverable — the L1 corruption is already happening and the next
+        // session will see corrupt ETH state regardless of what teardown does.
+        // TT_THROW surfaces the violation immediately at the call site where the ordering
+        // invariant is broken, rather than silently producing a corrupted device state that
+        // only manifests 10-120 seconds later in a different session's ring-sync poll.
+        TT_THROW(
             "MetalEnv has {} outstanding reference(s) at teardown or fork. All objects using the MetalEnv (e.g. open "
-            "devices) must stop using it before the MetalEnv is destroyed or the process forks.",
+            "devices) must stop using it before the MetalEnv is destroyed or the process forks. "
+            "Dispatch threads must be drained before fabric teardown begins — otherwise in-flight "
+            "L1 writes from dispatch can corrupt ETH state during teardown_fabric_config(). "
+            "(GAP-78: teardown ordering violation)",
             use_count);
         return false;
     }
