@@ -1257,19 +1257,35 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                 // and causes fetch_queue_reserve_back timeouts on the very first run.
                 //
                 // FIX EXT (#42429): Distinguish in-cluster vs external base-UMD channels.
-                // An "external" channel has no entry in cluster_.get_ethernet_connections() —
-                // its peer is outside the fabric mesh (e.g. T3K Device 4 chan 6 connects to
-                // an out-of-mesh host).  Loading FABRIC_1D on external channels causes ring-sync
-                // timeouts because the external peer never responds to the ETH handshake.
+                // An "external" channel connects to a peer outside the active device set —
+                // either an external T3K board or the host.  Loading FABRIC_1D on external
+                // channels causes ETH handshake timeouts because the external peer never
+                // responds → Phase 5 master chan stuck at STARTED → FIX AL/AM fires →
+                // fabric_channels_not_ready_for_traffic_=true → GTEST_SKIP.
                 // Route external channels to external_umd_channels: skip soft-reset (preserve
                 // relay BRISC) AND skip write_launch_msg_to_core (do not load FABRIC_1D).
+                //
+                // FIX EXT2 (#42429): Corrected detection — get_ethernet_connections() returns
+                // ALL detected ETH connections INCLUDING external T3K boards (with ChipIds
+                // outside our local cluster). The original FIX EXT check (any entry in
+                // ethernet_connections?) was insufficient: external boards appear there too.
+                // Fix: also verify the peer ChipId is in the active devices_ list.
                 {
                     bool peer_in_cluster = false;
                     const auto& eth_connections = cluster_.get_ethernet_connections();
                     auto dev_conn_it = eth_connections.find(dev->id());
                     if (dev_conn_it != eth_connections.end()) {
-                        peer_in_cluster =
-                            dev_conn_it->second.count(static_cast<int>(eth_chan_id)) > 0;
+                        auto chan_it = dev_conn_it->second.find(static_cast<int>(eth_chan_id));
+                        if (chan_it != dev_conn_it->second.end()) {
+                            // Peer chip exists in UMD topology — verify it is in our active cluster.
+                            const ChipId peer_chip_id = std::get<0>(chan_it->second);
+                            for (const Device* d : devices_) {
+                                if (d->id() == peer_chip_id) {
+                                    peer_in_cluster = true;
+                                    break;
+                                }
+                            }
+                        }
                     }
                     if (peer_in_cluster) {
                         base_umd_channels.insert(eth_chan_id);
@@ -1286,9 +1302,10 @@ FabricFirmwareInitializer::TerminateStaleResult FabricFirmwareInitializer::termi
                         log_info(
                             tt::LogMetal,
                             "terminate_stale_erisc_routers: Device {} chan={} edm_status=0x{:08x} "
-                            "(base-UMD-firmware sentinel, no in-cluster peer) — external ETH "
-                            "channel. Added to external_umd_channels; soft-reset and "
-                            "write_launch_msg_to_core will both be skipped. (FIX EXT #42429)",
+                            "(base-UMD-firmware sentinel) — peer ChipId NOT in active device set "
+                            "(external T3K board or host). Added to external_umd_channels; "
+                            "soft-reset and write_launch_msg_to_core will both be skipped. "
+                            "(FIX EXT2 #42429)",
                             dev->id(),
                             eth_chan_id,
                             status_buf[0]);
