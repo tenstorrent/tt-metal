@@ -208,3 +208,42 @@ registry:
     tt_kmd: "TT-KMD 2.5.0"
     tt_smi: "4.0.0"
     tt_firmware: "19.2.0.0"
+  - trace_id: 17
+    status: draft
+    models: [whisper_2]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: d31cbcbb-cc28-4aed-9f20-563107113a43
+    tt_metal_sha: 712bac811f004514385c6d1d4c276244c43c309e
+    config_count: 109
+    loaded_at: '2026-05-04'
+    notes: ''
+
+  - trace_id: 18
+    status: draft
+    models: [whisper_3]
+    hardware: {board_type: Blackhole, device_series: p100a, card_count: 1}
+    trace_uid: d8b85e07-024f-4daa-a398-22722235ab44
+    tt_metal_sha: 712bac811f004514385c6d1d4c276244c43c309e
+    config_count: 162
+    loaded_at: '2026-05-04'
+    notes: ''
+
+  - trace_id: 19
+    status: draft
+    models: [whisper_2]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: ab268335-34c1-4c50-8fec-eab7191af375
+    tt_metal_sha: 712bac811f004514385c6d1d4c276244c43c309e
+    config_count: 109
+    loaded_at: '2026-05-04'
+    notes: ''
+
+  - trace_id: 20
+    status: draft
+    models: [whisper_3]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: 74016d01-15b4-4c09-9249-22f07194d839
+    tt_metal_sha: 712bac811f004514385c6d1d4c276244c43c309e
+    config_count: 162
+    loaded_at: '2026-05-04'
+    notes: ''
