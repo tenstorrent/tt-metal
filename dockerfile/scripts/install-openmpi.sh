@@ -59,14 +59,19 @@ make install -j"$(nproc)"
 cd /
 rm -rf "${WORKDIR}"
 
-# Create mpirun-ulfm symlink for compatibility with scripts expecting this name
+# Create mpirun-ulfm wrapper for compatibility with scripts expecting this name.
+# The wrapper calls mpirun with --with-ft ulfm and forwards all remaining arguments.
 if [ -e "${OMPI_PREFIX}/bin/mpirun-ulfm" ]; then
-    echo "[WARNING] mpirun-ulfm already exists at ${OMPI_PREFIX}/bin/mpirun-ulfm, skipping symlink creation"
+    echo "[WARNING] mpirun-ulfm already exists at ${OMPI_PREFIX}/bin/mpirun-ulfm, skipping wrapper creation"
 elif [ ! -x "${OMPI_PREFIX}/bin/mpirun" ]; then
-    echo "[ERROR] mpirun not found or not executable at ${OMPI_PREFIX}/bin/mpirun, cannot create mpirun-ulfm symlink" >&2
+    echo "[ERROR] mpirun not found or not executable at ${OMPI_PREFIX}/bin/mpirun, cannot create mpirun-ulfm wrapper" >&2
     exit 1
 else
-    cd "${OMPI_PREFIX}/bin" && ln -s mpirun mpirun-ulfm
+    cat > "${OMPI_PREFIX}/bin/mpirun-ulfm" <<'EOF'
+#!/bin/bash
+exec "$(dirname "$0")/mpirun" --with-ft ulfm "$@"
+EOF
+    chmod +x "${OMPI_PREFIX}/bin/mpirun-ulfm"
 fi
 
 # Guard: ensure no munge runtime dependency leaked into libmpi.so.
