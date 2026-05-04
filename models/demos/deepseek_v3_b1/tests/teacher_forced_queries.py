@@ -40,17 +40,7 @@ def find_api_key(explicit_api_key: Optional[str]) -> Optional[str]:
     return None
 
 
-def extract_generated_token(response: dict) -> Optional[str]:
-    choices = response.get("choices") or []
-    if not choices:
-        return None
-
-    message = choices[0].get("message") or {}
-    return message.get("content")
-
-
-def evaluate_step(index: int, reference_token: str, response: dict) -> dict:
-    generated_token = extract_generated_token(response)
+def evaluate_step(index: int, reference_token: str, generated_token: Optional[str]) -> dict:
     return {
         "index": index,
         "reference_token": reference_token,
@@ -68,18 +58,38 @@ def run_teacher_forced_queries(
     max_steps: Optional[int] = 6,
     timeout: int = 60,
 ) -> list[dict]:
-    forced_prefix = ""
     session_id = None
+    pending_generated_token = None
     results = []
     tokens = reference_tokens[:max_steps] if max_steps is not None else reference_tokens
+    reference_index = 0
 
-    for index, reference_token in enumerate(tokens):
-        messages = [{"role": "user", "content": prompt}]
-        if forced_prefix:
-            messages.append({"role": "assistant", "content": forced_prefix})
+    def append_result(
+        reference_index: int, reference_token: str, generated_token: Optional[str]
+    ) -> int:
+        results.append(
+            evaluate_step(index=reference_index, reference_token=reference_token, generated_token=generated_token)
+        )
+        return reference_index + 1
+
+    while reference_index < len(tokens):
+        reference_token = tokens[reference_index]
+        if pending_generated_token is not None:
+            generated_token = pending_generated_token
+            pending_generated_token = None
+            reference_index = append_result(reference_index, reference_token, generated_token)
+            continue
+
+        teacher_index = reference_index - 1
+        while teacher_index >= 0 and tokens[teacher_index] in ("<think>", "</think>"):
+            teacher_index -= 1
+        if teacher_index < 0:
+            messages = [{"role": "user", "content": prompt}]
+        else:
+            messages = [{"role": "user", "content": tokens[teacher_index]}]
 
         payload = {
-            "max_tokens": 1,
+            "max_tokens": 2,
             "model": model,
             "messages": messages,
             # The server only supports top-1 today; keep this field so top-k can grow here later.
@@ -88,20 +98,38 @@ def run_teacher_forced_queries(
         if session_id:
             payload["session_id"] = session_id
 
+        print(f"payload: {payload}")
         response = send_chat_completion_request(
             payload=payload,
             api_key=api_key,
             url=url,
             timeout=timeout,
         )
+        print(f"response: {response}")
         if isinstance(response, Exception):
             raise response
 
         if session_id is None:
             session_id = response["usage"]["sessionId"]
 
-        results.append(evaluate_step(index=index, reference_token=reference_token, response=response))
-        forced_prefix += reference_token
+        choices = response.get("choices") or []
+        message = choices[0].get("message") if choices else {}
+        message = message or {}
+        content = message.get("content")
+        reasoning = message.get("reasoning")
+        if reference_token == "<think>" and reasoning:
+            generated_token = "<think>"
+            pending_generated_token = reasoning
+        elif reference_token == "</think>" and content:
+            generated_token = "</think>"
+            pending_generated_token = content
+        else:
+            generated_token = content or reasoning
+
+        if generated_token is None:
+            raise RuntimeError("response did not include content or reasoning")
+
+        reference_index = append_result(reference_index, reference_token, generated_token)
 
     return results
 
