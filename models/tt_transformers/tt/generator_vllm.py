@@ -252,7 +252,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         tt_data_parallel: int = 1,
         **kwargs,
     ) -> int:
-        """Returns config-specific total token budget across all users."""
+        """Returns config-specific all-user KV-cache token capacity."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -371,7 +371,7 @@ class LlamaForCausalLM(Generator):
         tt_data_parallel: int = 1,
         **kwargs,
     ) -> int:
-        """Returns config-specific total token budget across all users."""
+        """Returns config-specific all-user KV-cache token capacity."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -455,7 +455,7 @@ class QwenForCausalLM(Generator):
         tt_data_parallel: int = 1,
         **kwargs,
     ) -> int:
-        """Returns config-specific total token budget across all users."""
+        """Returns config-specific all-user KV-cache token capacity."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -533,7 +533,7 @@ class MistralForCausalLM(Generator):
         tt_data_parallel: int = 1,
         **kwargs,
     ) -> int:
-        """Returns config-specific total token budget across all users."""
+        """Returns config-specific all-user KV-cache token capacity."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 
@@ -609,7 +609,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         tt_data_parallel: int = 1,
         **kwargs,
     ) -> int:
-        """Returns config-specific total token budget across all users."""
+        """Returns config-specific all-user KV-cache token capacity."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         is_wormhole = is_wormhole_b0()
 

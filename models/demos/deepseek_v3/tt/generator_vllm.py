@@ -54,7 +54,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         tt_data_parallel: int = 1,
         **kwargs,
     ) -> int:
-        """Returns config-specific total token budget across all users."""
+        """Returns config-specific all-user KV-cache token capacity."""
         if "DeepSeek-R1-0528" in model_name and is_wormhole_b0():
             return 32_768
         return super().get_max_tokens_all_users(
