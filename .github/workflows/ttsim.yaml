@@ -178,13 +178,11 @@ jobs:
           TTSIM_TIMEOUT_MINUTES = 40
           entries = []
           for t in tests:
-              if not t.get("ttsim") or not t.get("cmd"):
-                  continue
               cmd = re.sub(r'\s+--timeout\s+\d+', '', t['cmd'])
               serial_cmd = re.sub(r'\s+--splits\s+\d+', '', re.sub(r'\s+--group\s+\d+', '', cmd))
               entries.append({"name": t.get("name", "Unnamed Test"), "cmd": cmd, "serial_cmd": serial_cmd, "timeout": TTSIM_TIMEOUT_MINUTES})
           if not entries:
-              raise SystemExit("No TTSim-compatible TTNN tests found (ttsim: true)")
+              raise SystemExit("No TTSim-compatible TTNN tests found")
           with open(out_path, "a") as f:
               f.write("ttnn-tests<<EOF\n" + json.dumps(entries) + "\nEOF\n")
           PY

@@ -1,3 +1,6 @@
+dest_acc: true
+
+
 operands:
   - name: "input_A"
     dims: [256, 256]
@@ -19,4 +22,4 @@ operations:
         unpacker: "UnpackerA"
         math_fidelity: "HiFi2"
     packer: "Packer"
-    block_size: [64, 128]
+    block_size: [32, 128]

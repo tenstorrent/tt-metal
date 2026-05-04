@@ -7,11 +7,13 @@
 #include <stdint.h>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "hlk_desc.hpp"
 #include <hostdevcommon/kernel_structs.h>
+#include <tt-metalium/tile.hpp>
 
 namespace tt::tt_metal {
 enum class MathFidelity : uint8_t;
@@ -58,6 +60,9 @@ public:
         uint32_t tile_r_dim,
         uint32_t tile_c_dim);
     void set_cb_tile_size_all_cores(CBIndex cb_id, uint32_t tile_size);
+
+    void set_cb_data_fmt_and_tile(CBIndex cb_id, DataFormat data_format, const std::optional<Tile>& tile);
+
     // old API name
     void set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format);
 };

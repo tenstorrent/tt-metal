@@ -25,8 +25,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
+    get_gate_outputs,
+    initialize_predictable_test_inputs,
+    initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_global_expert_idx_table
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
@@ -37,16 +41,22 @@ def run_torch_routed_experts(
     experts_per_chip: int,
     num_dispatch_groups: int,
     dispatch_group_size: int,
+    expert_token_counts: torch.Tensor,
 ) -> torch.Tensor:
     """
     Run torch routed experts on dispatched buffer.
 
     Args:
-        dispatched_buffer: (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
+        dispatched_buffer: Flat dispatch buffer matching the real per-device layout.
+            Shape: (num_dispatch_groups, dispatch_group_size, max_dispatch_buffer_token_size, emb_dim)
+            Each expert's token region starts at a TILE_SIZE-aligned inter_chip_offset within
+            the flat token dimension. Only expert_token_counts[dg, 0, global_expert] rows are valid.
         experts: List of TorchExpert modules (total = num_dispatch_groups * dispatch_group_size * experts_per_chip)
         experts_per_chip: Number of experts per chip
         num_dispatch_groups: Number of dispatch groups (EP ranks, mesh_cols for 2D mesh)
         dispatch_group_size: Size of each dispatch group (SP ranks, mesh_rows for 2D mesh)
+        expert_token_counts: Total tokens routed to each expert (group-sparse, replicated across dispatch_group_size)
+            Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
 
     Returns:
         expert_outputs: Same shape as dispatched_buffer
@@ -55,7 +65,10 @@ def run_torch_routed_experts(
 
     for dg in range(num_dispatch_groups):
         for ds in range(dispatch_group_size):
-            # dg = col (mesh col / dispatch group), ds = row (mesh row / chip within group)
+            # inter_chip_offset tracks the TILE_SIZE-aligned start row of the current expert
+            # within the flat token dimension — mirrors how the dispatch kernel lays out tokens.
+            inter_chip_offset = 0
+
             for local_expert in range(experts_per_chip):
                 # Use column-major ordering to match TorchMoe and TtRoutedExpert
                 global_expert = ExpertMapping.get_global_expert_idx(
@@ -68,22 +81,29 @@ def run_torch_routed_experts(
                     is_col_major=True,
                 )
 
-                # Get input for this expert
-                expert_input = dispatched_buffer[dg, ds, local_expert, :, :]
+                # expert_token_counts is group-sparse: experts outside dispatch group dg have count 0.
+                # Counts are replicated across dispatch_group_size, so index 0 suffices.
+                token_count = expert_token_counts[dg, 0, global_expert].item()
 
-                # Run expert
-                expert_output = experts[global_expert](expert_input.float())
-                expert_outputs[dg, ds, local_expert, :, :] = expert_output
+                if token_count > 0:
+                    expert_input = dispatched_buffer[dg, ds, inter_chip_offset : inter_chip_offset + token_count, :]
+                    expert_output = experts[global_expert](expert_input.float())
+                    expert_outputs[dg, ds, inter_chip_offset : inter_chip_offset + token_count, :] = expert_output
+
+                # Advance to the next TILE_SIZE-aligned boundary
+                inter_chip_offset += (token_count + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
 
     return expert_outputs
 
 
+# dispatch_buffer_capacity_factor below is the most conservative integer such
+# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
         # fmt: off
-        (320, 1024, 512, 64, 2, 2, True),
-        (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, False),
+        (320, 1024, 512, 64, 2, 9, True),
+        (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False),
         # fmt: on
     ],
     ids=["small-dims-validate-pcc", "deepseek-v3-dims-skip-pcc"],
@@ -123,6 +143,7 @@ def run_torch_routed_experts(
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 def test_ttnn_routed_expert(
     mesh_device,
     device_params,
@@ -131,8 +152,9 @@ def test_ttnn_routed_expert(
     hidden_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     run_pcc_check,
+    use_predictable_data,
 ):
     """
     Test TtRoutedExpert with DeepSeek V3 dimensions on various mesh configurations.
@@ -149,14 +171,24 @@ def test_ttnn_routed_expert(
 
     # Compute configuration constants
     # For routed expert, experts_per_chip = num_routed_experts // num_devices (all devices combined)
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
 
     signpost(
         f"TtRoutedExpert {mesh_device.shape=} {num_devices=} {experts_per_chip=}"
         f"\n{seq_len_per_chip=} {emb_dim=} {hidden_dim=} {num_routed_experts=}"
-        f"\n{num_experts_per_tok=} {capacity_factor=}"
+        f"\n{num_experts_per_tok=}"
     )
 
     logger.debug(f"\n{'='*60}")
@@ -172,10 +204,50 @@ def test_ttnn_routed_expert(
     total_experts = num_devices * experts_per_chip
     logger.debug(f"Total experts: {total_experts}")
 
-    # Input shape: (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, emb_dim)
+    # Compute expert_token_counts from routing indices
+    # expert_token_counts shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+    if use_predictable_data:
+        _, _, routing_indices = initialize_predictable_test_inputs(
+            dispatch_group_size=dispatch_group_size,
+            seq_len_per_chip=seq_len_per_chip,
+            emb_dim=emb_dim,
+            num_routed_experts=num_routed_experts,
+            num_experts_per_tok=num_experts_per_tok,
+            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            num_dispatch_groups=num_dispatch_groups,
+        )
+        logger.debug("Using PREDICTABLE test data for debugging")
+    else:
+        _, _, routing_indices = initialize_test_inputs(
+            dispatch_group_size=dispatch_group_size,
+            seq_len_per_chip=seq_len_per_chip,
+            emb_dim=emb_dim,
+            num_routed_experts=num_routed_experts,
+            num_experts_per_tok=num_experts_per_tok,
+            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            num_dispatch_groups=num_dispatch_groups,
+            skip_x_initialization=True,
+        )
+        logger.debug("Using RANDOM test data")
+    _, expert_token_counts_torch, expert_region_offsets_torch, _ = get_gate_outputs(
+        routing_indices,
+        dispatch_group_size,
+        num_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
+    )
+
+    # Input shape: (num_dispatch_groups, dispatch_group_size, max_dispatch_buffer_token_size, emb_dim)
     # For 2D mesh: num_dispatch_groups=mesh_cols, dispatch_group_size=mesh_rows
-    # Final per-device shape after sharding: (experts_per_chip, max_tokens, emb_dim)
-    per_device_shape = (experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
+    # Final per-device shape after sharding: (max_dispatch_buffer_token_size, emb_dim)
+    per_device_shape = (max_dispatch_buffer_token_size, emb_dim)
 
     # Create weights and input only if PCC check is enabled
     # When run_pcc_check=False, use fast device-side allocation (no host-to-device transfer)
@@ -187,8 +259,7 @@ def test_ttnn_routed_expert(
         dispatched_buffer_torch = torch.randn(
             num_dispatch_groups,
             dispatch_group_size,
-            experts_per_chip,
-            max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size,
             emb_dim,
             dtype=torch.float32,
         )
@@ -223,6 +294,7 @@ def test_ttnn_routed_expert(
             experts_per_chip,
             num_dispatch_groups,
             dispatch_group_size,
+            expert_token_counts_torch,
         )
         profiler.end("torch_forward")
         logger.debug(f"Torch output shape: {torch_outputs.shape}")
@@ -255,6 +327,32 @@ def test_ttnn_routed_expert(
 
     logger.debug(f"TTNN input shape: {dispatched_buffer_tt.shape}")
 
+    # Build the (group, chip, local_expert) -> global expert id table and shard it
+    # across the EP mesh: each device ends up with (1, 1, experts_per_chip) of the
+    # global expert ids it is responsible for.
+    global_expert_idx_torch = ExpertMapping.create_global_expert_idx_table(
+        experts_per_chip=experts_per_chip,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+    log_global_expert_idx_table(
+        global_expert_idx_table=global_expert_idx_torch,
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+    )
+    global_expert_idx_tt = ttnn.from_torch(
+        global_expert_idx_torch,
+        mesh_mapper=get_ep_mesh_mapper(mesh_device),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+    )
+    # Per-device shape is (1, 1, experts_per_chip); drop the two leading singleton
+    # dims so each device holds a 1D (experts_per_chip,) lookup vector.
+    global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+    global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+
     # Create TtRoutedExpert
     # When torch_weights=None, uses _create_random_weight for fast device-side DRAM allocation
     # When torch_weights provided, distributes weights to devices (device i gets experts [i*N:(i+1)*N])
@@ -263,6 +361,7 @@ def test_ttnn_routed_expert(
     tt_routed_expert = TtRoutedExpert(
         mesh_device=mesh_device,
         experts_per_chip=experts_per_chip,
+        global_expert_idx_table=global_expert_idx_tt,
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         max_tokens=max_dispatched_tokens_per_expert,
@@ -273,10 +372,14 @@ def test_ttnn_routed_expert(
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_routed_expert_creation")
 
+    # Prepare expert_token_counts and expert_region_offsets for TTNN RoutedExpert
+    expert_token_counts_tt = TtRoutedExpert.shard_expert_token_counts(mesh_device, expert_token_counts_torch)
+    expert_region_offsets_tt = TtRoutedExpert.shard_expert_token_counts(mesh_device, expert_region_offsets_torch)
+
     # Run TTNN forward
     logger.debug("Running TTNN forward...")
     profiler.start("tt_forward")
-    ttnn_outputs = tt_routed_expert(dispatched_buffer_tt)
+    ttnn_outputs = tt_routed_expert(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
     logger.debug(f"TTNN output shape: {ttnn_outputs.shape}")
@@ -289,23 +392,24 @@ def test_ttnn_routed_expert(
 
     # Convert back to torch and validate PCC
     profiler.start("pcc_validation")
-    # Output shape per device: (experts_per_chip, max_tokens, emb_dim)
-    # Need to unsqueeze and compose back to (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, emb_dim)
+    # Output shape per device: (max_dispatch_buffer_token_size, emb_dim)
+    # Unsqueeze twice and compose back to (num_dispatch_groups, dispatch_group_size, max_dispatch_buffer_token_size, emb_dim)
     ttnn_outputs_expanded = ttnn.unsqueeze(ttnn.unsqueeze(ttnn_outputs, dim=0), dim=0)
     mesh_composer = get_ep_mesh_composer(mesh_device)
     ttnn_outputs_torch = ttnn.to_torch(ttnn_outputs_expanded, mesh_composer=mesh_composer)
     logger.debug(f"TTNN output (torch) shape: {ttnn_outputs_torch.shape}")
     logger.debug(f"TTNN output stats - min: {ttnn_outputs_torch.min():.4f}, max: {ttnn_outputs_torch.max():.4f}")
 
-    # Validate ALL chips - each device now has unique weights for its experts
-    # Torch outputs: (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
-    # TTNN outputs: same shape after mesh_composer concat
+    # Validate ALL chips - each device now has unique weights for its experts.
+    # Both torch and TTNN outputs have shape (num_dispatch_groups, dispatch_group_size, flat_tokens, emb_dim).
+    # Use the same TILE_SIZE-aligned inter_chip_offset logic to slice per-expert rows for comparison.
     pcc_values = []
     for dg in range(num_dispatch_groups):
         for ds in range(dispatch_group_size):
-            torch_chip = torch_outputs[dg, ds, :, :, :]  # (experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
-            ttnn_chip = ttnn_outputs_torch[dg, ds, :, :, :]
+            torch_chip = torch_outputs[dg, ds]  # (flat_tokens, emb_dim)
+            ttnn_chip = ttnn_outputs_torch[dg, ds]
 
+            inter_chip_offset = 0
             for expert_idx in range(experts_per_chip):
                 global_expert_idx = ExpertMapping.get_global_expert_idx(
                     group=dg,
@@ -316,11 +420,16 @@ def test_ttnn_routed_expert(
                     num_dispatch_groups=num_dispatch_groups,
                     is_col_major=True,
                 )
-                _, pcc = comp_pcc(torch_chip[expert_idx], ttnn_chip[expert_idx])
-                pcc_values.append(pcc)
-                logger.debug(
-                    f"Chip (dg={dg},ds={ds}), Local Expert {expert_idx} (Global {global_expert_idx}) PCC: {pcc:.6f}"
-                )
+                token_count = expert_token_counts_torch[dg, 0, global_expert_idx].item()
+                if token_count > 0:
+                    torch_expert = torch_chip[inter_chip_offset : inter_chip_offset + token_count]
+                    ttnn_expert = ttnn_chip[inter_chip_offset : inter_chip_offset + token_count]
+                    _, pcc = comp_pcc(torch_expert, ttnn_expert)
+                    pcc_values.append(pcc)
+                    logger.debug(
+                        f"Chip (dg={dg},ds={ds}), Local Expert {expert_idx} (Global {global_expert_idx}) PCC: {pcc:.6f}"
+                    )
+                inter_chip_offset += (token_count + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
 
     min_pcc = min(pcc_values)
     avg_pcc = sum(pcc_values) / len(pcc_values)

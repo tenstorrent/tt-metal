@@ -67,11 +67,10 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         block_ct_dim = compute_unit.src_a.tile_count_x
 
-        return f"_llk_unpack_tilize_init_(unpack_a_src_format{stage}, unpack_a_dst_format{stage}, {block_ct_dim}, {face_r_dim}, false);\n"
+        return f"_llk_unpack_tilize_init_({config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}, {block_ct_dim}, {face_r_dim}, false);\n"
 
     def unpack(
         self,
@@ -80,7 +79,6 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         block_ct_dim = compute_unit.src_a.tile_count_x
@@ -90,7 +88,7 @@ class UnpackerTilizeA(Unpacker):
             f"{{\n"
             f"std::uint32_t row = ({block.tile_id_global}) / {block_ct_dim};\n"
             f"std::uint32_t col = ({block.tile_id_global}) % {block_ct_dim};\n"
-            f"_llk_unpack_tilize_(L1_ADDRESS({buffer_a}[row * {block_ct_dim}]), col, unpack_a_src_format{stage}, unpack_a_dst_format{stage}, {block_ct_dim}, {face_r_dim}, {num_faces}, false);\n"
+            f"_llk_unpack_tilize_(L1_ADDRESS({buffer_a}[row * {block_ct_dim}]), col, {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}, {block_ct_dim}, {face_r_dim}, {num_faces}, false);\n"
             f"}}\n"
         )
 
@@ -101,9 +99,6 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
 
-        return (
-            f"_llk_unpack_tilize_uninit_(unpack_a_dst_format{stage}, {face_r_dim});\n\n"
-        )
+        return f"_llk_unpack_tilize_uninit_({config.sentinel.unpack_a_dst_format}, {face_r_dim});\n\n"
