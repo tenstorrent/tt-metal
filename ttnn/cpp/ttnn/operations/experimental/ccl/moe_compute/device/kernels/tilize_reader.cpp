@@ -823,7 +823,7 @@ void kernel_main() {
                 per_expert_total_tokens_cb_read_ptr,
                 per_expert_counts_mcast_addr,
                 experts_per_device * sizeof(uint32_t),
-                num_tilize_cores - 1);
+                tilize_bounding_box_num_cores - 1);
 
             // Multicast total_chunks to all tilize cores
             noc_async_write_multicast(
