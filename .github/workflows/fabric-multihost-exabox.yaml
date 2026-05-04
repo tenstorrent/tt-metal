@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       note:
-        description: 'This workflow can be run between 3 and 7 AM UTC'
+        description: 'This workflow can be run between 7 and 11 AM UTC'
         required: false
         default: ''
 
