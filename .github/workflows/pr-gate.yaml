@@ -147,6 +147,7 @@ jobs:
       llk-wormhole-changed: ${{ steps.find-changes.outputs.llk-wormhole-changed }}
       llk-blackhole-changed: ${{ steps.find-changes.outputs.llk-blackhole-changed }}
       llk-common-changed: ${{ steps.find-changes.outputs.llk-common-changed }}
+      llk-sfpi-changed: ${{ steps.find-changes.outputs.llk-sfpi-changed }}
       llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
@@ -451,6 +452,7 @@ jobs:
         (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
          needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
@@ -467,13 +469,14 @@ jobs:
             if ("${{ needs.find-changed-files.outputs.llk-wormhole-changed }}" === "true") expectedLabels.add("llk:wormhole");
             if ("${{ needs.find-changed-files.outputs.llk-blackhole-changed }}" === "true") expectedLabels.add("llk:blackhole");
             if ("${{ needs.find-changed-files.outputs.llk-common-changed }}" === "true") expectedLabels.add("llk:common");
+            if ("${{ needs.find-changed-files.outputs.llk-sfpi-changed }}" === "true") expectedLabels.add("sfpi");
             if ("${{ needs.find-changed-files.outputs.llk-tests-changed }}" === "true") expectedLabels.add("llk:test-infra");
             if ("${{ needs.find-changed-files.outputs.llk-ci-changed }}" === "true") expectedLabels.add("llk:ci");
             if ("${{ needs.find-changed-files.outputs.llk-perf-changed }}" === "true") expectedLabels.add("llk:performance");
             if ("${{ needs.find-changed-files.outputs.llk-quasar-changed }}" === "true") expectedLabels.add("llk:quasar");
 
             const managedLabels = new Set(["llk:wormhole", "llk:blackhole", "llk:common",
-                                           "llk:ci", "llk:test-infra",
+                                           "sfpi", "llk:ci", "llk:test-infra",
                                            "llk:performance", "llk:quasar"]);
 
             const {data: currentLabels} = await github.rest.issues.listLabelsOnIssue({
@@ -507,7 +510,7 @@ jobs:
               ));
             }
 
-  # LLK Functional Unit Tests on Wormhole (PR gate - runs on wormhole/common/test/ci changes)
+  # LLK Functional Unit Tests on Wormhole (PR gate - runs on wormhole/common/sfpi/test/ci changes)
   llk-test-wormhole:
     needs: [ build-docker-images, find-changed-files ]
     if: ${{
@@ -516,6 +519,7 @@ jobs:
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
@@ -527,7 +531,7 @@ jobs:
       test_splits: 2
       pytest_markers: "not perf and not nightly and not quasar"
 
-  # LLK Functional Unit Tests on Blackhole (PR gate - runs on blackhole/common/test/ci changes)
+  # LLK Functional Unit Tests on Blackhole (PR gate - runs on blackhole/common/sfpi/test/ci changes)
   llk-test-blackhole:
     needs: [ build-docker-images, find-changed-files ]
     if: ${{
@@ -536,6 +540,7 @@ jobs:
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
@@ -556,6 +561,7 @@ jobs:
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}

@@ -90,11 +90,11 @@ def overlap_tensors(
         device: The mesh device to place the fused tensor on.
         move_to_device: If True (default), place the result on device.
         per_core: If True, use per-core L1 allocation instead of lockstep.
-            Eliminates the lockstep memory tax on cores not in the fused
-            buffer.  Must be the first per-core allocation on the device
-            so that all cores receive the same L1 address.  Falls back to
-            lockstep silently when ``TT_METAL_ALLOCATOR_MODE_HYBRID=1``
-            is not set.
+            Eliminates the lockstep memory tax on cores outside the fused
+            buffer.  Requires ``TT_METAL_ALLOCATOR_MODE_HYBRID=1`` be
+            exported before device open (allocation TT_FATALs otherwise)
+            and the tensor be the first per-core allocation on the
+            device so all cores receive the same L1 address.
 
     Returns:
         A dict of ``OverlappedTensor`` views, keyed by tensor name.

@@ -13,6 +13,7 @@ import pytest
 import torch
 from loguru import logger
 from transformers.cache_utils import DynamicCache
+from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
@@ -129,9 +130,11 @@ def run_mla_inference(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
         },
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
         },
     ],
     ids=["line", "ring"],
@@ -171,7 +174,8 @@ def test_mla(
 
     # Conditionally load fixtures - only load what we need!
     if use_pretrained:
-        config, weights = request.getfixturevalue("pretrained_weights")
+        config, sd = request.getfixturevalue("pretrained_transformer_weights")
+        weights = sd["layers"][0]["mla_weights"]
     else:
         config, weights = request.getfixturevalue("random_weights")
 

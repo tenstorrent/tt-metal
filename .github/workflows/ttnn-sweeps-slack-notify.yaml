@@ -1,4 +1,4 @@
-name: "ttnn - Sweeps Slack Notification"
+name: "ttnn - sweeps slack notification"
 
 on:
   workflow_run:

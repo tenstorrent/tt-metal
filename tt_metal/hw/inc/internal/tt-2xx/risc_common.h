@@ -17,7 +17,6 @@
 #include "stream_io_map.h"
 #include "tensix.h"
 #include "tensix_neo_reg.h"
-#include "api/debug/assert.h"
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
@@ -316,6 +315,10 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 }
 #endif  // ARCH_QUASAR && !COMPILE_FOR_DM
 
+// Included here (rather than at the top of the file) so that assert_and_hang()
+// sees flush_l2_cache_line() in scope on ARCH_QUASAR + COMPILE_FOR_DM builds.
+#include "api/debug/assert.h"
+
 template <bool enable = true>
 inline __attribute__((always_inline)) void set_l1_data_cache() {
 #if defined(ARCH_BLACKHOLE)
@@ -382,30 +385,18 @@ inline __attribute__((always_inline)) void setup_isr_csrs() {
 
 inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
     // Enable ROCC interrupt in mie
-    uint64_t mie_val;
-    asm volatile("csrr %0, mie" : "=r"(mie_val));
-    mie_val |= (1 << 13);
-    asm volatile("csrrs zero, mie, %0" : : "r"(mie_val));
+    asm volatile("csrrs zero, mie, %0" : : "r"(1 << 13));
 
     // Enable MIE in mstatus
-    uint64_t mstatus_val;
-    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
-    mstatus_val |= (1 << 3);
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(mstatus_val));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(1 << 3));
 }
 
 inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Disable ROCC interrupt in mie
-    uint64_t mie_val;
-    asm volatile("csrr %0, mie" : "=r"(mie_val));
-    mie_val &= ~(1 << 13);
-    asm volatile("csrrc zero, mie, %0" : : "r"(mie_val));
+    asm volatile("csrrc zero, mie, %0" : : "r"(1 << 13));
 
     // Disable MIE in mstatus
-    uint64_t mstatus_val;
-    asm volatile("csrr %0, mstatus" : "=r"(mstatus_val));
-    mstatus_val &= ~(1 << 3);
-    asm volatile("csrrc zero, mstatus, %0" : : "r"(mstatus_val));
+    asm volatile("csrrc zero, mstatus, %0" : : "r"(1 << 3));
 }
 
 #endif  // !defined(COMPILE_FOR_TRISC)

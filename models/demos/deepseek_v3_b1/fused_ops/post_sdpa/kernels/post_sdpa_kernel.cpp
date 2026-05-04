@@ -44,6 +44,7 @@
 #ifndef SKIP_SDPA
 #include "../../../unified_kernels/sdpa_reduce_worker.hpp"
 #include "../../../unified_kernels/sdpa_reduce_forwarder.hpp"
+#include "../../../metadata/metadata.hpp"
 #endif
 
 // Compile-time role flags for dead code elimination via if constexpr
@@ -114,6 +115,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather2_row_major"),
                 get_named_compile_time_arg_val("gather2_receiver_data_addr"),
                 get_named_compile_time_arg_val("gather2_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
@@ -152,6 +154,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather3_row_major"),
                 get_named_compile_time_arg_val("gather3_receiver_data_addr"),
                 get_named_compile_time_arg_val("gather3_sender_idx"),
+                noc_index,
             },
         .receiver = {},
     };
@@ -353,7 +356,10 @@ void kernel_main() {
                 .r2_recv_buffer_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             };
             if constexpr (ReaderCTArgs::position_enabled) {
-                reader_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+                uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
+                volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+                reader_args.global_pos = metadata_ptr->position_id;
                 reader_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
                 reader_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
                 reader_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -429,6 +435,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sdpa_scale_fp32"),
                 get_named_compile_time_arg_val("sdpa_tiles_per_l_chunk"),
                 get_named_compile_time_arg_val("sdpa_num_l_chunks"),
+                get_named_compile_time_arg_val("sdpa_compute_block_size"),
                 get_named_compile_time_arg_val("sdpa_position_enabled"),
                 get_named_compile_time_arg_val("sdpa_per_device_chunk_size"),
                 1>;  // final_reduction=1 (always normalize in post_sdpa, untilize constraint)
@@ -436,8 +443,11 @@ void kernel_main() {
             // Note: compute_kernel_hw_startup already called at top of TRISC block
             Worker::ComputeArgs compute_args;
             if constexpr (ComputeCTArgs::position_enabled) {
+                uint32_t metadata_addr = get_common_arg_val<uint32_t>(0);
+                volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_addr);
+                compute_args.global_pos = metadata_ptr->position_id;
                 uint32_t per_core_rta_arg_idx = 0;
-                compute_args.pos_addr = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
                 compute_args.device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
                 compute_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
                 compute_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
@@ -584,6 +594,7 @@ void kernel_main() {
         args.dest_noc_y = get_common_arg_val<uint32_t>(2);
         args.per_core_rta_start_idx = 0;
         deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> writer;
+        writer.open_connections(args);
         writer(args);
     }
     if constexpr (Core::is_allreduce_receiver_core) {
@@ -595,6 +606,15 @@ void kernel_main() {
         args.sender_noc_y = get_common_arg_val<uint32_t>(3);
         args.sender_local_data_l1_addr = get_common_arg_val<uint32_t>(4);
         args.local_ready_sem_bank_addr = get_common_arg_val<uint32_t>(5);
+
+        // Residual CB is tensor-backed (data already in L1); signal TRISC so
+        // Compute's cb_wait_front(cb_residual) unblocks. Reader no longer does
+        // this — responsibility moved to the caller.
+        if constexpr (AllReduceReaderCTArgs::has_residual) {
+            cb_reserve_back(AllReduceReaderCTArgs::residual_cb_id, AllReduceReaderCTArgs::total_num_tiles);
+            cb_push_back(AllReduceReaderCTArgs::residual_cb_id, AllReduceReaderCTArgs::total_num_tiles);
+        }
+
         deepseek_b1_ops::AllReduce::Reader<AllReduceReaderCTArgs> reader;
         reader(args);
     }
@@ -608,6 +628,7 @@ void kernel_main() {
         args.dest_noc_y = get_common_arg_val<uint32_t>(2);
         args.per_core_rta_start_idx = 0;
         deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceBriscWriterCTArgs> writer;
+        writer.open_connections(args);
         writer(args);
     }
 

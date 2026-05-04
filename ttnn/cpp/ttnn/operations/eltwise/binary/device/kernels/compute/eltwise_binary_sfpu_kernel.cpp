@@ -133,14 +133,38 @@ void kernel_main() {
 #ifdef LT_INT32_INIT
             LT_INT32_INIT
 #endif
+#ifdef LT_UINT32_INIT
+            LT_UINT32_INIT
+#endif
+#ifdef LT_UINT16_INIT
+            LT_UINT16_INIT
+#endif
 #ifdef GT_INT32_INIT
             GT_INT32_INIT
+#endif
+#ifdef GT_UINT32_INIT
+            GT_UINT32_INIT
+#endif
+#ifdef GT_UINT16_INIT
+            GT_UINT16_INIT
 #endif
 #ifdef GE_INT32_INIT
             GE_INT32_INIT
 #endif
+#ifdef GE_UINT32_INIT
+            GE_UINT32_INIT
+#endif
+#ifdef GE_UINT16_INIT
+            GE_UINT16_INIT
+#endif
 #ifdef LE_INT32_INIT
             LE_INT32_INIT
+#endif
+#ifdef LE_UINT32_INIT
+            LE_UINT32_INIT
+#endif
+#ifdef LE_UINT16_INIT
+            LE_UINT16_INIT
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT

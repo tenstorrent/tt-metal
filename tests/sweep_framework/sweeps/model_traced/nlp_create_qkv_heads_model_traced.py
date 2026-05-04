@@ -14,11 +14,12 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -68,6 +69,51 @@ def mesh_device_fixture():
         del device
 
 
+def _qkv_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
+def _qkv_per_chip_q(per_chip_input, num_q_heads, num_kv_heads):
+    b, _, s, hd = per_chip_input.shape
+    head_dim = hd // (num_q_heads + 2 * num_kv_heads)
+    (q, _k, _v) = torch.split(
+        per_chip_input,
+        [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim],
+        dim=-1,
+    )
+    return torch.reshape(q, [b, s, num_q_heads, head_dim]).transpose(-3, -2)
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -86,6 +132,16 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Re-inject memory_config ONLY when the master config originally had it as a
+    # kwarg. Some models (e.g. gpt_oss) pass memory_config explicitly; others
+    # (e.g. wan/tt_dit) don't pass it at all. Falling back to output_memory_config
+    # would inject a kwarg the model never set, causing a trace diff.
+    mc_raw = kwargs.get("memory_config")
+    if mc_raw not in (None, "__ABSENT__") and "memory_config" not in op_kwargs:
+        parsed_mc = parse_dict_value("memory_config", mc_raw) if isinstance(mc_raw, dict) else mc_raw
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
 
     # num_heads flows through op_kwargs; read it for golden computation
     if num_q_heads is None:
@@ -122,17 +178,16 @@ def run(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Compute proper torch reference (from test_nlp_create_qkv_heads.py)
-    # Split input into Q, K, V components
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology and runs the kernel independently. The gathered
+    # output is the per-chip Q tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
     (ref_q, _, _) = torch.split(
-        torch_input_tensor_a, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
+        torch_input_tensor_a,
+        [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim],
+        dim=-1,
     )
-
-    # Reshape and transpose to get proper head dimensions
-    # [B, 1, S, heads*head_dim] -> [B, S, heads, head_dim] -> [B, heads, S, head_dim]
     ref_q = torch.reshape(ref_q, [batch_size, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
-
-    # Use Q heads as reference for PCC check (operation returns tuple of Q, K, V)
     torch_output_tensor = ref_q
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
@@ -177,6 +232,8 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - using lower tolerance for complex operations
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
     return [pcc, e2e_perf]

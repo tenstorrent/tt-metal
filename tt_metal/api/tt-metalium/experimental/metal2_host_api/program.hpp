@@ -23,8 +23,8 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = fals
 // (This will become a member function for the Program class)
 // This performs a copy from the ProgramRunParams to the Program's internal data structures.
 //
-// COMPLETENESS: You must specify runtime_args for every (kernel, node) pair that
-// requires runtime arguments. Missing entries will cause an error.
+// COMPLETENESS: You must specify runtime args (named and vararg alike) for every
+// (kernel, node) pair that requires runtime arguments. Missing entries will cause an error.
 //
 // For high-performance inner loops, prefer the in-place power user API below.
 // If stateful behavior of parameters is required, use the power user API.

@@ -25,7 +25,7 @@ inline void calculate_add_rsqrt(uint32_t param0) {
         if constexpr (fp32_dest_acc_en) {
             sfpi::dst_reg[0] = y;
         } else {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(y, 0));
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(y, RoundMode::NearestEven));
         }
         sfpi::dst_reg++;
     }

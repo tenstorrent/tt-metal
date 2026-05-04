@@ -2,8 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import ttnn
+
+from loguru import logger
 
 from ttnn.device import is_wormhole_b0
 
@@ -21,53 +25,65 @@ from models.experimental.functional_unet.tests.common import (
 )
 
 
-def run_unet_model(batch, groups, device, iterations=1):
+@pytest.mark.parametrize("batch", [1])
+@pytest.mark.parametrize("groups", [4])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
+def test_unet_model(batch, groups, mesh_device, reset_seeds):
+    num_devices = mesh_device.get_num_devices()
+
+    if (
+        num_devices == 1
+        and not is_wormhole_b0(mesh_device)
+        and (
+            mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y != 110
+            and mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y != 130
+        )
+    ):
+        pytest.skip(
+            f"Shallow UNet only supports 110 or 130 cores on BH (was {mesh_device.compute_with_storage_grid_size()})"
+        )
+
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+
+    total_batch = num_devices * batch
+    logger.info(f"Using {num_devices} device(s) for this test")
+
+    # Create parameters with per-device batch size (not total_batch), since the model
+    # runs on each device independently with sharded inputs
+    param_input, _ = create_unet_input_tensors(batch, groups)
+    model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
+    parameters = create_unet_model_parameters(model, param_input, groups=groups, device=mesh_device)
+    ttnn_model = unet_shallow_ttnn.UNet(parameters, device=mesh_device, mesh_mapper=weights_mesh_mapper)
+
     torch_input, ttnn_input = create_unet_input_tensors(
-        batch,
+        total_batch,
         groups,
         channel_order="first",
         pad=False,
         fold=True,
-        device=device,
+        device=mesh_device,
         memory_config=unet_shallow_ttnn.UNet.input_sharded_memory_config,
+        mesh_mapper=inputs_mesh_mapper,
     )
-    model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
-
-    parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
-    ttnn_model = unet_shallow_ttnn.UNet(parameters, device)
 
     torch_output_tensor = model(torch_input)
-    output_tensor = ttnn_model(ttnn_input, move_input_tensor_to_device=False, deallocate_input_activation=True).cpu()
+    output_tensor = ttnn_model(ttnn_input, move_input_tensor_to_device=False)
 
     B, C, H, W = torch_output_tensor.shape
-    ttnn_output_tensor = ttnn.to_torch(output_tensor).reshape(B, C, H, W)
+    ttnn_output_tensor = ttnn.to_torch(output_tensor, mesh_composer=output_mesh_composer).reshape(B, C, H, W)
     verify_with_pcc(
         torch_output_tensor,
         ttnn_output_tensor,
-        UNET_FULL_MODEL_PCC if is_wormhole_b0(device) else UNET_FULL_MODEL_PCC_BH,
+        UNET_FULL_MODEL_PCC if is_wormhole_b0(mesh_device) else UNET_FULL_MODEL_PCC_BH,
     )
-
-    for _ in range(iterations - 1):
-        _, ttnn_input = create_unet_input_tensors(
-            batch,
-            groups,
-            channel_order="first",
-            pad=False,
-            fold=True,
-            device=device,
-            memory_config=unet_shallow_ttnn.UNet.input_sharded_memory_config,
-        )
-        ttnn_model(ttnn_input, move_input_tensor_to_device=False, deallocate_input_activation=True).cpu()
-        ttnn.ReadDeviceProfiler(device)
-
-
-@pytest.mark.parametrize("batch", [1])
-@pytest.mark.parametrize("groups", [4])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
-def test_unet_model(batch, groups, device, reset_seeds):
-    if not is_wormhole_b0(device) and (
-        device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
-        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
-    ):
-        pytest.skip(f"Shallow UNet only support 110 or 130 cores on BH (was {device.compute_with_storage_grid_size()})")
-    run_unet_model(batch, groups, device)

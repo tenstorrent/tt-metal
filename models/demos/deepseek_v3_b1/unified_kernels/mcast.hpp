@@ -72,6 +72,7 @@ FORCE_INLINE void mcast_send_set_state(uint32_t src_local_addr, uint64_t dst_noc
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, 0);
     if constexpr (set_size) {
+        ASSERT(len_bytes <= NOC_MAX_BURST_SIZE);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     }
     if constexpr (set_addresses) {
@@ -109,6 +110,7 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
     while (!noc_cmd_buf_ready(noc, cmd_buf));
 
     if constexpr (set_size) {
+        ASSERT(len_bytes <= NOC_MAX_BURST_SIZE);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     }
     if constexpr (set_addresses) {

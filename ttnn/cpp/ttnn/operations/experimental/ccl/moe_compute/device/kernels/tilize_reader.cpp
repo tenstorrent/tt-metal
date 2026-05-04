@@ -483,7 +483,7 @@ void kernel_main() {
 
         // Get local CB addresses (same relative address as drain core)
         uint32_t local_indices_addr = get_read_ptr(indices_tensor_cb_id) + token_byte_offset_indices;
-        uint32_t local_scores_addr = get_read_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
+        uint32_t local_scores_addr = get_write_ptr(scores_tensor_cb_id) + token_byte_offset_scores;
 
         // Calculate drain core's source addresses
         // Note: CB addresses are allocated at same L1 offset on all cores, so we use local get_read_ptr
@@ -823,7 +823,7 @@ void kernel_main() {
                 per_expert_total_tokens_cb_read_ptr,
                 per_expert_counts_mcast_addr,
                 experts_per_device * sizeof(uint32_t),
-                num_tilize_cores - 1);
+                tilize_bounding_box_num_cores - 1);
 
             // Multicast total_chunks to all tilize cores
             noc_async_write_multicast(

@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -127,21 +128,14 @@ def run(
     else:
         raise ValueError("Either input_b_shape or weight_shape must be provided")
 
-    # Squeeze leading dimensions of 1 from weight shape to make it 2D
-    # E.g., (1, 1, 128256, 2048) -> (128256, 2048)
+    # Keep original weight shape to match the master trace's original_shape.
+    # The tracer records original_shape as-is (e.g. 4D [1,1,131072,64]).
+    # Squeezing to 2D would cause validation diffs.
+    # For num_embeddings extraction, use the second-to-last dim for >2D shapes.
     if isinstance(weight_shape_actual, (list, tuple)) and len(weight_shape_actual) > 2:
-        # Remove leading 1s
-        squeezed_shape = weight_shape_actual
-        while len(squeezed_shape) > 2 and squeezed_shape[0] == 1:
-            squeezed_shape = squeezed_shape[1:]
-
-        # If still not 2D, there are non-1 leading dims - this is truly invalid
-        if len(squeezed_shape) != 2:
-            raise ValueError(f"Cannot convert weight shape {weight_shape_actual} to 2D - has non-1 leading dimensions")
-
-        weight_shape_actual = squeezed_shape
-
-    num_embeddings = weight_shape_actual[0]
+        num_embeddings = weight_shape_actual[-2]
+    else:
+        num_embeddings = weight_shape_actual[0]
 
     # Generate input indices tensor (random integers in range [0, num_embeddings))
     torch_input_tensor = torch_random(input_shape, 0, num_embeddings, torch.int64)
@@ -159,7 +153,10 @@ def run(
     )(weight_shape_actual)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
+    # Golden function (torch.nn.functional.embedding) requires 2D weights,
+    # but the model uses 4D weights. Reshape for golden comparison only.
+    golden_weight = torch_weight_tensor.reshape(-1, torch_weight_tensor.shape[-1])
+    torch_output_tensor = golden_function(torch_input_tensor, golden_weight)
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -214,10 +211,34 @@ def run(
         # Host storage
         weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=weight_dtype_actual, layout=weight_layout_actual)
 
+    # Only pass dtype/memory_config/layout if they were in the master trace.
+    # Passing None creates extra_key diffs in validation.
+    embedding_kwargs = dict(op_kwargs)
+    if dtype is not None:
+        embedding_kwargs["dtype"] = dtype
+    if memory_config is not None:
+        embedding_kwargs["memory_config"] = memory_config
+    if layout is not None:
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        parsed_layout = parse_dict_value("layout", layout) if isinstance(layout, dict) else layout
+        if parsed_layout is not None:
+            embedding_kwargs["layout"] = parsed_layout
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.embedding(input_tensor, weight_tensor, dtype=dtype, memory_config=memory_config, **op_kwargs)
+    output_tensor = ttnn.embedding(input_tensor, weight_tensor, **embedding_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None).squeeze()
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, weight_tensor_placement
+        )
+    if torch_output_tensor.shape != output_tensor.shape:
+        squeezed_expected = torch_output_tensor.squeeze()
+        squeezed_actual = output_tensor.squeeze()
+        if squeezed_expected.shape == squeezed_actual.shape:
+            torch_output_tensor = squeezed_expected
+            output_tensor = squeezed_actual
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

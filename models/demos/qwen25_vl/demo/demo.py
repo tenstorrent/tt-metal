@@ -15,6 +15,7 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForCond
 
 import ttnn
 from models.common.sampling import SamplingParams
+from models.common.utility_functions import is_blackhole
 from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
     merge_vision_tokens,
@@ -29,6 +30,11 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
+
+# trace_region_size per architecture
+TRACE_REGION_SIZE = 28467200
+if is_blackhole():
+    TRACE_REGION_SIZE = 36000000
 
 
 def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config):
@@ -299,7 +305,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 28467200, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": TRACE_REGION_SIZE, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -892,9 +898,10 @@ def test_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
+            run_type="demo",
             ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
+            device_name=tt_device_name,
             num_layers=model_args.n_layers,
             batch_size=global_batch_size,
             config_params={
