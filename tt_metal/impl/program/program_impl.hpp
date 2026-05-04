@@ -482,13 +482,12 @@ private:
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 
-    void set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    // Set data format and tile metadata in `build_options` for every circular buffer
+    // intersecting `crs`.
+    void set_cb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
-    void set_dfb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
-
-    void set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
-
-    void set_dfb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    // Same as `set_cb_data_fmt_and_tile`, but for dataflow buffers.
+    void set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 

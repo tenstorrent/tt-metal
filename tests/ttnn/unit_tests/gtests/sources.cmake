@@ -6,7 +6,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
-    test_conv2d.cpp
+    conv/test_conv2d.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
 )

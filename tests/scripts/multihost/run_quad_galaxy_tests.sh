@@ -55,6 +55,162 @@ extract_hosts_from_hostfile() {
 }
 
 ###############################################################################
+# Run summary: every pytest case (via junitxml) + native steps; test_summary.txt
+###############################################################################
+
+_test_run_summary_tsv() {
+    echo "${TT_METAL_HOME}/generated/artifacts/test_summary.tsv"
+}
+
+_test_run_summary_txt() {
+    echo "${TT_METAL_HOME}/generated/artifacts/test_summary.txt"
+}
+
+_test_run_summary_junit_path() {
+    local stem="$1"
+    mkdir -p "${TT_METAL_HOME}/generated/artifacts/test_summary_junit"
+    echo "${TT_METAL_HOME}/generated/artifacts/test_summary_junit/${stem}.xml"
+}
+
+_test_run_summary_init() {
+    mkdir -p "${TT_METAL_HOME}/generated/artifacts/test_summary_junit"
+    mkdir -p "${TT_METAL_HOME}/generated/artifacts"
+    : >"$(_test_run_summary_tsv)"
+    # NOTE: This replaces any pre-existing EXIT trap. No other EXIT trap is
+    # expected in this script; add chaining here if that assumption changes.
+    trap '_test_run_summary_on_exit' EXIT
+}
+
+# Run the command and capture its exit code without toggling global errexit.
+# Callers must read _TEST_RUN_LAST_EC immediately after this function returns.
+# NOTE: _TEST_RUN_LAST_EC is a global variable; calls must be sequential (no &).
+_test_run_summary_exec() {
+    "$@" && _TEST_RUN_LAST_EC=0 || _TEST_RUN_LAST_EC=$?
+    return 0
+}
+
+_test_run_summary_record_native_step() {
+    local step_label="$1" exit_code="$2" log_path="${3:-}"
+    local st="PASS"
+    [[ "${exit_code}" -eq 0 ]] || st="FAIL"
+    local hint=""
+    if [[ -n "${log_path}" && -f "${log_path}" ]]; then
+        hint="$(tail -n 50 "${log_path}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g')"
+        hint="${hint:0:300}"
+    fi
+    printf 'native\t%s\t-\t%s\texit=%s %s\n' "${step_label}" "${st}" "${exit_code}" "${hint}" >>"$(_test_run_summary_tsv)"
+}
+
+_test_run_summary_append_junit_rows() {
+    local step_label="$1" junit_path="$2" pytest_ec="${3:-0}"
+    export _QG_STEP="${step_label}"
+    export _QG_PATH="${junit_path}"
+    export _QG_PEXIT="${pytest_ec}"
+    "${PYTHON:-python3}" >>"$(_test_run_summary_tsv)" <<'PYappend' || true
+import os, sys, xml.etree.ElementTree as ET
+
+step = os.environ.get("_QG_STEP", "?")
+path = os.environ.get("_QG_PATH", "")
+pexit = os.environ.get("_QG_PEXIT", "0")
+out = sys.stdout
+
+
+def brief(x):
+    if x is None:
+        return ""
+    t = (x.text or "") + " " + (x.get("message") or "")
+    t = " ".join(t.split())
+    return t[:240]
+
+
+if not path or not os.path.isfile(path):
+    out.write(
+        "native\t%s\t-\tFAIL\tdid not run or stopped before pytest wrote results "
+        "(launcher exit %s); e.g. host offline, MPI/SSH/tt-run failure - no junit xml\n"
+        % (step, pexit)
+    )
+    raise SystemExit(0)
+try:
+    root = ET.parse(path).getroot()
+except Exception as e:
+    out.write("native\t%s\t-\tFAIL\tjunit parse: %s\n" % (step, str(e)[:200]))
+    raise SystemExit(0)
+tc_count = 0
+for el in root.iter("testcase"):
+    c = el.get("classname") or ""
+    tc_name = el.get("name") or ""
+    tid = "%s::%s" % (c, tc_name) if c and tc_name else (tc_name or c or "?")
+    sk = el.find("skipped")
+    fl = el.find("failure")
+    er = el.find("error")
+    if sk is not None:
+        out.write("pytest\t%s\t%s\tSKIP\t%s\n" % (step, tid, brief(sk)))
+    elif fl is not None:
+        out.write("pytest\t%s\t%s\tFAIL\t%s\n" % (step, tid, brief(fl)))
+    elif er is not None:
+        out.write("pytest\t%s\t%s\tFAIL\t%s\n" % (step, tid, brief(er)))
+    else:
+        out.write("pytest\t%s\t%s\tPASS\t\n" % (step, tid))
+    tc_count += 1
+if tc_count == 0:
+    out.write(
+        "native\t%s\t-\tFAIL\tpytest produced junit but no test cases (exit %s); "
+        "collection error, deselect, or crash before any test executed\n"
+        % (step, pexit)
+    )
+PYappend
+    unset _QG_STEP _QG_PATH _QG_PEXIT
+}
+
+_test_run_summary_on_exit() {
+    local tsv txt
+    tsv="$(_test_run_summary_tsv)"
+    txt="$(_test_run_summary_txt)"
+    if [[ -z "${TT_METAL_HOME:-}" || ! -f "${tsv}" ]]; then
+        return 0
+    fi
+    "${PYTHON:-python3}" - "${tsv}" "${txt}" <<'PYexit' || true
+import sys
+
+tsv, txt = sys.argv[1], sys.argv[2]
+try:
+    lines = open(tsv, encoding="utf-8", errors="replace").read().splitlines()
+except OSError:
+    sys.exit(0)
+rows = []
+for ln in lines:
+    parts = ln.split("\t", 4)
+    if len(parts) < 4:
+        continue
+    kind, step, tid, st = parts[:4]
+    brief = parts[4] if len(parts) > 4 else ""
+    rows.append((kind, step, tid, st, brief))
+pas = sum(1 for r in rows if r[3] == "PASS")
+fail = sum(1 for r in rows if r[3] == "FAIL")
+skp = sum(1 for r in rows if r[3] == "SKIP")
+hdr = "=== test summary (%d pass, %d fail, %d skip) ===" % (pas, fail, skp)
+with open(txt, "w", encoding="utf-8") as f:
+    f.write(hdr + "\n")
+    for kind, step, tid, st, br in rows:
+        brs = (br or "").strip()
+        if len(brs) > 200:
+            brs = brs[:197] + "..."
+        if kind == "pytest":
+            f.write("%-6s %s\n" % (st, tid))
+            if brs:
+                f.write("       %s\n" % brs)
+        else:
+            f.write("%-6s [%s]\n" % (st, step))
+            if brs:
+                f.write("       %s\n" % brs)
+    f.write("=== end summary; raw TSV: %s ===\n" % tsv)
+PYexit
+    echo "" >&2
+    echo "Test summary written to: ${txt}" >&2
+    cat "${txt}" >&2
+}
+
+###############################################################################
 # Infrastructure unit tests (quad galaxy only)
 ###############################################################################
 
@@ -72,19 +228,32 @@ run_quad_galaxy_unit_tests() {
   local mpirun_args="$mpi_host $mpirun_args_base"
 
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
-  local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
 
   # TODO: Currently failing
   #mpirun-ulfm $mpi_run_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
 
-  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation ; fail+=$?
+  local cv_log="${TT_METAL_HOME}/generated/artifacts/test_summary_junit/cluster_validation_console.log"
+  mkdir -p "${TT_METAL_HOME}/generated/artifacts/test_summary_junit"
+  set +e
+  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation 2>&1 | tee "$cv_log"
+  ec="${PIPESTATUS[0]}"
+  set -e
+  ((fail += ec)) || true
+  _test_run_summary_record_native_step "run_cluster_validation" "$ec" "$cv_log"
 
-  tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
+  local j_mesh j_ccl
+  j_mesh="$(_test_run_summary_junit_path infra_quad_mesh_device_trace)"
+  _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv --junitxml="${j_mesh}" "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace"
+  ec="${_TEST_RUN_LAST_EC}" ; ((fail += ec)) || true
+  _test_run_summary_append_junit_rows "infra_quad_mesh_device_trace" "${j_mesh}" "$ec"
 
   # TODO: Currently failing on 1D/2D tests
   #tt_run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
+  j_ccl="$(_test_run_summary_junit_path infra_quad_ccl_quad_host_mesh)"
+  _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv --junitxml="${j_ccl}" tests/nightly/tg/ccl/ -k "quad_host_mesh"
+  ec="${_TEST_RUN_LAST_EC}" ; ((fail += ec)) || true
+  _test_run_summary_append_junit_rows "infra_quad_ccl_quad_host_mesh" "${j_ccl}" "$ec"
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -342,7 +511,11 @@ run_dual_deepseekv3_unit_tests() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
+    local junit_path="$(_test_run_summary_junit_path deepseekv3_unit_dual)"
+    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests/unit
+    local ec="${_TEST_RUN_LAST_EC}"
+    ((fail += ec)) || true
+    _test_run_summary_append_junit_rows "deepseekv3_unit_dual" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -353,7 +526,11 @@ run_quad_deepseekv3_unit_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
+    local junit_path="$(_test_run_summary_junit_path deepseekv3_unit_quad)"
+    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests/unit
+    local ec="${_TEST_RUN_LAST_EC}"
+    ((fail += ec)) || true
+    _test_run_summary_append_junit_rows "deepseekv3_unit_quad" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -368,7 +545,11 @@ run_dual_deepseekv3_module_tests() {
     fail=0
     setup_dual_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
+    local junit_path="$(_test_run_summary_junit_path deepseekv3_module_dual)"
+    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests
+    local ec="${_TEST_RUN_LAST_EC}"
+    ((fail += ec)) || true
+    _test_run_summary_append_junit_rows "deepseekv3_module_dual" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -379,7 +560,11 @@ run_quad_deepseekv3_module_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
+    local junit_path="$(_test_run_summary_junit_path deepseekv3_module_quad)"
+    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests
+    local ec="${_TEST_RUN_LAST_EC}"
+    ((fail += ec)) || true
+    _test_run_summary_append_junit_rows "deepseekv3_module_quad" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -396,8 +581,13 @@ run_dual_teacher_forced_test() {
     local timeout=$(_demo_timeout 3600)
     local tf_args
     tf_args="$(teacher_forced_pytest_args | paste -sd' ')"
+    local junit_path="$(_test_run_summary_junit_path teacher_forced_dual)"
+    local junit_flag="--junitxml=${junit_path}"
 
-    _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${tf_args} 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} ${tf_args} 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    ((fail += ec)) || true
+    _test_run_summary_append_junit_rows "teacher_forced_dual" "${junit_path}" "${ec}"
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/dual_teacher_forced_output.log ]]; then
@@ -417,8 +607,13 @@ run_quad_teacher_forced_test() {
     local timeout=$(_demo_timeout 3600)
     local tf_args
     tf_args="$(teacher_forced_pytest_args | paste -sd' ')"
+    local junit_path="$(_test_run_summary_junit_path teacher_forced_quad)"
+    local junit_flag="--junitxml=${junit_path}"
 
-    _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${tf_args} 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} ${tf_args} 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    ((fail += ec)) || true
+    _test_run_summary_append_junit_rows "teacher_forced_quad" "${junit_path}" "${ec}"
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/quad_teacher_forced_output.log ]]; then
@@ -441,16 +636,25 @@ run_dual_demo_test() {
     local timeout=$(_demo_timeout 2400)
     local selector
     selector="$(demo_case_selector "dual" "full")"
+    local junit_path="$(_test_run_summary_junit_path demo_full_dual)"
+    local junit_flag="--junitxml=${junit_path}"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_output.log"
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "demo_full_dual" "${junit_path}" "${ec}"
+    return "${ec}"
 }
 
 run_dual_demo_mtp_test() {
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 2400)
+    local junit_path="$(_test_run_summary_junit_path demo_mtp_dual)"
+    local junit_flag="--junitxml=${junit_path}"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/dual_demo_mtp_output.log"
-
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/dual_demo_mtp_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "demo_mtp_dual" "${junit_path}" "${ec}"
+    return "${ec}"
 }
 
 run_quad_demo_test() {
@@ -458,15 +662,25 @@ run_quad_demo_test() {
     local timeout=$(_demo_timeout 3600)
     local selector
     selector="$(demo_case_selector "quad" "full")"
+    local junit_path="$(_test_run_summary_junit_path demo_full_quad)"
+    local junit_flag="--junitxml=${junit_path}"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/quad_demo_output.log"
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/quad_demo_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "demo_full_quad" "${junit_path}" "${ec}"
+    return "${ec}"
 }
 
 run_quad_demo_mtp_test() {
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 3600)
+    local junit_path="$(_test_run_summary_junit_path demo_mtp_quad)"
+    local junit_flag="--junitxml=${junit_path}"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/quad_demo_mtp_output.log"
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/quad_demo_mtp_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "demo_mtp_quad" "${junit_path}" "${ec}"
+    return "${ec}"
 }
 
 ###############################################################################
@@ -478,8 +692,13 @@ run_dual_demo_stress_test() {
     local timeout=$(_demo_timeout 5400)
     local selector
     selector="$(demo_case_selector "dual" "stress")"
+    local junit_path="$(_test_run_summary_junit_path demo_stress_dual)"
+    local junit_flag="--junitxml=${junit_path}"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "demo_stress_dual" "${junit_path}" "${ec}"
+    return "${ec}"
 }
 
 run_quad_demo_stress_test() {
@@ -487,8 +706,13 @@ run_quad_demo_stress_test() {
     local timeout=$(_demo_timeout 5400)
     local selector
     selector="$(demo_case_selector "quad" "stress")"
+    local junit_path="$(_test_run_summary_junit_path demo_stress_quad)"
+    local junit_flag="--junitxml=${junit_path}"
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log"
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo.py -k '$selector' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "demo_stress_quad" "${junit_path}" "${ec}"
+    return "${ec}"
 }
 
 ###############################################################################
@@ -622,6 +846,7 @@ main() {
     fi
 
     init_multihost_test_env
+    _test_run_summary_init
 
     # Args: [test_function] [upr_mode] plus --no-torus/--model-path/--cache-path.
     local test_function="all"

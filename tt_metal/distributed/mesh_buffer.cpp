@@ -269,12 +269,18 @@ void MeshBuffer::deallocate() {
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
         if (MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
             // Unmirror lockstep L1 allocation from each device's lockstep allocator.
+            // Skip per-device unmirror if the device has been closed (default_allocator_ reset
+            // by Device::close()). This can happen at process teardown when the mesh device is
+            // closed before stray tensors are destroyed by the garbage collector. Mirrors the
+            // device_->is_initialized() guard in Buffer::deallocate_impl().
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {
                 for (const auto& [coord, device_buffer] : buffers_) {
                     if (mesh_device->impl().is_local(coord)) {
                         auto* device = mesh_device->impl().get_device(coord);
-                        device->allocator_impl()->unmirror_lockstep_allocation(address_);
+                        if (device->is_initialized()) {
+                            device->allocator_impl()->unmirror_lockstep_allocation(address_);
+                        }
                     }
                 }
             }

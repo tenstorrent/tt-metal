@@ -107,6 +107,10 @@ void kernel_main() {
         // unpack operation) can read it back.
         // Without scaling, transpose and welford (both SFPU-compatible)
         // can share a single DST window for the entire loop.
+        // On the do_scale path, transpose_wh_init_short(cb_scaled) runs before each
+        // welford_update; it re-inits UNPACK and MATH via llk_math_eltwise_unary_datacopy_init
+        // (same MATH-side effect as welford_reinit), so a separate welford_reinit after the mul
+        // is not required here.
         if constexpr (!do_scale) {
             // Explicit srca reconfig is required because the output packing
             // phase (below) calls reconfig_data_format_srca(cb_var) which
