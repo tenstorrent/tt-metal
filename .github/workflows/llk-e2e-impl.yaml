@@ -56,7 +56,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "nightly"
+            "e2e"
       - name: Build test matrix
         id: build-matrix
         run: |
