@@ -1030,6 +1030,13 @@ FIX_M2_FIRES=$(grep -cE 'FIX M2.*dead-relay|compile_and_configure_fabric: FIX M2
 # FIX PL (#42429): opt-in timeout guards on l1_barrier / dram_barrier / read_core for non-MMIO chips.
 # Fires when the ERISC relay path is dead and the barrier/read would otherwise hang indefinitely.
 FIX_PL_FIRES=$(grep -cE 'clear_l1_state: l1_barrier timed out.*dead ERISC relay|clear_dram_state: dram_barrier timed out|terminate_active_ethernet_cores_on_all_chips: l1_barrier timed out|WriteInitMagic: read_core timed out' "$CLEAN" 2>/dev/null; :)
+# FIX TV (#42429): poll MMIO ETH heartbeat in run_launch_phase() after reset_cores().
+# Success: "FIX TV — all N MMIO ETH channel(s) confirmed base firmware heartbeat in Xms"
+# Timeout: "FIX TV — MMIO ETH heartbeat poll timed out after Xms"
+# FIX TW (#42429): inside FIX TV, detects static 0xABCDxxxx UMD marker as immediate-ready.
+# Without FIX TW, FIX TV always times out because it waits for heartbeat value change.
+FIX_TV_SUCCESS=$(grep -cE 'FIX TV.*all.*confirmed base firmware heartbeat' "$CLEAN" 2>/dev/null; :)
+FIX_TV_TIMEOUT=$(grep -cE 'FIX TV.*MMIO ETH heartbeat poll timed out' "$CLEAN" 2>/dev/null; :)
 # FIX PF (#42429): UMD base fw heartbeat detected at Metal exit — skip writing Metal exit signal.
 # Fires in risc_firmware_initializer.cpp when BRISC is still running base-UMD fw at process shutdown.
 # Clears stale fw_launch_addr to unblock next session.  Distinct from FIX PA (which fires during init).
@@ -1323,6 +1330,15 @@ if [ "${FIX_PF_FIRES:-0}" -gt 0 ]; then
     echo "     BRISC was still running base-UMD firmware at process shutdown; writing the Metal exit signal"
     echo "     would overwrite a live base-UMD relay.  FIX PF clears the stale fw_launch_addr instead."
     echo "     Distinct from FIX PA (init cascade): FIX PF fires in risc_firmware_initializer.cpp teardown path."
+fi
+if [ "${FIX_TV_SUCCESS:-0}" -gt 0 ] || [ "${FIX_TV_TIMEOUT:-0}" -gt 0 ]; then
+    echo "  => [FIX TV/TW] MMIO ETH heartbeat poll: ${FIX_TV_SUCCESS:-0} success, ${FIX_TV_TIMEOUT:-0} timeout."
+    echo "     FIX TV polls MMIO ETH heartbeat in run_launch_phase() after reset_cores()."
+    echo "     FIX TW detects static 0xABCDxxxx UMD marker as immediate-ready (no increment wait)."
+    if [ "${FIX_TV_TIMEOUT:-0}" -gt 0 ]; then
+        echo "     WARNING: FIX TV timed out — MMIO ETH still rebooting after 3000ms. Probe_dead likely."
+        echo "     If FIX TW is present, timeout means hardware reboot genuinely slow (not UMD-marker miss)."
+    fi
 fi
 if [ "${INVALID_EDMSTATUS:-0}" -gt 0 ]; then
     echo "  => [CORRUPT EDMSTATUS] Invalid EDMStatus value(s) in ERISC L1 (${INVALID_EDMSTATUS} occurrence(s))."
@@ -1638,6 +1654,8 @@ echo "  FIX_UP2_FIRES:             ${FIX_UP2_FIRES:-0}  (pre-test-loop ring-sync
 echo "  FIX_TM2_FIRES:             ${FIX_TM2_FIRES:-0}  (ring-sync timeout in post-TL warm-up)"
 echo "  FIX_TH3_FIRES:             ${FIX_TH3_FIRES:-0}  (120s/12x ring-sync timeout extension)"
 echo "  FIX_TG2_SYNC_CLEARS:       ${FIX_TG2_SYNC_CLEARS:-0}  (stale sync-address clears for base-UMD channels)"
+echo "  FIX_TV_SUCCESS:            ${FIX_TV_SUCCESS:-0}  (MMIO ETH heartbeat confirmed after reset_cores)"
+echo "  FIX_TV_TIMEOUT:            ${FIX_TV_TIMEOUT:-0}  (MMIO ETH heartbeat poll timed out — probe_dead likely)"
 echo ""
 if [ "${FIX_TH3_FIRES:-0}" -gt 0 ]; then
     echo "  => [FIX TH3] fabric_router_sync_timeout extended from 10s to 120s (12x) (${FIX_TH3_FIRES} occurrence(s))."

@@ -525,8 +525,8 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             //
             // Two-phase heartbeat check:
             //   Phase 1: wait for heartbeat != 0  (ROM zeroes L1 on boot; firmware writes first value)
-            //   Phase 2: wait for value to CHANGE  (proves firmware is actively running, not stale memory)
-            // WH heartbeat at 0x1F80 (test_results[48]) is a plain incrementing counter — no 0xABCDxxxx prefix.
+            //   Phase 2: wait for value to CHANGE, or detect static 0xABCDxxxx UMD marker (FIX TW)
+            // WH heartbeat at 0x1F80 (test_results[48]) — UMD base firmware writes a STATIC 0xABCDxxxx marker.
             // cluster_.read_reg() on MMIO cores goes through PCIe — safe even with broken relay.
             //
             // Heartbeat addresses (populated in each arch's HAL active_eth file):
