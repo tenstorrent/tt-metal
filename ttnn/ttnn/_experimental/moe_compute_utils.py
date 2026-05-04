@@ -398,3 +398,52 @@ def prepare_w2_tensor_for_moe_compute(
     padding = torch.zeros(12, L, E, 5, N_padding, 4 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
     all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)  # (12, L, E, 5, N + 192, 128)
     return all_groups_per_bank
+
+
+# NOTE! The following functions are a hard divergence from `main` and should be deleted upon merge
+def get_w0_w1_memory_config(num_layers, experts_per_device, hidden_size, compute_matmul_dram_core_range_set):
+    w0_w1_shard_height = num_layers * experts_per_device * 3 * hidden_size
+    w0_w1_shard_width = 4 * ttnn.TILE_SIZE
+    w0_w1_shard_spec = ttnn.ShardSpec(
+        compute_matmul_dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w0_w1_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec
+    )
+    return w0_w1_memory_config
+
+
+def get_w2_memory_config(num_layers, experts_per_device, matmul_N, compute_matmul_dram_core_range_set):
+    w2_shard_height = num_layers * experts_per_device * 5 * (matmul_N + 192)
+    w2_shard_width = 4 * ttnn.TILE_SIZE
+    w2_shard_spec = ttnn.ShardSpec(
+        compute_matmul_dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
+    return w2_memory_config
+
+
+def determine_compute_matmul_cores(mesh_device):
+    MATMUL_FULL_CORES = {0, 3, 6, 9}
+    MATMUL_PAD_CORES = {1, 2, 4, 5, 7, 8, 10, 11}
+
+    in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(mesh_device, 0)
+    core2dram = {}
+    for dram_bank_id, core_coords in enumerate(in0_core_coords):
+        core2dram[core_coords] = dram_bank_id
+
+    in0_num_cores = len(in0_core_coords)
+
+    # Make a new list of core coords that are sorted in decreasing order by y coordinate and then x coordinate.
+    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda x: (x.y, x.x), reverse=True)
+
+    ring2cores = {}
+    for ring_pos, core_coord in enumerate(in0_core_coords_sorted):
+        # key: ring_pos, value: (core_coord, dram_bank_id, pad_flag)
+        ring2cores[ring_pos] = (core_coord, core2dram[core_coord], 1 if ring_pos in MATMUL_PAD_CORES else 0)
+
+    dram_core_coords = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(in0_num_cores)]
+    dram_core_range = [ttnn.CoreRange(dram_core_coord, dram_core_coord) for dram_core_coord in dram_core_coords]
+    dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
+
+    return ring2cores, dram_core_range_set

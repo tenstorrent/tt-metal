@@ -637,10 +637,6 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
             **cfg["quad_ring_moe_compute"],
         )
 
-        ttnn.deallocate(compute_output_dense_expert_activation)
-        ttnn.deallocate(compute_ouput_dense_e_t)
-        ttnn.deallocate(compute_output_token_counts)
-
         combine_output = ttnn.unsqueeze(combine_output, dim=1)
 
         if combine_output.shape[2] == ttnn.TILE_SIZE:
@@ -682,7 +678,7 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         rs_kwargs = {
             "dim": rs_cfg["dim"],
             "cluster_axis": rs_cfg.get("cluster_axis"),
-            "subdevice_id": rs_cfg.get("subdevice_id"),
+            # "subdevice_id": rs_cfg.get("subdevice_id"),
             "memory_config": rs_cfg.get("memory_config"),
             "intermediate_memory_config": rs_cfg.get("intermediate_memory_config"),
             "num_links": rs_cfg.get("num_links"),

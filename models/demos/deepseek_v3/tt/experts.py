@@ -8,6 +8,13 @@ from pathlib import Path
 import torch
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
+from ttnn.experimental.moe_compute_utils import (
+    determine_compute_matmul_cores,
+    get_w0_w1_memory_config,
+    get_w2_memory_config,
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w2_tensor_for_moe_compute,
+)
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -28,13 +35,6 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
-)
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
-    determine_compute_matmul_cores,
-    get_w0_w1_memory_config,
-    get_w2_memory_config,
-    prepare_w0_w1_tensor,
-    prepare_w2_tensor,
 )
 
 
@@ -136,7 +136,7 @@ class Experts(AbstractModule):
         prepared_w0_w1 = []
         prepared_w2 = []
         for i in range(0, num_routed_experts, num_experts_per_device):
-            prepared_w0_w1_tensor = prepare_w0_w1_tensor(
+            prepared_w0_w1_tensor = prepare_w0_w1_tensor_for_moe_compute(
                 w0[:, i : i + num_experts_per_device, :, :],
                 w1[:, i : i + num_experts_per_device, :, :],
                 num_layers,
@@ -145,7 +145,7 @@ class Experts(AbstractModule):
                 matmul_N,
                 ring2cores,
             )
-            prepared_w2_tensor = prepare_w2_tensor(
+            prepared_w2_tensor = prepare_w2_tensor_for_moe_compute(
                 w2[:, i : i + num_experts_per_device, :, :],
                 num_layers,
                 num_experts_per_device,

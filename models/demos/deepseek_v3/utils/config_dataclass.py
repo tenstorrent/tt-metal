@@ -501,8 +501,8 @@ class MoEComputeConfig(OpConfigBase):
 
     output_height_shard_dim: int
     output_width_shard_dim: int
-    cluster_axis: int | None = None
     mux_core_range_set: ttnn.CoreRangeSet
+    cluster_axis: int | None = None
     topology: ttnn.Topology = ttnn.Topology.Ring
     num_links: int = 4
     optional_cross_device_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
