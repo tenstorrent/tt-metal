@@ -18,6 +18,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 TIMEOUT = 300
@@ -195,7 +196,8 @@ def run(
                 dtype_c,
                 ttnn.ROW_MAJOR_LAYOUT,
                 mem_config_c,
-                kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
+                (update_idxs_tensor_kwargs or {}).get("tensor_placement")
+                or kwargs.get("input_c_tensor_placement", input_a_tensor_placement),
             )
         else:
             input_tensor_a = ttnn.from_torch(
@@ -235,7 +237,8 @@ def run(
                     dtype_d,
                     ttnn.ROW_MAJOR_LAYOUT,
                     mem_config_d,
-                    kwargs.get("input_d_tensor_placement", input_a_tensor_placement),
+                    (page_table_kwargs or {}).get("tensor_placement")
+                    or kwargs.get("input_d_tensor_placement", input_a_tensor_placement),
                 )
             else:
                 input_tensor_d = ttnn.from_torch(
@@ -253,16 +256,17 @@ def run(
     # Only cache and input are positional, everything else is keyword-only
     # So tensor_a=cache, tensor_b=input, tensor_c=update_idxs_tensor, tensor_d=page_table
     # Note: paged_update_cache may not accept memory_config parameter - it modifies cache_tensor in place
-    # Ensure batch_offset has a default value in op_kwargs
-    if "batch_offset" not in op_kwargs or op_kwargs["batch_offset"] is None:
+    # Only include batch_offset if it was in the original traced kwargs
+    # (adding it when master didn't have it causes extra_key diffs)
+    if "batch_offset" in op_kwargs and op_kwargs["batch_offset"] is None:
         op_kwargs["batch_offset"] = 0
     try:
         output_tensor = ttnn.experimental.paged_update_cache(
             input_tensor_a,  # cache_tensor (positional)
             input_tensor_b,  # input_tensor (positional)
-            update_idxs_tensor=input_tensor_c
-            if input_tensor_c is not None
-            else None,  # update_idxs_tensor (optional keyword)
+            update_idxs_tensor=(
+                input_tensor_c if input_tensor_c is not None else None
+            ),  # update_idxs_tensor (optional keyword)
             page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
             **op_kwargs,
         )
@@ -271,9 +275,9 @@ def run(
         output_tensor = ttnn.experimental.paged_update_cache(
             input_tensor_a,  # cache_tensor (positional)
             input_tensor_b,  # input_tensor (positional)
-            update_idxs_tensor=input_tensor_c
-            if input_tensor_c is not None
-            else None,  # update_idxs_tensor (optional keyword)
+            update_idxs_tensor=(
+                input_tensor_c if input_tensor_c is not None else None
+            ),  # update_idxs_tensor (optional keyword)
             page_table=input_tensor_d if input_tensor_d is not None else None,  # page_table (optional keyword)
             **op_kwargs,
         )
@@ -282,5 +286,9 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, kwargs.get("input_b_tensor_placement", None)
+        )
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     return [pcc, e2e_perf]

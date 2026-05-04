@@ -13,10 +13,14 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+)
 import re
 
 
@@ -120,14 +124,9 @@ def run(
     if program_config is not None:
         op_kwargs["program_config"] = program_config
 
-    # Use named memory_config for output if output_memory_config not set
-    if output_memory_config is None and "memory_config" in op_kwargs:
-        output_memory_config = op_kwargs.pop("memory_config")
-    # If output_memory_config is explicitly set, remove duplicate memory_config from op_kwargs
-    elif "memory_config" in op_kwargs:
-        op_kwargs.pop("memory_config")
-    if output_memory_config is not None:
-        op_kwargs["memory_config"] = output_memory_config
+    # Do NOT inject memory_config — the master trace only records it when the model
+    # explicitly passed it as a kwarg.  Injecting from vector metadata causes
+    # extra_key diffs in validation.
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -155,12 +154,20 @@ def run(
     torch_weight = torch.randn(w_shape, dtype=torch.float32)
 
     # PyTorch golden: RMS norm = x * weight / sqrt(mean(x^2) + eps)
-    # Need 1D weight matching input's last dim for broadcasting
-    if len(w_shape) > 1:
-        weight_size = input_shape[-1]
-        torch_weight_1d = torch_weight.flatten()[:weight_size]
+    # Need 1D weight matching input's last dim for broadcasting. When weight
+    # is replicated across a mesh and input is sharded along the feature dim,
+    # each chip uses its full weight on its per-chip slice; globally, repeat
+    # the weight by mesh_factor along the feature dim to match input_shape[-1].
+    flat_weight = torch_weight.flatten()
+    feature_dim = input_shape[-1]
+    if flat_weight.numel() == feature_dim:
+        torch_weight_1d = flat_weight
+    elif flat_weight.numel() < feature_dim and feature_dim % flat_weight.numel() == 0:
+        torch_weight_1d = flat_weight.repeat(feature_dim // flat_weight.numel())
+    elif flat_weight.numel() > feature_dim:
+        torch_weight_1d = flat_weight[:feature_dim]
     else:
-        torch_weight_1d = torch_weight
+        torch_weight_1d = flat_weight
 
     eps = float(op_kwargs.get("epsilon", 1e-5))
     rms = torch.sqrt(torch.mean(torch_input**2, dim=-1, keepdim=True) + eps)
@@ -224,5 +231,7 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output, output_tensor, 0.999)
     return [pcc, e2e_perf]

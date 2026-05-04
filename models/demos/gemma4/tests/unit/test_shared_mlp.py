@@ -17,7 +17,7 @@ from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batc
 
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
-def test_shared_mlp(batch_size, seq_len, mesh_device):
+def test_shared_mlp(batch_size, seq_len, mesh_device, reset_seeds):
     """Test SharedMLP against HF Gemma4TextMLP (GeGLU)."""
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tt.ccl import CCLManager
