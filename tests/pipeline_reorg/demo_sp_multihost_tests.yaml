@@ -112,8 +112,8 @@
       mpirun --pernode --tag-output /opt/venv/bin/tt-smi -glx_reset
 
       if [ "$attempt" -lt "$MAX_RETRIES" ]; then
-        echo "--- Sleeping 30s before next attempt ---"
-        sleep 30
+        echo "--- Sleeping 300s before next attempt ---"
+        sleep 300
       fi
     done
 
