@@ -151,11 +151,18 @@ class DecoderLayer(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
-        # Largest num_cores ≤ 64 dividing dim/TILE that fits compute grid (8×7 harvested WH).
+        # Match decode RMSNorm width-shard cores to MLP DRAM-sharded matmul grid. Independent picks
+        # (e.g. LN at 64c vs MLP at 8c) produced wrong per-core K tiles vs dram_sharded in0_block_w.
         dim_tiles = hidden_size // 32
-        ln_num_cores = next(
-            c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0 and _sharded_ln_core_grid_fits(device, c)
-        )
+        ln_num_cores = self.mlp.dram_shard_decode_num_cores
+        if dim_tiles % ln_num_cores != 0:
+            raise RuntimeError(
+                f"hidden dim in tiles ({dim_tiles}) must divide MLP DRAM shard core count ({ln_num_cores})"
+            )
+        if not _sharded_ln_core_grid_fits(device, ln_num_cores):
+            raise RuntimeError(
+                f"MLP DRAM shard cores ({ln_num_cores}) cannot form a sharded layernorm grid on this device"
+            )
         self._decode_ln_in_memcfg, self._decode_ln_progcfg = _build_sharded_rmsnorm_configs(
             device, hidden_size, ln_num_cores, m=32
         )

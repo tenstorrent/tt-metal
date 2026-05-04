@@ -25,28 +25,39 @@ import ttnn
 TILE = ttnn.TILE_SIZE  # 32
 
 
-def _wormhole_mesh_on_mmio_multi_chip_board(device) -> bool:
-    """N300-style board: multiple WH chips share one host MMIO while ``open_device`` still yields a 1x1 mesh."""
+def dram_sharded_decode_compute_kernel_config(device) -> ttnn.WormholeComputeKernelConfig:
+    """Compute kernel for ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``.
+
+    On Wormhole B0, FP32 dest accumulation inflates intermediate/CB L1 usage; the DRAM-sharded
+    matmul also allocates CBs on the full bounding box of in0 shard cores and DRAM reader cores,
+    which can overlap the globally allocated width-sharded in0 buffer (Metal validate failure).
+    ``tt_transformers`` uses LoFi with ``fp32_dest_acc_en=False`` on WH for this path.
+    """
     try:
-        if device.arch() != ttnn.device.Arch.WORMHOLE_B0:
-            return False
-        n = int(ttnn.device.GetNumAvailableDevices())
-        if n < 2:
-            return False
-        get_ids = getattr(device, "get_device_ids", None)
-        if not callable(get_ids):
-            return False
-        mmio_parent = [int(ttnn.device.GetPCIeDeviceID(i)) for i in range(n)]
-        peer_count: dict[int, int] = {}
-        for m in mmio_parent:
-            peer_count[m] = peer_count.get(m, 0) + 1
-        return any(peer_count.get(int(ttnn.device.GetPCIeDeviceID(int(cid))), 0) > 1 for cid in get_ids())
+        if device.arch() == ttnn.device.Arch.WORMHOLE_B0:
+            return ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
     except Exception:
-        return False
+        pass
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
 
 def mesh_dram_shard_decode_matmul_ok(device) -> bool:
-    """Allow DRAM-sharded decode matmul only for safe single-logical-device paths (see N300 MMIO note above)."""
+    """Use DRAM-sharded decode matmul when the opened device is a single logical mesh.
+
+    True for N150 and for N300 when only one chip is in the mesh (shape 1×1). False when
+    multiple devices are opened or the mesh spans more than one chip (e.g. 1×2 tensor
+    parallel), where sharded DRAM matmul is not wired for multi-chip.
+    """
     try:
         get_n = getattr(device, "get_num_devices", None)
         if callable(get_n) and int(get_n()) > 1:
@@ -56,7 +67,7 @@ def mesh_dram_shard_decode_matmul_ok(device) -> bool:
             return False
     except Exception:
         pass
-    return not _wormhole_mesh_on_mmio_multi_chip_board(device)
+    return True
 
 
 def _largest_divisor(n: int, max_divisor: int = 8) -> int:

@@ -19,6 +19,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     build_dram_sharded_weight,
+    dram_sharded_decode_compute_kernel_config,
     dram_sharded_program_config,
     find_grid_k_n,
     mesh_dram_shard_decode_matmul_ok,
@@ -214,6 +215,7 @@ class Attention(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._decode_dram_shard_compute = dram_sharded_decode_compute_kernel_config(device)
 
         # Keep fp32 accumulation for attention matmuls. HiFi2 is the current
         # quality/speed tradeoff for this path.
@@ -453,7 +455,7 @@ class Attention(LightweightModule):
             xqkv_sharded = ttnn.linear(
                 x_sharded,
                 self.wqkv_dram_sharded,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self._decode_dram_shard_compute,
                 program_config=self._decode_wqkv_dramshard_progcfg,
                 memory_config=self._decode_wqkv_out_memcfg,
             )
@@ -872,7 +874,7 @@ class Attention(LightweightModule):
             out_sharded = ttnn.linear(
                 attn_sharded,
                 self.wo_dram_sharded,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self._decode_dram_shard_compute,
                 program_config=self._decode_wo_dramshard_progcfg,
                 memory_config=self._decode_wo_out_memcfg,
             )

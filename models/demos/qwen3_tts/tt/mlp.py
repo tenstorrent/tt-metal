@@ -15,6 +15,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     build_dram_sharded_weight,
+    dram_sharded_decode_compute_kernel_config,
     dram_sharded_program_config,
     find_grid_k_n,
     mesh_dram_shard_decode_matmul_ok,
@@ -110,6 +111,10 @@ class MLP(LightweightModule):
             N2_tiles=n_tiles_d,
         )
         num_dc = rows_dc * cols_dc
+        # DecoderLayer decode RMSNorm must width-shard hidden with this same core count so the
+        # post-attention tensor matches gate_proj DRAM-sharded in0 (avoids matmul TT_FATAL:
+        # per-core K tiles not divisible by in0_block_w).
+        self.dram_shard_decode_num_cores = num_dc
         self._decode_gate_up_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_gu, n=n_padded_gu, num_cores=num_dc
         )
@@ -134,6 +139,7 @@ class MLP(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._decode_dram_shard_compute = dram_sharded_decode_compute_kernel_config(device)
         # Prefill program configs (M>1, regular 1D matmul).
         self.short_seq_limit = 32
         _fp32 = self.compute_kernel_config.fp32_dest_acc_en
@@ -186,7 +192,7 @@ class MLP(LightweightModule):
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
-        # Decode: DRAM-sharded chain on single-chip mesh; 1D path on multi-chip (N300).
+        # Decode: DRAM-sharded chain on single-chip mesh; 1D path if mesh_dram_shard_decode_matmul_ok is False.
         if is_decode and seq_len < 1024:
             if self._decode_use_dram_sharded_matmul:
                 if x.memory_config() == self._decode_gate_up_in0_memcfg:
@@ -198,14 +204,14 @@ class MLP(LightweightModule):
                 gate_sharded = ttnn.linear(
                     x_sharded,
                     self.gate_proj_dram_sharded,
-                    compute_kernel_config=self.compute_kernel_config,
+                    compute_kernel_config=self._decode_dram_shard_compute,
                     program_config=self._decode_gate_up_dramshard_progcfg,
                     memory_config=self._decode_gate_up_out_memcfg,
                 )
                 up_sharded = ttnn.linear(
                     x_sharded,
                     self.up_proj_dram_sharded,
-                    compute_kernel_config=self.compute_kernel_config,
+                    compute_kernel_config=self._decode_dram_shard_compute,
                     program_config=self._decode_gate_up_dramshard_progcfg,
                     memory_config=self._decode_gate_up_out_memcfg,
                 )
@@ -222,7 +228,7 @@ class MLP(LightweightModule):
                 out_sharded = ttnn.linear(
                     hidden_sharded,
                     self.down_proj_dram_sharded,
-                    compute_kernel_config=self.compute_kernel_config,
+                    compute_kernel_config=self._decode_dram_shard_compute,
                     program_config=self._decode_down_dramshard_progcfg,
                     memory_config=self._decode_down_out_memcfg,
                 )
