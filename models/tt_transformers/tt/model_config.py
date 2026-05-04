@@ -1115,12 +1115,6 @@ class ModelArgs:
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
 
-        if not to_warmup_seq_lens:
-            # e.g. max_seq_len is below every standard warmup length after filtering
-            m = self.max_seq_len
-            assert m >= 1, "max_seq_len must be positive for prefill warmup"
-            to_warmup_seq_lens = [m]
-
         return to_warmup_seq_lens
 
     def filter_warmup_seq_lens(self, to_warmup_seq_lens):
