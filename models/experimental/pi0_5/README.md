@@ -70,8 +70,20 @@ policy replanning every 10 steps (chunk=10).
 | 3: bowl on cookie box → plate | Yes | 119 | 3.7 s | 163.9 | 32.5 |
 | 4: bowl in drawer → plate | No | 400 | 13.0 s | 163.8 | 30.7 |
 
-> Task 0 is slower (248.6 ms) due to first-call TTNN kernel compilation;
-> subsequent tasks run at steady-state 163.8 ms.
+> Task 0 is slower due to first-call TTNN kernel compilation;
+> subsequent tasks run at steady-state ~164 ms.
+
+### Power consumption (Blackhole p150a)
+
+| State | Power | Current | Voltage | AICLK | Temp |
+|---|---|---|---|---|---|
+| Idle | 38–43 W | — | 711 mV | 800 MHz | 46 °C |
+| Active (mean) | **69 W** | 85 A | 811 mV | 1350 MHz | 49–63 °C |
+| Active (peak) | **104 W** | 131 A | 800 mV | 1350 MHz | 63 °C |
+
+Measured via `tt-smi` telemetry sampled at 2 Hz during closed-loop rollout.
+Peak power occurs during inference bursts; between replans the chip drops
+to ~65 W while the host runs MuJoCo env steps.
 
 Reproduce:
 
