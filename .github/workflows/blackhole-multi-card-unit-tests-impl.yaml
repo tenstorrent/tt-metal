@@ -53,10 +53,35 @@ jobs:
           all_tests_yaml=$(cat <<'YAML_EOF'
           - name: fabric fast unit tests (1D, 2D, single erisc)
             cmd: |
-              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-              TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-            timeout: 15
+              dram_fw_init_step_prefixes=(
+                "clear_l1"
+                "clear_l1,assert_reset"
+                "clear_l1,assert_reset,write_bank_tables"
+                "clear_l1,assert_reset,write_bank_tables,load_binaries"
+                "clear_l1,assert_reset,write_bank_tables,load_binaries,write_core_info"
+                "clear_l1,assert_reset,write_bank_tables,load_binaries,write_core_info,write_launch_msg"
+                "clear_l1,assert_reset,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg"
+                "clear_l1,assert_reset,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs"
+                "clear_l1,assert_reset,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc"
+                "clear_l1,assert_reset,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc,deassert_reset"
+                "clear_l1,assert_reset,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc,deassert_reset,wait_init_done"
+              )
+
+              status=0
+              run_with_dram_fw_init_steps() {
+                echo "+ TT_METAL_DRAM_FW_INIT_STEPS=${dram_fw_init_steps} $*"
+                TT_METAL_DRAM_FW_INIT_STEPS="${dram_fw_init_steps}" "$@" || status=1
+              }
+
+              for dram_fw_init_steps in "${dram_fw_init_step_prefixes[@]}"; do
+                echo "Running fabric fast unit tests with TT_METAL_DRAM_FW_INIT_STEPS=${dram_fw_init_steps}"
+                run_with_dram_fw_init_steps ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+                run_with_dram_fw_init_steps ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+                run_with_dram_fw_init_steps env TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+              done
+
+              exit ${status}
+            timeout: 180
             test-type: fast
           - name: fabric and ttnn UDM unit tests
             cmd: |
