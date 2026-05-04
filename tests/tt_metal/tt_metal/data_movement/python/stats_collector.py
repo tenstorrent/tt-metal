@@ -43,6 +43,7 @@ class StatsCollector:
             dm_stats[risc] = {
                 "analysis": {"stats": dict(), "series": []},
                 "attributes": dict(),
+                "attributes_per_core": dict(),
             }
 
         # Gather analysis stats
@@ -62,18 +63,34 @@ class StatsCollector:
                     dm_stats[risc]["analysis"]["series"].extend(core_analysis[analysis_key]["series"])
 
         # Gather test attributes
-
+        # Two views of attribute stamps:
+        #   - global: last-write-wins per (run_host_id, zone_name); stable for tests that
+        #     stamp the same value on every core.
+        #   - per-core: keyed by (run_host_id, core, zone_name); used when kernels stamp
+        #     role-specific values (e.g. matmul sender vs receiver). event[4] is the core
+        #     appended in tracy.process_device_log.core_to_device_timeseries.
         for risc in dm_stats.keys():
             attributes = dm_stats[risc]["attributes"]
+            attributes_per_core = dm_stats[risc]["attributes_per_core"]
             events_key = self.riscv_to_analysis_event[risc]["events"]
 
             for event in stats["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"][events_key]:
                 run_host_id = event[0]["run_host_id"]
+                zone_name = event[0]["zone_name"]
+                value = event[2]
+                core = event[4] if len(event) > 4 else None
 
                 if run_host_id in attributes.keys():
-                    attributes[run_host_id][event[0]["zone_name"]] = event[2]
+                    attributes[run_host_id][zone_name] = value
                 else:
-                    attributes[run_host_id] = {event[0]["zone_name"]: event[2]}
+                    attributes[run_host_id] = {zone_name: value}
+
+                if core is not None:
+                    if run_host_id not in attributes_per_core:
+                        attributes_per_core[run_host_id] = {}
+                    if core not in attributes_per_core[run_host_id]:
+                        attributes_per_core[run_host_id][core] = {}
+                    attributes_per_core[run_host_id][core][zone_name] = value
 
         aggregate_stats = self.aggregate_performance(dm_stats)
 
@@ -140,28 +157,46 @@ class StatsCollector:
         for riscv in RISCV_PROCESSORS:
             grouped_durations = defaultdict(list)
             grouped_bandwidths = defaultdict(list)
+            grouped_bandwidths_per_core = defaultdict(list)
             grouped_cores = defaultdict(list)
             grouped_start_cycles = defaultdict(list)
             grouped_end_cycles = defaultdict(list)
+            attributes_per_core = dm_stats[riscv].get("attributes_per_core", {})
 
             for entry in dm_stats[riscv]["analysis"]["series"]:
                 run_host_id = entry["duration_type"][0]["run_host_id"]
                 attributes = dm_stats[riscv]["attributes"][run_host_id]
+                core = entry["core"]
                 num_transactions = attributes.get("Number of transactions", 1)
                 transaction_size = attributes.get("Transaction size in bytes", 0)
 
                 duration = entry["duration_cycles"]
+                # Effective bandwidth from global attrs — same formula on every core,
+                # represents "how fast did the multicast complete". Used for the aggregate
+                # (median) reported to performance_checker / plotter / stats_reporter.
                 bandwidth = num_transactions * transaction_size / duration if duration else 0
+
+                # Per-core actual NOC bandwidth — uses the role-specific "Per-core bytes"
+                # stamp when available so the heatmap can show sender vs receiver asymmetry.
+                # Falls back to the effective bandwidth when no per-core stamp exists.
+                core_attrs = attributes_per_core.get(run_host_id, {}).get(core, {})
+                per_core_bytes = core_attrs.get("Per-core bytes")
+                if per_core_bytes is not None and duration:
+                    bandwidth_per_core = per_core_bytes / duration
+                else:
+                    bandwidth_per_core = bandwidth
 
                 grouped_durations[run_host_id].append(duration)
                 grouped_bandwidths[run_host_id].append(bandwidth)
-                grouped_cores[run_host_id].append(entry["core"])
+                grouped_bandwidths_per_core[run_host_id].append(bandwidth_per_core)
+                grouped_cores[run_host_id].append(core)
                 grouped_start_cycles[run_host_id].append(entry.get("start_cycle", 0))
                 grouped_end_cycles[run_host_id].append(entry.get("end_cycle", 0))
 
             agg = {}
             for run_host_id, durations in grouped_durations.items():
                 bandwidths = grouped_bandwidths[run_host_id]
+                bandwidths_per_core = grouped_bandwidths_per_core[run_host_id]
                 attributes = dm_stats[riscv]["attributes"][run_host_id]
                 test_id = attributes.get("Test id")
                 cores = grouped_cores[run_host_id]
@@ -186,7 +221,19 @@ class StatsCollector:
                 wall_clock_time = max_end - min_start if max_end > min_start else float(np.max(durations))
                 transaction_size = attributes.get("Transaction size in bytes", 0)
                 num_transactions = attributes.get("Number of transactions", 1)
-                total_bytes = num_cores * transaction_size * num_transactions
+                # Matmul-only override: when every core in the run stamped "Per-core bytes"
+                # (matmul multicast kernels), sum the per-core actual NOC bytes instead of
+                # using num_cores * transaction_size * num_transactions. The latter assumes
+                # every core multicasts every iteration, which over-counts by a factor of C
+                # for rotating-sender / fixed-sender multicast tests. Falls back to the
+                # original formula for every other test in the suite, including 1D in1
+                # (which doesn't stamp "Per-core bytes").
+                run_per_core = attributes_per_core.get(run_host_id, {})
+                per_core_byte_values = [run_per_core.get(c, {}).get("Per-core bytes") for c in cores]
+                if cores and all(v is not None for v in per_core_byte_values):
+                    total_bytes = sum(per_core_byte_values)
+                else:
+                    total_bytes = num_cores * transaction_size * num_transactions
                 combined_bandwidth = total_bytes / wall_clock_time if wall_clock_time > 0 else 0
 
                 # Use real clock frequency from device if logged
@@ -199,7 +246,9 @@ class StatsCollector:
                     "bandwidth": agg_bandwidth,
                     "attributes": attributes,
                     "all_durations": durations,
-                    "all_bandwidths": bandwidths,
+                    # Per-core values when "Per-core bytes" is stamped (e.g. matmul);
+                    # otherwise identical to the effective-bandwidth list.
+                    "all_bandwidths": bandwidths_per_core,
                     "all_cores": cores,
                     "transaction_size": transaction_size,
                     "num_transactions": num_transactions,

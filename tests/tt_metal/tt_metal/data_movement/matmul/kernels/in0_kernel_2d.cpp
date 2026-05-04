@@ -53,10 +53,12 @@ void kernel_main() {
         physical_end_x,
         physical_end_y);
 
+    // Track number of times this core acted as sender across the K-loop. Declared outside
+    // the timer zone so we can stamp it after the zone ends without inflating duration_cycles.
+    uint32_t local_k_send_idx = 0;
     {
         DeviceZoneScopedN("RISCV0");
         // K-loop: iterate through all K subblocks, rotating sender across columns
-        uint32_t local_k_send_idx = 0;
 
         for (uint32_t k = 0; k < num_subblocks_k_dim; k++) {
             uint32_t sender_col = k % num_cores_c_dim;
@@ -102,4 +104,11 @@ void kernel_main() {
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("Number of transactions", num_subblocks_k_dim);
     DeviceTimestampedData("Transaction size in bytes", k_subblock_size_bytes);
+    // Per-core actual NOC bytes pushed by this core's RISCV_0 across the K-loop.
+    // Sender iterations multicast k_subblock_size_bytes row-wise; receiver iterations
+    // issue a single semaphore inc atomic op.
+    constexpr uint32_t SEM_INC_BYTES = 16;
+    uint32_t num_recv_iters = num_subblocks_k_dim - local_k_send_idx;
+    uint32_t per_core_bytes = local_k_send_idx * k_subblock_size_bytes + num_recv_iters * SEM_INC_BYTES;
+    DeviceTimestampedData("Per-core bytes", per_core_bytes);
 }

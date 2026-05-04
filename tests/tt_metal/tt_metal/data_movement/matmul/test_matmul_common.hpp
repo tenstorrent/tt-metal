@@ -30,7 +30,7 @@ struct MatmulTestConfig {
     uint32_t subblock_r_dim = 1;
     uint32_t subblock_c_dim = 1;
     uint32_t subblock_k_dim = 1;
-    uint32_t page_size_bytes = 1;
+    uint32_t page_size_bytes = 2048;
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t dram_bank_id = 0;
 
@@ -160,7 +160,6 @@ inline std::vector<MatmulTestConfig> get_matmul_test_configs() {
          .subblock_k_dim_sweep = {1u, 2u, 4u, 8u}},
 
         // ---- R subblock size sweep ----
-        // ID 1027: 4x4 grid, K=4, subblock_k=4, subblock_c=1, sweep subblock_r_dim.
         {.test_id = 1027,
          .num_subblocks_r_dim = 4,
          .num_subblocks_c_dim = 4,
@@ -178,11 +177,28 @@ inline std::vector<MatmulTestConfig> get_matmul_test_configs() {
          .subblock_r_dim = 1,
          .subblock_k_dim = 1,
          .subblock_c_dim_sweep = {1u, 2u, 4u, 8u, 16u, 32u}},
+
+        {.test_id = 1029,
+         .num_subblocks_r_dim = 4,
+         .num_subblocks_c_dim = 4,
+         .num_subblocks_k_dim = 1,
+         .subblock_c_dim = 1,
+         .subblock_k_dim = 1,
+         .subblock_r_dim_sweep = {1u, 2u, 4u, 8u, 16u, 32u, 64u, 128u, 256u}},
+
+        {.test_id = 1030,
+         .num_subblocks_r_dim = 4,
+         .num_subblocks_c_dim = 4,
+         .num_subblocks_k_dim = 8,
+         .subblock_k_dim = 1,
+         .subblock_r_dim_sweep = {1u, 2u, 4u, 8u, 16u},
+         .subblock_c_dim_sweep = {1u, 2u, 4u, 8u, 16u, 32u}},
     };
 
     return configs;
 }
 
+// sweep in1 and keep in0 constant for new test
 struct MatmulTestNameGenerator {
     std::string operator()(const ::testing::TestParamInfo<MatmulTestConfig>& info) const {
         const auto& c = info.param;

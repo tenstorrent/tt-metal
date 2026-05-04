@@ -89,6 +89,12 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     uint32_t in0_pages_bytes = in0_pages * test_config.page_size_bytes;
     uint32_t in1_pages_bytes = in1_pages * test_config.page_size_bytes;
 
+    // Bytes the column-0 sender multicasts per K iteration (one K subblock for one row).
+    // Matches the v2 / 2D definition so the kernel can run a K-loop of `num_subblocks_k_dim`
+    // multicasts of `k_subblock_size_bytes` each.
+    uint32_t k_subblock_size_bytes =
+        test_config.subblock_r_dim * test_config.subblock_k_dim * test_config.page_size_bytes;
+
     uint32_t l1_base_address = unit_tests::dm::get_l1_address_and_size(mesh_device, in0_cores_list[0]).base_address;
 
     // in0 Input
@@ -218,15 +224,16 @@ bool run_dm_1d_matmul(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     // Assign Runtime Args
     for (auto & i : matmul_cores_list) {
         vector<uint32_t> risc0_core_runtime_args = {
-            l1_base_address,                       // 0  Sender: source addr of in0 data in L1
-            pages_per_core_size_bytes,             // 1  Sender: number of bytes to multicast
-            in0_mcast_output_addr,                 // 2  All cores: L1 dest addr for multicast data
-            risc0_barrier_sem_id,                  // 3  Barrier arrival semaphore ID
-            (uint32_t)barrier_coordinator_phys.x,  // 4  Barrier coordinator physical X
-            (uint32_t)barrier_coordinator_phys.y,  // 5  Barrier coordinator physical Y
-            num_cores,                             // 6  Total number of cores in barrier
-            risc0_local_barrier_addr,              // 7  Local L1 scratch addr for barrier
-            risc0_barrier_done_sem_id,             // 8  Barrier done semaphore ID
+            l1_base_address,                       // 0  Sender: source addr of in0 data (all K subblocks contiguous)
+            test_config.num_subblocks_k_dim,       // 1  Number of K subblocks (loop iterations)
+            k_subblock_size_bytes,                 // 2  Bytes per K subblock multicast
+            in0_mcast_output_addr,                 // 3  All cores: L1 dest base addr for multicast data
+            risc0_barrier_sem_id,                  // 4  Barrier arrival semaphore ID
+            (uint32_t)barrier_coordinator_phys.x,  // 5  Barrier coordinator physical X
+            (uint32_t)barrier_coordinator_phys.y,  // 6  Barrier coordinator physical Y
+            num_cores,                             // 7  Total number of cores in barrier
+            risc0_local_barrier_addr,              // 8  Local L1 scratch addr for barrier
+            risc0_barrier_done_sem_id,             // 9  Barrier done semaphore ID
         };
         uint32_t col_idx = i.x - test_config.start_logical_core.x;
         vector<uint32_t> risc1_core_runtime_args = {
