@@ -14,7 +14,7 @@ from models.tt_cnn.tt.builder import (
     MaxPool2dConfiguration,
     TtConv2d,
     TtMaxPool2d,
-    AutoShardedStrategyConfiguration,
+    HeightShardedStrategyConfiguration,
 )
 
 
@@ -57,10 +57,10 @@ class TTNNDPUnit:
                 dilation=(1, 1),
                 weight=self.conv1_weight,
                 bias=self.conv1_bias,
-                sharding_strategy=AutoShardedStrategyConfiguration(),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 weights_dtype=ttnn.bfloat8_b,
-                enable_act_double_buffer=True,
-                enable_weights_double_buffer=True,
+                enable_act_double_buffer=False,
+                enable_weights_double_buffer=False,
             )
             self._conv1_cache[key] = TtConv2d(config, self.device)
         return self._conv1_cache[key]
@@ -81,11 +81,11 @@ class TTNNDPUnit:
                 dilation=(1, 1),
                 weight=self.conv2_weight,
                 bias=self.conv2_bias,
-                sharding_strategy=AutoShardedStrategyConfiguration(),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 activation=ttnn.UnaryOpType.RELU,
                 weights_dtype=ttnn.bfloat8_b,
-                enable_act_double_buffer=True,
-                enable_weights_double_buffer=True,
+                enable_act_double_buffer=False,
+                enable_weights_double_buffer=False,
             )
             self._conv2_cache[key] = TtConv2d(config, self.device)
         return self._conv2_cache[key]
@@ -130,11 +130,11 @@ class TTNNConvBN:
                 dilation=(1, 1),
                 weight=self.weight,
                 bias=self.bias,
-                sharding_strategy=AutoShardedStrategyConfiguration(),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 activation=ttnn.UnaryOpType.RELU,
                 weights_dtype=ttnn.bfloat8_b,
-                enable_act_double_buffer=True,
-                enable_weights_double_buffer=True,
+                enable_act_double_buffer=False,
+                enable_weights_double_buffer=False,
             )
             self._conv_cache[key] = TtConv2d(config, self.device)
         return self._conv_cache[key]
@@ -174,10 +174,10 @@ class TTNNConv1x1:
                 dilation=(1, 1),
                 weight=self.weight,
                 bias=self.bias,
-                sharding_strategy=AutoShardedStrategyConfiguration(),
+                sharding_strategy=HeightShardedStrategyConfiguration(),
                 weights_dtype=ttnn.bfloat8_b,
-                enable_act_double_buffer=True,
-                enable_weights_double_buffer=True,
+                enable_act_double_buffer=False,
+                enable_weights_double_buffer=False,
             )
             self._conv_cache[key] = TtConv2d(config, self.device)
         return self._conv_cache[key]
