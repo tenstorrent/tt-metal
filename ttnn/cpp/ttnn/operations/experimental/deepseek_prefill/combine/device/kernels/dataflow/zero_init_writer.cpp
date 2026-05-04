@@ -192,6 +192,7 @@ void kernel_main() {
                 uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
                 noc_async_write_page(
                     output_page_idx, output_addr_gen, untilize_read_ptr + t * aligned_output_page_size);
+                noc_async_writes_flushed();
             }
             noc_async_write_barrier();
         }
