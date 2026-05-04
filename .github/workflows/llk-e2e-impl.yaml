@@ -16,10 +16,6 @@ on:
         required: false
         type: string
         default: "not perf and not quasar"
-      runs-on-for-coverage:
-        description: "Runner label for merge-coverage CHIP_ARCH detection (match matrix runner)"
-        required: true
-        type: string
       coverage:
         description: "Enable coverage collection and merge job"
         required: false
@@ -141,32 +137,24 @@ jobs:
           annotate_only: true
 
   merge-coverage:
-    name: "Merge coverage files"
+    name: "Merge coverage (${{ matrix.chip-arch }})"
     runs-on: ubuntu-latest
     container:
       image: ${{ inputs.docker-image }}
     needs: llk-e2e-exec
     if: ${{ inputs.coverage == true }}
+    strategy:
+      matrix:
+        chip-arch: [wormhole, blackhole]
     permissions:
       contents: read
     steps:
-      - name: Set CHIP_ARCH
-        shell: bash
-        run: |
-          CHIP_ARCH=unknown
-          RO="${{ inputs.runs-on-for-coverage }}"
-          if [[ "$RO" =~ n150 ]]; then
-            CHIP_ARCH=wormhole
-          elif [[ "$RO" =~ p150 ]]; then
-            CHIP_ARCH=blackhole
-          fi
-          echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Download all coverage artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: code-coverage-${{ env.CHIP_ARCH }}*
+          pattern: code-coverage-${{ matrix.chip-arch }}*
           path: ./merged_coverage_files
       - name: Unzip artefacts, merge coverage data and generate HTML report
         shell: bash
@@ -181,19 +169,19 @@ jobs:
           done
 
           lcov -q --remove ./merged.info '*tests/*' \
-            -o ./code_coverage_for_${{ env.CHIP_ARCH }}.info
+            -o ./code_coverage_for_${{ matrix.chip-arch }}.info
 
       - name: Upload merged coverage .info file
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: code_coverage_for_${{ env.CHIP_ARCH }}
-          path: ./code_coverage_for_${{ env.CHIP_ARCH }}.info
+          name: code_coverage_for_${{ matrix.chip-arch }}
+          path: ./code_coverage_for_${{ matrix.chip-arch }}.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
-          files: ./code_coverage_for_${{ env.CHIP_ARCH }}.info
-          name: coverage-report-${{ env.CHIP_ARCH }}
+          files: ./code_coverage_for_${{ matrix.chip-arch }}.info
+          name: coverage-report-${{ matrix.chip-arch }}
           verbose: true

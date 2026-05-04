@@ -22,36 +22,22 @@ jobs:
     name: "Docker setup"
     uses: ./.github/workflows/build-docker-artifact.yaml
 
-  e2e-test-wormhole:
-    name: "LLK e2e (Wormhole)"
+  e2e-tests:
+    name: "LLK e2e Tests"
     needs: build-images
     uses: ./.github/workflows/llk-e2e-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      enabled-skus: wh_n150_civ2
+      enabled-skus: ALL_SKUS_IN_TESTS
       pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
-      runs-on-for-coverage: tt-ubuntu-2204-n150-stable
-      coverage: true
-
-  e2e-test-blackhole:
-    name: "LLK e2e (Blackhole)"
-    needs: build-images
-    uses: ./.github/workflows/llk-e2e-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      enabled-skus: bh_p150b_civ2
-      pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
-      runs-on-for-coverage: tt-ubuntu-2204-p150b-stable
       coverage: true
 
   e2e-summary:
     name: "LLK e2e summary"
     if: always()
     needs:
-      - e2e-test-wormhole
-      - e2e-test-blackhole
+      - e2e-tests
     runs-on: ubuntu-latest
     steps:
       - name: Check e2e test results
