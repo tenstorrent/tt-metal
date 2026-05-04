@@ -70,7 +70,7 @@
   model: deepseek_prefill
   skus:
     bh_loudbox:
-      timeout: 60
+      timeout: 75
   owner_id: U08E1JCMAJF
   team: models
 
