@@ -228,12 +228,13 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
             _IM_END = 151937  # <im_end>   frame boundary token
             token_type_ids = ((input_ids == _IMAGE_PATCH_ID) | (input_ids == _IM_START) | (input_ids == _IM_END)).long()
 
-        self.model.reset_kv_cache(user_id=0)
-        logger.info(
-            f"Prefill: S={seq_len}, "
-            f"vision={'video' if pixel_values_videos is not None else 'image' if pixel_values is not None else 'none'}"
-        )
+        import time
 
+        self.model.reset_kv_cache(user_id=0)
+        vision_str = "video" if pixel_values_videos is not None else "image" if pixel_values is not None else "none"
+        logger.info(f"Prefill: S={seq_len}, vision={vision_str}")
+
+        t0 = time.perf_counter()
         logits = self.model.forward_prefill(
             input_ids=input_ids,
             pixel_values=pv,
@@ -241,6 +242,10 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
             token_type_ids=token_type_ids,
             user_id=0,
         )
+        self._last_prefill_ms = (time.perf_counter() - t0) * 1000
+        self._decode_step_count = 0
+        self._decode_total_ms = 0.0
+        logger.info(f"Prefill done: {self._last_prefill_ms:.0f}ms")
 
         # Decode trace is pre-captured at server bringup (initialize_vllm_model).
         # No lazy capture here — nothing should JIT or trace during inference.
@@ -270,8 +275,20 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         token_id = int(tokens[0, 0].item())
         position = int(start_pos[0].item()) if hasattr(start_pos[0], "item") else int(start_pos[0])
 
+        import time
+
+        t0 = time.perf_counter()
         # Use forward_decode_step (eager, no trace) — decode JIT is pre-compiled during
         # initialize_vllm_model warmup so no first-inference stall happens.
         logits = self.model.forward_decode_step(token_id, position).squeeze(0)
+        step_ms = (time.perf_counter() - t0) * 1000
+
+        self._decode_step_count = getattr(self, "_decode_step_count", 0) + 1
+        self._decode_total_ms = getattr(self, "_decode_total_ms", 0.0) + step_ms
+        logger.info(
+            f"Decode step {self._decode_step_count}: pos={position} {step_ms:.0f}ms  "
+            f"(total decode {self._decode_total_ms:.0f}ms, "
+            f"prefill {getattr(self,'_last_prefill_ms',0):.0f}ms)"
+        )
 
         return logits.unsqueeze(0)  # [1, vocab_size]
