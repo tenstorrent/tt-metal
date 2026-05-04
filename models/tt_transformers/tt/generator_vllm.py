@@ -462,6 +462,13 @@ class QwenForCausalLM(Generator):
         # Qwen3-8B on N150 (same constraint as Llama8B-N150)
         if "3-8B" in model_name and devices_per_dp_cache == 1 and is_wormhole:
             return 32_768
+        # DeepSeek-R1-Distill-Qwen-14B / Qwen2.5-14B on N300
+        if (
+            ("DeepSeek-R1-Distill-Qwen-14B" in model_name or "Qwen2.5-14B" in model_name)
+            and devices_per_dp_cache == 2
+            and is_wormhole
+        ):
+            return 65_536
         return super().get_max_tokens_all_users(
             model_name=model_name,
             num_devices=num_devices,
