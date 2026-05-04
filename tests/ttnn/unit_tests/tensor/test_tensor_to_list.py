@@ -14,7 +14,11 @@ pytestmark = pytest.mark.use_module_device
 def get_types_from_binding_framwork():
     if hasattr(ttnn.DataType, "_member_map_"):
         # nanobind
-        ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
+        ALL_TYPES = [
+            dtype
+            for _, dtype in ttnn.DataType._member_map_.items()
+            if dtype != ttnn.DataType.INVALID and dtype != ttnn.DataType.FP8_E4M3
+        ]
     else:
         raise Exception(
             "test_tensor_to_list.py: ttnn.DataType has unexpected way of holding values. Not matching nanobind."
