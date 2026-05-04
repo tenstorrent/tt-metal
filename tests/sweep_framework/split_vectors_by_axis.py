@@ -109,10 +109,20 @@ def split_file(in_path: Path, out_col: Path, out_row: Path):
     return n_col, n_row, wrote_col, wrote_row
 
 
+# Canonical paths under the sweep framework. Hardcoded (not argv-driven) so
+# this utility can't be pointed at arbitrary file paths — both for security
+# (unsanitized user input in file paths flagged by Cycode SAST) and because
+# the CI workflow always operates on the standard vectors_export tree.
+_SWEEP_FRAMEWORK = Path(__file__).resolve().parent
+_SRC_DIR = _SWEEP_FRAMEWORK / "vectors_export"
+_DST_COL = _SWEEP_FRAMEWORK / "vectors_export_col"
+_DST_ROW = _SWEEP_FRAMEWORK / "vectors_export_row"
+
+
 def main():
-    src = Path(sys.argv[1] if len(sys.argv) > 1 else "tests/sweep_framework/vectors_export")
-    dst_col = Path(sys.argv[2] if len(sys.argv) > 2 else "tests/sweep_framework/vectors_export_col")
-    dst_row = Path(sys.argv[3] if len(sys.argv) > 3 else "tests/sweep_framework/vectors_export_row")
+    src = _SRC_DIR
+    dst_col = _DST_COL
+    dst_row = _DST_ROW
 
     # Clean dst dirs to avoid stale files from prior runs.
     for d in (dst_col, dst_row):
