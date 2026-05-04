@@ -443,8 +443,10 @@ def test_sdpa_perf_check(shape_id, q_chunk_size, k_chunk_size, expected_util):
 
     subdir = "ttnn_sdpa_perf_check"
     test_id = f"k{k_chunk_size}-q{q_chunk_size}-bf16"
+    # CI=false override: subprocess inherits CI=true under GitHub Actions, which would
+    # trigger the @skipif on test_sdpa_sweep_perf_impl and leave the profiler with no ops.
     command = (
-        f"pytest tests/nightly/blackhole/sdpa/"
+        f"CI=false pytest tests/nightly/blackhole/sdpa/"
         f"test_scaled_dot_product_attention_sprint.py::test_sdpa_sweep_perf_impl"
         f"[{shape_id}-{test_id}]"
     )
@@ -456,6 +458,10 @@ def test_sdpa_perf_check(shape_id, q_chunk_size, k_chunk_size, expected_util):
     r = post_process_ops_log(
         subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
     )
+
+    assert (
+        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
+    ), "profiler returned no SDPA ops — inner test was skipped or did not produce a kernel run"
 
     core_count = int(r["CORE COUNT"][0])
     duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())

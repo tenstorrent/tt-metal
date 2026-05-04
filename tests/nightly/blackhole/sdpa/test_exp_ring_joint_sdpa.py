@@ -819,8 +819,11 @@ def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_siz
     local_seq_len = total_seq // sp_size
 
     subdir = "ttnn_exp_ring_joint_sdpa_perf_check"
+    # CI=false override: subprocess inherits CI=true under GitHub Actions, which would
+    # trigger the @skipif on test_exp_ring_joint_attention_sdpa_sweep_perf_impl and leave
+    # the profiler with no ops.
     command = (
-        f"pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::"
+        f"CI=false pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::"
         f"test_exp_ring_joint_attention_sdpa_sweep_perf_impl"
         f"[{config_id}-bf16-{payload_id}]"
     )
@@ -833,11 +836,18 @@ def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_siz
         subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
     )
 
-    measured_core_count = int(r["CORE COUNT"][0]) if len(r["CORE COUNT"]) > 0 else 0
-    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max()) if len(r["DEVICE KERNEL DURATION [ns]"]) > 0 else 0
+    assert (
+        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
+    ), "profiler returned no SDPA ops — inner test was skipped or did not produce a kernel run"
+
+    measured_core_count = int(r["CORE COUNT"][0])
+    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
 
     # Match perf-table effective_cores rounding (ignore non-multiple-of-10 strays)
     effective_cores = measured_core_count - measured_core_count % 10
+    assert (
+        effective_cores > 0
+    ), f"effective_cores=0 (measured_core_count={measured_core_count}) — profiler output incomplete"
 
     utilization = compute_math_utilization(
         local_seq_len, total_seq, d, d, local_nh, duration_ns, effective_cores, is_causal=False
