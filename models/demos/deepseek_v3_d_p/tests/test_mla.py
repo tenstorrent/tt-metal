@@ -16,6 +16,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -383,7 +384,7 @@ def test_mla(
             "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
         },
     ],
-    ids=["line-original", "ring-original", "line-emb", "ring-emb"],
+    ids=["line_original", "ring_original", "line_emb", "ring_emb"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
