@@ -1,6 +1,6 @@
 # Model memory on host for performance and accuracy
 
-Host memory usage results in MB are collected from host_mem_profiler.py by running the target demo under memory_profiler at
+[Host memory usage results](models/sample_data/host_mem_profiling/) at peak memory (in MB) are collected from host_mem_profiler.py by running the target demo under memory_profiler at
 100 ms sampling intervals. You can generate these results by running the script with --mesh-device, --hf-model, and
 --test arguments in [demo/simple_text_demo.py](demo/simple_text_demo.py)); it produces a timestamped PNG plot under profiling_results/ and prints peak and baseline RSS to the
 console.
@@ -10,8 +10,11 @@ host-side footprint. Peak memory is defined as the maximum RSS observed across t
 model weight loading, KV-cache allocation, and decode iterations. Baseline is the RSS at process start before any
 model work begins.
 
-All figures below were captured with a maximum generation of 200 tokens (200 decode iterations) to match the
-conditions used in PERF.md.
+Host memory (RSS) was profiled across three configurations — [Performance](#performance), [Accuracy](#accuracy), and [Multimodal](#multimodal-models) — using up to 200
+decode iterations on T3K (8-chip) and N300 (2-chip) devices.
+
+All [numbers](models/sample_data/host_mem_profiling/) below were captured with a maximum generation of 200 tokens (200 decode iterations) to match the
+conditions used in [performance table](models/tt_transformers/PERF.md).
 
 ## Performance
 
@@ -66,3 +69,20 @@ The memory is reported in MB.
 | Qwen2.5-VL-72B    | T3K         | 160437        | 147925        | 15.1          | 216       |
 | Qwen2.5-VL-32B    | T3K         | 71960         | 68464         | 19.7          | 183       |
 | Qwen3-VL-32B      | T3K         | 76297         | 21514         | 19.6          | 119       |
+
+
+[Performance](#performance) vs. [Accuracy](#accuracy) modes trade memory for precision: accuracy mode uses BF16 attention weights versus bfp8/bfp4
+in performance mode, resulting in consistently higher memory. The gap is most pronounced for mid-size models —
+Llama-3.1-8B rises from 13.7 GB to 20.4 GB (batch-1) and Qwen2.5-32B from 53 GB to 74 GB — while 70B+ models show a
+smaller relative increase since attention weight precision is already reduced in both modes.
+
+Memory scales roughly with model size, ranging from ~3–4 GB for 1B models up to ~147–155 GB for 72–90B models. The
+largest models (Qwen2.5-72B, Llama-3.2-90B) show little difference between batch-1 and batch-32, suggesting KV-cache
+and weight loading dominate over activation memory. Mid-size models (32B class) exhibit a larger batch-1 to batch-32
+gap, likely due to KV-cache growth with sequence length at batch-1.
+
+Throughput and TTFT follow expected trends: smaller models deliver higher tokens/s/user (up to 120 t/s/u for 1B) and
+low TTFT (~30 ms), while 90B models drop to 6 t/s/u with TTFT exceeding 5.5 seconds.
+
+[Multimodal](#multimodal-models) models carry a modest overhead versus their text-only counterparts — Llama-3.2-11B adds ~400 MB at batch-1
+though Qwen2.5-VL-72B reaches the highest overall footprint at ~160 GB.
