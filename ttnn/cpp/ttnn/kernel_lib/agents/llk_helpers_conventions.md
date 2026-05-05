@@ -12,6 +12,10 @@ Reference for writing `compute_kernel_lib` helpers. All helpers live in `ttnn/cp
 | `reduce_helpers_compute.hpp` | reduce ROW/COL/SCALAR with SUM/AVG/MAX | InputPolicy enum, Accumulate type trait, PostReduceOp callback, auto DEST limit detection |
 | `dest_helpers.hpp` | DEST register capacity detection | constexpr functions, JIT header integration, sync/accum mode auto-detect |
 | `binary_op_helpers.hpp` | add/sub/mul with broadcast | BroadcastDim, input/output policies, DEST chunking, post-op callback |
+| `matmul_block_helpers.hpp` | sub-blocked matmul + K-blocking, both pack layouts | OutputLayout / LastBlockTarget / InitMode enums, MatmulBlockShape factory struct, retain_in0/retain_in1, pin_interm_to_captured_base for output-aliased interm, PostComputeFn / PreKBlockFn callbacks |
+| `bias_add_helpers.hpp` | broadcast-row bias add over a sub-blocked matmul output | Layout-matched to matmul_block (SubblockMajor / RowMajor), bias_offset for partial-bias callers |
+| `reblock_untilize_helpers.hpp` | output reblocking + untilize after matmul | Pairs with matmul_block when downstream wants per-row-group untilize |
+| `transpose_block_helpers.hpp` | per-K-block in0 transpose for callers that need pre-matmul transpose | Used as a `PreKBlockFn` for matmul_block |
 | `common_types.hpp` | Shared types | `NoOp`, `NoAccumulation` |
 | `cb_helpers.hpp` | CB query utilities | tile size, page count, validation |
 
