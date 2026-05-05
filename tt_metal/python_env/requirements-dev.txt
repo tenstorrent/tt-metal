@@ -15,7 +15,7 @@ pytest-github-actions-annotate-failures==0.3.0
 # requires <4.0.0 platformdirs, so we're pinning platformdirs here
 platformdirs<4.0.0
 pre-commit==3.5.0
-black==24.3.0
+black==26.3.1
 clang-format==19.1.4
 build==0.10.0
 twine==4.0.2
