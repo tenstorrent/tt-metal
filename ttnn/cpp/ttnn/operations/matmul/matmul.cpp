@@ -106,6 +106,10 @@ static bool get_post_process_bias(
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
     if (bias.has_value()) {
+        // Fused matmul+bias does not support batched weights; apply bias via add().
+        if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {
+            return true;
+        }
         // Check if bias shape is compatible with kernel fusion
         // Bias fusion requires bias_shape_aligned[-2] == tile_height
         const auto& bias_tensor = bias.value();
@@ -361,8 +365,7 @@ Tensor linear(
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
-    bool b_is_batched = detail::is_input_batched(input_tensor_b.logical_shape());
-    TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
+    bool user_run_batched = detail::is_input_batched(input_tensor_b.logical_shape());
 
     auto matmul_params = ttnn::prim::MatmulParams{
         program_config,
@@ -373,7 +376,7 @@ Tensor linear(
         /*untilize_out=*/false,
         user_core_coord,
         get_fused_activation(activation),
-        /*user_run_batched=*/false,
+        user_run_batched,
         transpose_a,
         transpose_b,
         output_tile,
