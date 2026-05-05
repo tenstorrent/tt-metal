@@ -20,6 +20,7 @@ set(HW_JIT_API_HEADERS
     inc/api/numeric/bfloat16.h
     inc/api/numeric/float32.h
     inc/api/numeric/int32.h
+    inc/api/kernel_thread_globals.h
     inc/api/tensor/tensor_accessor.h
     inc/api/tensor/tensor_accessor_args.h
     inc/api/tensor/shard_pages_address_iterator.h
