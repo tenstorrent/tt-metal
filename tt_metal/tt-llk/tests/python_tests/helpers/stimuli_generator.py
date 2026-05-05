@@ -6,10 +6,7 @@ import math
 import torch
 
 from .bfp_format_utils import bfp4b_to_float16b
-from .format_config import (
-    MX_FORMAT_MAX_NORMAL,
-    DataFormat,
-)
+from .format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_MAGNITUDE, DataFormat
 from .llk_params import format_dict
 from .tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -704,10 +701,9 @@ def format_elem_max(data_format: DataFormat) -> float:
 
     Falls back to `torch.finfo(format_dict[data_format]).max` for non-MX formats.
     """
-    if data_format == DataFormat.MxFp8R:
-        return MXFP8_E5M2_MAX_NORMAL
-    if data_format == DataFormat.MxFp8P:
-        return MXFP8_E4M3_MAX_NORMAL
+    if data_format.is_mx_format():
+        return MX_FORMAT_MAX_NORMAL[data_format]
+
     return float(torch.finfo(format_dict[data_format]).max)
 
 
@@ -719,10 +715,9 @@ def _format_elem_min_magnitude(data_format: DataFormat) -> float:
     For MX formats uses the element type's documented minimum magnitude; for other
     formats returns `max(1e-6, finfo(torch_dtype).tiny * 100)`.
     """
-    if data_format == DataFormat.MxFp8P:
-        return MXFP8_E4M3_MIN_MAGNITUDE
-    if data_format == DataFormat.MxFp8R:
-        return MXFP8_E5M2_MIN_MAGNITUDE
+    if data_format.is_mx_format():
+        return MX_FORMAT_MIN_MAGNITUDE[data_format]
+
     return max(1e-6, float(torch.finfo(format_dict[data_format]).tiny) * 100)
 
 

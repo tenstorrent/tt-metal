@@ -13,58 +13,6 @@ import numpy as np
 from .tile_constants import SRCS_SLICE_32B_ELEMENT_COUNT, SRCS_SLICE_ELEMENT_COUNT
 
 # ============================================================================
-# MX (Microscaling) Format Constants - OCP Specification
-# ============================================================================
-
-MXFP8_BLOCK_SIZE = 32  # Fixed block size per OCP MX specification
-MXFP8_E5M2_MAX_NORMAL = float(
-    ml_dtypes.finfo(ml_dtypes.float8_e5m2).max
-)  # 57344.0 from dtype
-MXFP8_E4M3_MAX_NORMAL = float(
-    ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
-)  # 448.0 from dtype
-
-# Safe minimum magnitudes for stimulus generation.
-# These sit well above the subnormal boundary so that quantised golden
-# values stay in the normal range of each FP8 element type.
-MXFP8_E4M3_MIN_MAGNITUDE = 0.0625  # 2^-4  (E4M3 min normal = 2^-6)
-MXFP8_E5M2_MIN_MAGNITUDE = 2.44e-4  # 2^-12 (E5M2 min normal = 2^-14)
-
-# ============================================================================
-# MX SrcS Slice L1 Layout
-# ============================================================================
-# Each SrcS slice is 8×16 = 128 elements.  In L1 a slice is stored as
-# [scales padded to 16 B][elements padded to 16 B].
-
-
-def l1_align(size: int) -> int:
-    """Align *size* to the next 16B boundary."""
-    l1_alignment = 16
-    return (size + l1_alignment - 1) // l1_alignment * l1_alignment
-
-
-# Per SrcS slice (8×16 = 128 elements, each 8-bit in L1):
-#   scales:   128 / 32 = 4 bytes   → padded to 16 B
-#   elements: 128 × 1 = 128 bytes  → already 16 B-aligned
-#   total: 16 + 128 = 144 bytes per slice
-MXFP8_SLICE_SCALE_BYTES = SRCS_SLICE_ELEMENT_COUNT // MXFP8_BLOCK_SIZE  # 4
-MXFP8_SLICE_ELEMENT_BYTES = SRCS_SLICE_ELEMENT_COUNT  # 128
-MXFP8_SRCS_SLICE_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_SCALE_BYTES) + l1_align(
-    MXFP8_SLICE_ELEMENT_BYTES
-)
-
-# 32-bit SrcS mode (dest_acc): 4x16 = 64 elements per slice
-#   scales:   64 / 32 = 2 bytes   -> padded to 16 B
-#   elements: 64 x 1  = 64 bytes  -> already 16 B-aligned
-#   total: 16 + 64 = 80 bytes per slice
-MXFP8_SLICE_32B_SCALE_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT // MXFP8_BLOCK_SIZE  # 2
-MXFP8_SLICE_32B_ELEMENT_BYTES = SRCS_SLICE_32B_ELEMENT_COUNT  # 64
-MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_32B_SCALE_BYTES) + l1_align(
-    MXFP8_SLICE_32B_ELEMENT_BYTES
-)  # 80
-
-
-# ============================================================================
 # Data Format Classes
 # ============================================================================
 
@@ -200,6 +148,11 @@ class DataFormat(Enum):
 # MX (Microscaling) Format Value Maps
 # ============================================================================
 
+# Map of MX formats to their block sizes (all use 32-element blocks per OCP spec)
+# This is a size of a basic block with one scale factor in MX formats.
+# Bare in mind that MX formats can have multiple contiguous scales with corresponding values after.
+MX_FORMAT_BLOCK_SIZE = 32
+
 # Map of MX formats to their maximum normal values
 # Per OCP MX Specification:
 # - E5M2 (MxFp8R): Max normal = ± 2^15 × 1.75 = ± 57,344
@@ -259,8 +212,12 @@ MX_FORMAT_MIN_SUBNORMAL = {
     ),
 }
 
-# Map of MX formats to their block sizes (all use 32-element blocks per OCP spec)
-MX_FORMAT_BLOCK_SIZE = 32
+# Map of MX formats to safe minimum magnitudes for stimulus generation.
+MX_FORMAT_MIN_MAGNITUDE = {
+    DataFormat.MxFp8R: 2.44e-4,
+    DataFormat.MxFp8P: 0.0625,
+    DataFormat.MxFp4: 1.0,
+}
 
 # ============================================================================
 # MX SrcS Slice L1 Layout
