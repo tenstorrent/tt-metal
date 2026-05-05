@@ -32,16 +32,46 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
     constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
 
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_res = tt::CBIndex::c_5;  // residual b
+    constexpr uint32_t cb_inp = tt::CBIndex::c_3;  // fused a + b
+    binary_op_init_common(cb_in0, cb_res, cb_inp);
+#else
+    constexpr uint32_t cb_inp = cb_in0;
     binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+#endif
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+#ifdef FUSE_PRE_ADD
+        /*
+         * Fuse pre-add: cb_inp = cb_in0 + cb_res
+         */
+        reconfig_data_format(cb_in0, cb_res);
+        pack_reconfig_data_format(cb_inp);
+        add_tiles_init(cb_in0, cb_res);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            cb_wait_front(cb_in0, blk);
+            cb_wait_front(cb_res, blk);
+            cb_reserve_back(cb_inp, blk);
+            ACQ();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                add_tiles(cb_in0, cb_res, wtr, wtr, wtr);
+                pack_tile(wtr, cb_inp);
+            }
+            REL();
+            cb_push_back(cb_inp, blk);
+            cb_pop_front(cb_in0, blk);
+            cb_pop_front(cb_res, blk);
+        }
+#endif
+
         /*
          * x**2
          */

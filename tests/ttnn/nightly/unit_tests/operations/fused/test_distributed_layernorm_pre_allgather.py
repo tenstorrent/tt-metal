@@ -11,7 +11,7 @@ import ttnn
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
-from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics, tt_dtype_to_torch_dtype
 
 TEST_PADDING_VALUE = -42
 
@@ -79,13 +79,14 @@ def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe, kernel_config):
     return tt_out
 
 
-def run_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
-    """Stats from layer_norm_pre_all_gather with residual_input_tensor (input + residual).
+def run_pre_all_gather_residual_pcc(device, inp_shape, op_name):
+    """Stats from {layer,rms}_norm_pre_all_gather with residual_input_tensor (input + residual).
 
-    Shape (1, 1, 32, 128), BFLOAT16, HiFi4, fp32_dest_acc on pre.
+    BFLOAT16, HiFi4, fp32_dest_acc on pre.
     Golden stats match torch reductions on the fused tensor input + residual.
     """
     torch.manual_seed(41467)
+    is_rmsnorm = op_name == "rms_norm"
 
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
@@ -93,7 +94,7 @@ def run_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
     torch_res = torch.randn(inp_shape, dtype=torch.bfloat16)
     combined = torch_inp + torch_res
 
-    out_torch = reference(combined.chunk(1, dim=-1), 1, False)[0]
+    out_torch = reference(combined.chunk(1, dim=-1), 1, is_rmsnorm)[0]
 
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -119,7 +120,8 @@ def run_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
         tt_memory_config=dram_memcfg,
     )
 
-    tt_stats = ttnn.layer_norm_pre_all_gather(
+    pre_op = ttnn.rms_norm_pre_all_gather if is_rmsnorm else ttnn.layer_norm_pre_all_gather
+    tt_stats = pre_op(
         tt_inp,
         residual_input_tensor=tt_res,
         dtype=ttnn.bfloat16,
@@ -151,23 +153,25 @@ def run_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
     logger.debug(f"tt vs torch padding 1 residual path = {output_str}")
     all_passing &= passing
 
-    # sum(x) lives in column 0 of the second stats tile (offset 32)
-    passing, output_str = comp_allclose_and_pcc(
-        out_torch[:, :, :, 32 + device_offset],
-        tt_output_host[:, :, :, 32 + device_offset],
-        rtol=5e-01 * reduction_width,
-        atol=10,
-        pcc=0.99,
-    )
-    logger.debug(f"tt vs torch sum(x) residual path = {output_str}")
-    all_passing &= passing
+    # rmsnorm output is one tile wide; layernorm has a second tile holding sum(x).
+    if not is_rmsnorm:
+        # sum(x) lives in column 0 of the second stats tile (offset 32)
+        passing, output_str = comp_allclose_and_pcc(
+            out_torch[:, :, :, 32 + device_offset],
+            tt_output_host[:, :, :, 32 + device_offset],
+            rtol=5e-01 * reduction_width,
+            atol=10,
+            pcc=0.99,
+        )
+        logger.debug(f"tt vs torch sum(x) residual path = {output_str}")
+        all_passing &= passing
 
-    passing, output_str = comp_equal(
-        out_torch[:, :, :, 33 + device_offset : 64 + device_offset],
-        tt_output_host[:, :, :, 33 + device_offset : 64 + device_offset],
-    )
-    logger.debug(f"tt vs torch padding 2 residual path = {output_str}")
-    all_passing &= passing
+        passing, output_str = comp_equal(
+            out_torch[:, :, :, 33 + device_offset : 64 + device_offset],
+            tt_output_host[:, :, :, 33 + device_offset : 64 + device_offset],
+        )
+        logger.debug(f"tt vs torch padding 2 residual path = {output_str}")
+        all_passing &= passing
 
     assert all_passing
 
@@ -472,9 +476,10 @@ def test_layernorm_pre_post_gamma_only_pcc(use_pre_all_gather, device):
     "inp_shape",
     [(1, 1, 32, 128), (1, 1, 24, 42), (1, 1, 24, 38)],
 )
-def test_layernorm_pre_all_gather_residual_pcc(device, inp_shape):
-    """layer_norm_pre_all_gather with residual_input_tensor; PCC vs torch reference."""
-    run_layernorm_pre_all_gather_residual_pcc(device, inp_shape)
+@pytest.mark.parametrize("op_name", ["layer_norm", "rms_norm"])
+def test_layernorm_pre_all_gather_residual_pcc(device, op_name, inp_shape):
+    """{layer,rms}_norm_pre_all_gather with residual_input_tensor; PCC vs torch reference."""
+    run_pre_all_gather_residual_pcc(device, inp_shape, op_name)
 
 
 @pytest.mark.parametrize(
@@ -553,6 +558,76 @@ def test_layernorm_pre_all_gather_residual_padding_isolated_from_stats(device, i
         rtol=1e-2,
         atol=1.0,
         pcc_threshold=0.999,
+    )
+
+
+@pytest.mark.parametrize(
+    "inp_dtype, res_dtype",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.float32, ttnn.bfloat16),
+    ],
+    ids=["bf16_inp_fp32_res", "fp32_inp_bf16_res"],
+)
+def test_layernorm_pre_all_gather_residual_mismatched_dtype(device, inp_dtype, res_dtype):
+    """Input and residual with different dtypes must produce correct result.
+
+    Different dtypes have different per-tile byte sizes (bfloat16=2048B, float32=4096B).
+    Each operand's CB must be sized in its own data format; the LLK's add_tiles
+    handles per-operand format conversion. For example, sizing cb_res with the input's tile
+    size would silently truncate or overrun the residual reads.
+
+    """
+    torch.manual_seed(41512)
+    inp_shape = (1, 1, 32, 128)
+
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+
+    torch_inp = torch.randn(inp_shape, dtype=tt_dtype_to_torch_dtype[inp_dtype])
+    torch_res = torch.randn(inp_shape, dtype=tt_dtype_to_torch_dtype[res_dtype])
+    combined = torch_inp.float() + torch_res.float()
+
+    out_torch = referencefp32(combined.chunk(1, dim=-1), 1, False)[0]
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_inp = torch2tt_tensor(
+        torch_inp, tt_dtype=inp_dtype, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
+    )
+    tt_res = torch2tt_tensor(
+        torch_res, tt_dtype=res_dtype, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
+    )
+
+    tt_stats = ttnn.layer_norm_pre_all_gather(
+        tt_inp,
+        residual_input_tensor=tt_res,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=kernel_config,
+        memory_config=dram_memcfg,
+    )
+
+    tt_output_host = tt2torch_tensor(tt_stats)
+
+    # Column 0 = sum(x^2) of the first stats tile, column 32 = sum(x) of the second tile.
+    assert_numeric_metrics(
+        out_torch[:, :, :, 0].float(),
+        tt_output_host[:, :, :, 0].float(),
+        rtol=5e-2,
+        atol=1.0,
+        pcc_threshold=0.99,
+    )
+    assert_numeric_metrics(
+        out_torch[:, :, :, 32].float(),
+        tt_output_host[:, :, :, 32].float(),
+        rtol=5e-2,
+        atol=1.0,
+        pcc_threshold=0.99,
     )
 
 

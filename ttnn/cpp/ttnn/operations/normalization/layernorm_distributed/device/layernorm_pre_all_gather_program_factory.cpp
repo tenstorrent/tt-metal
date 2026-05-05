@@ -63,6 +63,12 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat scaler_cb_data_format =
         in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
+    uint32_t inb_single_tile_size = 0;
+    if (fuse_pre_add) {
+        inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b->dtype());
+        inb_single_tile_size = tt::tile_size(inb_data_format);
+    }
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -248,14 +254,15 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherProgramFactory::create_desc
             .page_size = scaler_tile_size}}}});
 
     if (fuse_pre_add) {
-        // c_5 -> residual b
+        // c_5 -> residual b. Sized in residual's own data format so a residual with a different
+        // dtype than the input is read correctly; add_tiles handles the per-operand format.
         program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = res_tiles * in_single_tile_size,
+            .total_size = res_tiles * inb_single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-                .data_format = in_data_format,
-                .page_size = in_single_tile_size}}}});
+                .data_format = inb_data_format,
+                .page_size = inb_single_tile_size}}}});
         // c_3 -> fused a + b (compute kernel writes into this and downstream consumes)
         program_descriptor.cbs.push_back(CBDescriptor{
             .total_size = fused_tiles * single_tile_size,
@@ -297,6 +304,8 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     const LayerNormPreAllGatherInputs& tensor_args,
     Tensor& output) {
     const auto& a = tensor_args.input;
+    const auto& b = tensor_args.residual_input_tensor;
+    const bool fuse_pre_add = b.has_value();
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const auto& shape = a.padded_shape();
@@ -322,6 +331,12 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat scaler_cb_data_format =
         in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
+    uint32_t inb_single_tile_size = 0;
+    if (fuse_pre_add) {
+        inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b->dtype());
+        inb_single_tile_size = tt::tile_size(inb_data_format);
+    }
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -329,10 +344,13 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
 
     auto a_addr = a.buffer()->address();
     auto dst_addr = output.buffer()->address();
+    auto b_addr = fuse_pre_add ? b->buffer()->address() : 0;
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
     const uint32_t in1_tiles = 1;  // reduce scalar
+    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
+    const uint32_t fused_tiles = Wt * double_buffer_constant;  // a + b
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
     uint32_t out0_tiles = 1;
@@ -387,9 +405,19 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
         cores_y,
     };
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
+    if (fuse_pre_add) {
+        tt::tt_metal::TensorAccessorArgs(b->buffer()).append_to(reader_compile_time_args);
+    }
 
     std::vector<uint32_t> writer_compile_time_args = {writer_block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> compute_defines;
+    if (fuse_pre_add) {
+        reader_defines["FUSE_PRE_ADD"] = "1";
+        compute_defines["FUSE_PRE_ADD"] = "1";
+    }
 
     std::vector<uint32_t> compute_args = {tiles_per_core_x, tiles_per_core_y, block_size, cores_y};
 
@@ -409,17 +437,19 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
             uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
             uint32_t out_tile_offset = x * out0_tiles;
 
-            reader_runtime_args.emplace_back(
-                core,
-                std::vector<uint32_t>{
-                    a_addr,
-                    tiles_per_core_x,
-                    tiles_per_core_y,
-                    in_tile_offset,
-                    static_cast<uint32_t>(is_merge_core),
-                    static_cast<uint32_t>(merge_core.x),
-                    static_cast<uint32_t>(merge_core.y),
-                    y});
+            std::vector<uint32_t> reader_args = {
+                a_addr,
+                tiles_per_core_x,
+                tiles_per_core_y,
+                in_tile_offset,
+                static_cast<uint32_t>(is_merge_core),
+                static_cast<uint32_t>(merge_core.x),
+                static_cast<uint32_t>(merge_core.y),
+                y};
+            if (fuse_pre_add) {
+                reader_args.push_back(b_addr);
+            }
+            reader_runtime_args.emplace_back(core, std::move(reader_args));
             compute_runtime_args.emplace_back(core, std::vector<uint32_t>{static_cast<uint32_t>(is_merge_core)});
             if (is_merge_core) {
                 writer_runtime_args.emplace_back(
@@ -445,6 +475,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
@@ -469,6 +500,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -497,6 +529,26 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGather2DProgramFactory::create_de
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
             .data_format = scaler_cb_data_format,
             .page_size = scaler_tile_size}}}});
+
+    if (fuse_pre_add) {
+        // c_5 -> residual b. Sized in residual's own data format so a residual with a different
+        // dtype than the input is read correctly; add_tiles handles the per-operand format.
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = res_tiles * inb_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+                .data_format = inb_data_format,
+                .page_size = inb_single_tile_size}}}});
+        // c_3 -> fused a + b (compute kernel writes into this and downstream consumes)
+        program_descriptor.cbs.push_back(CBDescriptor{
+            .total_size = fused_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size}}}});
+    }
 
     // LN and RMS shared intermediates
     // c_intermed0 -> x^2

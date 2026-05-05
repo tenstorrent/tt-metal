@@ -38,7 +38,7 @@ ttnn::Tensor rms_norm_pre_all_gather(
     }
     return ttnn::prim::layer_norm_pre_all_gather(
         input_tensor,
-        std::nullopt,  // residual fusion not yet implemented for rmsnorm pre_all_gather
+        residual_input_tensor,
         std::nullopt,  // recip_tensor not needed for rmsnorm
         ttnn::prim::LayerNormDistributedType::RMSNORM,
         dtype,

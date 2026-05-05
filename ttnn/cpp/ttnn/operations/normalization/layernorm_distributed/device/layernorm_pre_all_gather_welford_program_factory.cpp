@@ -82,6 +82,12 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
+    uint32_t inb_single_tile_size = 0;
+    if (fuse_pre_add) {
+        inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b->dtype());
+        inb_single_tile_size = tt::tile_size(inb_data_format);
+    }
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -250,14 +256,15 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
             .page_size = in_single_tile_size}}}});
 
     if (fuse_pre_add) {
-        // c_5 -> residual b
+        // c_5 -> residual b. Sized in residual's own data format so a residual with a different
+        // dtype than the input is read correctly; add_tiles handles the per-operand format.
         program_descriptor.cbs.push_back(CBDescriptor{
-            .total_size = res_tiles * in_single_tile_size,
+            .total_size = res_tiles * inb_single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-                .data_format = in_data_format,
-                .page_size = in_single_tile_size}}}});
+                .data_format = inb_data_format,
+                .page_size = inb_single_tile_size}}}});
         // c_3 -> fused a + b (compute kernel writes here, welford consumes from it)
         program_descriptor.cbs.push_back(CBDescriptor{
             .total_size = fused_tiles * single_tile_size,
