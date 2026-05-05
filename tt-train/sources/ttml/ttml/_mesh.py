@@ -230,7 +230,8 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
     for _, param in parameters.items():
         if not param.is_grad_initialized():
             continue
-        grad_t = ttml.autograd.create_tensor(param.get_grad())
+        grad = param.get_grad()
         for axis in axes:
-            grad_t = ttml.ops.distributed.all_reduce(grad_t, True, axis)
-        param.set_grad(ttnn.multiply(grad_t.get_value(), inv_scaler))
+            grad = ttnn.all_reduce(grad, cluster_axis=axis)
+        grad = ttnn.multiply(grad, inv_scaler)
+        param.set_grad(grad)

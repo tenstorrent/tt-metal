@@ -2,21 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/work_split.hpp"
 
+#include <map>
 #include <string>
 
 using namespace tt::tt_metal;
-using namespace std;
 
 namespace ttnn::prim {
 
-TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::create(
-    const TopkParams& args, const TopkInputs& tensor_args, std::tuple<Tensor, Tensor>& output_tensors) {
+tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactory::create_descriptor(
+    const TopkParams& operation_attributes,
+    const TopkInputs& tensor_args,
+    std::tuple<Tensor, Tensor>& tensor_return_value) {
+    const auto& args = operation_attributes;
+    auto& output_tensors = tensor_return_value;
     // Tensor references
     const auto& input_tensor = tensor_args.input;
     const auto& value_tensor = std::get<0>(output_tensors);
@@ -26,7 +30,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     const ttnn::Shape input_shape = input_tensor.padded_shape();
     const bool uint16_output = (input_shape[args.dim] < std::numeric_limits<uint16_t>::max());
 
-    tt::tt_metal::Program program{};
+    ProgramDescriptor desc;
 
     // Data format conversions for circular buffer configurations
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -50,9 +54,9 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     // Device memory buffer pointers for kernel runtime arguments
-    const auto* input_buffer = input_tensor.buffer();
-    const auto* values_buffer = value_tensor.buffer();
-    const auto* index_buffer = index_tensor.buffer();
+    auto* const input_buffer = input_tensor.buffer();
+    auto* const values_buffer = value_tensor.buffer();
+    auto* const index_buffer = index_tensor.buffer();
 
     // Tensor shape and dimension calculations
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -87,64 +91,96 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     const uint32_t output_cb_tile_count = Ktiles;           // Final output buffer
 
     // Circular Buffer Creations:
-    const uint32_t input_cb_index = tt::CBIndex::c_0;
-    const tt::tt_metal::CircularBufferConfig input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            input_cb_tile_count * input_tile_size, {{input_cb_index, input_cb_data_format}})
-            .set_page_size(input_cb_index, input_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
+    constexpr uint32_t input_cb_index = tt::CBIndex::c_0;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_cb_tile_count * input_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_cb_index),
+            .data_format = input_cb_data_format,
+            .page_size = input_tile_size,
+        }}},
+    });
 
     constexpr uint32_t index_cb_index = tt::CBIndex::c_1;
-    const tt::tt_metal::CircularBufferConfig index_input_intermed0_config =
-        tt::tt_metal::CircularBufferConfig(
-            input_cb_tile_count * index_tile_size, {{index_cb_index, output_ind_cb_data_format}})
-            .set_page_size(index_cb_index, index_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, index_input_intermed0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_cb_tile_count * index_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(index_cb_index),
+            .data_format = output_ind_cb_data_format,
+            .page_size = index_tile_size,
+        }}},
+    });
 
     // Uses bf16 when input is bfp8/bfp4 so that the insertion sort operates at higher
     // precision and avoids shared-exponent corruption of tiles adjacent to inf values.
     constexpr uint32_t transposed_val_cb_index = tt::CBIndex::c_2;
-    const tt::tt_metal::CircularBufferConfig transposed_val_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            transposed_cb_tile_count * compute_tile_size, {{transposed_val_cb_index, compute_cb_data_format}})
-            .set_page_size(transposed_val_cb_index, compute_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, transposed_val_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = transposed_cb_tile_count * compute_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(transposed_val_cb_index),
+            .data_format = compute_cb_data_format,
+            .page_size = compute_tile_size,
+        }}},
+    });
 
     constexpr uint32_t transposed_ind_cb_index = tt::CBIndex::c_3;
-    const tt::tt_metal::CircularBufferConfig transposed_ind_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            transposed_cb_tile_count * index_tile_size, {{transposed_ind_cb_index, output_ind_cb_data_format}})
-            .set_page_size(transposed_ind_cb_index, index_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, transposed_ind_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = transposed_cb_tile_count * index_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(transposed_ind_cb_index),
+            .data_format = output_ind_cb_data_format,
+            .page_size = index_tile_size,
+        }}},
+    });
 
     // Uses bf16 when input is bfp8/bfp4 (same rationale as transposed_val_cb_index).
     constexpr uint32_t result_prep_val_cb_index = tt::CBIndex::c_4;
-    const tt::tt_metal::CircularBufferConfig result_prep_val_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            result_prep_cb_tile_count * compute_tile_size, {{result_prep_val_cb_index, compute_cb_data_format}})
-            .set_page_size(result_prep_val_cb_index, compute_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, result_prep_val_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = result_prep_cb_tile_count * compute_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(result_prep_val_cb_index),
+            .data_format = compute_cb_data_format,
+            .page_size = compute_tile_size,
+        }}},
+    });
 
     constexpr uint32_t result_prep_ind_cb_index = tt::CBIndex::c_5;
-    const tt::tt_metal::CircularBufferConfig result_prep_ind_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            result_prep_cb_tile_count * index_tile_size, {{result_prep_ind_cb_index, output_ind_cb_data_format}})
-            .set_page_size(result_prep_ind_cb_index, index_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, result_prep_ind_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = result_prep_cb_tile_count * index_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(result_prep_ind_cb_index),
+            .data_format = output_ind_cb_data_format,
+            .page_size = index_tile_size,
+        }}},
+    });
 
     constexpr uint32_t output_val_cb_index = tt::CBIndex::c_6;
-    const tt::tt_metal::CircularBufferConfig output_val_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            output_cb_tile_count * value_tile_size, {{output_val_cb_index, output_val_cb_data_format}})
-            .set_page_size(output_val_cb_index, value_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, output_val_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_cb_tile_count * value_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_val_cb_index),
+            .data_format = output_val_cb_data_format,
+            .page_size = value_tile_size,
+        }}},
+    });
 
     constexpr uint32_t output_ind_cb_index = tt::CBIndex::c_7;
-    const tt::tt_metal::CircularBufferConfig output_ind_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            output_cb_tile_count * index_tile_size, {{output_ind_cb_index, output_ind_cb_data_format}})
-            .set_page_size(output_ind_cb_index, index_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, output_ind_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_cb_tile_count * index_tile_size,
+        .core_ranges = core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_ind_cb_index),
+            .data_format = output_ind_cb_data_format,
+            .page_size = index_tile_size,
+        }}},
+    });
 
     // Kernel Creations:
     std::vector<uint32_t> reader_compile_time_args = {
@@ -159,14 +195,19 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     if (tensor_args.indices.has_value()) {
         tt::tt_metal::TensorAccessorArgs(tensor_args.indices->buffer()).append_to(reader_compile_time_args);
     }
-    const std::map<std::string, std::string> reader_defines = {
+    const std::map<std::string, std::string> reader_defines_map = {
         {"GENERATE_INDICES", "1"},  // tensor_args.indices.has_value() ? "0" : "1" - GH issue: #36329
     };
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp",
-        core_range,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+    KernelDescriptor::Defines reader_defines(reader_defines_map.begin(), reader_defines_map.end());
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_range;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.defines = std::move(reader_defines);
+    reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_val_cb_index,   // CB6: Output values
@@ -177,11 +218,14 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     };
     tt::tt_metal::TensorAccessorArgs(values_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(index_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp",
-        core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_range;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     const std::vector<uint32_t> compute_args = {
         input_cb_index,                            // Input values
@@ -197,80 +241,53 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
         Ktiles,                                    // K value in tiles
         static_cast<std::uint32_t>(args.largest),  // Sort order: largest (true) or smallest (false)
     };
-    tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
-        core_range,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = !uint16_output, .compile_args = compute_args});
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_range;
+    compute_desc.compile_time_args = compute_args;
+    compute_desc.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = !uint16_output,
+        .dst_full_sync_en = false,
+    };
 
     uint32_t id = 0;  // Offset for the next core in the group
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                SetRuntimeArgs(
-                    program,
-                    unary_reader_kernel_id,
+                reader_desc.emplace_runtime_args(
                     core,
                     {
-                        input_buffer->address(),
+                        input_buffer,
                         id,
                         work_per_core,
                         tensor_args.indices.has_value() ? tensor_args.indices->buffer()->address()
-                                                        : 0,  // Optional indices tensor
+                                                        : 0u,  // Optional indices tensor
                     });
-                SetRuntimeArgs(
-                    program,
-                    binary_writer_kernel_id,
+                writer_desc.emplace_runtime_args(
                     core,
                     {
-                        values_buffer->address(),
-                        index_buffer->address(),
+                        values_buffer,
+                        index_buffer,
                         id,
                         work_per_core,
                     });
-                SetRuntimeArgs(
-                    program,
-                    compute_kernel_id,
+                compute_desc.runtime_args.emplace_back(
                     core,
-                    {
+                    KernelDescriptor::CoreRuntimeArgs{
                         work_per_core,
                     });
                 id++;
             }
         }
     }
-    return cached_program_t{std::move(program), {unary_reader_kernel_id, binary_writer_kernel_id, cores}};
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+
+    return desc;
 }
 
-void TopKSingleCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const TopkParams& /*args*/,
-    const TopkInputs& tensor_args,
-    std::tuple<Tensor, Tensor>& output_tensors) {
-    // Extract program and kernel information from cached program
-    auto& program = cached_program.program;
-    auto& shared_vars = cached_program.shared_variables;
-    auto& unary_reader_kernel_id = shared_vars.unary_reader_kernel_id;
-    auto& binary_writer_kernel_id = shared_vars.binary_writer_kernel_id;
-
-    // Get new buffer addresses for current tensor operation
-    const auto* input_buffer = tensor_args.input.buffer();
-    const auto* values_buffer = std::get<0>(output_tensors).buffer();
-    const auto* index_buffer = std::get<1>(output_tensors).buffer();
-
-    // Update runtime arguments with new buffer addresses
-    for (const auto& core : cached_program.shared_variables.cores) {
-        // Update reader kernel
-        auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-        reader_runtime_args[0] = input_buffer->address();  // Input values
-        if (tensor_args.indices.has_value()) {
-            reader_runtime_args[3] = tensor_args.indices->buffer()->address();  // Optional indices tensor
-        }
-
-        // Update writer kernel
-        auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_kernel_id, core);
-        writer_runtime_args[0] = values_buffer->address();  // TopK values output
-        writer_runtime_args[1] = index_buffer->address();   // TopK indices output
-    }
-}
 }  // namespace ttnn::prim

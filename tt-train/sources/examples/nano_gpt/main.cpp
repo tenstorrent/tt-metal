@@ -149,7 +149,7 @@ using DataLoader = ttml::datasets::DataLoader<
 struct TrainingConfig {
     std::string project_name;
     uint32_t seed = 5489U;
-    uint32_t model_save_interval = 500;
+    uint32_t model_save_interval = 0;
     uint32_t batch_size = 64;
     uint32_t num_epochs = 1;
     uint32_t max_steps = 5000;
@@ -166,7 +166,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     auto training_config = yaml_config["training_config"];
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.seed = training_config["seed"].as<uint32_t>();
-    config.model_save_interval = training_config["model_save_interval"].as<uint32_t>();
+    config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
@@ -854,7 +854,8 @@ int main(int argc, char **argv) {
 
                 if (!multihost_config.enable_mpi) {
                     // save training state if it's not 3 tier training
-                    if (!model_config.model_path.empty() && global_step % training_config.model_save_interval == 0) {
+                    if (!model_config.model_path.empty() && training_config.model_save_interval > 0 &&
+                        global_step % training_config.model_save_interval == 0) {
                         save_training_state(
                             model_config.model_path, model, scheduler, model_config.model_type, optimizer->get_name());
                     }
