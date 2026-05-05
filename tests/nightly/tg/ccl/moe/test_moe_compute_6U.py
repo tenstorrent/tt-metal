@@ -2269,3 +2269,571 @@ def test_moe_compute_glm5(
         activation_type=activation_type,
         has_bias=has_bias,
     )
+
+
+# Test for DS V4 Flash configuration
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"DS V4 Flash test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["correctness"])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("tokens_per_device", [32])
+def test_moe_compute_ds_v4_flash(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+    experts_per_device,
+    tokens_per_device,
+):
+    """Test MoE compute for DS V4 Flash (hidden=4096, intermediate=2048, n_routed=256) on 1x16 mesh."""
+
+    cluster_axis = 1
+    N = 2048
+    hidden_size = 4096
+    output_height_shard_dim = 4
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:
+        selected_experts_k = 6  # DS V4 Flash uses top-6
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
+
+
+# Test for DS V4 Pro configuration
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"DS V4 Pro test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["correctness"])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("experts_per_device", [6])  # n_routed=384, multiple of 3
+@pytest.mark.parametrize("tokens_per_device", [32])
+def test_moe_compute_ds_v4_pro(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+    experts_per_device,
+    tokens_per_device,
+):
+    """Test MoE compute for DS V4 Pro (hidden=7168, intermediate=3072, n_routed=384) on 1x16 mesh."""
+
+    cluster_axis = 1
+    N = 3072
+    hidden_size = 7168
+    output_height_shard_dim = 4
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:
+        selected_experts_k = 6  # DS V4 Pro uses top-6
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
+
+
+# Test for Kimi K2.5 configuration
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"Kimi K2.5 test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["correctness"])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("experts_per_device", [6])  # n_routed=384, multiple of 3
+@pytest.mark.parametrize("tokens_per_device", [32])
+def test_moe_compute_kimi_k25(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+    experts_per_device,
+    tokens_per_device,
+):
+    """Test MoE compute for Kimi K2.5 (hidden=7168, intermediate=2048, n_routed=384) on 1x16 mesh."""
+
+    cluster_axis = 1
+    N = 2048
+    hidden_size = 7168
+    output_height_shard_dim = 4
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:
+        selected_experts_k = 8  # Kimi K2.5 uses top-8
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
+
+
+# Test for Ling 1T configuration
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"Ling 1T test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["correctness"])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("tokens_per_device", [32])
+def test_moe_compute_ling_1t(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+    experts_per_device,
+    tokens_per_device,
+):
+    """Test MoE compute for Ling 1T (hidden=8192, intermediate=2048, n_routed=256) on 1x16 mesh."""
+
+    cluster_axis = 1
+    N = 2048
+    hidden_size = 8192
+    output_height_shard_dim = 4
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:
+        selected_experts_k = 8  # Ling 1T uses top-8
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
+
+
+# Test for GLM-4.7 configuration
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"GLM-4.7 test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["correctness"])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("tokens_per_device", [32])
+def test_moe_compute_glm_47(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+    experts_per_device,
+    tokens_per_device,
+):
+    """Test MoE compute for GLM-4.7 (hidden=5120, intermediate=1536, n_routed=160) on 1x16 mesh."""
+
+    cluster_axis = 1
+    N = 1536
+    hidden_size = 5120
+    output_height_shard_dim = 4
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:
+        selected_experts_k = 8  # GLM-4.7 uses top-8
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
+
+
+# Test for Mistral Large 3 configuration
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"Mistral Large 3 test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["correctness"])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("tokens_per_device", [32])
+def test_moe_compute_mistral_large_3(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+    experts_per_device,
+    tokens_per_device,
+):
+    """Test MoE compute for Mistral Large 3 (hidden=7168, intermediate=4096, n_routed=128) on 1x16 mesh."""
+
+    cluster_axis = 1
+    N = 4096
+    hidden_size = 7168
+    output_height_shard_dim = 4
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:
+        selected_experts_k = 4  # Mistral Large 3 uses top-4
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
+
+
+# Test for Gemma 4 26B configuration
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"Gemma 4 26B test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["correctness"])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("tokens_per_device", [32])
+def test_moe_compute_gemma_4_26b(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+    experts_per_device,
+    tokens_per_device,
+):
+    """Test MoE compute for Gemma 4 26B (hidden=2816, intermediate=704, n_routed=128) on 1x16 mesh."""
+
+    cluster_axis = 1
+    N = 704
+    hidden_size = 2816
+    output_height_shard_dim = 4
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.GELU  # Gemma uses GELU not SILU
+
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:
+        selected_experts_k = 8  # Gemma 4 26B uses top-8
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
+
+
+# Test for DS-OCR configuration
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+    reason=f"DS-OCR test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("enable_trace", [False])
+@pytest.mark.parametrize("test_mode", ["correctness"])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("experts_per_device", [2])
+@pytest.mark.parametrize("tokens_per_device", [32])
+def test_moe_compute_ds_ocr(
+    mesh_device,
+    mesh_shape,
+    has_bias,
+    enable_trace,
+    test_mode,
+    experts_per_device,
+    tokens_per_device,
+):
+    """Test MoE compute for DS-OCR (hidden=1280, intermediate=896, n_routed=64) on 1x16 mesh."""
+
+    cluster_axis = 1
+    N = 896
+    hidden_size = 1280
+    output_height_shard_dim = 4
+    output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+    dtype = ttnn.bfloat16
+    activation_type = MoEActivationFunction.SILU
+
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:
+        selected_experts_k = 6  # DS-OCR uses top-6
+        num_layers = 5
+        num_iterations = 3
+
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=cluster_axis,
+        experts_per_device=experts_per_device,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=N,
+        hidden_size=hidden_size,
+        output_height_shard_dim=output_height_shard_dim,
+        output_width_shard_dim=output_width_shard_dim,
+        dtype=dtype,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+    )
