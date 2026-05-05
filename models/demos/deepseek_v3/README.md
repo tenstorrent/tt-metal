@@ -328,7 +328,7 @@ python examples/server_example_tt.py \
   --model "deepseek-ai/DeepSeek-R1-0528" \
   --max_model_len 1024 \
   --block_size 32 \
-  --override_tt_config '{"trace_mode": false}'
+  --plugin-config '{"tt": {"trace_mode": false}}'
 ```
 
 In another terminal, send a client request:

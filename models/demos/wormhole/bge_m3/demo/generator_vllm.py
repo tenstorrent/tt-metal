@@ -91,12 +91,9 @@ class BgeM3ForEmbedding:
             raise ValueError("Optimizations are not supported for BGE-M3")
 
         if vllm_config is not None:
-            if (
-                not hasattr(vllm_config.model_config, "override_tt_config")
-                or vllm_config.model_config.override_tt_config is None
-            ):
-                vllm_config.model_config.override_tt_config = {}
-            vllm_config.model_config.override_tt_config["is_embedding_model"] = True
+            if getattr(vllm_config, "plugin_config", None) is None:
+                vllm_config.plugin_config = {}
+            vllm_config.plugin_config.setdefault("tt", {})["is_embedding_model"] = True
 
             return cls(
                 device=mesh_device,
