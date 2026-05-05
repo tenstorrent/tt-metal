@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "api/kernel_thread_globals.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
@@ -14,8 +15,12 @@
 #endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr bool use_dfbs = get_arg(args::use_dfbs) == 1;
+#else
     const uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr bool use_dfbs = get_compile_time_arg_val(1) == 1;
+#endif
     uint32_t src_addr  = get_arg_val<uint32_t>(0); // global base address
     uint32_t src_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
@@ -39,7 +44,11 @@ void kernel_main() {
     AllocatorBank<bank_type> src_dram;
     Noc noc;
     if constexpr (use_dfbs) {
+#ifdef ARCH_QUASAR
+        DataflowBuffer dfb(dfb::out);
+#else
         DataflowBuffer dfb(cb_id);
+#endif
         uint32_t ublock_size_bytes = dfb.get_entry_size();
         // stride_factor = stride_in_entries: how many entry-sized slots one
         // producer skips per tile. For a DFB with N producers interleaved
