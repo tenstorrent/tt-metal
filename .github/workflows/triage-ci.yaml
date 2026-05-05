@@ -20,17 +20,13 @@ on:
         type: number
         default: 0
       llm-backend:
-        description: "LLM backend to use for issue drafting (cursor or copilot)"
+        description: "LLM backend for issue drafting: 'cursor' (default) or 'copilot'"
         type: string
         default: "cursor"
       workflow-filter:
-        description: "Comma-separated list of workflow filenames to analyze (empty = all)"
+        description: "Comma-separated substrings to filter workflow names (e.g. 'ops-unit-tests,Blackhole'). Empty = all."
         type: string
         default: ""
-      cursor-model:
-        description: "Cursor model to use when llm-backend is 'cursor' (default: claude-4-sonnet)"
-        type: string
-        default: "claude-4-sonnet"
 
 permissions:
   contents: read
