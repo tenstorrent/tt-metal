@@ -487,12 +487,11 @@ def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -
     log_warning_location(location, f"{risc_name}: {message}")
 
 
-def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
+def serialize_result(script: TriageScript, result, execution_time: str = ""):
     from dataclasses import fields, is_dataclass
 
-    if script is not None:
-        print()
-        utils.INFO(f"{script.name}{execution_time}:")
+    print()
+    utils.INFO(f"{script.name}{execution_time}:")
 
     global FAILURE_CHECKS, FAILURE_CHECKS_LOCK, WARNING_CHECKS, WARNING_CHECKS_LOCK
     with FAILURE_CHECKS_LOCK:
@@ -501,16 +500,15 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
     with WARNING_CHECKS_LOCK:
         warnings = WARNING_CHECKS
         WARNING_CHECKS = []
-    if script is not None and script.skipped:
+    if script.skipped:
         utils.INFO(f"  skipped: {script.status_message}")
         return
     if result is None:
-        script_failed = script is not None and script.failed
-        if len(failures) > 0 or script_failed:
+        if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
             for failure in failures:
                 utils.ERROR(f"    {failure}")
-            if script_failed:
+            if script.failed:
                 utils.ERROR(f"    {script.status_message}")
 
                 import textwrap
@@ -761,10 +759,9 @@ def run_script(
 
     result = manager.execute_script(script_path, args, context)
 
-    script = manager.scripts.get(script_path)
     if return_result:
         return result
-    serialize_result(script, result)
+    serialize_result(manager.scripts[script_path], result)
 
     if force_exit:
         # Remove nanobind leak check to avoid false positives on exit
