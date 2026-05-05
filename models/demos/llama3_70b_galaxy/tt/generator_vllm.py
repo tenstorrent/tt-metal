@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 import torch
 from tqdm import tqdm
@@ -10,6 +12,11 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
+
+
+def _dummy_weights_from_env() -> bool:
+    """vLLM nightly random-weights mode toggle (TT_DUMMY_WEIGHTS=1)."""
+    return os.environ.get("TT_DUMMY_WEIGHTS", "").lower() in ("1", "true", "yes")
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
@@ -50,6 +57,7 @@ def initialize_vllm_text_transformer(
     n_layers=None,
     dtype=ttnn.bfloat8_b,
     optimizations=LlamaOptimizations.performance,
+    dummy_weights=False,
 ):
     # tt_data_parallel is the total number of DP kv caches, so need to divide by the DP factor of attention.
     dp_attention_factor = mesh_device.shape[1]
@@ -70,6 +78,7 @@ def initialize_vllm_text_transformer(
             max_batch_size=max_batch_size // tt_data_parallel,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
+            dummy_weights=dummy_weights,
         )
 
         if n_layers is not None:
@@ -105,6 +114,7 @@ def initialize_vllm_text_transformer_qwen(
     n_layers=None,
     dtype=ttnn.bfloat8_b,
     optimizations=LlamaOptimizations.performance,
+    dummy_weights=False,
 ):
     # tt_data_parallel is the total number of DP kv caches, so need to divide by the DP factor of attention.
     dp_attention_factor = mesh_device.shape[1]
@@ -125,6 +135,7 @@ def initialize_vllm_text_transformer_qwen(
             max_batch_size=max_batch_size // tt_data_parallel,
             # optimizations=optimizations,
             max_seq_len=max_seq_len,
+            dummy_weights=dummy_weights,
         )
 
         if n_layers is not None:
@@ -193,6 +204,7 @@ class LlamaForCausalLM(Generator):
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=LlamaOptimizations.performance,
+            dummy_weights=_dummy_weights_from_env(),
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -238,6 +250,7 @@ class QwenForCausalLM(Generator):
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=LlamaOptimizations.performance,
+            dummy_weights=_dummy_weights_from_env(),
         )
         return cls(tt_model, model_args, mesh_device)
 

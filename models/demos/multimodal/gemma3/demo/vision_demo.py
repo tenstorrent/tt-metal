@@ -62,13 +62,18 @@ def create_multimodal_model(
     optimizations=None,
     num_layers=None,
     paged_attention_config=None,
+    dummy_weights=False,
 ):
     from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 
     # limit length or we'll run out of space
     tt_model_args = ModelArgs(
-        mesh_device, max_batch_size=max_batch_size, optimizations=optimizations, max_seq_len=max_seq_len
+        mesh_device,
+        max_batch_size=max_batch_size,
+        optimizations=optimizations,
+        max_seq_len=max_seq_len,
+        dummy_weights=dummy_weights,
     )
     assert tt_model_args.is_multimodal, "This model is multimodal"
 

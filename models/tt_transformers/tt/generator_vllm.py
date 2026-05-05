@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from types import SimpleNamespace
 from typing import List, Mapping, Union
 
@@ -30,6 +31,16 @@ from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
+
+
+def _dummy_weights_from_env() -> bool:
+    """vLLM nightly random-weights mode toggle.
+
+    Set ``TT_DUMMY_WEIGHTS=1`` in the workflow env to construct every TT model
+    in this module with ``dummy_weights=True`` (config + tokenizer still load
+    from HF Hub; only the multi-GB weight materialisation is skipped).
+    """
+    return os.environ.get("TT_DUMMY_WEIGHTS", "").lower() in ("1", "true", "yes")
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -79,6 +90,7 @@ def initialize_vllm_text_transformer(
     n_layers=None,
     dtype=ttnn.bfloat8_b,
     optimizations=DecodersPrecision.performance,
+    dummy_weights=False,
 ):
     submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
@@ -92,6 +104,7 @@ def initialize_vllm_text_transformer(
             max_batch_size=max_batch_size // tt_data_parallel,
             optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
             max_seq_len=max_seq_len,
+            dummy_weights=dummy_weights,
         )
 
         assert model_args_i.model_name.replace("-", "") in hf_config._name_or_path.replace(
@@ -178,6 +191,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         model = []
         state_dict = None
 
+        dummy_weights = _dummy_weights_from_env()
         for submesh in submesh_devices:
             model_args_i, model_i, state_dict = create_multimodal_model(
                 mesh_device=submesh,
@@ -185,6 +199,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
                 max_seq_len=max_seq_len,
                 use_paged_kv_cache=True,
                 checkpoint=state_dict,
+                dummy_weights=dummy_weights,
             )
             model_args.append(model_args_i)
             model.append(model_i)
@@ -263,6 +278,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         model = []
         state_dict = None
 
+        dummy_weights = _dummy_weights_from_env()
         for submesh in submesh_devices:
             model_args_i, model_i, state_dict = create_multimodal_model(
                 mesh_device=submesh,
@@ -270,6 +286,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
                 max_seq_len=max_seq_len,
                 use_paged_kv_cache=True,
                 checkpoint=state_dict,
+                dummy_weights=dummy_weights,
             )
             model_args.append(model_args_i)
             model.append(model_i)
@@ -379,6 +396,7 @@ class LlamaForCausalLM(Generator):
             optimizations=DecodersPrecision.from_string(optimizations)
             if optimizations is not None
             else DecodersPrecision.performance,
+            dummy_weights=_dummy_weights_from_env(),
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -428,6 +446,7 @@ class QwenForCausalLM(Generator):
             optimizations=DecodersPrecision.from_string(optimizations)
             if optimizations is not None
             else DecodersPrecision.performance,
+            dummy_weights=_dummy_weights_from_env(),
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -477,6 +496,7 @@ class MistralForCausalLM(Generator):
             optimizations=DecodersPrecision.from_string(optimizations)
             if optimizations is not None
             else DecodersPrecision.performance,
+            dummy_weights=_dummy_weights_from_env(),
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -532,6 +552,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         model = []
         state_dict = None
 
+        dummy_weights = _dummy_weights_from_env()
         for submesh in submesh_devices:
             model_args_i, model_i, state_dict = create_multimodal_model(
                 mesh_device=submesh,
@@ -540,6 +561,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
                 use_paged_kv_cache=True,
                 checkpoint=state_dict,
                 optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
+                dummy_weights=dummy_weights,
             )
             model_args.append(model_args_i)
             model.append(model_i)
@@ -598,6 +620,7 @@ class GptOssForCausalLM(Generator):
             # For users_row_sharded, we internally manage DP=4 in attention so we don't need to create submeshes
             tt_data_parallel = 1
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+        dummy_weights = _dummy_weights_from_env()
         for submesh in submesh_devices:
             # Use the existing create_tt_model function
             model_args_i, model_i, _, state_dict = create_tt_model(
@@ -612,6 +635,7 @@ class GptOssForCausalLM(Generator):
                 create_kv_cache=False,
                 users_row_sharded=users_row_sharded,
                 use_throughput_experts=submesh.shape[0] > 1 and (max_batch_size > 1),
+                dummy_weights=dummy_weights,
             )
 
             model_args.append(model_args_i)

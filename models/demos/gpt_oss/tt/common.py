@@ -23,6 +23,7 @@ def create_tt_model(
     create_kv_cache=True,
     users_row_sharded=False,
     use_throughput_experts=False,
+    dummy_weights=False,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
@@ -44,6 +45,7 @@ def create_tt_model(
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        dummy_weights=dummy_weights,
     )
     # Override num_layers if provided (useful for quick testing with fewer layers)
     if num_layers is not None:
@@ -58,13 +60,19 @@ def create_tt_model(
             convert_to_meta_format=True,
         )
 
+    # When dummy_weights=True the weights themselves are random and differ run
+    # to run; persisted .tensorbin caches would either be stale (if read) or
+    # pure waste (if written), so force tensor_cache_path=None to disable
+    # caching entirely on this path.
+    tensor_cache_path = None if dummy_weights else str(gpt_oss_model_args.weight_cache_path(dtype))
+
     # Create GPT-OSS model using transformer-compatible constructor
     model = Model.create_transformer_compatible(
         args=gpt_oss_model_args,
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        tensor_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
+        tensor_cache_path=tensor_cache_path,
         paged_attention_config=paged_attention_config,
         mesh_config=mesh_config,  # Pass explicit MeshConfig
         create_kv_cache=create_kv_cache,

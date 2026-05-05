@@ -165,6 +165,7 @@ def create_multimodal_model(
     dtype=ttnn.bfloat16,
     use_paged_kv_cache=False,
     checkpoint=None,
+    dummy_weights=False,
 ):
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
@@ -174,7 +175,9 @@ def create_multimodal_model(
     if get_base_model_name(hf_tail) == _MISTRAL_SMALL_31_24B_BASE:
         max_seq_len = max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR)
 
-    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+    tt_model_args = ModelArgs(
+        mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, dummy_weights=dummy_weights
+    )
     assert tt_model_args.is_multimodal, "This model is multimodal"
     if tt_model_args.is_90b:
         assert tt_model_args.device_name == "T3K", "90B model only supported on T3K right now"

@@ -76,19 +76,19 @@ class ModelArgs:
 
         logger.info(f"Using GPT-OSS model from: {self.model_path}")
 
+        # Always load the HF config — even with dummy_weights=True we need
+        # vocab_size / n_layers / head_dim / rope_theta to construct the model.
+        # The HF config download is small (a few KB) and cheap; only the
+        # multi-GB weight tensors are skipped via load_state_dict's dummy
+        # branch.
+        self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+        self.vocab_size = self.hf_config.vocab_size
+        self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)
+        self.head_dim = self.hf_config.hidden_size // self.hf_config.num_attention_heads
+        self.rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
+        self.rope_scaling = None  # Keep simple like original GPT-OSS
         if self.dummy_weights:
-            # Skip loading HF config for testing - use default values
-            logger.info("Using dummy weights mode - skipping HuggingFace config loading")
-
-        else:
-            # Load HF config to get model parameters
-            self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
-            # Set key attributes that tt_transformers expects
-            self.vocab_size = self.hf_config.vocab_size
-            self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)
-            self.head_dim = self.hf_config.hidden_size // self.hf_config.num_attention_heads
-            self.rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
-            self.rope_scaling = None  # Keep simple like original GPT-OSS
+            logger.info("Using dummy weights mode - HF config loaded, weight materialisation skipped")
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
@@ -99,14 +99,10 @@ class ModelArgs:
         ], f"Unrecognized model name {self.model_name} inferred from model path {self.model_path}. Make sure you're using standard huggingface naming convention for your model checkpoint e.g openai/gpt-oss-20b"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
-        if self.dummy_weights:
-            # Skip tokenizer loading for testing
-            self.tokenizer = None
-            self.processor = None
-        else:
-            # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
-            self.processor = None  # GPT-OSS doesn't use vision processor
+        # Tokenizer is small and required for vLLM serving even in dummy-weights
+        # mode; always load it.
+        self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
+        self.processor = None  # GPT-OSS doesn't use vision processor
 
         self.disable_batched_prefill = True
         self.capped_warmup_seq_len = 2048
@@ -225,8 +221,15 @@ class ModelArgs:
                 Set to False when loading for HuggingFace reference models.
         """
         if dummy_weights:
-            # Return dummy state dict for testing
-            return {}
+            # Build a state dict from a randomly-initialised model — uses the
+            # HF config (already loaded; small) and skips the multi-GB weight
+            # download. Produces the same key set / tensor shapes as the real
+            # checkpoint so the convert_hf_qkv_to_meta_format path below and
+            # all downstream `state_dict[...]` lookups behave identically.
+            from transformers import AutoModelForCausalLM as _AutoModelForCausalLM
+
+            config = AutoConfig.from_pretrained(weights_path, trust_remote_code=True)
+            model = _AutoModelForCausalLM.from_config(config, trust_remote_code=True)
         else:
             # Load actual GPT-OSS weights directly from safetensors files
             # Check if we have a cached torch_state_dict.pt file
@@ -237,18 +240,18 @@ class ModelArgs:
                 # may come in any dtype. If the model weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
             )
-            state_dict = model.state_dict()
-            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
-            if convert_to_meta_format:
-                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                state_dict = convert_hf_qkv_to_meta_format(state_dict, model.config.head_dim)
-            if state_dict["model.norm.weight"].dtype != torch.bfloat16:
-                # Convert to bfloat16 if needed
-                state_dict = {
-                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
-                    for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
-                }
-            return state_dict
+        state_dict = model.state_dict()
+        # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
+        if convert_to_meta_format:
+            logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
+            state_dict = convert_hf_qkv_to_meta_format(state_dict, model.config.head_dim)
+        if state_dict["model.norm.weight"].dtype != torch.bfloat16:
+            # Convert to bfloat16 if needed
+            state_dict = {
+                k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
+                for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
+            }
+        return state_dict
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
