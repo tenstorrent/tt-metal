@@ -51,9 +51,8 @@ void kernel_main() {
     constexpr uint32_t cb_metadata_scratch_id = get_compile_time_arg_val(7);
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(8);
     constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(9);
-    constexpr uint32_t max_dispatched_tokens_per_expert = get_compile_time_arg_val(10);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(11);
-    constexpr auto output_args = TensorAccessorArgs<12>();
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(10);
+    constexpr auto output_args = TensorAccessorArgs<11>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t total_transfer_size = read_batch_size * aligned_output_page_size;
@@ -100,6 +99,7 @@ void kernel_main() {
     uint64_t sender_scratch_slot_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, sender_scratch_base + core_id * sizeof(uint32_t));
     noc_inline_dw_write(sender_scratch_slot_noc_addr, mailbox_l1_addr);
+    noc_async_write_barrier();  // ensure mailbox L1 addr has landed before atomic wakes sender
     uint64_t sender_mbox_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(mbox_ready_semaphore_id));
     noc_semaphore_inc(sender_mbox_ready_noc_addr, 1);
@@ -175,4 +175,8 @@ void kernel_main() {
         // 6. Release untilize CB
         cb_pop_front(cb_untilize_id, read_batch_size);
     }
+    // Ensure all in-flight NOC traffic has landed before kernel exit. The all-local path only
+    // calls noc_async_writes_flushed (departure-from-source); without this barrier its
+    // noc_async_write_page DRAM writes can still be in flight at program end.
+    noc_async_full_barrier();
 }

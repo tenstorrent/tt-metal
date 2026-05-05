@@ -326,7 +326,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // With fp32_dest_acc_en=true, DST has only 4 registers (indices 0-3).
     // update_cur_mm_out and final normalization use DST[0..block_size-1] for data tiles
     // plus DST[block_size] for the unary_bcast operand, so we need block_size + 1 <= 4.
-    const uint32_t block_size = get_block_size(qWt, 3U);
+    const uint32_t block_size = get_block_size(vWt, 3U);
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -397,13 +397,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
     [[maybe_unused]] auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+        program, all_cores, kPrevMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
 
     [[maybe_unused]] auto cb_cur_mm_out = create_circular_buffer(
-        program, all_cores, kCurMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+        program, all_cores, kCurMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
 
     [[maybe_unused]] auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, vWt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -479,7 +479,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,              // num tile in inner dim in query(d/TILE_W)
+        qWt,              // num tile in inner dim in query/key (d_qk/TILE_W)
+        vWt,              // num tile in inner dim in value (d_v/TILE_W)
         St,               // num tile in seq len dim (S/TILE_H)
         qNH,              // number of heads in query
         heads_per_group,  // number of heads per group
@@ -497,7 +498,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        qWt,  // num tile in inner dim in query(d/TILE_W)
+        vWt,  // num tile in inner dim in output/value (d_v/TILE_W)
         St,   // num tile in seq len dim (S/TILE_H)
         qNH,  // number of heads in query
     };
@@ -527,8 +528,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
         std::vector<uint32_t> compute_args = {
             max_pairs_per_core,  // num_pairs (or max_pairs if some cores have fewer)
-            block_size,          // per_core_block_size
-            qWt,                 // num tile in inner dim in query(d/TILE_W)
+            block_size,          // per_core_block_size (derived from vWt)
+            qWt,                 // num tile in inner dim in query/key (d_qk/TILE_W)
+            vWt,                 // num tile in inner dim in value (d_v/TILE_W)
             St,                  // num_seq_len / TILE_H
             scaler,              // sqrt(Et) - sdpa scaler factor
             minus_one,           // used to transform mask from 1/0 to 0/-1
@@ -552,8 +554,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         // Group 1 compile-time arguments
         std::vector<uint32_t> compute_group_1_args = {
             num_rows_per_core_group_1,  // per_core_block_cnt
-            block_size,                 // per_core_block_size
-            qWt,                        // num tile in inner dim in query(d/TILE_W)
+            block_size,                 // per_core_block_size (derived from vWt)
+            qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
+            vWt,                        // num tile in inner dim in value (d_v/TILE_W)
             St,                         // num_seq_len / TILE_H
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
@@ -576,8 +579,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         if (!core_group_2.ranges().empty()) {
             std::vector<uint32_t> compute_group_2_args = {
                 num_rows_per_core_group_2,  // per_core_block_cnt
-                block_size,                 // per_core_block_size
-                qWt,                        // num tile in inner dim in query(d/TILE_W)
+                block_size,                 // per_core_block_size (derived from vWt)
+                qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
+                vWt,                        // num tile in inner dim in value (d_v/TILE_W)
                 St,                         // num_seq_len / TILE_H
                 scaler,                     // sqrt(Et) - sdpa scaler factor
                 minus_one,                  // used to transform mask from 1/0 to 0/-1

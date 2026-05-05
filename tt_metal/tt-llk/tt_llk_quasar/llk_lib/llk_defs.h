@@ -9,6 +9,17 @@
 namespace ckernel
 {
 
+// Currently unused but kept for backwards compatibility
+enum class VectorMode
+{
+    None      = 0,
+    R         = 1,
+    C         = 2,
+    RC        = 4,
+    RC_custom = 6,
+    Invalid   = 0xFF,
+};
+
 enum class ReduceDim : std::uint8_t
 {
     REDUCE_ROW,
@@ -70,8 +81,8 @@ enum class SfpuType : std::uint32_t
     rsqrt,
     relu,
     lrelu,
-    relumin,
-    relumax,
+    relu_min,
+    relu_max,
     stochround,
     typecast,
     add,
@@ -158,6 +169,8 @@ private:
     ReluType mode           = ReluType::NO_RELU;
     std::uint32_t threshold = 0;
 };
+
+constexpr std::uint32_t SFPU_ITERATIONS = 8; // Number of iterations to unroll for SFPU loops
 
 } // namespace ckernel
 

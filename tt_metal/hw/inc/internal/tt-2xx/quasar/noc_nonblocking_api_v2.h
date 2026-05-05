@@ -439,6 +439,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
         (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, len_bytes);
+    if (mcast) {
+        // HW needs MCAST_DESTS to match the number of cores in the (start,end) rectangle
+        // so it can track per-destination acks for the multicast.
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, num_dests);
+    }
     __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
 
     if constexpr (update_counter) {
@@ -487,6 +493,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
         (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, len_bytes);
+    if (mcast) {
+        // HW needs MCAST_DESTS to match the number of cores in the (start,end) rectangle
+        // so it can track per-destination acks for the multicast.
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, num_dests);
+    }
     __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
 
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
@@ -653,6 +665,12 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8,
         (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    if (mcast) {
+        // HW needs MCAST_DESTS to match the number of cores in the (start,end) rectangle
+        // so it can track per-destination acks for the multicast.
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, num_dests);
+    }
     __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
 
     if (posted) {
@@ -732,6 +750,9 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, at_len);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, (uint64_t)incr);
+    // HW needs MCAST_DESTS to match the number of cores in the (start,end) rectangle
+    // so it can track per-destination acks for the multicast atomic.
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, num_dests);
     __builtin_riscv_ttrocc_scmdbuf_issue_trans();
 
     if (!posted) {

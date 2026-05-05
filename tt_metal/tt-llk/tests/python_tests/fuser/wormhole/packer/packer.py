@@ -37,14 +37,13 @@ class Packer(BasePacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
         face_r_dim = operation.output.tile_shape.face_r_dim
         num_faces = operation.output.tile_shape.total_num_faces()
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
             f"    _llk_pack_init_<false, false>(\n"
-            f"        pack_dst_format{stage}, {face_r_dim}, {num_faces}\n"
+            f"        {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
             f"    );\n"
             f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}, false>();\n"
         )

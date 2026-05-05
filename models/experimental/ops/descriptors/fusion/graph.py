@@ -400,10 +400,20 @@ class OpGraphBuilder:
         sem_compute_done = ttnn.create_global_semaphore(device, union_range, 0)
         sem_writer_done = ttnn.create_global_semaphore(device, union_range, 0)
         sem_reset_done = ttnn.create_global_semaphore(device, union_range, 0)
+        sem_pack_drained = ttnn.create_global_semaphore(device, union_range, 0)
+        sem_math_drained = ttnn.create_global_semaphore(device, union_range, 0)
         compute_done_addr = ttnn.get_global_semaphore_address(sem_compute_done)
         writer_done_addr = ttnn.get_global_semaphore_address(sem_writer_done)
         reset_done_addr = ttnn.get_global_semaphore_address(sem_reset_done)
-        all_sem_refs = [sem_compute_done, sem_writer_done, sem_reset_done]
+        pack_drained_addr = ttnn.get_global_semaphore_address(sem_pack_drained)
+        math_drained_addr = ttnn.get_global_semaphore_address(sem_math_drained)
+        all_sem_refs = [
+            sem_compute_done,
+            sem_writer_done,
+            sem_reset_done,
+            sem_pack_drained,
+            sem_math_drained,
+        ]
 
         # Collect semaphore specs (allocation blueprints) and current
         # addresses in matching order.  Used post-build to compute
@@ -412,8 +422,16 @@ class OpGraphBuilder:
             _SemaphoreSpec(core_ranges=union_range, initial_value=0),
             _SemaphoreSpec(core_ranges=union_range, initial_value=0),
             _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
+            _SemaphoreSpec(core_ranges=union_range, initial_value=0),
         ]
-        sem_addrs = [compute_done_addr, writer_done_addr, reset_done_addr]
+        sem_addrs = [
+            compute_done_addr,
+            writer_done_addr,
+            reset_done_addr,
+            pack_drained_addr,
+            math_drained_addr,
+        ]
 
         # Pre-allocate barrier configs for each unique (release, arrive) scope
         # pair across all groups.  Groups sharing a release scope MUST use the
@@ -479,6 +497,8 @@ class OpGraphBuilder:
                 compute_done_addr,
                 writer_done_addr,
                 reset_done_addr,
+                pack_drained_addr,
+                math_drained_addr,
                 all_sem_refs,
                 segment_cache,
                 needs_target_core_range=multi_group,
@@ -631,6 +651,8 @@ class OpGraphBuilder:
         compute_done_addr: int,
         writer_done_addr: int,
         reset_done_addr: int,
+        pack_drained_addr: int,
+        math_drained_addr: int,
         shared_sem_refs: List[Any],
         segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig],
         needs_target_core_range: bool = False,
@@ -665,6 +687,8 @@ class OpGraphBuilder:
             compute_done_addr=compute_done_addr,
             writer_done_addr=writer_done_addr,
             reset_done_addr=reset_done_addr,
+            pack_drained_addr=pack_drained_addr,
+            math_drained_addr=math_drained_addr,
             transition_map=transition_map,
             _sem_refs=list(shared_sem_refs),
         )

@@ -110,9 +110,17 @@ class EltwiseFpu(Fpu):
         return (
             f"_llk_math_eltwise_binary_<{op}, {broadcast_type}, dest_sync{stage},\n"
             f"{dest_acc}, {math_fidelity}, {reuse_dest}>"
-            f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {block.tile_id_block}, {clear_fp32_dst_acc}\n"
-            f");\n"
+            f"(ckernel::TensorShape{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}}, {block.tile_id_block}, {clear_fp32_dst_acc});\n"
         )
+
+    def uninit(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        return "_llk_math_eltwise_binary_uninit_();\n"
 
     def __str__(self) -> str:
         return f"EltwiseFpu({self.operation})"

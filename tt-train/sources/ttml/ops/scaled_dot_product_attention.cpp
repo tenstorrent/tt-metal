@@ -106,8 +106,8 @@ void validate_qkv_shapes(
     if (batch_num != batch_num_key || batch_num != batch_num_value || seq_len_key != seq_len_value ||
         embedding_dim != embedding_dim_key) {
         throw std::invalid_argument(fmt::format(
-            "Query and key must have matching batch_num and embedding_dim. Value must also have matching "
-            "batch_num. Key and value must have matching seq_len. Value embedding_dim may differ. "
+            "Query, key, and value must have matching batch_num. Query and key must have matching embedding_dim. "
+            "Key and value must have matching seq_len. Value embedding_dim can differ from query/key. "
             "Got shapes: query={}, key={}, value={}",
             query->get_value().logical_shape(),
             key->get_value().logical_shape(),

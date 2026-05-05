@@ -376,7 +376,7 @@ def test_prefill_block_loop(
     )
     if not is_dense:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
-        block_kwargs["capacity_factor"] = 32  # default=2 causes massive overflow with pretrained weights
+        block_kwargs["dispatch_buffer_capacity_factor"] = 2
         block_kwargs["routed_expert_activations_dtype"] = ttnn.bfloat16
         block_kwargs["routed_expert_weights_dtype"] = ttnn.bfloat16
         block_kwargs["shared_expert_activations_dtype"] = ttnn.bfloat16

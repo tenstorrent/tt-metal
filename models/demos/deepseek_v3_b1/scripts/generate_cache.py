@@ -17,7 +17,10 @@ Examples:
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --cache-root /path/to/cache --type embedding
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --cache-root /path/to/cache --type lm_head
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --cache-root /path/to/cache --type mtp
+  python generate_cache.py --model-path /path/to/DeepSeek-V3 --cache-root /path/to/cache --type spec
 
+  python generate_cache.py --model-path /path/to/DeepSeek-V3 --cache-root /path/to/cache --type lm_head --fold-rmsnorm
+  python generate_cache.py --model-path /path/to/DeepSeek-V3 --cache-root /path/to/cache --type spec --fold-rmsnorm
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --cache-root /path/to/cache --type embedding --verify
 """
 
@@ -49,6 +52,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
     prepare_mtp_weights,
+    prepare_spec_weights,
 )
 
 NUM_LAYERS = 62
@@ -150,7 +154,7 @@ def _create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--type",
         dest="mode",
-        choices=("dense", "moe", "embedding", "lm_head", "mtp"),
+        choices=("dense", "moe", "embedding", "lm_head", "mtp", "spec"),
         required=True,
     )
     parser.add_argument(
@@ -180,6 +184,16 @@ def _create_parser() -> argparse.ArgumentParser:
         "--verify-only",
         action="store_true",
         help="Skip warm; only run the double-load check (use on an already-populated cache-root).",
+    )
+    parser.add_argument(
+        "--fold-rmsnorm",
+        action="store_true",
+        help=(
+            "Fold RMSNorm gamma into the weight matrix (eliminates runtime gamma multiply). "
+            "Applies to --type lm_head (final_norm folded into lm_head), "
+            "--type mtp (e_gamma/h_gamma folded into eh_projection), and "
+            "--type spec (shared_head_norm folded into spec lm_head)."
+        ),
     )
     parser.add_argument(
         "--bspm-dir",
@@ -244,6 +258,9 @@ def _validate_args(args: argparse.Namespace, cache_root: Path) -> None:
                 )
                 sys.exit(1)
 
+    if args.fold_rmsnorm and mode not in ("lm_head", "mtp", "spec"):
+        logger.warning("--fold-rmsnorm is only used with --type lm_head/mtp/spec; ignoring for type={}", mode)
+
     if args.bspm_dir is not None and mode != "moe":
         logger.warning("--bspm-dir is only used with --type moe; ignoring for type={}", mode)
 
@@ -277,6 +294,7 @@ def _warm(
     bspm_dir: Path | None = None,
     bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
+    fold_rmsnorm_weights: bool = False,
 ) -> None:
     _ensure_fabric_env()
     device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
@@ -326,14 +344,37 @@ def _warm(
             elif mode == "lm_head":
                 t0 = time.perf_counter()
                 logger.info("Warming TensorCache: lm_head")
-                prepare_lm_head_weights(state_dict, submesh, move_to_device=True, cache_config=cfg)
+                prepare_lm_head_weights(
+                    state_dict,
+                    submesh,
+                    move_to_device=True,
+                    cache_config=cfg,
+                    fold_rmsnorm_weights=fold_rmsnorm_weights,
+                )
                 logger.info("LM head done in {:.3f}s", time.perf_counter() - t0)
-            else:
-                assert mode == "mtp"
+            elif mode == "mtp":
                 t0 = time.perf_counter()
                 logger.info("Warming TensorCache: mtp")
-                prepare_mtp_weights(state_dict, submesh, move_to_device=True, cache_config=cfg)
+                prepare_mtp_weights(
+                    state_dict,
+                    submesh,
+                    move_to_device=True,
+                    cache_config=cfg,
+                    fold_rmsnorm_weights=fold_rmsnorm_weights,
+                )
                 logger.info("MTP done in {:.3f}s", time.perf_counter() - t0)
+            else:
+                assert mode == "spec"
+                t0 = time.perf_counter()
+                logger.info("Warming TensorCache: spec")
+                prepare_spec_weights(
+                    state_dict,
+                    submesh,
+                    move_to_device=True,
+                    cache_config=cfg,
+                    fold_rmsnorm_weights=fold_rmsnorm_weights,
+                )
+                logger.info("Spec done in {:.3f}s", time.perf_counter() - t0)
 
 
 def _verify(
@@ -393,6 +434,16 @@ def _verify(
                 if w2.h_gamma.shape != hs or w2.e_gamma.shape != es or w2.eh_projection.shape != ehs:
                     logger.error("mtp second load shape mismatch")
                     return False
+            elif mode == "spec":
+                w = provider.load_spec(submesh)
+                ls = w.lm_head.shape
+                ttnn.deallocate(w.lm_head, force=True)
+                if w.shared_head_norm is not None:
+                    ttnn.deallocate(w.shared_head_norm, force=True)
+                w2 = provider.load_spec(submesh)
+                if w2.lm_head.shape != ls:
+                    logger.error("spec second load shape mismatch")
+                    return False
             elif mode == "dense":
                 for lid in layer_nums:
                     w = provider.load_dense_layer(lid, submesh)
@@ -450,6 +501,7 @@ def main() -> int:
             bspm_dir=args.bspm_dir,
             bspm_variant=BspmVariant(args.bspm_variant),
             bspm_budget=args.bspm_budget,
+            fold_rmsnorm_weights=args.fold_rmsnorm,
         )
         logger.info("Warm complete in {:.3f}s", time.perf_counter() - t_all)
 

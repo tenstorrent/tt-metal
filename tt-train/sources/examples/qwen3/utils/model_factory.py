@@ -6,9 +6,12 @@
 
 import time
 
-from model_qwen3 import (
-    Qwen3ForCausalLM,
+from ttml.models import RunnerType
+from ttml.models.qwen3 import (  # noqa: F401
+    Qwen3,
     create_qwen3_config_from_hf,
+)
+from model_qwen3 import (
     load_weights_from_hf,
 )
 from model_qwen3_distributed import (
@@ -43,7 +46,8 @@ def create_ttml_model(
     Weight loading is left to the caller (see :func:`load_hf_weights`).
     """
     use_tp = tp_size > 1
-    config = create_qwen3_config_from_hf(hf_config, max_seq_len)
+    runner = RunnerType.MemoryEfficient if checkpoint else RunnerType.Default
+    config = create_qwen3_config_from_hf(hf_config, max_seq_len, runner_type=runner)
     tie = getattr(hf_config, "tie_word_embeddings", False)
     mode_str = build_mode_str(dp_size, tp_size)
 
@@ -71,12 +75,7 @@ def create_ttml_model(
                 print("  Sharded loss: ENABLED (LM head gather_output=False)")
         else:
             shard_dim = None
-            model = Qwen3ForCausalLM(
-                config,
-                tie_word_embeddings=tie,
-                track_memory=track_memory,
-                use_checkpoint=checkpoint,
-            )
+            model = Qwen3(config, track_memory=track_memory)
             if checkpoint:
                 print("  Gradient checkpointing: ENABLED")
 

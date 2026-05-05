@@ -26,6 +26,8 @@
 
 namespace {
 
+constexpr uint32_t TILE_WIDTH = 32;
+
 uint32_t get_num_pages_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
 
 uint32_t get_page_size_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
@@ -39,6 +41,9 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
     return logical_volume / hidden_size;
 }
 
+const CoreRangeSet max_combine_core_range_set = CoreRangeSet(CoreRange({5, 0}, {6, 7}));
+const std::vector<CoreCoord> max_tilize_cores = {CoreCoord(6, 9), CoreCoord(6, 8), CoreCoord(5, 9), CoreCoord(5, 8)};
+
 std::tuple<
     std::vector<CoreCoord>,  // T cores
     std::vector<CoreCoord>,  // MM cores
@@ -51,16 +56,28 @@ std::tuple<
     std::vector<CoreCoord>,  // Combine vector of CoreCoord
     CoreRange,               // T bounding box
     CoreRange>               // MM bounding box
-get_cores(ttnn::MeshDevice* mesh_device) {
+get_cores(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    uint32_t combine_data_parallel_cores,
+    uint32_t hidden_size) {
     /*
      * - First tilize core is the drain sync
      * - First ((total_tilize_cores + 1) / 2) tilize cores are primary mcast group
      * - Remaining cores are secondary mcast group (with the first of them being the secondary mcaster)
      */
 
-    // Cores
-    const std::vector<CoreCoord> tilize_cores = {CoreCoord(6, 9), CoreCoord(6, 8), CoreCoord(5, 9), CoreCoord(5, 8)};
-    const std::vector<CoreCoord> matmul_cores =
+    // Calculate number of tilize cores based on hidden dimension
+    const uint32_t hidden_tiles = hidden_size / TILE_WIDTH;
+
+    // Find the maximum number of tilize cores that evenly divides hidden_tiles
+    // Start from max possible (4 cores) and work down
+    std::vector<CoreCoord> tilize_cores = max_tilize_cores;
+    while (tilize_cores.size() > 1 && hidden_tiles % tilize_cores.size() != 0) {
+        tilize_cores.pop_back();
+    }
+
+    const auto matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
 
     // CoreRangeSets
@@ -75,9 +92,12 @@ get_cores(ttnn::MeshDevice* mesh_device) {
     // Verify none of the bounding boxes overlap
     TT_FATAL(!tilize_bounding_box.intersects(matmul_bounding_box), "tilize and matmul bounding boxes cannot overlap");
 
-    // Combine cores (16 total), that don't overlap with any of the tilize or matmul bounding boxes
-    const CoreRange combine_core_range({5, 0}, {6, 7});
-    const CoreRangeSet combine_core_range_set = CoreRangeSet(combine_core_range);
+    // Combine cores (16 max), that don't overlap with any of the tilize or matmul bounding boxes
+    const auto combine_core_range_set = select_from_corerangeset(
+        max_combine_core_range_set,
+        /*start_index=*/0,
+        (combine_token_parallel_cores * combine_data_parallel_cores) - 1);
+
     const CoreRange combine_bounding_box = combine_core_range_set.bounding_box();
 
     // consistent order matters for the list of combine cores so produce them as a sorted vector
@@ -129,10 +149,17 @@ std::string serialize_physical_core_coords(const std::vector<ttnn::CoreCoord>& c
 namespace ttnn::experimental::prim {
 
 // expose a helper function so callers know what cores are available for subsequently running a2a combine
-std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
+std::vector<ttnn::CoreCoord> get_moe_combine_cores(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores) {
     constexpr auto combine_cores_return_index = 8;
 
-    const auto get_cores_return = get_cores(mesh_device);
+    // Use dummy hidden_size since we only need combine cores (which don't depend on hidden_size)
+    // This function is only for getting combine cores, not tilize cores
+    constexpr uint32_t dummy_hidden_size = 7168;  // DeepSeek default
+    const auto get_cores_return =
+        get_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, dummy_hidden_size);
 
     return std::get<combine_cores_return_index>(get_cores_return);
 }
@@ -148,7 +175,14 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
     constexpr auto combine_core_range_set_return_index = 5;
 
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
-    const auto core_ret = get_cores(mesh_device);
+    const auto& tilize_input_shape = tensor_args.tilize_input_tensor.tensor_spec().logical_shape();
+    const uint32_t hidden_size = tilize_input_shape[-1];
+
+    const auto core_ret = get_cores(
+        mesh_device,
+        args.combine_params.num_token_parallel_cores,
+        args.combine_params.num_data_parallel_cores,
+        hidden_size);
 
     const auto& combine_core_range_set = std::get<combine_core_range_set_return_index>(core_ret);
 
@@ -275,6 +309,22 @@ MoEComputeMeshWorkloadFactory::create_at(
     // result is fractional experts per device so div_up is required to get the right value here.
     uint32_t experts_per_device = tt::div_up(experts, num_devices);
 
+    // Output/Combine input core dims, for core selection
+    const auto combine_token_parallel_cores = args.combine_params.num_token_parallel_cores;
+    const auto combine_data_parallel_cores = args.combine_params.num_data_parallel_cores;
+
+    // Determine config type based on hidden size. Bias does not matter for these values
+    uint32_t config_type, a2a_cb_pages;
+    if (hidden_size == 7168) {
+        config_type = static_cast<uint32_t>(detail::MoEConfigType::DEEPSEEK);
+        a2a_cb_pages = moe_ring::DeepSeekRingConfig</*HasBias=*/false>::IN2_TILES_PER_STEP;
+    } else if (hidden_size == 2880) {
+        config_type = static_cast<uint32_t>(detail::MoEConfigType::GPT);
+        a2a_cb_pages = moe_ring::GptRingConfig</*HasBias=*/false>::IN2_TILES_PER_STEP;
+    } else {
+        TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
+    }
+
     // Cores
     const auto
         [tilize_cores,
@@ -287,7 +337,8 @@ MoEComputeMeshWorkloadFactory::create_at(
          all_worker_cores_range_set,
          combine_cores,
          tilize_bounding_box,
-         matmul_bounding_box] = get_cores(mesh_device);
+         matmul_bounding_box] =
+            get_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size);
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
@@ -371,8 +422,9 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Tilize drain-sync core signals combine sync core (which then multicasts to the rest)
     // that metadata is ready and task splitting can proceed.
+    // Allocate on full rectangle of usable cores so we can multicast without clobbering.
     const auto tilize_combine_sync_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
+        tt::tt_metal::CreateSemaphore(program, max_combine_core_range_set, INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
     // For double buffering, combine cores will also use this semaphore to signal matmul when buffer segments are free
@@ -642,7 +694,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"cb_r2c_w0", tt::CBIndex::c_3, tt::DataFormat::Bfp4_b, true, 14 * 6},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, 6 * 12},
+        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * 12},
         {"cb_w2c_md", tt::CBIndex::c_7, tt::DataFormat::UInt32, false, 2},
     };
     if (args.has_bias) {
@@ -680,12 +732,11 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // tile_width_bytes = TILE_WIDTH * element_size
     // max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes
-    constexpr uint32_t TILE_WIDTH = 32;
     uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
     uint32_t max_tiles_per_local_chunk = max_tilize_subtoken_size / tile_width_bytes;
 
-    const uint32_t primary_mcast_gather_group_num_cores = (tilize_num_cores + 1) / 2;
-    const uint32_t secondary_mcast_gather_group_num_cores = tilize_num_cores / 2;
+    const uint32_t primary_mcast_gather_group_num_cores = tilize_num_cores / 2;
+    const uint32_t secondary_mcast_gather_group_num_cores = tilize_num_cores - primary_mcast_gather_group_num_cores;
 
     // Drain core is always the first tilize core (index 0)
     CoreCoord tilize_drain_core_physical = tilize_cores_physical.at(0);
@@ -998,17 +1049,22 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(matmul_compile_time_args);
     }
 
+    // parameters for writing to output shards
     const uint32_t tile_width = tilize_input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tilize_input_tensor.tensor_spec().tile().get_height();
     const uint32_t output_height_shard_dim = args.output_height_shard_dim;
-    const uint32_t output_width_shard_dim = args.output_width_shard_dim;
-    const uint32_t output_shard_width_tiles = hidden_size / tile_width / output_width_shard_dim;
 
-    constexpr uint32_t buffer_size_total_tokens =
-        512;  // Hardware buffer is always sized for 512 tokens, even if total tokens is smaller
+    // this logic is awkward. needs to match selective_reduce_combine_program_factory.
+    constexpr auto double_buffer = 2;
+    const auto shards = tilize_output_tensor.memory_config().shard_spec()->grid.num_cores();
+    const auto token_expert_row_offset = tilize_output_tensor.logical_shape().volume() / shards /
+                                         (hidden_size / combine_data_parallel_cores / double_buffer) /
+                                         combine_token_parallel_cores;
 
-    const ::detail::MoEActivationFunction activation_type = args.activation_type;
+    // activation function
+    const ttnn::experimental::prim::detail::MoEActivationFunction activation_type = args.activation_type;
 
+    const uint32_t output_shard_width_tiles = hidden_size / tile_width / combine_data_parallel_cores;
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
         {"layer_id", args.layer_id},
@@ -1027,9 +1083,10 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tile_height", tile_height},
         {"tile_width", tile_width},
         {"tile_width_size_bytes", tile_width * tt::datum_size(tilize_output_dataformat)},
-        {"buffer_size_total_tokens", buffer_size_total_tokens},  // Hardware buffer is always sized for 512 tokens
+        {"token_expert_row_offset", token_expert_row_offset},
         {"height_shard_dim", output_height_shard_dim},
-        {"width_shard_dim", output_width_shard_dim},
+        {"width_shard_dim", combine_data_parallel_cores},
+        {"moe_config_type", config_type},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
         {"matmul_combine_sync_semaphore_id", matmul_combine_sync_semaphore_id},
     };
@@ -1179,7 +1236,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         .optional_output_tensor = tensor_args.optional_output_tensor};
 
     // 3 compute cores write output pages to each combine cores in a column of sharded output
-    const uint32_t compute_cores_per_combine_core = matmul_core_range_set.num_cores() / output_width_shard_dim;
+    const uint32_t compute_cores_per_combine_core = matmul_core_range_set.num_cores() / combine_data_parallel_cores;
     auto selective_reduce_combine_artifacts = build_selective_reduce_combine_program_artifacts(
         program,
         combine_params,
