@@ -238,24 +238,11 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryGen
             mask_h = tile_height;
         }
 
-        // NOTE: do not pass Buffer* here. scaler is attribute-derived (changes between
-        // calls) and BufferBinding's fast cache-hit path skips create_descriptor(),
-        // leaving scaler stale.
-        reader_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input.buffer()->address(),
-                num_tiles_per_core,
-                tile_offset,
-                Ht,
-                Wt,
-                std::bit_cast<uint32_t>(scaler),
-                mask_h});
+        // BufferBinding is safe: scaler is constant 1.0f, others are shape-derived.
+        reader_desc.emplace_runtime_args(
+            core, {input.buffer(), num_tiles_per_core, tile_offset, Ht, Wt, std::bit_cast<uint32_t>(scaler), mask_h});
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output_tensor.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt});
+        writer_desc.emplace_runtime_args(core, {output_tensor.buffer(), num_tiles_per_core, tile_offset, Ht, Wt});
 
         tile_offset += num_tiles_per_core;
     }
