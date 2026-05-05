@@ -13,6 +13,7 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -268,17 +269,16 @@ struct DRAMStreamingMatmul {
             constexpr bool split_acc = true;
             constexpr bool dense_packing = false;
 
-            reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
-            pack_reconfig_data_format<true>(CTArgs::cb_out);
-            custom_mm_block_init_short<transpose, split_acc, dense_packing>(
-                CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
-                if constexpr (CTArgs::fp32_dest_acc_en) {
-                    enable_fp32_dest_acc();
-                } else {
-                    disable_fp32_dest_acc();
-                }
+                custom_mm_block_init<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
+                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            } else {
+                reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
+                pack_reconfig_data_format<true>(CTArgs::cb_out);
+                custom_mm_block_init_short<transpose, split_acc, dense_packing>(
+                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             }
+
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
             } else {
@@ -371,11 +371,7 @@ struct DRAMStreamingMatmul {
             custom_mm_block_uninit<dense_packing>();
             // Reset FP32 accum mode if different from DST_ACCUM_MODE
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
-                if constexpr (CTArgs::fp32_dest_acc_en) {
-                    disable_fp32_dest_acc();
-                } else {
-                    enable_fp32_dest_acc();
-                }
+                deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             }
 
             if constexpr (PopIn0) {
