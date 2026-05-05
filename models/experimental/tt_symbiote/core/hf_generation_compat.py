@@ -59,6 +59,10 @@ def apply_qwen3_omni_talker_prepare_inputs_fix() -> None:
                 **kwargs,
             )
 
+            # Qwen3-Omni recomputes 3D mRoPE position_ids inside forward() from stored rope_deltas,
+            # so the 1D position_ids returned by the base prepare_inputs are stale on the talker
+            # path. Mirror upstream HF behavior (modeling_qwen3_omni_moe.py) and null it out.
+
             inputs["position_ids"] = None
 
             if not is_first_iteration and kwargs.get("use_cache", True):
