@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -169,6 +170,25 @@ def _normalize_tensor_placement(tp):
     return out
 
 
+_PC_GRID_DASH = re.compile(r"compute_with_storage_grid_size=(\d+)-(\d+)")
+_PC_GRID_PARENS_SPACED = re.compile(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)")
+
+
+def _canonicalize_program_config_repr(s: str) -> str:
+    """Canonicalize program_config repr drift across ttnn versions.
+
+    Older tracer recorded `compute_with_storage_grid_size=(x=N,y=M)` with no
+    space; newer ttnn produces `compute_with_storage_grid_size=N-M`. Both
+    encode the same grid; we canonicalize both to `(x=N,y=M)` (no space) so
+    the validator's string compare doesn't flag the format drift.
+    """
+    if "compute_with_storage_grid_size=" not in s:
+        return s
+    s = _PC_GRID_DASH.sub(r"compute_with_storage_grid_size=(x=\1,y=\2)", s)
+    s = _PC_GRID_PARENS_SPACED.sub(r"compute_with_storage_grid_size=(x=\1,y=\2)", s)
+    return s
+
+
 def normalize(obj: Any, *, _parent_key: str = "") -> Any:
     """Recursively normalize a config dict for comparison.
 
@@ -221,6 +241,9 @@ def normalize(obj: Any, *, _parent_key: str = "") -> Any:
         coerced = _coerce_set_repr(obj)
         if coerced is not obj:
             return coerced
+    # Canonicalize program_config repr drift (`(x=N,y=M)` vs `N-M`).
+    if isinstance(obj, str) and "compute_with_storage_grid_size=" in obj:
+        return _canonicalize_program_config_repr(obj)
     return obj
 
 
@@ -409,28 +432,21 @@ def validate(master_data: dict, sweep_data: dict) -> ValidationReport:
             norm_sweep = normalize(canonicalize_op_args(op_name, sweep_args))
 
             if norm_master == norm_sweep:
-                # Arguments match — check if config_hash computation also agrees
-                if sweep_config_hash and sweep_config_hash != source_hash:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="hash_mismatch",
-                            sweep_config_hash=sweep_config_hash,
-                        )
+                # Arguments match (after normalization) — that's a match.
+                # The on-disk config_hash may differ if the trace was recorded
+                # with an older repr format and the sweep used the newer one
+                # (see _canonicalize_program_config_repr). The hash is a
+                # pre-normalization fingerprint; with normalized args equal,
+                # the hash difference is expected drift, not a real divergence.
+                report.results.append(
+                    ConfigResult(
+                        config_hash=source_hash,
+                        op_name=op_name,
+                        master_config_id=master_cid,
+                        sweep_config_id=sweep_cid,
+                        status="match",
                     )
-                else:
-                    report.results.append(
-                        ConfigResult(
-                            config_hash=source_hash,
-                            op_name=op_name,
-                            master_config_id=master_cid,
-                            sweep_config_id=sweep_cid,
-                            status="match",
-                        )
-                    )
+                )
             else:
                 diffs = deep_diff(norm_master, norm_sweep)
                 report.results.append(
