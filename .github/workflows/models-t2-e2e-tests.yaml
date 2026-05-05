@@ -25,6 +25,10 @@ on:
           - mistral-7b
           - gemma-3-4b
           - gemma-3-27b
+          - gemma-4-e2b
+          - gemma-4-e4b
+          - gemma-4-26b-a4b
+          - gemma-4-31b
           - mixtral-8x7b
           - gpt-oss-20b
       sku:

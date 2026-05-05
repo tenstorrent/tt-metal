@@ -307,6 +307,67 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Gemma-4 e2e tests: one entry per model variant, multiple SKUs per entry.
+# parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
+# runner when CI=true is set, so the same `pytest` invocation runs 1x1 on N150,
+# 1x2 on N300, 1x8 on T3K — no per-SKU `-k` filter needed.
+
+- name: Gemma-4-E2B e2e tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
+    pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
+  model: gemma-4-e2b
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-E4B e2e tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
+  model: gemma-4-e4b
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 2
+    # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
+    # wh_n300:
+    #   timeout: 15
+    #   tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-26B-A4B e2e tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
+    pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+  model: gemma-4-26b-a4b
+  skus:
+    wh_llmbox_perf:
+      timeout: 7
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: Gemma-4-31B e2e tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+  model: gemma-4-31b
+  skus:
+    wh_llmbox_perf:
+      timeout: 5
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
 # ── Mistral / Mixtral ──────────────────────────────────────────────
 
 - name: Mistral-7B e2e tests
@@ -371,7 +432,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
-  owner_id: U08TJ70UFRT # Stuti Raizada
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: GPT-OSS 120B e2e tests (Galaxy, high batch)
@@ -384,7 +445,7 @@
     wh_galaxy_perf:
       timeout: 20
       tier: 1
-  owner_id: U08TJ70UFRT # Stuti Raizada
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 # ── Whisper ────────────────────────────────────────────────────────
