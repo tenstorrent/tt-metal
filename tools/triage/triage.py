@@ -769,8 +769,6 @@ def run_script(
 
 
 def main():
-    from triage_script_manager import TriageScriptManager
-
     triage_start = time()
 
     # Parse only tt-triage script arguments first to initialize logging and console
@@ -780,6 +778,8 @@ def main():
     my_name = os.path.splitext(os.path.basename(__file__))[0]
     if my_name not in sys.modules:
         sys.modules[my_name] = sys.modules["__main__"]
+
+    from triage_script_manager import TriageScriptManager
 
     application_path = os.path.abspath(os.path.dirname(__file__))
     manager = TriageScriptManager()
