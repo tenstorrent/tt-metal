@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
+
 import torch
 import ttnn
 
@@ -392,3 +394,23 @@ def test_extract_resource_usage_per_core_empty():
     assert usage.peak_cb == 0, "Empty trace should have zero CB usage"
     assert usage.peak_l1 == 0, "Empty trace should have zero L1 usage"
     assert usage.peak_total == 0, "Empty trace should have zero total usage"
+
+
+def test_extract_resource_usage_per_core_deprecated_kwarg():
+    """The legacy interleaved_storage_cores kwarg must still be accepted (with a
+    DeprecationWarning) until the removal date 2026-06-07."""
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    baseline = ttnn.graph.extract_resource_usage_per_core(captured_graph)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        legacy = ttnn.graph.extract_resource_usage_per_core(captured_graph, interleaved_storage_cores=64)
+
+    assert any(
+        issubclass(w.category, DeprecationWarning) and "interleaved_storage_cores" in str(w.message) for w in caught
+    ), f"Expected DeprecationWarning mentioning interleaved_storage_cores, got {[str(w.message) for w in caught]}"
+    assert legacy.peak_cb == baseline.peak_cb
+    assert legacy.peak_l1 == baseline.peak_l1
+    assert legacy.peak_total == baseline.peak_total
