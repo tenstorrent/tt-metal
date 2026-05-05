@@ -72,14 +72,43 @@ def main():
     tt_decoder = TtSpeechTokenizerDecoder(device, all_weights, tt_config, use_reference=False)
 
     ttnn_embeddings = tt_decoder._codebook_lookup(codes)
+    embeddings_torch = ttnn.to_torch(ttnn_embeddings, dtype=torch.float32)
+    # Codebook path uses [batch, 1, seq, 512]; squeeze the singleton dim for torch stats / reference.
+    embeddings_nlc = embeddings_torch.squeeze(1)
     print(
-        f"  TTNN embeddings: shape={ttnn_embeddings.shape}, range=[{ttnn_embeddings.min():.4f}, {ttnn_embeddings.max():.4f}]"
+        f"  TTNN embeddings (post-codebook): shape={embeddings_nlc.shape}, range=[{embeddings_nlc.min():.4f}, {embeddings_nlc.max():.4f}]"
     )
-    print(f"  TTNN embeddings mean: {ttnn_embeddings.mean():.6f}, std: {ttnn_embeddings.std():.6f}")
+    print(f"  TTNN embeddings mean: {embeddings_nlc.mean():.6f}, std: {embeddings_nlc.std():.6f}")
 
-    # Reference config for later
+    from models.demos.qwen3_tts.reference.functional import codebook_lookup_rvq
+
+    nq = codes.shape[1]
+    _rvq_first = all_weights.get("quantizer.rvq_first.vq.layers.0._codebook.embedding_sum")
+    _rvq_first_u = all_weights.get("quantizer.rvq_first.vq.layers.0._codebook.cluster_usage")
+    _rvq_first_op = all_weights.get("quantizer.rvq_first.output_proj.weight")
+    _rvq_rest, _rvq_rest_u = [], []
+    for _i in range(nq - 1):
+        _k = f"quantizer.rvq_rest.vq.layers.{_i}._codebook.embedding_sum"
+        _uk = f"quantizer.rvq_rest.vq.layers.{_i}._codebook.cluster_usage"
+        if _k in all_weights:
+            _rvq_rest.append(all_weights[_k])
+            _rvq_rest_u.append(all_weights.get(_uk))
+    _rvq_rest_op = all_weights.get("quantizer.rvq_rest.output_proj.weight")
+    ref_codebook_bct = codebook_lookup_rvq(
+        codes,
+        _rvq_first,
+        _rvq_rest,
+        _rvq_first_op,
+        _rvq_rest_op,
+        _rvq_first_u,
+        _rvq_rest_u,
+    )
+    ref_codebook_nlc = ref_codebook_bct.transpose(1, 2).contiguous()
+    pcc = compute_pcc(embeddings_nlc.detach().flatten(), ref_codebook_nlc.detach().flatten())
+    print(f"  Codebook lookup PCC (TTNN vs reference): {pcc:.6f}")
+
     ref_config = SpeechTokenizerDecoderConfig()
-    pcc = 0.0  # Will be computed when we have ref embeddings
+    pre_trans_pcc = None
 
     # =========================================================================
     # Step 2: Compare codebook lookup with reference
@@ -93,26 +122,23 @@ def main():
 
     # Get reference embeddings by calling the full decoder and capturing intermediate
     # Actually let's just compare the shapes and ranges
-    print(f"  TTNN codebook output: shape={ttnn_embeddings.shape}")
-    print("  Expected for pre-transformer input: [batch, seq_len, 1024]")
+    print(f"  TTNN codebook output (NLC): shape={embeddings_nlc.shape}")
+    print("  After pre_conv, pre-transformer input: [batch, seq_len, 1024]")
 
     if tt_decoder.has_pre_transformer:
         print("\n  TTNN pre-transformer available")
-        # Run pre-transformer on TTNN embeddings
-        import ttnn as ttnn_module
-
-        embeddings_ttnn = ttnn_module.from_torch(
-            ttnn_embeddings.detach(),
-            dtype=tt_decoder.dtype,
-            layout=ttnn_module.TILE_LAYOUT,
-            device=device,
-        )
-        seq_len = ttnn_embeddings.shape[1]
-        cos_ttnn, sin_ttnn = tt_decoder._compute_rope(seq_len)
-
-        # Forward through pre-transformer
-        hidden_ttnn = tt_decoder.pre_transformer(embeddings_ttnn, cos_ttnn, sin_ttnn)
-        hidden_torch = ttnn_module.to_torch(hidden_ttnn)
+        batch_cb = int(ttnn_embeddings.shape[0])
+        seq_cb = int(ttnn_embeddings.shape[2])
+        ch_cb = int(ttnn_embeddings.shape[3])
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        x_nlc = ttnn.reshape(ttnn_embeddings, (batch_cb, seq_cb, ch_cb), memory_config=mc)
+        if tt_decoder.pre_conv_weight is not None:
+            x_nlc, seq_pt = tt_decoder._embedding_pre_conv_nlc(x_nlc)
+        else:
+            seq_pt = seq_cb
+        cos_ttnn, sin_ttnn = tt_decoder._compute_rope(seq_pt)
+        hidden_ttnn = tt_decoder.pre_transformer(x_nlc, cos_ttnn, sin_ttnn)
+        hidden_torch = ttnn.to_torch(hidden_ttnn)
         print(f"  TTNN pre-transformer output: shape={hidden_torch.shape}")
         print(f"  TTNN pre-transformer range: [{hidden_torch.min():.4f}, {hidden_torch.max():.4f}]")
         print(f"  TTNN pre-transformer mean: {hidden_torch.mean():.4f}, std: {hidden_torch.std():.4f}")
@@ -126,15 +152,26 @@ def main():
     print("Step 2.5: Reference Pre-transformer Output")
     print("=" * 80)
 
-    # Run reference pre-transformer on the same embeddings
-    ref_pre_trans = pre_transformer_forward(ttnn_embeddings.detach(), all_weights, ref_config)
+    # Match reference decoder: pre_conv on [B,512,T] then pre_transformer on [B,T,1024]
+    ref_pt_in = embeddings_nlc
+    if "pre_conv.conv.weight" in all_weights:
+        conv_w = all_weights["pre_conv.conv.weight"]
+        conv_b = all_weights.get("pre_conv.conv.bias")
+        kernel_size = conv_w.shape[-1]
+        bct = embeddings_nlc.transpose(1, 2)
+        bct = F.pad(bct, (kernel_size - 1, 0), mode="constant", value=0)
+        bct = F.conv1d(bct, conv_w, conv_b)
+        ref_pt_in = bct.transpose(1, 2)
+    pre_transformer_weights = {
+        k.replace("pre_transformer.", ""): v for k, v in all_weights.items() if k.startswith("pre_transformer.")
+    }
+    ref_pre_trans = pre_transformer_forward(ref_pt_in, pre_transformer_weights, ref_config)
     print(f"  Reference pre-transformer output: shape={ref_pre_trans.shape}")
     print(f"  Reference pre-transformer range: [{ref_pre_trans.min():.4f}, {ref_pre_trans.max():.4f}]")
     print(f"  Reference pre-transformer mean: {ref_pre_trans.mean():.4f}, std: {ref_pre_trans.std():.4f}")
 
     if tt_decoder.has_pre_transformer:
-        # Compare TTNN vs reference pre-transformer
-        pre_trans_pcc = compute_pcc(hidden_torch.detach(), ref_pre_trans.detach())
+        pre_trans_pcc = compute_pcc(hidden_torch.detach().flatten(), ref_pre_trans.detach().flatten())
         print(f"  Pre-transformer PCC: {pre_trans_pcc:.6f}")
 
     # =========================================================================
@@ -191,16 +228,20 @@ def main():
     print("\n" + "=" * 80)
     print("Summary")
     print("=" * 80)
-    print(f"  Codebook Lookup PCC: {pcc:.6f}")
+    print(f"  Codebook lookup PCC: {pcc:.6f}")
+    if pre_trans_pcc is not None:
+        print(f"  Pre-transformer PCC: {pre_trans_pcc:.6f}")
     print(f"  Final Audio PCC:     {audio_pcc:.6f}")
     print(f"  Energy PCC:          {energy_pcc:.6f}")
     print()
     if pcc < 0.99:
-        print("  ISSUE: Codebook lookup diverges!")
+        print("  NOTE: TTNN RVQ codebook path differs from reference (investigate TTNN embedding/conv).")
+    elif pre_trans_pcc is not None and pre_trans_pcc < 0.99:
+        print("  NOTE: Pre-transformer differs; waveform PCC stays low even with a shared PyTorch conv tail.")
     elif audio_pcc < 0.5:
-        print("  ISSUE: Full decoder diverges after codebook lookup")
+        print("  NOTE: Full decoder waveforms still disagree (length alignment or later mismatch).")
     else:
-        print("  Both implementations match!")
+        print("  Decoder outputs agree well on this clip (PCC).")
     print("=" * 80)
 
 

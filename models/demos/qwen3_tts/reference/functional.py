@@ -1368,6 +1368,81 @@ def conv_decoder_block(
 
 
 # =============================================================================
+# Speech Tokenizer Decoder - Post pre-transformer (upsampler + conv decoder)
+# =============================================================================
+def speech_tokenizer_post_pre_transformer_forward(
+    hidden_nlc: torch.Tensor,
+    weights: dict,
+    config: SpeechTokenizerDecoderConfig,
+) -> torch.Tensor:
+    """
+    Run upsampler and conv decoder from pre-transformer output.
+
+    Args:
+        hidden_nlc: [batch, seq_len, latent_dim] (same layout as `pre_transformer_forward` output)
+        weights: Full decoder + quantizer weight dict (same as `speech_tokenizer_decoder_forward`)
+        config: Decoder configuration
+
+    Returns:
+        Audio waveform [batch, 1, num_samples] (same as full decoder forward)
+    """
+    hidden_states = hidden_nlc.transpose(1, 2).contiguous()
+
+    for i, ratio in enumerate(config.upsampling_ratios):
+        upsample_prefix = f"upsample.{i}."
+        conv_weight = weights.get(f"{upsample_prefix}0.conv.weight")
+        conv_bias = weights.get(f"{upsample_prefix}0.conv.bias")
+
+        if conv_weight is not None:
+            hidden_states = F.conv_transpose1d(hidden_states, conv_weight, conv_bias, stride=ratio)
+            pad_to_trim = conv_weight.shape[-1] - ratio
+            if pad_to_trim > 0:
+                hidden_states = hidden_states[..., :-pad_to_trim]
+
+            convnext_weights = {
+                k.replace(f"{upsample_prefix}1.", ""): v
+                for k, v in weights.items()
+                if k.startswith(f"{upsample_prefix}1.")
+            }
+            if convnext_weights:
+                hidden_states = convnext_block(
+                    hidden_states,
+                    dwconv_weight=convnext_weights.get("dwconv.conv.weight"),
+                    dwconv_bias=convnext_weights.get("dwconv.conv.bias"),
+                    pwconv1_weight=convnext_weights.get("pwconv1.weight"),
+                    pwconv1_bias=convnext_weights.get("pwconv1.bias"),
+                    pwconv2_weight=convnext_weights.get("pwconv2.weight"),
+                    pwconv2_bias=convnext_weights.get("pwconv2.bias"),
+                    norm_weight=convnext_weights.get("norm.weight"),
+                    norm_bias=convnext_weights.get("norm.bias"),
+                    gamma=convnext_weights.get("gamma"),
+                )
+
+    if "decoder.0.conv.weight" in weights:
+        conv_weight = weights["decoder.0.conv.weight"]
+        kernel_size = conv_weight.shape[-1]
+        hidden_states = F.pad(hidden_states, (kernel_size - 1, 0), mode="constant", value=0)
+        hidden_states = F.conv1d(hidden_states, conv_weight, weights.get("decoder.0.conv.bias"))
+
+    for i, rate in enumerate(config.upsample_rates):
+        block_prefix = f"decoder.{i + 1}."
+        block_weights = {k.replace(block_prefix, ""): v for k, v in weights.items() if k.startswith(block_prefix)}
+        if block_weights:
+            hidden_states = conv_decoder_block(hidden_states, block_weights, rate)
+
+    if "decoder.5.alpha" in weights:
+        hidden_states = snake_activation(hidden_states, weights["decoder.5.alpha"], weights["decoder.5.beta"])
+
+    if "decoder.6.conv.weight" in weights:
+        conv_weight = weights["decoder.6.conv.weight"]
+        kernel_size = conv_weight.shape[-1]
+        hidden_states = F.pad(hidden_states, (kernel_size - 1, 0), mode="constant", value=0)
+        hidden_states = F.conv1d(hidden_states, conv_weight, weights.get("decoder.6.conv.bias"))
+
+    return hidden_states.clamp(min=-1, max=1)
+
+
+# =============================================================================
 # Speech Tokenizer Decoder - Full Forward Pass
 # =============================================================================
 def speech_tokenizer_decoder_forward(
@@ -1441,74 +1516,8 @@ def speech_tokenizer_decoder_forward(
 
     if pre_transformer_weights:
         hidden_states = pre_transformer_forward(hidden_states, pre_transformer_weights, config)
-    # hidden_states is [batch, seq_len, latent_dim]
 
-    # Transpose back to channels-first for conv decoder
-    hidden_states = hidden_states.transpose(1, 2)  # [batch, latent_dim, seq_len]
-
-    # 5. Upsampler (ConvNeXt blocks)
-    for i, ratio in enumerate(config.upsampling_ratios):
-        upsample_prefix = f"upsample.{i}."
-        conv_weight = weights.get(f"{upsample_prefix}0.conv.weight")
-        conv_bias = weights.get(f"{upsample_prefix}0.conv.bias")
-
-        if conv_weight is not None:
-            # Upsample with ConvTranspose1d
-            hidden_states = F.conv_transpose1d(hidden_states, conv_weight, conv_bias, stride=ratio)
-            # Trim padding from conv_transpose
-            pad_to_trim = conv_weight.shape[-1] - ratio
-            if pad_to_trim > 0:
-                hidden_states = hidden_states[..., :-pad_to_trim]
-
-            # ConvNeXt block
-            convnext_weights = {
-                k.replace(f"{upsample_prefix}1.", ""): v
-                for k, v in weights.items()
-                if k.startswith(f"{upsample_prefix}1.")
-            }
-            if convnext_weights:
-                hidden_states = convnext_block(
-                    hidden_states,
-                    dwconv_weight=convnext_weights.get("dwconv.conv.weight"),
-                    dwconv_bias=convnext_weights.get("dwconv.conv.bias"),
-                    pwconv1_weight=convnext_weights.get("pwconv1.weight"),
-                    pwconv1_bias=convnext_weights.get("pwconv1.bias"),
-                    pwconv2_weight=convnext_weights.get("pwconv2.weight"),
-                    pwconv2_bias=convnext_weights.get("pwconv2.bias"),
-                    norm_weight=convnext_weights.get("norm.weight"),
-                    norm_bias=convnext_weights.get("norm.bias"),
-                    gamma=convnext_weights.get("gamma"),
-                )
-
-    # 6. Conv decoder (main upsampling)
-    # Initial conv (causal padding)
-    if "decoder.0.conv.weight" in weights:
-        conv_weight = weights["decoder.0.conv.weight"]
-        kernel_size = conv_weight.shape[-1]
-        hidden_states = F.pad(hidden_states, (kernel_size - 1, 0), mode="constant", value=0)
-        hidden_states = F.conv1d(hidden_states, conv_weight, weights.get("decoder.0.conv.bias"))
-
-    # Decoder blocks with upsampling
-    for i, rate in enumerate(config.upsample_rates):
-        block_prefix = f"decoder.{i + 1}."
-        block_weights = {k.replace(block_prefix, ""): v for k, v in weights.items() if k.startswith(block_prefix)}
-        if block_weights:
-            hidden_states = conv_decoder_block(hidden_states, block_weights, rate)
-
-    # Final activation + conv (causal padding)
-    if "decoder.5.alpha" in weights:
-        hidden_states = snake_activation(hidden_states, weights["decoder.5.alpha"], weights["decoder.5.beta"])
-
-    if "decoder.6.conv.weight" in weights:
-        conv_weight = weights["decoder.6.conv.weight"]
-        kernel_size = conv_weight.shape[-1]
-        hidden_states = F.pad(hidden_states, (kernel_size - 1, 0), mode="constant", value=0)
-        hidden_states = F.conv1d(hidden_states, conv_weight, weights.get("decoder.6.conv.bias"))
-
-    # Clamp to audio range [-1, 1] (matching official qwen_tts)
-    audio = hidden_states.clamp(min=-1, max=1)
-
-    return audio
+    return speech_tokenizer_post_pre_transformer_forward(hidden_states, weights, config)
 
 
 def extract_speech_tokenizer_decoder_weights(state_dict: dict) -> dict:
