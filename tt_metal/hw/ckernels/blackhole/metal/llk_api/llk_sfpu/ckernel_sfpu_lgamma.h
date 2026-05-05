@@ -164,7 +164,8 @@ inline void calculate_lgamma_stirling_fp32(
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void lgamma_stirling_init() {
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    // init for _sfpu_reciprocal_<2> for Blackhole
+    sfpi::vConstFloatPrgm0 = 2.0f;
 }
 
 }  // namespace ckernel::sfpu
