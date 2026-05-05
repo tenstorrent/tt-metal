@@ -88,11 +88,11 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
-    """Legacy uniform-shape KV cache allocator.
+    """Uniform-shape KV cache allocator for non-hybrid models.
 
-    Retained for backward compatibility with vLLM's pre-kv-cache-groups
-    contract; new callers should use :func:`allocate_vllm_kv_cache_per_layer`
-    which supports hybrid attention models.
+    Hybrid attention models should use :func:`allocate_vllm_kv_cache_per_layer`,
+    which takes a per-layer ``(shape, dtype)`` list so sliding-window layers
+    can be backed by a smaller paged pool than full-attention layers.
     """
     return allocate_vllm_kv_cache_per_layer(
         [(kv_cache_shape, dtype)] * num_layers,
