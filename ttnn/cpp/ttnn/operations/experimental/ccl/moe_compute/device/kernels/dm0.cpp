@@ -33,7 +33,8 @@ void kernel_main() {
     constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
     constexpr uint32_t w2_dram_tiles_h = has_bias ? Nt + 1 : Nt;
 
-    constexpr uint32_t in2_tiles_per_step = (Nt + num_cores - 1) / num_cores;
+    constexpr uint32_t in2_tiles_per_step_raw = (Nt + num_cores - 1) / num_cores;
+    constexpr uint32_t in2_tiles_per_step = (in2_tiles_per_step_raw + 1) & ~1u;
     constexpr uint32_t w0_w1_block_tiles_h_c = moe_ring::W0_W1_BLOCK_TILES_H;  // = 7
     constexpr uint32_t w0_w1_blocks_per_col = (w0_w1_dram_tiles_h + w0_w1_block_tiles_h_c - 1) / w0_w1_block_tiles_h_c;
     constexpr uint32_t w0_w1_blocks_per_expert_c = w0_w1_blocks_per_col * in2_tiles_per_step / 2;

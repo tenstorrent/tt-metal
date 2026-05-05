@@ -434,7 +434,8 @@ def prepare_w0_w1_tensor_for_moe_compute(
 
     each_shard = []
     max_shard_size = max(shard_map)
-    if any(x not in [max_shard_size, max_shard_size - 1] for x in shard_map):
+    max_shard_size = max_shard_size + (max_shard_size % 2)  # round up to even
+    if any(x not in [max_shard_size, max_shard_size - 1, max_shard_size - 2] for x in shard_map):
         raise RuntimeError(f"W0W1 shard sizes should differ by 1 at most: {shard_map}")
 
     # Pick appropriate number of column tiles for each core based on the ring position.
@@ -442,8 +443,10 @@ def prepare_w0_w1_tensor_for_moe_compute(
     for num_tiles in shard_map:
         each_shard.append(torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :])
 
-        if num_tiles < max_shard_size:
-            each_shard.append(torch.zeros(L, E, 1, Kp, 2 * ttnn.TILE_SIZE, dtype=torch_w0_w1_permuted.dtype))
+        # Pad to max_shard_size (which may have been rounded up to even)
+        pad_tiles = max_shard_size - num_tiles
+        if pad_tiles > 0:
+            each_shard.append(torch.zeros(L, E, pad_tiles, Kp, 2 * ttnn.TILE_SIZE, dtype=torch_w0_w1_permuted.dtype))
         start_tile += num_tiles
 
     torch_w0_w1_reordered = torch.cat(each_shard, dim=2)
@@ -838,7 +841,8 @@ def get_weight_mem_configs(
         K_for_shard = math.ceil(hidden_size // ttnn.TILE_SIZE / BLOCK_TILES_H) * ttnn.TILE_SIZE * BLOCK_TILES_H
 
     # W0/W1 memory config
-    w1_w0_groups_per_core = max(w0_w1_shard_map) // 2
+    max_w0_w1 = max(w0_w1_shard_map)
+    w1_w0_groups_per_core = (max_w0_w1 + (max_w0_w1 % 2)) // 2
     w0_w1_shard_height = num_layers * experts_per_device * w1_w0_groups_per_core * K_for_shard
     w0_w1_shard_width = 4 * ttnn.TILE_SIZE
 

@@ -127,7 +127,8 @@ void kernel_main() {
     constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
     constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
         (w0_w1_dram_tiles_h + w0_w1_block_tiles_h - 1) / w0_w1_block_tiles_h;
-    constexpr uint32_t in2_tiles_per_step = (Nt + num_cores - 1) / num_cores;
+    constexpr uint32_t in2_tiles_per_step_raw = (Nt + num_cores - 1) / num_cores;
+    constexpr uint32_t in2_tiles_per_step = (in2_tiles_per_step_raw + 1) & ~1u;
     constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * in2_tiles_per_step / 2;
 
     // W2 reading constants
