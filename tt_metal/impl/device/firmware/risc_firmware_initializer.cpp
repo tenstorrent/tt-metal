@@ -259,9 +259,7 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
     if (has_dram_fw) {
         uint32_t dram_l1_size = hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
         std::vector<uint32_t> dram_zero_vec(dram_l1_size / sizeof(uint32_t), 0);
-        const auto& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_core{dram_core.x, dram_core.y};
+        for (const auto& virtual_core : get_dram_fw_cores(device_id)) {
             cluster_.l1_barrier(device_id);
             cluster_.dram_barrier(device_id);
             cluster_.write_core(
@@ -357,12 +355,35 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
     bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM) &&
                        rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepAssertReset);
     if (has_dram_fw) {
-        const auto& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_core{dram_core.x, dram_core.y};
+        for (const auto& virtual_core : get_dram_fw_cores(device_id)) {
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
         }
     }
+}
+
+std::vector<CoreCoord> RiscFirmwareInitializer::get_dram_fw_cores(tt::ChipId device_id) const {
+    const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
+    auto num_dram_views = soc_d.get_num_dram_views();
+    std::vector<CoreCoord> fw_cores;
+    fw_cores.reserve(num_dram_views);
+
+    for (uint32_t bank = 0; bank < num_dram_views; bank++) {
+        CoreCoord noc0_preferred = soc_d.get_preferred_worker_core_for_dram_view(bank, 0);
+        CoreCoord noc1_preferred = soc_d.get_preferred_worker_core_for_dram_view(bank, 1);
+
+        const auto& endpoints = soc_d.dram_bank_endpoint_coords[bank];
+        bool found = false;
+        for (const auto& endpoint : endpoints) {
+            if (endpoint != noc0_preferred && endpoint != noc1_preferred) {
+                fw_cores.push_back(endpoint);
+                found = true;
+                break;
+            }
+        }
+        TT_ASSERT(found, "No non-preferred DRAM endpoint found for bank {}", bank);
+    }
+
+    return fw_cores;
 }
 
 void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
@@ -1280,11 +1301,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         auto dram_launch_msg = dram_dev_msgs_factory.create<dev_msgs::launch_msg_t>();
         auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
         dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
-        const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_noc : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
-            dram_core_info.view().absolute_logical_x() = dram_noc.x;
-            dram_core_info.view().absolute_logical_y() = dram_noc.y;
+        for (const auto& virtual_dram_core : get_dram_fw_cores(device_id)) {
+            dram_core_info.view().absolute_logical_x() = virtual_dram_core.x;
+            dram_core_info.view().absolute_logical_y() = virtual_dram_core.y;
             if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteCoreInfo)) {
                 uint64_t core_info_addr =
                     hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
