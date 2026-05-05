@@ -4,6 +4,7 @@
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
 #include <algorithm>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -38,7 +39,17 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
     TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
     TT_FATAL(input_shape[2] % 32 == 0, "padded heads must be a multiple of TILE_HEIGHT (32), got {}", input_shape[2]);
-    TT_FATAL(input_shape[2] >= args.num_heads, "head_dim must be multiple of TILE_WIDTH");
+    TT_FATAL(
+        input_shape[2] >= args.num_heads,
+        "padded heads ({}) must be greater than or equal to num_heads ({})",
+        input_shape[2],
+        args.num_heads);
+    // The program factory derives head_tiles = head_dim / TILE_WIDTH from input_shape[-1].
+    TT_FATAL(
+        input_shape[-1] % tt::constants::TILE_WIDTH == 0,
+        "head_dim ({}) must be a multiple of TILE_WIDTH ({})",
+        input_shape[-1],
+        tt::constants::TILE_WIDTH);
 
     // input tensor shard spec
     TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded");
