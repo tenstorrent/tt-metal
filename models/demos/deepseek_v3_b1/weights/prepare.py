@@ -613,15 +613,50 @@ def create_gate_indices_tensor(
     device: Any,
     sender_core_grid: ttnn.CoreRangeSet,
     *,
+    sram_expert_ids: list = (),
     mesh_mapper: Any = None,
 ) -> ttnn.Tensor:
     """Build constant gate indices 0..255 as HEIGHT_SHARDED on sender core.
 
     Same layout as gate_bias: (16, 16), HEIGHT_SHARDED, tile 16x16, uint16.
+
+    SRAM/DRAM placement encoding (separate-pipeline plan):
+        For each global expert ID e in 0..255:
+          * if e in sram_expert_ids: encoded[e] = (1 << 15) | slot
+            where slot = sram_expert_ids.index(e) (compact 0..T-1)
+          * else: encoded[e] = e (DRAM, bit-15 = 0)
+
+        Position in sram_expert_ids is the slot index — this list IS the
+        single source of truth for SRAM placement and must match the slab
+        ordering used by build_sram_expert_weights (and friends). A mismatch
+        means slot s in the index points at slot s'-≠s's weights → silent
+        wrong outputs.
+
+        Default empty preserves Phase 1B behavior (identity arange).
+
+    Args:
+        device: TTNN mesh device.
+        sender_core_grid: 1-core CoreRangeSet for the sender core.
+        sram_expert_ids: list of global expert IDs (0..255) placed in SRAM,
+            in slot order. Empty → DRAM-only (default).
+        mesh_mapper: optional mesh mapper for multi-device replication.
     """
-    indices = torch.arange(_GATE_NUM_INDICES, dtype=torch.int32).reshape(
-        _GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1]
-    )
+    if sram_expert_ids:
+        assert (
+            len(sram_expert_ids) <= _GATE_NUM_INDICES
+        ), f"len(sram_expert_ids)={len(sram_expert_ids)} exceeds expert count {_GATE_NUM_INDICES}"
+        assert (
+            max(sram_expert_ids) < _GATE_NUM_INDICES
+        ), f"sram_expert_ids contains out-of-range eid (max={max(sram_expert_ids)} >= {_GATE_NUM_INDICES})"
+        assert len(set(sram_expert_ids)) == len(sram_expert_ids), "sram_expert_ids contains duplicates"
+        # 15-bit slot field — comfortable headroom (32k slots vs 256 experts).
+        assert len(sram_expert_ids) <= 0x7FFF, "sram_expert_ids exceeds 15-bit slot capacity"
+
+    encoded = torch.arange(_GATE_NUM_INDICES, dtype=torch.int32)  # default: DRAM, encoded == eid
+    for slot, eid in enumerate(sram_expert_ids):
+        encoded[eid] = (1 << 15) | slot
+
+    indices = encoded.reshape(_GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1])
     transposed = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
     shard_spec = ttnn.ShardSpec(
         sender_core_grid,
@@ -639,6 +674,115 @@ def create_gate_indices_tensor(
         tile=ttnn.Tile([16, 16]),
         **kwargs,
     )
+
+
+def build_sram_expert_weights(
+    sram_expert_ids: list,
+    full_torch_weights_per_device: list,
+    assigner: Any,
+    mesh_device: Any,
+    core_grid: ttnn.CoreRangeSet,
+    sram_k_per_core: int,
+    sram_n_parallel: int,
+    sram_per_core_N: int,
+    *,
+    tile_w: int = 32,
+) -> list:
+    """Build T L1-allocated CompressedTensors for SRAM-resident routed experts.
+
+    Mirrors ``_build_sram_cts_slice_k`` from
+    ``test_matmul_expert.py::per_core_allocation`` — HEIGHT_SHARDED with
+    K-slicing across cores, N-parallel across the remaining core axis. Each
+    core holds a ``[sram_k_per_core × tile_w, sram_per_core_N × tile_w]``
+    slab per expert.
+
+    Slot ordering: returned CTs are in the same order as ``sram_expert_ids``,
+    so slot s corresponds to global expert ``sram_expert_ids[s]``. This MUST
+    match the encoding in ``create_gate_indices_tensor(sram_expert_ids=...)``
+    or downstream lookups will read the wrong expert's weights.
+
+    Args:
+        sram_expert_ids: list of global expert IDs in slot order (e.g.
+            ``[42, 77, 198]``). Length T = number of SRAM-resident experts.
+        full_torch_weights_per_device: indexed
+            ``[global_eid][device_idx] -> torch.Tensor`` of shape
+            ``(K, N_per_device)``. Caller is responsible for the full-set
+            torch source (typically from state_dict + TP8 column-shard).
+        assigner: precision assigner used by CompressedTensor (e.g.
+            ``UniformPrecisionAssigner(ttnn.bfloat4_b)``).
+        mesh_device: TP8 mesh device.
+        core_grid: CoreRangeSet hosting the SRAM matmul (e.g. 64 shared
+            gate cores).
+        sram_k_per_core: K tiles per core (this core's K-slice length).
+            Must satisfy ``sram_k_per_core × n_parallel × k_parallel == Kt``.
+        sram_n_parallel: N parallelism factor (cores per K-slice). With
+            64-core ``k_parallel × n_parallel = 64`` and N_per_device = 32
+            elements, ``sram_n_parallel = 8``, ``sram_per_core_N = 1``.
+        sram_per_core_N: N tiles per core per expert (typically 1 for
+            DeepSeek V3 routed gate/up at TP8).
+        tile_w: tile width in elements (default 32).
+
+    Returns:
+        list[CompressedTensor] of length ``len(sram_expert_ids)``, in slot
+        order. Each CT is per-device sharded (PlacementShard along device
+        axes 0 and 1) and per-core L1-sharded on ``core_grid``.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
+
+    num_sram_cores = len(ttnn.corerange_to_cores(core_grid))
+    assert (
+        num_sram_cores % sram_n_parallel == 0
+    ), f"num_sram_cores={num_sram_cores} must be divisible by sram_n_parallel={sram_n_parallel}"
+
+    mesh_shape = mesh_device.shape
+    mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
+    num_devices = mesh_rows * mesh_cols
+
+    sram_b_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            core_grid,
+            [sram_k_per_core * tile_w, sram_per_core_N * tile_w],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    sram_cts = []
+    for eidx in sram_expert_ids:
+        # Per-device, slice the K×N tensor into per-core (k_slice, n_slice)
+        # shards in row-major (k-major) ordering. Concatenate along K axis
+        # to produce a HEIGHT_SHARDED-compatible single-device tensor of
+        # shape (num_cores × k_per_core × tile_w, per_core_N × tile_w).
+        per_dev_shards = []
+        for dev_idx in range(num_devices):
+            b_full = full_torch_weights_per_device[eidx][dev_idx]
+            shards = []
+            for i in range(num_sram_cores):
+                k_idx = i // sram_n_parallel
+                n_idx = i % sram_n_parallel
+                k_start = k_idx * sram_k_per_core * tile_w
+                k_end = k_start + sram_k_per_core * tile_w
+                n_start = n_idx * sram_per_core_N * tile_w
+                n_end = n_start + sram_per_core_N * tile_w
+                shards.append(b_full[k_start:k_end, n_start:n_end])
+            per_dev_shards.append(torch.cat(shards, dim=0))
+        b_4d = torch.stack(per_dev_shards).reshape(
+            mesh_rows,
+            mesh_cols,
+            num_sram_cores * sram_k_per_core * tile_w,
+            sram_per_core_N * tile_w,
+        )
+        ct = CompressedTensor.from_torch(
+            b_4d,
+            assigner,
+            device=mesh_device,
+            memory_config=sram_b_mem,
+            per_core_allocation=True,
+            mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)]),
+        )
+        sram_cts.append(ct)
+    return sram_cts
 
 
 def prepare_attention_weights(

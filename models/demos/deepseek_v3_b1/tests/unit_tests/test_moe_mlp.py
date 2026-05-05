@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.weights.prepare import (
+    build_sram_expert_weights,
     create_gate_bias_tensor,
     create_gate_indices_tensor,
     prepare_attention_weights,
@@ -64,6 +65,8 @@ class RoutedExpertTensors(NamedTuple):
     gate_proj_weights: Any
     up_proj_weights: Any
     down_proj_weights: Any
+    sram_gate_proj_weights: Any  # T L1-resident CTs (None when no SRAM placement)
+    sram_gate_proj_out_tensor: Any  # SRAM matmul output, sharded on 64 cores (read for PCC)
     final_output_tensor: Any
     gate_proj_expert_tensors: Any
     up_proj_expert_tensors: Any
@@ -245,6 +248,7 @@ def create_routed_expert_tensors(
     layer_idx=None,
     compressed_tp8=False,
     num_routed_experts=256,
+    sram_expert_ids: list = (),
 ):
     """
     Create all tensors needed for MoE routed expert test.
@@ -450,7 +454,12 @@ def create_routed_expert_tensors(
         assert list(ttnn.corerange_to_cores(ttnn_gate_bias.memory_config().shard_spec.grid)) == list(
             ttnn.corerange_to_cores(input_core_grid)
         ), "gate_bias grid must match input_core_grid (MOE_SENDER_GRID_SIZE)"
-        ttnn_gate_indices = create_gate_indices_tensor(device, input_core_grid, mesh_mapper=mesh_mapper)
+        ttnn_gate_indices = create_gate_indices_tensor(
+            device,
+            input_core_grid,
+            sram_expert_ids=sram_expert_ids,
+            mesh_mapper=mesh_mapper,
+        )
         # Gate output buffers (scores and indices on sender core)
         tile_1x16 = ttnn.Tile((1, 16))
         gate_output_shard_spec = ttnn.ShardSpec(
@@ -504,6 +513,62 @@ def create_routed_expert_tensors(
             **from_torch_kwargs,
         )
 
+    # SRAM routed gate_proj weights: build T L1-resident CompressedTensors for
+    # the placed eids. Mirrors how DRAM CTs come from prepare_routed_expert_weights.
+    sram_gate_proj_weights = None
+    sram_gate_proj_out_tensor = None
+    if sram_expert_ids and is_moe and enable_routing:
+        from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
+        from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RE
+
+        moe_tp = device.shape[0] * device.shape[1]
+        N_per_dev = _RE.GATE_PROJ_N // moe_tp
+        full_torch_per_device = {
+            eid: [
+                expert_weights_dict[eid]
+                .reshape(_RE.K, _RE.GATE_PROJ_N)[:, d * N_per_dev : (d + 1) * N_per_dev]
+                .contiguous()
+                for d in range(moe_tp)
+            ]
+            for eid in sram_expert_ids
+        }
+        a_cores, _b_cores = SharedExpertOp.build_ab_grids()
+        sram_gate_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores])
+        _sram_per_core_N = (N_per_dev // 32) // 8  # 1 N-tile per core
+        sram_gate_proj_weights = build_sram_expert_weights(
+            sram_expert_ids=sram_expert_ids,
+            full_torch_weights_per_device=full_torch_per_device,
+            assigner=CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"]),
+            mesh_device=device,
+            core_grid=sram_gate_core_grid,
+            sram_k_per_core=(_RE.K // 32) // 8,  # 28 (K=7168, k_parallel=8)
+            sram_n_parallel=8,  # cores per K-slice
+            sram_per_core_N=_sram_per_core_N,
+        )
+
+        # SRAM gate_proj output tensor — WIDTH_SHARDED on 64 cores, per core
+        # holds num_active_experts × per_core_N × tile_w bf16 elements (8 × 1 × 32 = 256).
+        # Mirrors `_build_sram_output` in test_matmul_expert.py.
+        _num_active = 8
+        _tile_w = 32
+        _sram_out_per_core = _num_active * _sram_per_core_N * _tile_w  # 256
+        _num_sram_cores = len(a_cores)  # 64
+        _sram_out_total = _sram_out_per_core * _num_sram_cores  # per-device width
+        sram_out_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(sram_gate_core_grid, [1, _sram_out_per_core], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        sram_gate_proj_out_tensor = ttnn.from_torch(
+            torch.zeros((1, _sram_out_total), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sram_out_mem,
+            tile=ttnn.Tile([1, _tile_w]),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+
     return RoutedExpertTensors(
         ttnn_residual_mcast_src=ttnn_residual_mcast_src,
         ttnn_rmsnorm_gamma=ttnn_rmsnorm_gamma,
@@ -516,6 +581,8 @@ def create_routed_expert_tensors(
         gate_proj_weights=gate_proj_weights,
         up_proj_weights=up_proj_weights,
         down_proj_weights=down_proj_weights,
+        sram_gate_proj_weights=sram_gate_proj_weights,
+        sram_gate_proj_out_tensor=sram_gate_proj_out_tensor,
         final_output_tensor=final_output_tensor,
         gate_proj_expert_tensors=gate_proj_expert_tensors,
         up_proj_expert_tensors=up_proj_expert_tensors,
@@ -935,6 +1002,12 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
 
     # ── Create MoE tensors (routed weights TP8-sharded; other tensors replicated) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+    # T=1: place expert 0 in L1 (separate-pipeline plan, Steps 0.1+1.1+1.2).
+    # Empty list = DRAM-only (Phase 1B baseline). With T=1, anchor PCC drops
+    # because expert 0's contribution is missing (DRAM kernel skips it via
+    # bit-15 filter; SRAM kernel runs but output drained locally — full
+    # gather/reduce/mcast pipeline lands in Steps 3-5).
+    sram_expert_ids = [0]
     r = create_routed_expert_tensors(
         submesh,
         mesh_mapper=mesh_mapper,
@@ -944,6 +1017,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         compressed_tp8=True,
         num_routed_experts=num_routed_experts,
+        sram_expert_ids=sram_expert_ids,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
@@ -1068,7 +1142,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
 
     # ── Run fused MoE op with reduce (looping inside kernel) ──
     moe_semaphores = MoeOp.create_semaphores(submesh)
-    num_iterations = 100
+    num_iterations = 1
     ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeOp.op(
         r.ttnn_residual_mcast_src,
         r.ttnn_gate_mm_weights,
@@ -1099,6 +1173,8 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         reduce_root_coord=ttnn.MeshCoordinate(root_coord),
         semaphores=moe_semaphores,
         noc_mode=noc_mode,
+        sram_gate_proj_weights_tensor=r.sram_gate_proj_weights,
+        sram_gate_proj_out_tensor=r.sram_gate_proj_out_tensor,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")

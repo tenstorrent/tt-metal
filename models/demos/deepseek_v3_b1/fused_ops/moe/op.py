@@ -302,6 +302,22 @@ class _MoeRoutedExpertContext:
     bcast_pkt_cb_descriptor: Any = None
     bcast_params: dict = None
 
+    # SRAM routed gate_proj (separate-pipeline plan; see SRAM_SEPARATE_PIPELINE.md)
+    # CB IDs always allocated so the kernel's setup_sharded_buffer + Op call have
+    # valid IDs even when no SRAM experts are placed (T=0). Activation is gated
+    # purely by sram_gate_proj_params being non-empty (= num_sram_experts>0).
+    sram_gate_proj_cb_in1: int = 0
+    sram_gate_proj_out_cb: int = 0
+    sram_gate_proj_params: dict = None
+    # CB descriptors built only when SRAM weights are provided.
+    # cb_in1 uses CompressedTensor.cb_descriptor_from_compressed_tensor() which
+    # returns a LIST of per-core descriptors (per_core_allocation=True). Stored
+    # per device since each mesh coord has its own L1 layout.
+    # cb_out backs the user-provided output tensor so the test can read it via
+    # ttnn.to_torch for PCC.
+    sram_gate_proj_cb_in1_descriptors_per_device: Any = None  # dict[MeshCoordinate -> list of CBDescriptors]
+    sram_gate_proj_cb_out_descriptor: Any = None
+
 
 @dataclass
 class _MoeSharedExpertContext:
@@ -733,6 +749,142 @@ class MoeRoutedExpertOp:
         }
 
     @staticmethod
+    def setup_matmul_expert_sram(
+        mesh_device,
+        sram_cts_list,
+        core_grid,
+        num_tiles_k,
+        per_core_n,
+        Kt,
+        num_active_experts=8,
+        accum_experts=False,
+    ):
+        """Set up MatmulExpertCompressedSRAM infrastructure for one projection.
+
+        Mirrors ``_build_sram_fmt_data`` from the canonical
+        ``test_matmul_expert.py`` (per_core_allocation). The caller is
+        responsible for allocating ``sram_cts_list`` as L1-sharded
+        CompressedTensors on ``core_grid`` — see
+        ``_build_sram_cts_standard`` / ``_build_sram_cts_slice_k`` in the
+        canonical test for reference layouts.
+
+        Args:
+            mesh_device: TP8 mesh device.
+            sram_cts_list: list[CompressedTensor] of length T (hot experts).
+                Already L1-allocated on ``core_grid``.
+            core_grid: CoreRangeSet hosting the SRAM matmul (e.g. 64 shared
+                gate cores).
+            num_tiles_k: K tiles per core per expert (this core's K-slice
+                length when K-sliced; full K otherwise).
+            per_core_n: N tiles per core per expert.
+            Kt: total K tiles per expert (full K). When ``num_tiles_k < Kt``,
+                K-slicing is active and per-core ``sram_k_offset`` values are
+                computed.
+            num_active_experts: TopK count threaded into kernel CT args.
+            accum_experts: False for gate/up (per-expert outputs), True for
+                down (cross-expert accumulation).
+
+        Returns:
+            dict with kernel CT-arg-ready fields:
+              - ``num_sram_experts`` (= len(sram_cts_list))
+              - ``num_tiles_k``, ``out_w``, ``in0_page_size``,
+                ``meta_words_per_expert``, ``accum_experts``
+              - ``sram_fmt_tensors`` / ``sram_base_addr_tensors`` (kept-alive
+                tensor dicts: {coord: {core_idx: tensor}})
+              - ``sram_fmt_l1_addr_per_device`` /
+                ``sram_base_addrs_l1_addr_per_device`` (per-device per-core
+                L1 byte addresses, ready for upload_per_core_uint32_tensor)
+              - ``sram_k_offsets`` (per-core K-slice offset values, None when
+                no K-slicing)
+              - ``cb_in1_size_bytes`` (per-core SRAM weight region size)
+              - ``cb_data_format``, ``cb_page_size`` (bfp4_b)
+              - ``num_active_experts``
+              - ``_sram_cts_list`` (kept alive)
+        """
+        from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
+            _meta_words_for_tiles,
+            create_expert_fmt_tensors,
+        )
+
+        num_sram_experts = len(sram_cts_list)
+        if num_sram_experts == 0:
+            return {
+                "num_sram_experts": 0,
+                "num_tiles_k": num_tiles_k,
+                "out_w": per_core_n,
+                "num_active_experts": num_active_experts,
+                "accum_experts": 1 if accum_experts else 0,
+            }
+
+        # Build fmt + base_addrs tables per device per core. Mirrors
+        # _build_sram_fmt_data in test_matmul_expert.py.
+        sram_fmt_tensors, sram_base_addr_tensors = create_expert_fmt_tensors(
+            sram_cts_list, mesh_device, core_grid, num_tiles_k, per_core_n
+        )
+
+        cores = ttnn.corerange_to_cores(core_grid)
+
+        # Per-core K-offset values for K-sliced layouts. None when full K per
+        # core (no K-slice). Layout matches HEIGHT_SHARDED K-slicing where
+        # consecutive cores own consecutive K-slices in row-major (K-major)
+        # order with n_parallel = total_cores * num_tiles_k / Kt.
+        sram_k_offsets = None
+        if num_tiles_k < Kt:
+            n_parallel = len(cores) * num_tiles_k // Kt
+            sram_k_offsets = [(cores[i], (i // n_parallel) * num_tiles_k) for i in range(len(cores))]
+        sram_fmt_l1_addr_per_device = {}
+        sram_base_addrs_l1_addr_per_device = {}
+        for coord in sram_fmt_tensors:
+            sram_fmt_l1_addr_per_device[coord] = [
+                (cores[i], sram_fmt_tensors[coord][i].experimental_per_core_buffer_address(cores[i]))
+                for i in range(len(cores))
+            ]
+            sram_base_addrs_l1_addr_per_device[coord] = [
+                (cores[i], sram_base_addr_tensors[coord][i].experimental_per_core_buffer_address(cores[i]))
+                for i in range(len(cores))
+            ]
+
+        # Per-tile fmt metadata word count. Matches DRAM path's
+        # _meta_words_for_tiles convention used by the canonical fmt encoder.
+        meta_words_per_expert = _meta_words_for_tiles(num_tiles_k * per_core_n)
+
+        # cb_in1 holds T expert slabs back-to-back. Each slab is
+        # K_per_core × N_per_core × bfp4_b tile size.
+        ct0 = sram_cts_list[0]
+        data0 = ct0.get_data_tensors()[0]
+        weights_tile = data0.get_tile()
+        from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import _TILE_SIZES
+
+        bfp4_tile_size = _TILE_SIZES[1]  # bfp4_b 32×32 = 576 B
+        cb_in1_size_bytes = num_sram_experts * num_tiles_k * per_core_n * bfp4_tile_size
+
+        # Activation page size: MoE uses 1×32 bf16 face tile, NOT the weight
+        # tile. Mirrors setup_matmul_expert_dram's convention (op.py:644-645).
+        in0_tile_h, in0_tile_w = 1, 32
+        in0_page_size = in0_tile_h * in0_tile_w * 2  # bf16
+
+        return {
+            "num_sram_experts": num_sram_experts,
+            "num_tiles_k": num_tiles_k,
+            "out_w": per_core_n,
+            "in0_page_size": in0_page_size,
+            "meta_words_per_expert": meta_words_per_expert,
+            "accum_experts": 1 if accum_experts else 0,
+            "num_active_experts": num_active_experts,
+            "sram_fmt_tensors": sram_fmt_tensors,
+            "sram_base_addr_tensors": sram_base_addr_tensors,
+            "sram_fmt_l1_addr_per_device": sram_fmt_l1_addr_per_device,
+            "sram_base_addrs_l1_addr_per_device": sram_base_addrs_l1_addr_per_device,
+            "sram_k_offsets": sram_k_offsets,
+            "cb_in1_size_bytes": cb_in1_size_bytes,
+            "cb_data_format": ttnn.bfloat4_b,
+            "cb_page_size": bfp4_tile_size,
+            "weights_tile": weights_tile,
+            "weights_dtype": data0.dtype,
+            "_sram_cts_list": sram_cts_list,
+        }
+
+    @staticmethod
     def setup_eltwise_mul(
         cb_in0_index,
         cb_in1_index,
@@ -1090,6 +1242,18 @@ class MoeRoutedExpertOp:
         cb_id_context=None,
         # Optional worker-core grid override (used to avoid overlap with external micro-ops).
         worker_core_grid=None,
+        # SRAM routed gate_proj weights (list of L1-resident CompressedTensors,
+        # one per slot, in slot order matching create_gate_indices_tensor's
+        # sram_expert_ids encoding). None or empty = no SRAM experts placed;
+        # the kernel's SRAM Op call will be a no-op via sram_gate_proj_active=0.
+        # Mirrors gate_proj_weights_tensor's DRAM contract — caller passes the
+        # CTs, _setup_dimensions calls setup_matmul_expert_sram internally.
+        sram_gate_proj_weights_tensor=None,
+        # SRAM routed gate_proj output tensor (caller-allocated, sharded on the
+        # 64 SRAM gate compute cores). Receives per-expert per-N-tile output;
+        # readable via ttnn.to_torch for PCC validation. Required when
+        # sram_gate_proj_weights_tensor is provided.
+        sram_gate_proj_out_tensor=None,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
 
@@ -1228,6 +1392,14 @@ class MoeRoutedExpertOp:
         # when k_parallel_per_bank>1 — kernel's constexpr branch eliminates otherwise.
         TD_8x32 = ttnn.TileDescriptor(ttnn.Tile((8, 32)))
         gate_proj_cb_out_silu = cb_id_context.get_cb_id(data_format, TD_8x32)
+
+        # SRAM routed gate_proj CBs — always allocated. cb_in1 holds T expert
+        # slabs (bfp4_b 32×32 tile); cb_out is per-expert per-N-tile output
+        # (bf16 1×32 face tile, mirrors gate_proj_cb_out). Default unused
+        # (T=0 → kernel treats them as a no-op via sram_gate_proj_active=0).
+        TD_32x32_bfp4 = ttnn.TileDescriptor(ttnn.Tile((32, 32)))
+        sram_gate_proj_cb_in1 = cb_id_context.get_cb_id(ttnn.bfloat4_b, TD_32x32_bfp4)
+        sram_gate_proj_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
 
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
@@ -1470,6 +1642,56 @@ class MoeRoutedExpertOp:
                 num_active_experts=gate_up_num_active_experts,
                 primary_worker_cores=gate_proj_worker_cores,
             )
+
+            # SRAM routed gate_proj setup (mirrors DRAM helper above). Caller
+            # passes pre-built L1 CompressedTensors; we derive K/N tiling from
+            # the CT shard shape and pass Kt = full K (= num_tiles_k).
+            sram_gate_proj_params = None
+            sram_gate_proj_cb_in1_descriptors_per_device = None  # dict[coord -> list of per-core CBDescriptors]
+            sram_gate_proj_cb_out_descriptor = None
+            if sram_gate_proj_weights_tensor:
+                _ct0 = sram_gate_proj_weights_tensor[0]
+                # Derive num_cores from the per-core allocation map (one entry per
+                # core in the grid). get_data_tensors()[0] returns ONE core's tensor
+                # in per_core_allocation mode, so its shard_spec.grid is single-core.
+                _first_coord = next(iter(_ct0._multi_device_data_per_core))
+                _num_cores = len(_ct0._multi_device_data_per_core[_first_coord])
+                # HEIGHT_SHARDED layout: per_device_tiles_h = num_cores × per_core_K_tiles;
+                # per_device_tiles_w = per_core_N (width not sharded).
+                _sram_num_tiles_k = _ct0._per_device_tiles_h // _num_cores
+                _sram_per_core_n = _ct0._per_device_tiles_w
+                # Grid for setup helper: take from the FIRST per-core tensor's bounding box.
+                # Actually simpler: rebuild from all per-core single-core ranges.
+                _per_core_tensors = list(_ct0._multi_device_data_per_core[_first_coord].values())
+                _grid_cores = [t.memory_config().shard_spec.grid.bounding_box().start for t in _per_core_tensors]
+                _grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _grid_cores])
+                sram_gate_proj_params = MoeRoutedExpertOp.setup_matmul_expert_sram(
+                    mesh_device=mesh_device_for_matmul_expert,
+                    sram_cts_list=sram_gate_proj_weights_tensor,
+                    core_grid=_grid,
+                    num_tiles_k=_sram_num_tiles_k,
+                    per_core_n=_sram_per_core_n,
+                    Kt=num_tiles_k,
+                    num_active_experts=gate_up_num_active_experts,
+                    accum_experts=False,
+                )
+                # cb_in1 descriptor: built via CompressedTensor.cb_descriptor_from_compressed_tensor,
+                # which returns ONE descriptor per core (since per_core_allocation=True).
+                # Each core's descriptor points to that core's individual L1 buffer.
+                # Mirrors the canonical pattern in micro_ops/matmul_expert/op.py:372.
+                # Per-device: each mesh coord has its own per-core L1 layout.
+                sram_gate_proj_cb_in1_descriptors_per_device = {}
+                for coord in sram_gate_proj_params["sram_fmt_l1_addr_per_device"]:
+                    sram_gate_proj_cb_in1_descriptors_per_device[coord] = _ct0.cb_descriptor_from_compressed_tensor(
+                        sram_gate_proj_cb_in1, device_coord=coord
+                    )
+                # cb_out descriptor: backed by the user-provided output tensor.
+                assert (
+                    sram_gate_proj_out_tensor is not None
+                ), "sram_gate_proj_out_tensor required when sram_gate_proj_weights_tensor is provided"
+                sram_gate_proj_cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    sram_gate_proj_out_cb, sram_gate_proj_out_tensor
+                )
         else:
             raise AssertionError(
                 "gate_proj: setup_dram_matmul (single ttnn.Tensor) path is no longer supported "
@@ -1961,6 +2183,12 @@ class MoeRoutedExpertOp:
             bcast_pkt_cb=bcast_pkt_cb if enable_bcast else None,
             bcast_pkt_cb_descriptor=bcast_pkt_cb_descriptor if enable_bcast else None,
             bcast_params=bcast_params,
+            # SRAM routed gate_proj (always-allocated CBs; params=None = no-op)
+            sram_gate_proj_cb_in1=sram_gate_proj_cb_in1,
+            sram_gate_proj_out_cb=sram_gate_proj_out_cb,
+            sram_gate_proj_params=sram_gate_proj_params,
+            sram_gate_proj_cb_in1_descriptors_per_device=sram_gate_proj_cb_in1_descriptors_per_device,
+            sram_gate_proj_cb_out_descriptor=sram_gate_proj_cb_out_descriptor,
         )
 
     @staticmethod
@@ -2421,6 +2649,41 @@ class MoeRoutedExpertOp:
             ("reduce_output_cb", ctx.reduce_output_cb),
             ("reduce_scratch_cb", ctx.reduce_scratch_cb),
         ]
+
+        # ---- SRAM routed gate_proj CT args (always emitted; gated at runtime) ----
+        # Default values are placeholders; the kernel's Op call is `if constexpr false`
+        # no-op when sram_gate_proj_active=0. Real values come in when the caller
+        # builds SRAM weights via build_sram_expert_weights + setup_matmul_expert_sram.
+        # Per-core values (fmt_l1_addr, base_addrs_l1_addr, k_offset) emitted via
+        # _build_core_descriptors with default 0 → all-cores 0 by default.
+        sgp = ctx.sram_gate_proj_params or {}
+        sram_uniform_args = [
+            # cb_in0 = rmsnorm-mcasted activation (already on shared gate cores).
+            ("sram_gate_proj_cb_in0", ctx.gate_mm_input_cb),
+            ("sram_gate_proj_cb_in1", ctx.sram_gate_proj_cb_in1),
+            ("sram_gate_proj_cb_out", ctx.sram_gate_proj_out_cb),
+            # Reuse the existing gate_proj index CB when routing is on; 0 otherwise.
+            ("sram_gate_proj_cb_index", ctx.gate_proj_cb_index if ctx.enable_routing else 0),
+            ("sram_gate_proj_num_tiles_k", sgp.get("num_tiles_k", 0)),
+            ("sram_gate_proj_out_w", sgp.get("out_w", 0)),
+            ("sram_gate_proj_cb_in0_num_pages", sgp.get("num_tiles_k", 0)),
+            ("sram_gate_proj_num_active_experts", sgp.get("num_active_experts", 0)),
+            # SRAM kernel reads indices from this L1 address directly (same
+            # location as DRAM expert path — index_mcast lands here on all
+            # receivers, including shared gate cores after we extended the
+            # mcast set).
+            (
+                "sram_gate_proj_index_l1_addr",
+                ctx.gate_proj_params.get("index_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+            ("sram_gate_proj_k_per_core", sgp.get("num_tiles_k", 0)),
+            ("sram_gate_proj_meta_words_per_expert", sgp.get("meta_words_per_expert", 0)),
+            ("sram_gate_proj_in0_page_size", sgp.get("in0_page_size", 0)),
+            ("sram_gate_proj_accum_experts", sgp.get("accum_experts", 0)),
+            ("sram_gate_proj_cb_out_sram", 0),
+        ]
+        ncrisc_named_compile_time_args += sram_uniform_args
+        trisc_named_compile_time_args += sram_uniform_args
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
 
     @staticmethod
@@ -2446,6 +2709,12 @@ class MoeRoutedExpertOp:
         descriptors += [
             ctx.gate_proj_params["cb_in1_descriptor"],  # Shared by gate_proj and up_proj
         ]
+
+        # SRAM routed gate_proj cb_out descriptor — same on all devices.
+        # cb_in1 descriptors are per-device (each coord has its own L1 layout)
+        # and are appended in _setup_per_device_args.
+        if ctx.sram_gate_proj_cb_out_descriptor is not None:
+            descriptors.append(ctx.sram_gate_proj_cb_out_descriptor)
 
         if ctx.enable_routing:
             descriptors.append(ctx.gate_proj_cb_index_descriptor)
@@ -2653,6 +2922,43 @@ class MoeRoutedExpertOp:
                         other_value=0,
                     ),
                 ]
+
+        # ---- SRAM gate_proj per-core CT args (always emitted; default 0) ----
+        # Per-core values for fmt_l1_addr, base_addrs_l1_addr, k_offset are
+        # populated when sram_gate_proj_params is non-empty. Otherwise empty
+        # core_values list with other_value=0 → all cores see 0 → kernel's
+        # `if constexpr (sram_gate_proj_active==1)` skips the path entirely.
+        sgp = getattr(ctx, "sram_gate_proj_params", None) or {}
+        # Per-device dicts (when present) provide the first-coord defaults here;
+        # _setup_per_device_args overrides per coord.
+        first_coord_fmt = []
+        first_coord_base = []
+        if sgp.get("num_sram_experts", 0) > 0:
+            fmt_per_dev = sgp.get("sram_fmt_l1_addr_per_device", {}) or {}
+            base_per_dev = sgp.get("sram_base_addrs_l1_addr_per_device", {}) or {}
+            if fmt_per_dev:
+                first_coord_fmt = fmt_per_dev[next(iter(fmt_per_dev))]
+            if base_per_dev:
+                first_coord_base = base_per_dev[next(iter(base_per_dev))]
+        sram_k_offsets = sgp.get("sram_k_offsets") or []
+
+        per_core_compile_time_descriptors += [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_gate_proj_fmt_l1_addr",
+                core_values=first_coord_fmt,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_gate_proj_base_addrs_l1_addr",
+                core_values=first_coord_base,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_gate_proj_k_offset",
+                core_values=sram_k_offsets,
+                other_value=0,
+            ),
+        ]
         return unified_compile_time_core_descriptors, per_core_compile_time_descriptors
 
 
@@ -5180,6 +5486,8 @@ class MoeOp:
         persistent_mode=False,
         forward_metadata_size_bytes=0,
         metadata_l1_addr=0,
+        sram_gate_proj_weights_tensor=None,
+        sram_gate_proj_out_tensor=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -5230,6 +5538,8 @@ class MoeOp:
             semaphores=semaphores,
             cb_id_context=cb_id_context,
             worker_core_grid=worker_core_grid,
+            sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
+            sram_gate_proj_out_tensor=sram_gate_proj_out_tensor,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
@@ -5583,6 +5893,31 @@ class MoeOp:
                         other_value=0,
                     )
 
+        # SRAM routed gate_proj per-device per-core overrides. Each device has
+        # its own SRAM weight + fmt + base_addrs L1 allocations (independent
+        # per-device addresses), so per-coord override is required for TP8.
+        sgp = routed_ctx.sram_gate_proj_params
+        if sgp and sgp.get("num_sram_experts", 0) > 0:
+            sram_overrides = {
+                "sram_gate_proj_fmt_l1_addr": sgp["sram_fmt_l1_addr_per_device"][coord],
+                "sram_gate_proj_base_addrs_l1_addr": sgp["sram_base_addrs_l1_addr_per_device"][coord],
+            }
+            for i, desc in enumerate(self.device_per_core_descs):
+                name = desc.named_compile_time_arg
+                if name in sram_overrides:
+                    self.device_per_core_descs[i] = PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=name,
+                        core_values=sram_overrides[name],
+                        other_value=0,
+                    )
+
+            # Append per-device cb_in1 CB descriptors (one per core, per_core_allocation=True).
+            # Each device has its own L1 layout, so per-coord descriptors are added here
+            # rather than in the shared _build_cb_descriptors.
+            cb_in1_descs = routed_ctx.sram_gate_proj_cb_in1_descriptors_per_device.get(coord)
+            if cb_in1_descs:
+                self.device_cb_descs.extend(cb_in1_descs)
+
         # Apply reduce-to-one modifications (no-op when reduce disabled)
         self._build_reduce_per_device(reduce_root_coord, coord, row, col, chip_id)
 
@@ -5644,6 +5979,14 @@ class MoeOp:
         # Per-worker downstream sockets for reduce workers to send reduced output
         downstream_sockets=None,
         cb_id_context=None,
+        # SRAM routed gate_proj weights — list of L1-resident CompressedTensors,
+        # one per slot, in slot order matching the sram_expert_ids encoding in
+        # create_gate_indices_tensor. None or empty = DRAM-only.
+        sram_gate_proj_weights_tensor=None,
+        # SRAM routed gate_proj output tensor — required when sram_gate_proj_weights_tensor
+        # is provided. Caller-allocated, sharded on the 64 SRAM gate compute cores;
+        # readable post-run for PCC validation.
+        sram_gate_proj_out_tensor=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -5718,6 +6061,8 @@ class MoeOp:
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
+            sram_gate_proj_out_tensor=sram_gate_proj_out_tensor,
         )
 
         # ==================================================================
