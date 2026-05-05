@@ -26,8 +26,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
-_ABSENT = "__ABSENT__"
-
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("full")
