@@ -2594,27 +2594,15 @@ class ModelArgs:
         mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
         prefill_memcfg = self.get_prefill_activation_mem_config(seq_len=x_bsh.shape[1])
-        try:
-            xs_1BSH = ttnn.from_torch(
-                x_1BSH,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=prefill_memcfg,
-                mesh_mapper=mesh_mapper,
-            )
-        except RuntimeError as e:
-            if prefill_memcfg == ttnn.DRAM_MEMORY_CONFIG:
-                raise
-            logger.warning(f"Prefill residual tensor allocation in L1 failed; falling back to DRAM. Reason: {e}")
-            xs_1BSH = ttnn.from_torch(
-                x_1BSH,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
-            )
+        # No DRAM fallback here: tensor memcfg must match get_residual_mem_config (decoder assert).
+        xs_1BSH = ttnn.from_torch(
+            x_1BSH,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=prefill_memcfg,
+            mesh_mapper=mesh_mapper,
+        )
         return xs_1BSH
 
     def _get_text_prefix(self):
