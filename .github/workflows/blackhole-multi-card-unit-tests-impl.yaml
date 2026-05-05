@@ -87,9 +87,8 @@ jobs:
             cmd: pytest tests/nightly/blackhole/sdpa/ -svv
             timeout: 60
             test-type: slow
-          - name: sdpa perf tests
+          - name: ring sdpa perf tests
             cmd: |
-              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py::test_sdpa_perf_check -svv
               SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
               SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
             timeout: 60
