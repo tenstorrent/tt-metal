@@ -629,9 +629,9 @@ jobs:
           {
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
             if [ -n "$FILTER" ]; then
-              pytest vllm/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+              pytest vllm/plugins/vllm-tt-plugin/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             else
-              pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+              pytest vllm/plugins/vllm-tt-plugin/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             fi
           } 2>&1 | tee "${FILE_SAMPLING_TESTS_LOG}"
           exit "${PIPESTATUS[0]}"
