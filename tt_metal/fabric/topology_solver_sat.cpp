@@ -1328,6 +1328,7 @@ bool topology_sat_search_n(
     state.mapping.assign(graph_data.n_target, -1);
     state.used.assign(graph_data.n_global, false);
     all_mappings_out.clear();
+    (void)quiet_mode;
 
     if (max_solutions == 0) {
         return false;
