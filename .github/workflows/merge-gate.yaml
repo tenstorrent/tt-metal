@@ -445,6 +445,7 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: fd
       enable-llk-asserts: true
+      timeout: 15
       gtest-shard-total: 4
       gtest-shard-index: ${{ matrix.shard }}
 
@@ -474,6 +475,7 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: fd
       enable-llk-asserts: true
+      timeout: 15
       gtest-filter: '-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*'
       gtest-shard-total: 2
       gtest-shard-index: ${{ matrix.shard }}
@@ -527,7 +529,7 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: sd
       enable-llk-asserts: true
-      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*'
+      gtest-filter: 'LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3'
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.

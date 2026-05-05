@@ -93,6 +93,12 @@ jobs:
           if [ "${{ inputs.dispatch-mode }}" = "sd" ]; then
             export TT_METAL_SLOW_DISPATCH_MODE=1
             echo "Running in slow dispatch mode"
+          elif [ "${{ inputs.dispatch-mode }}" = "fd" ]; then
+            unset TT_METAL_SLOW_DISPATCH_MODE
+            echo "Running in fast dispatch mode"
+          else
+            echo "Unsupported dispatch mode: '${{ inputs.dispatch-mode }}'. Expected one of: fd, sd." >&2
+            exit 1
           fi
           echo "Running: ./build/test/tt_metal/unit_tests_llk --gtest_filter=${{ inputs.gtest-filter }}"
           ./build/test/tt_metal/unit_tests_llk --gtest_filter='${{ inputs.gtest-filter }}'

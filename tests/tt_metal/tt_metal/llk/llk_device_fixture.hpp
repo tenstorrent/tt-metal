@@ -46,36 +46,13 @@ struct LLKSharedDevices {
     }
 };
 
-// gtest Environment that owns the device handles for one fixture chain.
-//
-// Why an Environment: the device handles are shared_ptr<MeshDevice> kept alive
-// for the whole life of the test binary. If they were dropped during static
-// destruction at process exit, MetalContext (also a function-local static)
-// could be destroyed first and the MeshDevice dtor would touch a dead context.
-// gtest guarantees Environment::TearDown() runs *before* RUN_ALL_TESTS()
-// returns, while MetalContext is still alive — so dropping the handles here is
-// always safe.
-//
-// (See https://google.github.io/googletest/advanced.html#global-set-up-and-tear-down.)
-class LLKDeviceEnvironment : public ::testing::Environment {
-public:
-    LLKSharedDevices state;
-
-    void TearDown() override { state.reset(); }
-};
-
-// One Environment instance per Tag — ::testing::AddGlobalTestEnvironment takes
-// ownership of the heap allocation. Lazy: registered on first call (from the
-// fixture's SetUpTestSuite), which happens before RUN_ALL_TESTS reaches
-// Environment::TearDown.
+// Per-tag shared state storage. TearDownTestSuite() must reset it before the
+// test binary reaches static destruction so MeshDevice handles are dropped while
+// MetalContext is still alive.
 template <class Tag>
-inline LLKDeviceEnvironment& acquire_environment() {
-    static LLKDeviceEnvironment* env = [] {
-        auto owned = std::make_unique<LLKDeviceEnvironment>();
-        ::testing::AddGlobalTestEnvironment(owned.get());
-        return owned.release();  // gtest now owns this pointer
-    }();
-    return *env;
+inline LLKSharedDevices& shared_state_storage() {
+    static LLKSharedDevices state;
+    return state;
 }
 
 inline bool detect_slow_dispatch() { return getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr; }
@@ -123,9 +100,7 @@ protected:
     template <class F>
     friend void detail::apply_shared_state(F&, const detail::LLKSharedDevices&);
 
-    static detail::LLKSharedDevices& shared_state() {
-        return detail::acquire_environment<LLKMeshDeviceFixture>().state;
-    }
+    static detail::LLKSharedDevices& shared_state() { return detail::shared_state_storage<LLKMeshDeviceFixture>(); }
 
     static void SetUpTestSuite() {
         auto& s = shared_state();
@@ -149,10 +124,7 @@ protected:
 
     // Per-suite cleanup: drop the device handles between suites so the next
     // suite re-opens fresh ones (avoids cross-suite allocator/dispatch state
-    // bleed). The registered LLKDeviceEnvironment::TearDown is the final
-    // safety net — it runs at end of RUN_ALL_TESTS in any path that reaches
-    // gtest's normal completion (including failures and skips), guaranteeing
-    // shutdown order vs MetalContext.
+    // bleed) and so handles are gone before process shutdown.
     static void TearDownTestSuite() { shared_state().reset(); }
 
     void SetUp() override {
@@ -165,8 +137,7 @@ protected:
     }
 
     void TearDown() override {
-        // Devices are owned by the suite-shared Environment / static state;
-        // just drop the per-test references.
+        // Devices are owned by the suite-shared state; just drop the per-test references.
         this->devices_.clear();
     }
 };
@@ -191,7 +162,7 @@ protected:
     friend void detail::apply_shared_state(F&, const detail::LLKSharedDevices&);
 
     static detail::LLKSharedDevices& shared_state() {
-        return detail::acquire_environment<LLKMeshDeviceSingleCardFixture>().state;
+        return detail::shared_state_storage<LLKMeshDeviceSingleCardFixture>();
     }
 
     static void SetUpTestSuite() {
@@ -204,7 +175,7 @@ protected:
         detail::populate_shared_state(s, ids);
     }
 
-    // Per-suite cleanup; LLKDeviceEnvironment::TearDown is the final safety net.
+    // Per-suite cleanup; keep the static shared state empty at process shutdown.
     static void TearDownTestSuite() { shared_state().reset(); }
 
     void SetUp() override {
@@ -217,7 +188,7 @@ protected:
     }
 
     void TearDown() override {
-        // Devices are owned by the suite-shared Environment; just drop the per-test references.
+        // Devices are owned by the suite-shared state; just drop the per-test references.
         this->devices_.clear();
     }
 };
