@@ -2381,7 +2381,7 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("QNOPE/MATMUL3");
-                    deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
+                    deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false, true> matmul3;
                     matmul3(matmul3_args);
                 }
 
