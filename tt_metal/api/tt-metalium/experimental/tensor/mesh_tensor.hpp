@@ -69,13 +69,6 @@ public:
     explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
 
     /**
-     * Move constructor with new spec and topology.
-     * Moves the buffer from other and uses the provided spec/topology.
-     * This is meant for transition as TTNN-Tensor current has a two-step construction for MeshTensor.
-     */
-    MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology);
-
-    /**
      * Release ownership of the underlying device memory.
      * Whether or not the device memory is actually deallocated depends on the destructor semantics of the underlying
      * MeshBuffer.

@@ -33,11 +33,6 @@ public:
             "MeshBuffer must be large enough to hold the tensor.");
     }
 
-    // Two step construction for MeshTensor,
-    // for transiet purpose.
-    MeshTensorImpl(MeshTensorImpl&& other, TensorSpec spec, TensorTopology topology) :
-        mesh_buffer_(std::move(other.mesh_buffer_)), spec_(std::move(spec)), topology_(std::move(topology)) {}
-
     const distributed::MeshBuffer& mesh_buffer() const { return *raw_mesh_buffer(); }
     const std::shared_ptr<distributed::MeshBuffer>& raw_mesh_buffer() const { return mesh_buffer_; }
     const TensorSpec& spec() const { return spec_; }

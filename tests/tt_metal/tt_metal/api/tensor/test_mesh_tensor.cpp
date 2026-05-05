@@ -93,18 +93,6 @@ TEST(MeshTensorTest, ConstructionWithNullMeshBufferFails) {
     EXPECT_ANY_THROW(MeshTensor(nullptr, std::move(spec), std::move(topology)));
 }
 
-TEST(MeshTensorTest, MoveConstructionWithNewSpecFromDefaultConstructedFails) {
-    MeshTensor default_tensor;
-
-    auto page_config = PageConfig(Layout::ROW_MAJOR);
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
-    auto new_spec = TensorSpec(Shape{4, 32}, tensor_layout);
-    auto new_topology = TensorTopology();
-
-    EXPECT_ANY_THROW(MeshTensor(std::move(default_tensor), std::move(new_spec), std::move(new_topology)));
-}
-
 // Device-based tests using GenericMeshDeviceFixture
 using MeshTensorDeviceTest = GenericMeshDeviceFixture;
 
@@ -223,27 +211,6 @@ TEST_F(MeshTensorDeviceTest, MoveAssignmentTransfersOwnership) {
 
     EXPECT_EQ(&tensor2.mesh_buffer(), buffer1_ptr);
     EXPECT_EQ(tensor2.logical_shape(), Shape({1, 32}));
-}
-
-TEST_F(MeshTensorDeviceTest, MoveConstructionWithNewSpecAndTopology) {
-    auto page_config = PageConfig(Layout::ROW_MAJOR);
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
-    auto spec = TensorSpec(Shape{2, 64}, tensor_layout);
-
-    auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
-    MeshTensor original(mesh_buffer, std::move(spec), TensorTopology());
-    auto* buffer_ptr = &original.mesh_buffer();
-
-    auto new_tensor_layout = TensorLayout(DataType::FLOAT32, page_config, memory_config);
-    auto new_spec = TensorSpec(Shape{4, 32}, new_tensor_layout);
-    auto new_topology = TensorTopology();
-
-    MeshTensor moved(std::move(original), std::move(new_spec), std::move(new_topology));
-
-    EXPECT_EQ(&moved.mesh_buffer(), buffer_ptr);
-    EXPECT_EQ(moved.logical_shape(), Shape({4, 32}));
-    EXPECT_EQ(moved.dtype(), DataType::FLOAT32);
 }
 
 TEST_F(MeshTensorDeviceTest, TensorProperties) {
