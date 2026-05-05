@@ -31,162 +31,114 @@ using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::IDevice;
 
-// Perf-tuning knob: how many worker cores stream tiles for each DRAM bank.
-// total_cores = kCoresPerDramBank * device->num_dram_channels()
-// kCoresPerDramBank = 1 reproduces the original 12-core (1 per bank) behavior on Wormhole.
-// Each bank's tiles are split contiguously across its kCoresPerDramBank cores;
-// cores are picked to minimize Manhattan distance to their bank's NOC endpoint.
-// constexpr uint32_t kCoresPerDramBank = 1;
-// constexpr uint32_t kFirstUnavailableWorkerPhysicalRow = 10;
-
-// struct DramCoreWorkAssignment {
-//     CoreCoord core;
-//     uint32_t dram_bank = 0;
-//     uint32_t slot = 0;
-//     uint32_t tile_ofs = 0;
-//     uint32_t num_tiles = 0;
-// };
-
-// bool is_worker_physical_row_available(const CoreCoord& worker_phys) {
-//     return worker_phys.y < kFirstUnavailableWorkerPhysicalRow;
-// }
-
-// inline uint32_t torus_dist(int a, int b, int n) {
-//     int d = (a - b) % n;
-//     if (d < 0) {
-//         d += n;
-//     }
-//     return static_cast<uint32_t>(d);
-// }
-
-// uint32_t dynamic_dram_worker_score(const CoreCoord& worker_phys, const CoreCoord& dram_phys, const CoreCoord& grid) {
-//     const int wx = static_cast<int>(worker_phys.x);
-//     const int wy = static_cast<int>(worker_phys.y);
-//     const int dx = static_cast<int>(dram_phys.x);
-//     const int dy = static_cast<int>(dram_phys.y);
-//     const int grid_x = static_cast<int>(grid.x);
-//     const int grid_y = static_cast<int>(grid.y);
-
-//     const uint32_t dram_to_worker_noc0 = torus_dist(wx, dx, grid_x) + torus_dist(wy, dy, grid_y);
-//     const uint32_t dram_to_worker_noc1 = torus_dist(dx, wx, grid_x) + torus_dist(dy, wy, grid_y);
-//     return std::min(dram_to_worker_noc0, dram_to_worker_noc1);
-// }
-
-// CoreRangeSet core_range_set_from_assignments(const std::vector<DramCoreWorkAssignment>& assignments) {
-//     std::vector<CoreRange> core_ranges;
-//     core_ranges.reserve(assignments.size());
-//     for (const auto& assignment : assignments) {
-//         core_ranges.emplace_back(assignment.core, assignment.core);
-//     }
-//     return CoreRangeSet(core_ranges);
-// // }
-
-[[maybe_unused]] std::pair<CoreRangeSet, std::map<CoreCoord, bool>> double_dram_core_coords() {
-    //
-    std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = {// (y,x) physical core coords
-                                                                     // (11,0)
-                                                                     {{0, 1}},
-                                                                     // 1,0
-                                                                     {{0, 0}},
-                                                                     // 5,0
-                                                                     {{4, 0}},
-                                                                     // 7,0
-                                                                     {{5, 0}},
-                                                                     // 1,5
-                                                                     {{0, 4}},
-                                                                     // 11,5
-                                                                     {{0, 5}},
-                                                                     // 2,5
-                                                                     {{1, 4}},
-                                                                     // 9,5
-                                                                     {{7, 4}},
-                                                                     // 8,5
-                                                                     {{6, 4}},
-                                                                     // 3,5
-                                                                     {{2, 4}},
-                                                                     // 5,5
-                                                                     {{4, 4}},
-                                                                     // 7,5
-                                                                     {{5, 4}}};
-
-    // noc swap for 4,7, 0,7, 5,7 0,3  1,3, 7,3  6,3  2,3, 4,3 5,3   (y,x)
-    //  Need to swap all cores, I use y,x format , CoreCoord use x,y format.
-
-    // std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = {// (y,x) physical core coords
-    //                                                                  // (11,0)
-    //                                                                  {{0, 1}, {0, 2}},
-    //                                                                  // 1,0
-    //                                                                  {{0, 0}, {1, 0}},
-    //                                                                  // 5,0
-    //                                                                  {{4, 0}, {4, 1}},
-    //                                                                  // 7,0
-    //                                                                  {{5, 0}, {5, 1}},
-    //                                                                  // 1,5
-    //                                                                  {{0, 4}, {0, 5}},
-    //                                                                  // 11,5
-    //                                                                  {{0, 6}, {0, 7}},
-    //                                                                  // 2,5
-    //                                                                  {{1, 4}, {1, 5}},
-    //                                                                  // 9,5
-    //                                                                  {{7, 4}, {7, 5}},
-    //                                                                  // 8,5
-    //                                                                  {{6, 4}, {6, 5}},
-    //                                                                  // 3,5
-    //                                                                  {{2, 4}, {2, 5}},
-    //                                                                  // 5,5
-    //                                                                  {{4, 4}, {4, 5}},
-    //                                                                  // 7,5
-    //                                                                  {{5, 4}, {5, 5}}};
-
-    // std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = {// (y,x) physical core coords
-    //                                                                  // (11,0)
-    //                                                                  {{0, 1}, {0, 2}, {0, 3}},
-    //                                                                  // 1,0
-    //                                                                  {{0, 0}, {1, 0}, {2, 0}},
-    //                                                                  // 5,0
-    //                                                                  {{4, 0}, {4, 1}, {4, 2}},
-    //                                                                  // 7,0
-    //                                                                  {{5, 0}, {5, 1}, {5, 2}},
-    //                                                                  // 1,5 +
-    //                                                                  {{0, 4}, {0, 5}, {0, 6}},
-    //                                                                  // 11,5 +
-    //                                                                  {{1, 6}, {0, 7}, {1, 7}},
-    //                                                                  // 2,5 +
-    //                                                                  {{1, 4}, {1, 5}, {2, 5}},
-    //                                                                  // 9,5
-    //                                                                  {{7, 4}, {7, 5}, {7, 6}},
-    //                                                                  // 8,5
-    //                                                                  {{6, 4}, {6, 5}, {6, 6}},
-    //                                                                  // 3,5 +d
-    //                                                                  {{2, 4}, {3, 5}, {3, 4}},
-    //                                                                  // 5,5
-    //                                                                  {{4, 4}, {4, 5}, {4, 6}},
-    //                                                                  // 7,5
-    //                                                                  {{5, 4}, {5, 5}, {5, 6}}};
-    std::vector<CoreCoord> swap_noc_cores;
+// For compute bound operations, we need to get multiple cores per bank for optimal performance.
+CoreRangeSet get_optimal_wh_dram_core_coords(std::size_t num_cores_per_bank) {
+    /*
+    The problem: that "optimal DRAM bank → logical worker" mapping is a fixed physical layout. When dispatch_core_axis =
+    COL, the fast‑dispatch firmware reserves a column of Tensix cores; if any of the DRAM‑bank‑adjacent workers happen
+    to land in that reserved column, the subsequent CreateKernel placement collides with a dispatch core and
+    ProgramImpl::compile fatally asserts. In the ROW configuration those same workers are outside the dispatch row, so
+    the identical program compiles fine. That's exactly why only the COL parametrization fails.
+    */
+    std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = [num_cores_per_bank]() {
+        if (num_cores_per_bank == 1) {
+            return std::vector<std::vector<CoreCoord>>{// (y,x) physical core coords
+                                                       // (11,0)
+                                                       {{0, 1}},
+                                                       // 1,0
+                                                       {{0, 0}},
+                                                       // 5,0
+                                                       {{4, 0}},
+                                                       // 7,0
+                                                       {{5, 0}},
+                                                       // 1,5
+                                                       {{0, 4}},
+                                                       // 11,5
+                                                       {{0, 5}},
+                                                       // 2,5
+                                                       {{1, 4}},
+                                                       // 9,5
+                                                       {{7, 4}},
+                                                       // 8,5
+                                                       {{6, 4}},
+                                                       // 3,5
+                                                       {{2, 4}},
+                                                       // 5,5
+                                                       {{4, 4}},
+                                                       // 7,5
+                                                       {{5, 4}}};
+        }
+        if (num_cores_per_bank == 2) {
+            return std::vector<std::vector<CoreCoord>>{// (y,x) physical core coords
+                                                       // (11,0)
+                                                       {{0, 1}, {0, 2}},
+                                                       // 1,0
+                                                       {{0, 0}, {1, 0}},
+                                                       // 5,0
+                                                       {{4, 0}, {4, 1}},
+                                                       // 7,0
+                                                       {{5, 0}, {5, 1}},
+                                                       // 1,5
+                                                       {{0, 4}, {0, 5}},
+                                                       // 11,5
+                                                       {{0, 6}, {0, 7}},
+                                                       // 2,5
+                                                       {{1, 4}, {1, 5}},
+                                                       // 9,5
+                                                       {{7, 4}, {7, 5}},
+                                                       // 8,5
+                                                       {{6, 4}, {6, 5}},
+                                                       // 3,5
+                                                       {{2, 4}, {2, 5}},
+                                                       // 5,5
+                                                       {{4, 4}, {4, 5}},
+                                                       // 7,5
+                                                       {{5, 4}, {5, 5}}};
+        }
+        if (num_cores_per_bank == 3) {
+            return std::vector<std::vector<CoreCoord>>{// (y,x) physical core coords
+                                                       // (11,0)
+                                                       {{0, 1}, {0, 2}, {0, 3}},
+                                                       // 1,0
+                                                       {{0, 0}, {1, 0}, {2, 0}},
+                                                       // 5,0
+                                                       {{4, 0}, {4, 1}, {4, 2}},
+                                                       // 7,0
+                                                       {{5, 0}, {5, 1}, {5, 2}},
+                                                       // 1,5 +
+                                                       {{0, 4}, {0, 5}, {0, 6}},
+                                                       // 11,5 +
+                                                       {{1, 6}, {0, 7}, {1, 7}},
+                                                       // 2,5 +
+                                                       {{1, 4}, {1, 5}, {2, 5}},
+                                                       // 9,5
+                                                       {{7, 4}, {7, 5}, {7, 6}},
+                                                       // 8,5
+                                                       {{6, 4}, {6, 5}, {6, 6}},
+                                                       // 3,5 +d
+                                                       {{2, 4}, {3, 5}, {3, 4}},
+                                                       // 5,5
+                                                       {{4, 4}, {4, 5}, {4, 6}},
+                                                       // 7,5
+                                                       {{5, 4}, {5, 5}, {5, 6}}};
+        }
+        TT_THROW("Unsupported number of cores per bank: {}", num_cores_per_bank);
+    }();
 
     auto num_of_cores_per_bank = dram_worker_cores_ordered[0].size();
-    const uint32_t num_banks = 12;
-    std::vector<CoreRange> all_cores(num_banks * num_of_cores_per_bank, CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    const uint32_t num_wh_banks = 12;
+    std::vector<CoreRange> all_cores(num_wh_banks * num_of_cores_per_bank, CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
 
-    std::map<CoreCoord, bool> swap_noc_cores_map;
-
+    // TODO: Remove extra loop and provide coords in x,y format
     for (auto idx = 0; idx < num_of_cores_per_bank; ++idx) {
         for (auto bank_id = 0; bank_id < dram_worker_cores_ordered.size(); ++bank_id) {
             const auto& dram_cores = dram_worker_cores_ordered[bank_id];
-
-            bool is_swap_noc_core =
-                std::find(swap_noc_cores.begin(), swap_noc_cores.end(), dram_cores[idx]) != swap_noc_cores.end();
-
             auto core = CoreCoord(dram_cores[idx].y, dram_cores[idx].x);
-            // std::cout << "core: " << core.x << ", " << core.y << " is_swap_noc_core: " << is_swap_noc_core <<
-            // std::endl;
-            all_cores[bank_id + idx * num_banks] = CoreRange(core);
-            swap_noc_cores_map[core] = is_swap_noc_core;
+            all_cores[bank_id + idx * num_wh_banks] = CoreRange(core);
         }
     }
 
-    return {CoreRangeSet(all_cores), std::move(swap_noc_cores_map)};
+    return CoreRangeSet(all_cores);
 }
 
 // TODO: Move to utilities?
@@ -246,30 +198,17 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const tt::tt_metal::KernelHandle compute_kernel_id,
     const CoreRangeSet& all_device_cores,
-    const uint32_t num_tiles_per_batch,
-    const std::map<CoreCoord, bool>& swap_noc_cores_map) {
+    const uint32_t num_tiles_per_batch) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
 
     uint32_t num_tiles = static_cast<uint32_t>(a_tensor.physical_volume() / TILE_HW);
 
-    bool row_major = true;  // TODO: make this configurable
     uint32_t num_cores_total = all_device_cores.num_cores();
 
-    // TODO: Move FATAL to validate function?
-    TT_FATAL(
-        a_tensor.padded_shape()[-1] % tt::constants::TILE_HEIGHT == 0,
-        "num_tiles mismatch, {} % {} != 0",
-        a_tensor.padded_shape()[-1],
-        tt::constants::TILE_HEIGHT);
-    TT_FATAL(
-        a_tensor.padded_shape()[-2] % tt::constants::TILE_WIDTH == 0,
-        "num_tiles mismatch, {} % {} != 0",
-        a_tensor.padded_shape()[-2],
-        tt::constants::TILE_WIDTH);
-
     // vector of cores
+    bool row_major = true;  // TODO: make this configurable
     auto cores = corerange_to_cores(all_device_cores, std::nullopt, row_major);
 
     std::vector<std::vector<uint32_t>> reader_args_array{cores.size()};
@@ -282,22 +221,13 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
 
     std::vector<uint32_t> core_ids;
 
-    // device->get_mesh_device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
-    const auto num_dram_banks = 12;
+    const auto num_dram_banks =
+        a_tensor.device()->get_mesh_device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     std::vector<int> tiles_per_bank(num_dram_banks, 0);
     auto cores_per_bank = num_cores_total / num_dram_banks;
 
-    // std::cout << "num_tiles: " << num_tiles << std::endl;
-    // std::cout << "num_cores_total: " << num_cores_total << std::endl;
-    // std::cout << "num_dram_banks: " << num_dram_banks << std::endl;
-    // std::cout << "cores_per_bank: " << cores_per_bank << std::endl;
-
     for (uint32_t core_id = 0; core_id < num_cores_total; ++core_id) {
         const CoreCoord& core = cores.at(core_id);
-        const bool is_swap_noc_core = swap_noc_cores_map.contains(core) ? swap_noc_cores_map.at(core) : false;
-
-        // uint32_t num_tiles_per_core = num_tiles / num_cores_total + ((core_id < num_tiles % num_cores_total) ? 1 :
-        // 0);
 
         auto bank_id = core_id % num_dram_banks;
         auto slot_id = core_id / num_dram_banks;
@@ -309,9 +239,6 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
             bank_page_offset += pages_in_bank / cores_per_bank + (slot < pages_in_bank % cores_per_bank ? 1 : 0);
         }
         uint32_t tile_ofs = bank_id + bank_page_offset * num_dram_banks;
-
-        // std::cout << "core_id: " << core_id << " core: " << core.x << ", " << core.y
-        //           << " num_tiles_per_core: " << num_tiles_per_core << " tile_ofs: " << tile_ofs << std::endl;
 
         if constexpr (!initialize_args) {
             // RuntimeArgsData
@@ -329,18 +256,14 @@ inline void set_eltwise_binary_runtime_args_for_dram_cores(
             tile_ofs,
             num_tiles_per_core,
             num_tiles_per_batch,
-            is_swap_noc_core ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0};
+            tt::tt_metal::NOC::NOC_0};
 
         std::vector<uint32_t> compute_args_vec = {
             num_tiles_per_core,
             num_tiles_per_batch,
         };
         std::vector<uint32_t> writer_args_vec = {
-            output.buffer()->address(),
-            tile_ofs,
-            num_tiles_per_core,
-            num_tiles_per_batch,
-            is_swap_noc_core ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1};
+            output.buffer()->address(), tile_ofs, num_tiles_per_core, num_tiles_per_batch, tt::tt_metal::NOC::NOC_1};
 
         reader_args_array[core_id] = std::move(reader_args_vec);
         compute_args_array[core_id] = std::move(compute_args_vec);
@@ -466,6 +389,10 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
     const BinaryNgParams& operation_attributes, const BinaryNgInputs& tensor_args) {
     const auto& a = tensor_args.input_tensor_a;
 
+    if (a.device()->arch() != tt::ARCH::WORMHOLE_B0) {
+        return "Only WH architecture is supported for DRAM optimized program";
+    }
+
     if (operation_attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
         return "Subtile broadcast type is not supported for DRAM optimized program";
     }
@@ -478,13 +405,6 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
         return "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id";
     }
 
-    /*
-    The problem: that "optimal DRAM bank → logical worker" mapping is a fixed physical layout. When dispatch_core_axis =
-    COL, the fast‑dispatch firmware reserves a column of Tensix cores; if any of the DRAM‑bank‑adjacent workers happen
-    to land in that reserved column, the subsequent CreateKernel placement collides with a dispatch core and
-    ProgramImpl::compile fatally asserts. In the ROW configuration those same workers are outside the dispatch row, so
-    the identical program compiles fine. That's exactly why only the COL parametrization fails.
-    */
     if (!operation_attributes.memory_config.is_dram()) {
         return "Memory config must be DRAM";
     }
@@ -526,30 +446,14 @@ std::optional<std::string> BinaryNgDramOptimizedProgram::validate_program(
         return "Sub core grids are not supported for DRAM optimized program";
     }
 
-    // TODO: Fow now add support for interleaved tensors only
     if (a.memory_config().is_sharded() || b.memory_config().is_sharded()) {
         return "Sharded memory is not supported for DRAM optimized program";
     }
-    // if ((a.memory_config().is_sharded() && !b.memory_config().is_sharded()) ||
-    //     (!a.memory_config().is_sharded() && b.memory_config().is_sharded())) {
-    //     return "Input tensors A and B must be either both sharded or both interleaved";
-    // }
-
-    // if (a.memory_config().is_sharded() && b.memory_config().is_sharded()) {
-    //     if (a.memory_config().shard_spec().has_value() && b.memory_config().shard_spec().has_value()) {
-    //         if (a.memory_config().shard_spec()->grid != b.memory_config().shard_spec()->grid) {
-    //             return "Input tensors A and B must have the same shard spec";
-    //         }
-    //     } else if (a.memory_config().nd_shard_spec().has_value() && b.memory_config().nd_shard_spec().has_value()) {
-    //         if (a.memory_config().nd_shard_spec()->grid != b.memory_config().nd_shard_spec()->grid) {
-    //             return "Input tensors A and B must have the same ND shard spec";
-    //         }
-    //     }
-    // }
 
     if (operation_attributes.is_where_op) {
         return "Where op is not supported for DRAM optimized program";
     }
+
     return std::nullopt;
 }
 
@@ -558,14 +462,12 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     auto op_type = operation_attributes.binary_op_type;
     const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
-    // const bool is_where_op = operation_attributes.is_where_op;
 
     using namespace tt;
     using namespace tt::tt_metal;
 
-    // std::map<CoreCoord, bool> swap_noc_cores_map;
     //  auto dram_optimal_cores = CMAKE_UNIQUE_NAMESPACE::get_dram_optimal_cores(args.input_tensor_a.device());
-    auto [dram_optimal_cores, swap_noc_cores_map] = CMAKE_UNIQUE_NAMESPACE::double_dram_core_coords();
+    auto dram_optimal_cores = CMAKE_UNIQUE_NAMESPACE::get_optimal_wh_dram_core_coords(1);
 
     Program program{};
     auto dtype = tt_metal::datatype_to_dataformat_converter(args.input_tensor_a.dtype());
@@ -582,31 +484,10 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     const auto c_data_format = datatype_to_dataformat_converter(output.dtype());
     bool fp32_dest_acc_en = is_fp32_dest_acc_en(dtype, b_data_format, c_data_format);
 
-    /*
-    WH NOC_MAX_BURST_SIZE = 8192 bytes (single‑packet limit).
-    For bf8: single_tile_size = 1088 → num_tiles_per_batch = 8192/1088 = 7. ✓
-    But large_chunk = num_batches * num_tiles_per_batch = 2 * 7 = 14 tiles = 15232 bytes — exceeds 8192 bytes. ✗
-    The reader issues a single noc_async_read_one_packet for the whole large_chunk (see lines 97, 101‑102 of
-    reader_interleaved_dram_optimized.cpp), but the API docstring says:
-
-    Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE.
-
-    When the size exceeds the burst limit, the NOC transfers at most one burst worth and leaves the rest undefined. So
-    for bf8 on WH, tiles 7‑13 of every large_chunk contain stale CB contents, which gets added to the matmul result →
-    0.958 PCC.
-
-    This would also be broken on bf16 (4*2=8 tiles = 16384 bytes > 8192), but
-    test_addmm_square_matrices[matrix_size=512-dtype=bfloat16] was never actually run in your last session — only the
-    bf8 case was.
-
-    The writer has a different pattern — it issues n_tiles_proc separate noc_async_write(... tile_size ...) calls in a
-    loop (line 48‑51), so it's fine.
-    */
-
     const uint32_t num_tiles_per_batch =
         CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, args, output);
 
-    const uint32_t num_tiles_per_cb = 3 * num_tiles_per_batch;  // triple buffering
+    const uint32_t num_tiles_per_cb = 3 * num_tiles_per_batch;
 
     auto [a_tensor_cb, a_tensor_cb_handle] =
         create_cb(tt::CBIndex::c_0, program, dram_optimal_cores, single_tile_size, num_tiles_per_cb, dtype);
@@ -638,7 +519,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
-            .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC,  // DM_DYNAMIC_NOC
+            .noc_mode = tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_compile_time_vec,
             .defines = reader_defines,
         });
@@ -764,9 +645,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     std::vector<uint32_t> compute_compile_time_vec = {};
     std::string compute_kernel_path = operation_attributes.is_sfpu ? "compute/eltwise_binary_sfpu_dram_optimized.cpp"
                                                                    : "compute/eltwise_binary_dram_optimized.cpp";
-    // if (operation_attributes.is_where_op) {
-    //     compute_kernel_path = "compute/where_compute_kernel.cpp";
-    // }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (is_sfpu_op) {
@@ -786,12 +664,6 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         }
     }
 
-    log_info(tt::LogOp, "compute_kernel_defines: {}", compute_kernel_defines);
-    log_info(tt::LogOp, "num_tiles_per_batch : {}", num_tiles_per_batch);
-    log_info(tt::LogOp, "fp32_dest_acc_en : {}", fp32_dest_acc_en);
-    // Same config for sfpu and fpu kernels?
-    // MATH fidelity? ????
-    //  math_approx_mode ???
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         kernel_prefix + compute_kernel_path,
@@ -813,8 +685,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
         writer_kernel_id,
         compute_kernel_id,
         dram_optimal_cores,
-        num_tiles_per_batch,
-        swap_noc_cores_map);
+        num_tiles_per_batch);
     return {
         std::move(program),
         {reader_kernel_id,
@@ -836,8 +707,6 @@ void BinaryNgDramOptimizedProgram::override_runtime_arguments(
     Tensor& tensor_return_value) {
     const auto& sh_var = cached_program.shared_variables;
 
-    auto [_, swap_noc_cores_map] = CMAKE_UNIQUE_NAMESPACE::double_dram_core_coords();
-
     CMAKE_UNIQUE_NAMESPACE::set_eltwise_binary_runtime_args_for_dram_cores<false>(
         cached_program.program,
         tensor_args.input_tensor_a,
@@ -847,7 +716,6 @@ void BinaryNgDramOptimizedProgram::override_runtime_arguments(
         sh_var.writer_kernel_id,
         sh_var.eltwise_kernel_id,
         sh_var.dram_device_cores,
-        CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, tensor_args, tensor_return_value),
-        swap_noc_cores_map);
+        CMAKE_UNIQUE_NAMESPACE::compute_num_tiles_per_batches(operation_attributes, tensor_args, tensor_return_value));
 }
 }  // namespace ttnn::operations::binary_ng::program
