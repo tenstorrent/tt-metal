@@ -164,17 +164,24 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         slice_block_rows = 1U;
 
     // Named sizes for the cb_scan layout.
+    const uint32_t dram_align_bytes = tt::tt_metal::hal::get_dram_alignment();
     // Stage scratch must hold the offsets DMA write of size off_page_bytes
     // = round_up((e_local+1)*4, kL1_ALIGN). Pin a 128 B floor so leids_buf
     // stays at a stable offset for small e_local.
     uint32_t off_page_bytes_host = tt::round_up((e_local + 1U) * sizeof(uint32_t), kL1_ALIGN);
     uint32_t kStageBytes = std::max<uint32_t>(off_page_bytes_host, 128U);
-    // leids_buf must match the TensorAccessor's aligned page for the leids
-    // tensor (L1-aligned uint16 bytes). 32B floor for small e_local.
-    uint32_t leids_aligned_page_host = tt::round_up(e_local * sizeof(uint16_t), kL1_ALIGN);
+    // leids_buf must match the kernel TensorAccessor's aligned page for the
+    // leids tensor. On BH this is DRAM-aligned (64B), and using only the L1
+    // alignment places shared_local_counts on top of the private counts array.
+    uint32_t leids_aligned_page_host = tt::round_up(e_local * sizeof(uint16_t), dram_align_bytes);
     uint32_t kLeidsBufBytes = std::max<uint32_t>(leids_aligned_page_host, 32U);
     constexpr uint32_t kPlanChunk = 32U;      // plan pre-fill burst size (entries per chunk)
-    constexpr uint32_t kMdAlignedPage = 32U;  // metadata aligned page size (one cache line)
+    // Metadata / scores aligned page = round_up(K * sizeof(uint16), DRAM_ALIGNMENT). DRAM alignment
+    // is arch-specific (32 B on WH, 64 B on BH) and must match the TensorAccessor's AlignedPageSize
+    // computed kernel-side — otherwise cb_scan is undersized and md_block / sc_block writes overflow
+    // into plan_stage / gs_stage / ks_stage, corrupting the NOC staging buffers that publish
+    // offsets/counts/plan to DRAM.
+    const uint32_t kMdAlignedPage = tt::round_up(k * sizeof(uint16_t), dram_align_bytes);
     constexpr uint32_t kOverheadSlack = 64U;  // safety pad between sections (covers alignment carry-over)
     // counts(e_local) + offsets(e_local+1) + cursors(e_local) = 3*e_local + 1 uint32 entries.
     constexpr uint32_t kHeaderU32PerExpert = 3U;
