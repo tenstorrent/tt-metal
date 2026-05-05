@@ -381,7 +381,7 @@ jobs:
       - name: 📀 Install vLLM
         run: |
           {
-            uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+            VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
             if [ -d vllm/plugins/vllm-tt-plugin ]; then
               uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
             fi
