@@ -57,6 +57,9 @@ try:
     PreferredPrecision = _cpp_autograd.PreferredPrecision
     Tensor = _cpp_autograd.Tensor
     create_tensor = _cpp_autograd.create_tensor
+    # Identity autograd op used by FSDP to fire backward-pre / backward-post
+    # hooks at the right topological position.
+    callback = _cpp_autograd.callback
 
 except ImportError:
     # C++ bindings not available yet (e.g., during build)
@@ -78,5 +81,6 @@ __all__ = [
     "ParallelismContext",
     "PreferredPrecision",
     "Tensor",
+    "callback",
     "create_tensor",
 ]
