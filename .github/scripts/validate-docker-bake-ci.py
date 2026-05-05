@@ -12,7 +12,7 @@ import sys
 BAKE_FILE = "dockerfile/docker-bake.hcl"
 HARBOR_PREFIX = "harbor.ci.tenstorrent.net/"
 REPO = "ghcr.io/tenstorrent/tt-metal"
-BAKE_OUTPUT = "type=image,push=true"
+BAKE_OUTPUT = "type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"
 
 
 TOOL_TAGS = {
@@ -31,6 +31,35 @@ VENV_TAGS = {
     "ci-build-venv": f"{REPO}/tt-metalium/python-venv/ci-build:test",
     "ci-test-venv": f"{REPO}/tt-metalium/python-venv/ci-test:test",
 }
+
+
+def _parse_output_kvs(spec: str) -> dict[str, str]:
+    """Parse 'type=image,push=true,...' into a dict of lowercase string values."""
+    return {k: v.lower() for k, v in (kv.split("=", 1) for kv in spec.split(","))}
+
+
+def output_matches(actual: list | None, expected: str) -> bool:
+    """Return True if *actual* from --print JSON matches *expected*.
+
+    Docker Buildx may render the output field in several ways depending on version:
+      - String list  : ["type=image,push=true,..."]          (older Buildx)
+      - CSV-split    : ["type=image", "push=true", ...]      (--set splits on commas)
+      - Object list  : [{"type": "image", "push": True, ...}] (newer Buildx)
+    """
+    if not actual:
+        return False
+    # Exact string match (oldest format)
+    if actual == [expected]:
+        return True
+    # CSV-split: --set may split the comma-separated value into individual list items
+    if actual == expected.split(","):
+        return True
+    # Parsed-object format: newer Buildx emits a dict per output spec
+    if len(actual) == 1 and isinstance(actual[0], dict):
+        expected_kv = _parse_output_kvs(expected)
+        actual_kv = {k: str(v).lower() for k, v in actual[0].items()}
+        return actual_kv == expected_kv
+    return False
 
 
 def harbor_prefixed(image: str, prefix: str = HARBOR_PREFIX) -> str:
@@ -133,8 +162,11 @@ def main() -> int:
         target = targets[name]
         if not target.get("tags"):
             raise AssertionError(f"{name} has no tag after CI overrides")
-        if target.get("output") != [BAKE_OUTPUT]:
-            raise AssertionError(f"{name} output override was not preserved")
+        if not output_matches(target.get("output"), BAKE_OUTPUT):
+            raise AssertionError(
+                f"{name} output override was not preserved "
+                f"(got {target.get('output')!r})"
+            )
         for context in target.get("contexts", {}).values():
             if context.startswith("docker-image://") and HARBOR_PREFIX not in context:
                 raise AssertionError(
