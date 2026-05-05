@@ -164,11 +164,8 @@ class TtAceStepPatchEmbed1D(nn.Module):
         if int(hidden_states.shape[-1]) != self.in_channels:
             raise ValueError(f"Expected in_channels={self.in_channels}, got C={hidden_states.shape[-1]}")
 
-        meta = _pad_seq_len_to_patch_size(hidden_states, self.patch_size, value=0.0)
-        if meta.pad_length:
-            hs4 = ttnn.unsqueeze(hidden_states, 1)
-            hs4 = ttnn.pad(hs4, padding=((0, 0), (0, 0), (0, meta.pad_length), (0, 0)), value=0.0)
-            hidden_states = ttnn.squeeze(hs4, 1)
+        meta = _patchify_pad_meta(int(hidden_states.shape[1]), self.patch_size)
+        hidden_states = _pad_seq_len_to_patch_size(hidden_states, self.patch_size, value=0.0)
 
         batch_size = int(hidden_states.shape[0])
         input_length = int(hidden_states.shape[1])
