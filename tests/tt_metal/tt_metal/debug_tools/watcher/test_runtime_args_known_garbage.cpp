@@ -256,7 +256,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
             .work_units = {wu},
             ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
     };
 
     // Helper to set runtime arguments (per-node varargs + common varargs) on the active program
@@ -420,7 +420,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
             .work_units = {wu},
             ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
         experimental::metal2_host_api::ProgramRunParams params_m2;
         experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = OOB_KERNEL_NAME};
@@ -509,7 +509,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
         .work_units = {wu},
         ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
     };
-    program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::metal2_host_api::ProgramRunParams params;
     experimental::metal2_host_api::ProgramRunParams::KernelRunParams krp{.kernel_spec_name = MULTI_DM_KERNEL_NAME};

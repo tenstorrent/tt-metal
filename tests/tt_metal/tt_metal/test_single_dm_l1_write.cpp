@@ -78,7 +78,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {{

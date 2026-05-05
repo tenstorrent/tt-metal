@@ -104,7 +104,7 @@ static void RunTest(
                             .work_units = {wu},
                             ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
                         };
-                        program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+                        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
                     } else {
                         DataMovementConfig dm_config{};
                         dm_config.processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type);
@@ -135,7 +135,7 @@ static void RunTest(
                             .kernels = {assert_kernel_spec},
                             .work_units = {wu},
                         };
-                        program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+                        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
                     } else {
                         assert_kernel = CreateKernel(
                             program,

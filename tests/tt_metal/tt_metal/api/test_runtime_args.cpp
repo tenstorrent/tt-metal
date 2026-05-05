@@ -221,7 +221,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
         .kernels = kernel_specs,
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     workload.add_program(device_range, std::move(program));
     return {std::move(workload), kernel_names};

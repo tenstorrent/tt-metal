@@ -237,7 +237,7 @@ void RunTestOnCore(
                 .work_units = {wu},
                 ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
             };
-            program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+            program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
             // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
             noc = 0;

@@ -125,7 +125,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             .work_units = {wu},
             ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
         experimental::metal2_host_api::ProgramRunParams params;
         params.kernel_run_params = {

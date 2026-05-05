@@ -111,7 +111,7 @@ protected:
                 .kernels = {dm_kernel_spec},
                 .work_units = {main_wu},
             };
-            program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+            program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device_, spec);
 
             experimental::metal2_host_api::ProgramRunParams params;
             params.kernel_run_params = {{

@@ -74,7 +74,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSemaphores) {
         .semaphores = {sem},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {{
@@ -198,7 +198,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDmAndComputeKernelSemaphores) {
         .semaphores = {sem},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     const uint32_t base_src_l1_address = l1_address + 4 * sizeof(uint32_t);
     const uint32_t base_dst_l1_address = base_src_l1_address + 4 * sizeof(uint32_t);
@@ -335,7 +335,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
         .semaphores = {sem0_spec, sem1_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {
@@ -531,7 +531,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .semaphores = {sem_core_0_spec, sem_cross_spec, sem0_core_1_spec, sem1_core_1_spec},
         .work_units = {wu_core_0, wu_core_1},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {

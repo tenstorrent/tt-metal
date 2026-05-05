@@ -122,7 +122,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         .semaphores = {sem},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     const char* dram_to_l1_names[] = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2};
     const char* l1_to_dram_names[] = {L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2};

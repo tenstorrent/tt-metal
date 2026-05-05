@@ -111,7 +111,7 @@ void RunOneTest(
             .work_units = {wu},
             ._unsafe_disable_dm0_dm1_reservation_for_bob = true,
         };
-        Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+        Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
         workload.add_program(device_range, std::move(program));
     } else {
         // BH/WH legacy path

@@ -87,7 +87,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         .kernels = {k0, k1, k2, k3},
         .work_units = {wu_core0, wu_core1},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {

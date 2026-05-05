@@ -73,7 +73,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {{
@@ -149,7 +149,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(spec);
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::metal2_host_api::ProgramRunParams params;
     params.kernel_run_params = {{
@@ -211,5 +211,5 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
         .work_units = {main_wu},
     };
 
-    ASSERT_THROW(experimental::metal2_host_api::MakeProgramFromSpec(spec), std::runtime_error);
+    ASSERT_THROW(experimental::metal2_host_api::MakeProgramFromSpec(*devices_[0], spec), std::runtime_error);
 }

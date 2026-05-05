@@ -983,13 +983,13 @@ TEST_F(ProgramSpecTestQuasar, UnsafeDisableDMReservationToggleLiftsCapsForBob) {
 
         // Toggle off: rejected.
         EXPECT_THAT(
-            [&] { MakeProgramFromSpec(spec); },
+            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
             ::testing::ThrowsMessage<std::runtime_error>(
                 ::testing::HasSubstr("KernelSpec 'dm_kernel' has too many data movement threads")));
 
         // Toggle on: accepted.
         spec._unsafe_disable_dm0_dm1_reservation_for_bob = true;
-        EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+        EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
     }
 
     // Per-WorkUnit cap: two 4-thread DM kernels (each below the per-kernel cap; total 8 above the
@@ -1002,13 +1002,13 @@ TEST_F(ProgramSpecTestQuasar, UnsafeDisableDMReservationToggleLiftsCapsForBob) {
 
         // Toggle off: rejected.
         EXPECT_THAT(
-            [&] { MakeProgramFromSpec(spec); },
+            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
             ::testing::ThrowsMessage<std::runtime_error>(
                 ::testing::HasSubstr("WorkUnitSpec 'work_unit' requests 8 data movement cores")));
 
         // Toggle on: accepted.
         spec._unsafe_disable_dm0_dm1_reservation_for_bob = true;
-        EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+        EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
     }
 }
 
