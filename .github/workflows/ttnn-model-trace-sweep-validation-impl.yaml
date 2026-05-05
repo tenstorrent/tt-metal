@@ -610,13 +610,92 @@ jobs:
           path: validation_summary.md
           retention-days: 7
 
-  upload-results:
-    name: Upload sweep results to SFTP server
-    needs: [run-sweeps-with-tracer]
+  homogenize-validation-results:
+    name: Homogenize validation results
+    needs: [build-artifact, run-sweeps-with-tracer]
     if: |
       !cancelled() &&
       inputs.upload-results &&
       (needs.run-sweeps-with-tracer.result == 'success' || needs.run-sweeps-with-tracer.result == 'failure')
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Download all sweep results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sweeps-results-*
+          path: /work/tests/sweep_framework/results_export
+          merge-multiple: true
+
+      - name: Homogenize sweep results
+        env:
+          MODELS_FILTER: ${{ inputs.models-filter }}
+          SCOPE_TARGET: ${{ inputs.scope-targets }}
+        run: |
+          # The validation workflow tags every batch's oprun_*.json with one
+          # shared run identity so Superset groups them as a single row.
+          # When the user supplied --models-filter, use it as run_contents
+          # (e.g. "flux_1_dev" or "flux_1_dev,whisper"). Otherwise fall back
+          # to the scope-targets-derived run-type label.
+          RUN_TYPE="model_traced"
+          if [[ "$SCOPE_TARGET" == "lead_models" ]]; then
+            RUN_TYPE="lead_models"
+          fi
+
+          CMD=(
+            python3 tests/sweep_framework/run_collective_update.py
+            --run-type "$RUN_TYPE"
+          )
+
+          # Normalize models-filter (strip whitespace around commas) before
+          # using it verbatim as run_contents.
+          NORMALIZED_FILTER="$(echo "$MODELS_FILTER" | tr -d '[:space:]')"
+          if [[ -n "$NORMALIZED_FILTER" ]]; then
+            CMD+=(--run-contents "$NORMALIZED_FILTER")
+          fi
+
+          "${CMD[@]}"
+
+      - name: Upload homogenized run results
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sweeps-run-result
+          path: /work/tests/sweep_framework/results_export/oprun_*.json
+          retention-days: 7
+
+  upload-results:
+    name: Upload sweep results to SFTP server
+    needs: [homogenize-validation-results]
+    if: |
+      !cancelled() &&
+      inputs.upload-results &&
+      needs.homogenize-validation-results.result == 'success'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
@@ -625,12 +704,11 @@ jobs:
           sparse-checkout: |
             .github/actions
 
-      - name: Download sweep results
+      - name: Download homogenized sweep results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: sweeps-results-*
+          name: sweeps-run-result
           path: tests/sweep_framework/results_export
-          merge-multiple: true
 
       - name: List all downloaded files
         run: |

@@ -243,7 +243,11 @@ def find_op_run_files(directory: pathlib.Path) -> List[pathlib.Path]:
     return files
 
 
-def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly") -> Dict[str, Any]:
+def extract_common_metadata(
+    files: List[pathlib.Path],
+    run_type: str = "nightly",
+    run_contents_override: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Extract common metadata from all files and determine the earliest start
     and latest end timestamps.
@@ -253,6 +257,9 @@ def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly"
     Args:
         files: List of file paths to process
         run_type: Type of run - "nightly", "comprehensive", "model_traced", or "lead_models"
+        run_contents_override: If non-empty, used verbatim as ``run_contents``
+            (bypasses the run_type → label mapping). Used by validation
+            workflows to tag the run with the user-supplied models filter.
 
     Returns a dict with the common values and computed timestamps.
     """
@@ -313,8 +320,9 @@ def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly"
     if latest_end:
         common_metadata["run_end_ts"] = datetime_to_str(latest_end)
 
-    # Set run_contents based on run type
-    if run_type == "comprehensive":
+    if run_contents_override:
+        common_metadata["run_contents"] = run_contents_override
+    elif run_type == "comprehensive":
         common_metadata["run_contents"] = "comprehensive"
     elif run_type == "model_traced":
         common_metadata["run_contents"] = "model traced"
@@ -326,7 +334,12 @@ def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly"
     return common_metadata
 
 
-def update_op_run_files(directory: pathlib.Path, dry_run: bool = False, run_type: str = "nightly") -> None:
+def update_op_run_files(
+    directory: pathlib.Path,
+    dry_run: bool = False,
+    run_type: str = "nightly",
+    run_contents_override: Optional[str] = None,
+) -> None:
     """
     Update all op_run*.json files in the directory with common metadata.
 
@@ -334,6 +347,7 @@ def update_op_run_files(directory: pathlib.Path, dry_run: bool = False, run_type
         directory: Path to the directory containing op_run*.json files
         dry_run: If True, only print what would be changed without modifying files
         run_type: Type of run - "nightly", "comprehensive", "model_traced", or "lead_models"
+        run_contents_override: If non-empty, used verbatim as ``run_contents``
     """
     # Find all op_run*.json files
     files = find_op_run_files(directory)
@@ -347,9 +361,8 @@ def update_op_run_files(directory: pathlib.Path, dry_run: bool = False, run_type
         print(f"  - {f.name}")
     print()
 
-    # Extract common metadata and compute timestamps
     try:
-        common_metadata = extract_common_metadata(files, run_type)
+        common_metadata = extract_common_metadata(files, run_type, run_contents_override)
     except Exception as e:
         print(f"Error extracting metadata: {e}")
         return
@@ -406,6 +419,17 @@ def main():
         default="nightly",
         help="Type of run: 'nightly', 'comprehensive', 'model_traced', or 'lead_models' (default: nightly)",
     )
+    parser.add_argument(
+        "--run-contents",
+        type=str,
+        default=None,
+        help=(
+            "Override the ``run_contents`` metadata field with this exact string. "
+            "When set, takes precedence over the --run-type → label mapping. "
+            "Useful for validation workflows that want to tag the run with the "
+            "user-supplied models filter (e.g. 'flux_1_dev' or 'flux_1_dev,whisper')."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -424,9 +448,13 @@ def main():
         print(f"Error: '{args.directory}' is not a directory")
         sys.exit(1)
 
-    # Run the update
     try:
-        update_op_run_files(args.directory, dry_run=args.dry_run, run_type=args.run_type)
+        update_op_run_files(
+            args.directory,
+            dry_run=args.dry_run,
+            run_type=args.run_type,
+            run_contents_override=args.run_contents,
+        )
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
