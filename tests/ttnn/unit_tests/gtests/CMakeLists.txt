@@ -6,11 +6,16 @@ add_library(test_common_utils STATIC)
 # symbols when the final executable links both the OBJECT library and this
 # static lib).
 target_sources(test_common_utils PRIVATE common_test_utils.cpp)
+# common_test_utils.cpp #includes <gtest/gtest.h> directly, so the static lib
+# needs the gtest include path. gmock_main brings gtest in via its INTERFACE
+# deps. Without this, fresh Blackhole builds fail with "gtest/gtest.h not
+# found" because TTNN::CPP / TTNN::PCH do not transitively expose gtest.
 target_link_libraries(
     test_common_utils
     PRIVATE
         test_common_libs
         TTNN::CPP
+        gmock_main
 )
 tt_reuse_precompile_headers(test_common_utils TTNN::PCH)
 
