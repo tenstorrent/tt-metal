@@ -429,7 +429,7 @@ find_program(
     REQUIRED
 )
 
-set(KISSAT_EXT_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/kissat_build")
+set(KISSAT_EXT_BUILD_DIR "${kissat_SOURCE_DIR}/build")
 include(ExternalProject)
 ExternalProject_Add(
     kissat_external
@@ -440,7 +440,7 @@ ExternalProject_Add(
     UPDATE_COMMAND
         ""
     CONFIGURE_COMMAND
-        "${CMAKE_COMMAND}" -E chdir "${KISSAT_EXT_BUILD_DIR}" "${CMAKE_COMMAND}" -E env "CC=${CMAKE_C_COMPILER}" sh
+        "${CMAKE_COMMAND}" -E chdir "${kissat_SOURCE_DIR}" "${CMAKE_COMMAND}" -E env "CC=${CMAKE_C_COMPILER}" sh
         "${kissat_SOURCE_DIR}/configure" -fPIC
     BUILD_COMMAND
         "${CMAKE_COMMAND}" -E chdir "${KISSAT_EXT_BUILD_DIR}" ${KISSAT_GNU_MAKE} -j4 libkissat.a
