@@ -2153,12 +2153,18 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         dimensions: tuple[int, int],
         data_format: DataFormat,
         skip_tilize: bool = False,
+        input_format: DataFormat = None,
     ):
         if operation not in self.ops:
             raise ValueError(f"Unsupported SFPU operation: {operation}")
 
         if num_iterations < 1:
             raise ValueError(f"num_iterations must be at least 1, got {num_iterations}")
+
+        # Quantize MX inputs through pack/unpack round-trip so the golden
+        # operates on the same values hardware sees after unpack.
+        if input_format is not None and input_format.is_mx_format():
+            tensor = quantize_mx_tensor_chunked(tensor, input_format)
 
         total_elements = dimensions[0] * dimensions[1]
         elements_per_tile = ELEMENTS_PER_TILE

@@ -129,6 +129,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                         "FILL value {} out of range for UInt16",
                         as_int);
                     fill_val = static_cast<std::uint32_t>(as_int);
+                } else if (input_dtype == DataType::INT32) {
+                    // Cast through int32_t first: direct float-to-uint32_t cast is UB for
+                    // negative values and yields 0 on x86/LLVM (e.g. -29.5 -> 0, not -29).
+                    fill_val = static_cast<std::uint32_t>(static_cast<std::int32_t>(param0_raw));
                 } else {
                     fill_val = static_cast<std::uint32_t>(param0_raw);
                 }

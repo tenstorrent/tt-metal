@@ -156,11 +156,6 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 // Also emits get_vararg() / get_common_vararg() helpers with the named-args offset baked
 // in, so that vararg indices in kernel code are stable across schema changes.
 //
-// The generated header itself is never hashed; the kernel cache key is derived in
-// Kernel::compute_hash() from the input data (kernel source, schema, CTA bindings, etc).
-// So we don't need to massage the generation order for hash stability — we just emit what
-// we're given.
-//
 // NOTE: This is only invoked for Metal 2.0 kernels created via the new host API.
 //       Legacy kernels do not get kernel_args_generated.h.
 void write_kernel_args_generated_header(const std::filesystem::path& out_dir, const JitBuildSettings& settings) {
@@ -171,8 +166,9 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const vector<string>& crta_names = settings.get_named_common_runtime_args();
 
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
-    // The order in which we emit them doesn't matter: CTA values are baked into the header
-    // as independent constexpr constants; they don't affect RTA/CRTA byte offsets.
+    // The order in which we emit them DOES matter!
+    // We sort them to ensure the file output is deterministic for the JIT build cache
+    // (aka the on-disk per-object dephash cache)
     vector<pair<string, uint32_t>> cta_entries;
     settings.process_named_compile_time_args(
         [&cta_entries](const std::unordered_map<std::string, uint32_t>& named_args) {
@@ -180,6 +176,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
                 cta_entries.emplace_back(name, value);
             }
         });
+    sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
