@@ -217,7 +217,8 @@ def get_main_proc_only(test_module_name):
                         value = parts[1].split("#", 1)[0].strip()
                         return value.lower() in ("true", "1", "yes")
     except OSError:
-        pass
+        # Best-effort detection: if the file cannot be read, default to False.
+        return False
     return False
 
 
