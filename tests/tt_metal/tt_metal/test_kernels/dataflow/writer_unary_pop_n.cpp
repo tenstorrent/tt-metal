@@ -11,15 +11,23 @@
 #include "api/dataflow/endpoints.h"
 
 void kernel_main() {
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
+#ifdef ARCH_QUASAR
+    uint32_t dst_addr = get_vararg(0);
+    uint32_t dst_dram_bank_id = get_vararg(1);
+    uint32_t num_tiles = get_vararg(2);
+    uint32_t ublock_size_tiles = get_vararg(4);
+    bool writer_only = get_vararg(5);
+#else
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t dst_dram_bank_id = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
     uint32_t cb_id_out0 = get_arg_val<uint32_t>(3);
     uint32_t ublock_size_tiles = get_arg_val<uint32_t>(4);
     bool writer_only = get_arg_val<uint32_t>(5);
+#endif
 
 #ifdef ARCH_QUASAR
-    DataflowBuffer dfb(cb_id_out0);
+    DataflowBuffer dfb(dfb::in);
     uint32_t ublock_size_bytes = dfb.get_entry_size() * ublock_size_tiles;
 #else
     CircularBuffer cb(cb_id_out0);
