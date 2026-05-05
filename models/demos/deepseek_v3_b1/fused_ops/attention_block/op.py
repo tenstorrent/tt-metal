@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_a
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_gather.op import AllGatherConfig
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
+from models.demos.deepseek_v3_b1.micro_ops.distributed_create_q_heads.op import DistributedCreateQHeads
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     FlashMLADecode,
     get_max_page_size_and_num_pages,
@@ -505,6 +506,30 @@ class AttentionBlock:
                 )
             ]
         )
+        # CreateQHeads helper grids are hardcoded inside DistributedCreateQHeads
+        # (see NOPE_HELPER_GRID_* / ROPE_HELPER_GRID_* class constants). Sourcing
+        # them from a single place keeps the layout in sync with the helper
+        # row formulas used by the kernel and the standalone micro-op.
+        create_q_heads_nope_helper_grid = DistributedCreateQHeads.nope_helper_grid()
+        create_q_heads_rope_helper_grid = DistributedCreateQHeads.rope_helper_grid()
+        create_q_heads_nope_helper_cores = DistributedCreateQHeads.nope_helper_cores()
+        create_q_heads_rope_helper_cores = DistributedCreateQHeads.rope_helper_cores()
+
+        # The helper grids must not collide with the FlashMLA SDPA compute grid:
+        # NOPE helpers live in cols 0-3 (rows 5-6 are unused by FlashMLA blocks
+        # S1-S4 which only use rows 0-4 + 7-9), and ROPE helpers live in col 11
+        # which FlashMLA does not use. Catch any future drift in the constants.
+        flash_mla_grid = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
+                for block_cores, _ in FlashMLADecode.ProgramConfig.grid.BLOCKS
+                for (x, y) in block_cores
+            ]
+        )
+        helper_grid = DistributedCreateQHeads.helper_grid()
+        assert not helper_grid.intersects(
+            flash_mla_grid
+        ), f"DistributedCreateQHeads helper grid {helper_grid} overlaps FlashMLA cores {flash_mla_grid}"
 
         # CreateQHeads parameters for 3-phase tilization layout
         COMBINED_HEAD_SIZE = 576  # 512 (QNOPE) + 64 (QROPE) elements per combined head
@@ -1282,6 +1307,8 @@ class AttentionBlock:
         # ========================================================================
         # Get NOC coordinates for all SDPA Input cores (4×2 grid, indexed by source row)
         sdpa_input_noc_coords = []
+        cqh_nope_helper_noc_coords = []
+        cqh_rope_helper_noc_coords = []
         for src_row in range(HEAD_GRID_ROWS):
             # Mapping: target_x = row % 4, target_y = 1 + row // 4
             target_x = SDPA_INPUT_GRID_START_X + (src_row % 4)
@@ -1289,6 +1316,14 @@ class AttentionBlock:
             sdpa_input_logical_core = ttnn.CoreCoord(target_x, target_y)
             sdpa_input_noc_core = device.worker_core_from_logical_core(sdpa_input_logical_core)
             sdpa_input_noc_coords.append((sdpa_input_noc_core.x, sdpa_input_noc_core.y))
+
+            nope_helper_logical_core = create_q_heads_nope_helper_cores[src_row]
+            nope_helper_noc_core = device.worker_core_from_logical_core(nope_helper_logical_core)
+            cqh_nope_helper_noc_coords.append((nope_helper_noc_core.x, nope_helper_noc_core.y))
+
+            rope_helper_logical_core = create_q_heads_rope_helper_cores[src_row]
+            rope_helper_noc_core = device.worker_core_from_logical_core(rope_helper_logical_core)
+            cqh_rope_helper_noc_coords.append((rope_helper_noc_core.x, rope_helper_noc_core.y))
 
         # Common unicast parameters
         head_stride_bytes = COMBINED_HEAD_SIZE * 2  # 576 * 2 = 1152 bytes (2 bytes per bfloat16 element)
@@ -1311,6 +1346,70 @@ class AttentionBlock:
             ("cqh_target_noc_coords_row5", (sdpa_input_noc_coords[5][1] << 16 | sdpa_input_noc_coords[5][0])),
             ("cqh_target_noc_coords_row6", (sdpa_input_noc_coords[6][1] << 16 | sdpa_input_noc_coords[6][0])),
             ("cqh_target_noc_coords_row7", (sdpa_input_noc_coords[7][1] << 16 | sdpa_input_noc_coords[7][0])),
+            (
+                "cqh_nope_helper_noc_coords_row0",
+                (cqh_nope_helper_noc_coords[0][1] << 16 | cqh_nope_helper_noc_coords[0][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row1",
+                (cqh_nope_helper_noc_coords[1][1] << 16 | cqh_nope_helper_noc_coords[1][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row2",
+                (cqh_nope_helper_noc_coords[2][1] << 16 | cqh_nope_helper_noc_coords[2][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row3",
+                (cqh_nope_helper_noc_coords[3][1] << 16 | cqh_nope_helper_noc_coords[3][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row4",
+                (cqh_nope_helper_noc_coords[4][1] << 16 | cqh_nope_helper_noc_coords[4][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row5",
+                (cqh_nope_helper_noc_coords[5][1] << 16 | cqh_nope_helper_noc_coords[5][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row6",
+                (cqh_nope_helper_noc_coords[6][1] << 16 | cqh_nope_helper_noc_coords[6][0]),
+            ),
+            (
+                "cqh_nope_helper_noc_coords_row7",
+                (cqh_nope_helper_noc_coords[7][1] << 16 | cqh_nope_helper_noc_coords[7][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row0",
+                (cqh_rope_helper_noc_coords[0][1] << 16 | cqh_rope_helper_noc_coords[0][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row1",
+                (cqh_rope_helper_noc_coords[1][1] << 16 | cqh_rope_helper_noc_coords[1][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row2",
+                (cqh_rope_helper_noc_coords[2][1] << 16 | cqh_rope_helper_noc_coords[2][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row3",
+                (cqh_rope_helper_noc_coords[3][1] << 16 | cqh_rope_helper_noc_coords[3][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row4",
+                (cqh_rope_helper_noc_coords[4][1] << 16 | cqh_rope_helper_noc_coords[4][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row5",
+                (cqh_rope_helper_noc_coords[5][1] << 16 | cqh_rope_helper_noc_coords[5][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row6",
+                (cqh_rope_helper_noc_coords[6][1] << 16 | cqh_rope_helper_noc_coords[6][0]),
+            ),
+            (
+                "cqh_rope_helper_noc_coords_row7",
+                (cqh_rope_helper_noc_coords[7][1] << 16 | cqh_rope_helper_noc_coords[7][0]),
+            ),
             ("cqh_head_stride_bytes", head_stride_bytes),
             ("cqh_qnope_data_size_bytes", qnope_data_size_bytes),
             ("cqh_qrope_head_size_bytes", qrope_head_size_bytes),
@@ -3245,6 +3344,18 @@ class AttentionBlock:
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_sdpa_input_core",
                 core_range=sdpa_input_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_cqh_nope_helper_core",
+                core_range=create_q_heads_nope_helper_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_cqh_rope_helper_core",
+                core_range=create_q_heads_rope_helper_grid,
                 value=1,
                 other_value=0,
             ),

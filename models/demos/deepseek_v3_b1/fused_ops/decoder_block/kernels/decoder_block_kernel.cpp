@@ -34,6 +34,7 @@
 #include "../../../unified_kernels/gather_reduce.hpp"
 #include "../../../unified_kernels/kn_sliced_matmul.hpp"
 #include "../../../unified_kernels/create_q_heads.hpp"
+#include "../../../unified_kernels/distributed_create_q_heads.hpp"
 #include "../../../unified_kernels/rope.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
 #include "../../../unified_kernels/kv_cache_update.hpp"
@@ -77,6 +78,8 @@ struct Core {
     static constexpr bool is_qrope_core = get_named_compile_time_arg_val("is_qrope_core") == 1;
     // SDPA Input core: receives interleaved QNOPE/QROPE, runs create q heads (4×2 grid = 8 cores)
     static constexpr bool is_sdpa_input_core = get_named_compile_time_arg_val("is_sdpa_input_core") == 1;
+    static constexpr bool is_cqh_nope_helper_core = get_named_compile_time_arg_val("is_cqh_nope_helper_core") == 1;
+    static constexpr bool is_cqh_rope_helper_core = get_named_compile_time_arg_val("is_cqh_rope_helper_core") == 1;
 
     // DKV Matmul core: 9x2 grid, each core handles 1 head of 32 dim
     static constexpr bool is_dkv_matmul_core = get_named_compile_time_arg_val("is_dkv_matmul_core") == 1;
@@ -244,15 +247,14 @@ void kernel_main() {
         .global_pos = 0,
     };
 
-    // NCRISC: All CreateQHeads data movement (sender on qnope/qrope cores, receiver on sdpa input cores)
+    // NCRISC: Distributed CreateQHeads data movement (senders -> original/helper cores, helpers -> originals)
     constexpr uint32_t cqh_receiver_in_cb = get_named_compile_time_arg_val("cqh_receiver_in_cb");
-    using CreateQHeadsSenderCTArgs = deepseek_b1_ops::CreateQHeads::SenderCTArgs<
+    using CreateQHeadsSenderCTArgs = deepseek_b1_ops::DistributedCreateQHeads::SenderCTArgs<
         get_named_compile_time_arg_val("cqh_qnope_data_size_bytes"),
         get_named_compile_time_arg_val("cqh_qrope_head_size_bytes")>;
-    deepseek_b1_ops::CreateQHeads::SenderArgs create_q_heads_sender_args{
+    deepseek_b1_ops::DistributedCreateQHeads::SenderArgs create_q_heads_sender_args{
         0,  // sender_grid_start_x (logical 0)
         0,  // sender_grid_start_y (logical 0)
-        get_named_compile_time_arg_val("cqh_head_stride_bytes"),
         get_named_compile_time_arg_val("cqh_qnope_cols"),
         get_named_compile_time_arg_val("cqh_qnope_src_cb"),
         get_named_compile_time_arg_val("cqh_qrope_src_cb"),
@@ -271,20 +273,50 @@ void kernel_main() {
             get_named_compile_time_arg_val("cqh_target_noc_coords_row6"),
             get_named_compile_time_arg_val("cqh_target_noc_coords_row7"),
         },
+        {
+            get_named_compile_time_arg_val("cqh_nope_helper_noc_coords_row0"),
+            get_named_compile_time_arg_val("cqh_nope_helper_noc_coords_row1"),
+            get_named_compile_time_arg_val("cqh_nope_helper_noc_coords_row2"),
+            get_named_compile_time_arg_val("cqh_nope_helper_noc_coords_row3"),
+            get_named_compile_time_arg_val("cqh_nope_helper_noc_coords_row4"),
+            get_named_compile_time_arg_val("cqh_nope_helper_noc_coords_row5"),
+            get_named_compile_time_arg_val("cqh_nope_helper_noc_coords_row6"),
+            get_named_compile_time_arg_val("cqh_nope_helper_noc_coords_row7"),
+        },
+        {
+            get_named_compile_time_arg_val("cqh_rope_helper_noc_coords_row0"),
+            get_named_compile_time_arg_val("cqh_rope_helper_noc_coords_row1"),
+            get_named_compile_time_arg_val("cqh_rope_helper_noc_coords_row2"),
+            get_named_compile_time_arg_val("cqh_rope_helper_noc_coords_row3"),
+            get_named_compile_time_arg_val("cqh_rope_helper_noc_coords_row4"),
+            get_named_compile_time_arg_val("cqh_rope_helper_noc_coords_row5"),
+            get_named_compile_time_arg_val("cqh_rope_helper_noc_coords_row6"),
+            get_named_compile_time_arg_val("cqh_rope_helper_noc_coords_row7"),
+        },
         get_write_ptr(cqh_receiver_in_cb),
     };
-    using CreateQHeadsReceiverCTArgs = deepseek_b1_ops::CreateQHeads::ReceiverCTArgs;
-    deepseek_b1_ops::CreateQHeads::ReceiverArgs create_q_heads_receiver_args{
+    deepseek_b1_ops::DistributedCreateQHeads::ReceiverArgs create_q_heads_receiver_args{
         get_named_compile_time_arg_val("cqh_nope_phase1_semaphore_addr"),
         get_named_compile_time_arg_val("cqh_nope_phase2_semaphore_addr"),
         get_named_compile_time_arg_val("cqh_rope_semaphore_addr"),
-        get_named_compile_time_arg_val("cqh_num_nope_senders"),
-        get_named_compile_time_arg_val("cqh_num_rope_senders"),
+        {
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row0"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row1"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row2"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row3"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row4"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row5"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row6"),
+            get_named_compile_time_arg_val("cqh_target_noc_coords_row7"),
+        },
         get_named_compile_time_arg_val("cqh_receiver_in_cb"),
         get_named_compile_time_arg_val("cqh_out_cb"),
         get_named_compile_time_arg_val("cqh_nope_tiles"),
         get_named_compile_time_arg_val("cqh_rope_tiles"),
+        get_named_compile_time_arg_val("cqh_num_nope_senders"),
+        get_named_compile_time_arg_val("cqh_num_rope_senders"),
     };
+    using CreateQHeadsReceiverCTArgs = deepseek_b1_ops::DistributedCreateQHeads::ReceiverCTArgs;
 
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
     using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
@@ -1180,9 +1212,10 @@ void kernel_main() {
         get_common_arg_val<uint32_t>(15),  // qrope_trans_mat_addr
     };
 
-    // CreateQHeads compute args (tilization on SDPA input cores)
-    using CreateQHeadsReceiverCTArgs = deepseek_b1_ops::CreateQHeads::ComputeCTArgs;
-    deepseek_b1_ops::CreateQHeads::ComputeArgs create_q_heads_receiver_args{
+    // CreateQHeads compute args (tilization on SDPA input cores). Same name as
+    // the NCRISC ReceiverArgs so the receiver Op call site is RISC-agnostic.
+    using CreateQHeadsReceiverCTArgs = deepseek_b1_ops::DistributedCreateQHeads::ComputeCTArgs;
+    deepseek_b1_ops::DistributedCreateQHeads::ComputeArgs create_q_heads_receiver_args{
         get_named_compile_time_arg_val("cqh_receiver_in_cb"),
         get_named_compile_time_arg_val("cqh_out_cb"),
         get_named_compile_time_arg_val("cqh_nope_tiles"),
@@ -2402,21 +2435,18 @@ void kernel_main() {
                     DeviceZoneScopedN("CREATE_Q_HEADS");
                     constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
 #if defined(COMPILE_FOR_NCRISC)
-                    deepseek_b1_ops::CreateQHeads::Op<
-                        CreateQHeadsSenderCTArgs,
-                        is_create_q_heads_sender,
-                        Core::is_sdpa_input_core,
-                        true,
-                        false,
-                        true>
-                        create_q_heads_sender;
+                    deepseek_b1_ops::DistributedCreateQHeads::
+                        Op<CreateQHeadsSenderCTArgs, is_create_q_heads_sender, false, false, false, true, false, true>
+                            create_q_heads_sender;
                     create_q_heads_sender(create_q_heads_sender_args);
 #endif
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
-                    deepseek_b1_ops::CreateQHeads::Op<
+                    deepseek_b1_ops::DistributedCreateQHeads::Op<
                         CreateQHeadsReceiverCTArgs,
-                        is_create_q_heads_sender,
+                        false,
                         Core::is_sdpa_input_core,
+                        Core::is_cqh_nope_helper_core,
+                        Core::is_cqh_rope_helper_core,
                         true,
                         false,
                         true>

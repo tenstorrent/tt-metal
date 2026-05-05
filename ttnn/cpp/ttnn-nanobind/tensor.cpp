@@ -603,6 +603,21 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             &CoreRangeSet::merge<CoreRangeSet>,
             nb::arg("other"),
             "Merge this CoreRangeSet with another CoreRangeSet and return the result")
+        .def(
+            "intersects",
+            nb::overload_cast<const CoreCoord&>(&CoreRangeSet::intersects, nb::const_),
+            nb::arg("core"),
+            "Check if a core coordinate intersects with this CoreRangeSet")
+        .def(
+            "intersects",
+            nb::overload_cast<const CoreRange&>(&CoreRangeSet::intersects, nb::const_),
+            nb::arg("core_range"),
+            "Check if a core range intersects with this CoreRangeSet")
+        .def(
+            "intersects",
+            nb::overload_cast<const CoreRangeSet&>(&CoreRangeSet::intersects, nb::const_),
+            nb::arg("core_range_set"),
+            "Check if this CoreRangeSet intersects with another CoreRangeSet")
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
