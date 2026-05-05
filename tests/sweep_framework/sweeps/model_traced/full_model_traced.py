@@ -11,7 +11,6 @@ region path) are exercised, so the master records 4 distinct configurations.
 """
 
 import re
-from typing import Tuple
 
 import torch
 import ttnn
