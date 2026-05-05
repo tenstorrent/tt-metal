@@ -24,8 +24,6 @@ jobs:
     uses: ./.github/workflows/llk-e2e-impl.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      enabled-skus: ALL_SKUS_IN_TESTS
       pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
       coverage: true
 
