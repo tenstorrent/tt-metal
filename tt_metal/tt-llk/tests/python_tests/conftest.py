@@ -45,7 +45,7 @@ from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
-from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
+from helpers.target_config import TestTargetConfig
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
@@ -246,7 +246,7 @@ def pytest_configure(config):
         config.getoption("--speed-of-light", default=False),
     )
 
-    initialize_test_target_from_pytest(config)
+    TestTargetConfig().update_from_pytest_config(config)
 
     TestConfig.setup_mode(
         TestTargetConfig(),
@@ -553,8 +553,7 @@ _reset_simulator_pending = False
 
 def pytest_runtest_teardown(item, nextitem):
     """Mark that a restart is needed before the next test."""
-    test_target = TestTargetConfig()
-    if not test_target.reset_simulator_per_test:
+    if not TestConfig.TEST_TARGET.reset_simulator_per_test:
         return
     if nextitem is None:
         return
@@ -573,12 +572,10 @@ def pytest_runtest_setup(item):
     if _exalens_server is None:
         return
 
-    test_target = TestTargetConfig()
-
     if not _exalens_server.running and not _exalens_server.ever_started:
         _exalens_server.start()
         tt_exalens_init.init_ttexalens_remote(
-            port=test_target.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
         )
     elif not _exalens_server.running:
         logger.error("tt-exalens server is no longer running unexpectedly.")
@@ -588,7 +585,7 @@ def pytest_runtest_setup(item):
         tt_exalens_init.cleanup_global_context()
         _exalens_server.restart()
         tt_exalens_init.init_ttexalens_remote(
-            port=test_target.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
         )
 
 
@@ -596,9 +593,11 @@ def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
 
-    test_target = TestTargetConfig()
-    if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        _send_arc_message("GO_BUSY", test_target.device_id)
+    if (
+        not TestConfig.TEST_TARGET.run_simulator
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
+    ):
+        _send_arc_message("GO_BUSY", TestConfig.TEST_TARGET.device_id)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -637,9 +636,11 @@ def pytest_sessionfinish(session):
     if hasattr(session.config, "workerinput"):
         return
 
-    test_target = TestTargetConfig()
-    if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        _send_arc_message("GO_IDLE", test_target.device_id)
+    if (
+        not TestConfig.TEST_TARGET.run_simulator
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
+    ):
+        _send_arc_message("GO_IDLE", TestConfig.TEST_TARGET.device_id)
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
