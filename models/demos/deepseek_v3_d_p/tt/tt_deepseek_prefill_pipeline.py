@@ -187,6 +187,99 @@ class TtDeepSeekPrefillPipeline:
         )
         self.kv_cache_allocated = True
 
+        # Diagnostic: dump the cache's actual shard layout — both the high-level
+        # memory_config AND the per-page physical (bank_id, core_x, core_y,
+        # page_address) reported by ttnn._ttnn.reports.get_buffer_pages. This
+        # IS the tensor's own source of truth for where each shard physically
+        # lives. Compare these to the migration table entries logged at
+        # [migration][prefill][table][init]:
+        #   table says   (layer=L, pos=P) → (bank_id=B,  noc_addr=base+off)
+        #   tensor says  page_index=K     → (bank_id=B', page_address=A')
+        # If B != B' or noc_addr's local part != A' for the same logical page,
+        # migration is reading from the wrong physical location.
+        try:
+            cache_addr = self.kvpe_cache.buffer_address()
+            print(
+                f"[verify-layout] kvpe_cache shape={self.kvpe_cache.shape} "
+                f"buffer_address={cache_addr} "
+                f"dtype={self.kvpe_cache.dtype} layout={self.kvpe_cache.layout}",
+                flush=True,
+            )
+            print(
+                f"[verify-layout] kvpe_cache memory_config={self.kvpe_cache.memory_config()}",
+                flush=True,
+            )
+
+            # Per-device buffer addresses — KEY DIAGNOSTIC for the migration
+            # poison-bug. The migration table is built from ONE address
+            # (kvpe_cache.buffer_address()), but for a MeshDevice-backed
+            # sharded tensor, each per-device tensor inside the mesh has its
+            # OWN buffer_address that the per-device allocator assigned.
+            # If those addresses are not all equal to cache_addr, the table
+            # is reading from the wrong physical address on devices whose
+            # local buffer_address differs from the mesh-level one.
+            try:
+                device_tensors = ttnn.get_device_tensors(self.kvpe_cache)
+                addr_set = set()
+                for i, dt in enumerate(device_tensors):
+                    try:
+                        dt_addr = dt.buffer_address()
+                        try:
+                            dev_id = dt.device().id() if dt.device() is not None else None
+                        except Exception:
+                            dev_id = None
+                        addr_set.add(dt_addr)
+                        # Print first and last 4, plus any that diverge from cache_addr.
+                        if i < 4 or i >= len(device_tensors) - 4 or dt_addr != cache_addr:
+                            print(
+                                f"[verify-layout] device_tensors[{i}] device_id={dev_id} "
+                                f"buffer_address={dt_addr} (delta vs mesh={dt_addr - cache_addr})",
+                                flush=True,
+                            )
+                    except Exception as e:
+                        print(
+                            f"[verify-layout] device_tensors[{i}] buffer_address FAILED: " f"{type(e).__name__}: {e}",
+                            flush=True,
+                        )
+                print(
+                    f"[verify-layout] PER-DEVICE buffer_address: "
+                    f"{len(addr_set)} unique value(s) across {len(device_tensors)} device tensors. "
+                    f"Mesh-level cache.buffer_address()={cache_addr}. "
+                    f"{'CONSISTENT' if addr_set == {cache_addr} else 'MISMATCH — migration table built from mesh address but per-device addresses differ!'}",
+                    flush=True,
+                )
+            except Exception as e:
+                print(
+                    f"[verify-layout] per-device address dump FAILED: " f"{type(e).__name__}: {e}",
+                    flush=True,
+                )
+            # Per-page physical addresses — the source of truth.
+            try:
+                import ttnn as _ttnn_mod
+
+                all_pages = _ttnn_mod._ttnn.reports.get_buffer_pages(self.mesh_device)
+                # Filter to pages belonging to kvpe_cache (match by buffer base address).
+                cache_pages = [p for p in all_pages if p.address == cache_addr]
+                print(
+                    f"[verify-layout] kvpe_cache has {len(cache_pages)} pages across mesh; "
+                    f"sampling first 16 (and pages whose page_index hits global_pos 0/32/64/96):",
+                    flush=True,
+                )
+                # Sort for determinism: by (device_id, bank_id, page_index)
+                cache_pages.sort(key=lambda p: (p.device_id, p.bank_id, p.page_index))
+                for i, p in enumerate(cache_pages[:16]):
+                    print(
+                        f"[verify-layout] page[{i}]: device_id={p.device_id} "
+                        f"bank_id={p.bank_id} core=({p.core_x},{p.core_y}) "
+                        f"page_index={p.page_index} page_address={p.page_address} "
+                        f"page_size={p.page_size}",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(f"[verify-layout] page dump FAILED: {type(e).__name__}: {e}", flush=True)
+        except Exception as e:
+            print(f"[verify-layout] dump FAILED: {type(e).__name__}: {e}", flush=True)
+
     # ----------------------------------------------------------------
     # Lifecycle
     # ----------------------------------------------------------------
@@ -307,7 +400,64 @@ class TtDeepSeekPrefillPipeline:
 
         mesh_device = self.mesh_device
         migration_layer = self.migration_layer
+        kvpe_cache = self.kvpe_cache
         last_layer_idx = self.config.num_layers - 1
+
+        def _dump_cache_readback(layer_idx: int) -> None:
+            """Read kvpe_cache via the shard-spec path (ttnn.to_torch on per-device
+            tensors) and dump the first 16 bytes at sample positions. Use this to
+            compare against what migration's raw NOC read returns. If they disagree,
+            the table's (bank_id, offset) encoding doesn't match the cache's actual
+            shard layout."""
+            try:
+                import torch
+
+                device_tensors = ttnn.get_device_tensors(kvpe_cache)
+                # Print device 0's identity + buffer_address so we can correlate
+                # with the migration sender's "[scan-banks] device_id=N
+                # local_addr=M" log. If buffer_address(dev_tensors[0]) differs
+                # from kvpe_cache.buffer_address(), the migration table is reading
+                # from the wrong physical address.
+                try:
+                    dev0_phys_id = device_tensors[0].device().id() if device_tensors[0].device() is not None else None
+                except Exception:
+                    dev0_phys_id = None
+                try:
+                    dev0_buf_addr = device_tensors[0].buffer_address()
+                except Exception:
+                    dev0_buf_addr = None
+                try:
+                    mesh_buf_addr = kvpe_cache.buffer_address()
+                except Exception:
+                    mesh_buf_addr = None
+                print(
+                    f"[verify-readback] device_tensors[0]: device_id={dev0_phys_id} "
+                    f"buffer_address={dev0_buf_addr} "
+                    f"(mesh.buffer_address={mesh_buf_addr}, "
+                    f"delta={dev0_buf_addr - mesh_buf_addr if (dev0_buf_addr is not None and mesh_buf_addr is not None) else 'n/a'})",
+                    flush=True,
+                )
+                # Cache is sharded across SP devices along seq_len; each device holds
+                # seq_len_local = seq_len_total / sp_factor tokens. Print bytes from
+                # device 0 (which holds global positions 0..seq_len_local-1).
+                dev0 = ttnn.to_torch(device_tensors[0])  # [num_layers, 1, seq_len_local, head_dim]
+                seq_len_local = dev0.shape[2]
+                # Sample positions matching the migration's read_issue_pos values
+                # we suspected of poison (0, 32, 64, 96 in early; 1024, 1056 in padding).
+                sample_positions = [0, 32, 64, 96, 128, 1024, 1056, 1088, 1120]
+                for global_pos in sample_positions:
+                    if global_pos >= seq_len_local:
+                        continue  # would need a different device tensor
+                    row = dev0[layer_idx, 0, global_pos, :]
+                    head_bytes = row.contiguous().view(torch.uint8)[:16].tolist()
+                    head_uint32 = row.contiguous().view(torch.uint32)[:4].tolist()
+                    print(
+                        f"[verify-readback] layer={layer_idx} dev=0 global_pos={global_pos} "
+                        f"bytes[0..16]={head_bytes} uint32[0..4]={head_uint32}",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(f"[verify-readback] FAILED layer={layer_idx}: {type(e).__name__}: {e}", flush=True)
 
         def on_layer_complete(layer_idx: int) -> None:
             ttnn.synchronize_device(mesh_device)
@@ -315,6 +465,10 @@ class TtDeepSeekPrefillPipeline:
             print(
                 f"[migration][prefill] on_layer_complete, migrating layer {layer_idx} from slot {slot_id} to slot {slot_id}. Start_pos={0}, End_pos={end_pos}"
             )
+            # Diagnostic: only on layer 0 (one-shot per prefill) to compare cache contents
+            # via shard-spec readback against migration's raw-NOC reads in the same window.
+            if layer_idx == 0:
+                _dump_cache_readback(layer_idx)
             uuid = migration_layer.migrate_layer(layer_idx, 0, end_pos, slot_id, slot_id)
             ## Wait for each one for initial bringup
             # if layer_idx == last_layer_idx:
