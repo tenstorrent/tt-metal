@@ -47,17 +47,51 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@temp/e2e-wire-job-owner-note-20260505
+      - name: Checkout tt-auto-triage tooling
+        uses: actions/checkout@v4
         with:
-          workflow-name: ${{ inputs.workflow_name }}
-          job-name: ${{ inputs.job_name }}
-          copilot-pat: ${{ secrets.AUTO_TRIAGE_TOKEN }}
-          slack_ts: ${{ inputs.slack_ts }}
-          allow-pings: true
-          send-slack-message: ${{ inputs.send-slack-message }}
-          cutoff-commit: ${{ inputs.cutoff_commit }}
+          repository: tenstorrent/tt-auto-triage
+          ref: fix/job-owner-representative-note
+          path: .temp_tt_auto_triage
+
+      - name: Prepare minimal slack message payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .auto_triage/output .auto_triage/data .auto_triage/auto_triage/data
+          cat > .auto_triage/output/slack_message.json <<'EOF'
+          {
+            "case": 1,
+            "scenario": "Deterministic failure with identified commit",
+            "failing_test_name": "temp_slack_owner_extraction_test",
+            "failure_message": "Temporary extraction-only Slack test run",
+            "notes": "This temporary workflow validates parent-thread owner extraction and group representative resolution.",
+            "commits": [],
+            "relevant_developers": []
+          }
+          EOF
+
+      - name: Download Slack users/groups for resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install requests
+          python3 .temp_tt_auto_triage/.github/actions/auto-triage/auto_triage/download_slack_directory.py \
+            --output .auto_triage/auto_triage/data/slack_directory.json \
+            --groups-output .auto_triage/auto_triage/data/slack_groups.json
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          # SLACK_WEBHOOK_URL is removed in favor of SLACK_BOT_TOKEN + channel logic in the action
+
+      - name: Run Slack reporter only
+        if: inputs.send-slack-message == true
+        uses: tenstorrent/tt-auto-triage/.github/actions/slack-report-auto-triage@fix/job-owner-representative-note
+        with:
+          channel_id: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          slack_message_path: .auto_triage/output/slack_message.json
+          job_name: ${{ inputs.job_name }}
+          workflow_name: ${{ inputs.workflow_name }}
+          slack_ts: ${{ inputs.slack_ts }}
+          allow_pings: true
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
