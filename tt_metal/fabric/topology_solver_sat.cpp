@@ -1344,54 +1344,75 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
         return false;
     }
 
-    // Build the hard constraint SAT formula once. We keep the solver alive and add blocking clauses
-    // incrementally between solves to enumerate distinct solutions.
-    TopologySatSolver solver;
-    TopologySatHardEncoding enc;
+    // Kissat does NOT support incremental solving: kissat_add after kissat_solve is explicitly
+    // unsupported (kissat_require(!GET(searches), "incremental solving not supported")).
+    // We therefore reinitialise a fresh solver for every iteration, re-encoding all hard
+    // constraints plus all blocking clauses accumulated so far.  The encoding is deterministic
+    // so literal indices are stable across fresh instances.
 
-    if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
-        // Trivially UNSAT — no solutions exist.
-        return false;
+    // Accumulate blocking clauses as lists of (negated) literals; each inner vector is one clause.
+    std::vector<std::vector<int>> blocking_clauses;
+
+    // We need enc to persist across iterations (for decoding) so we initialise it once from a
+    // dry run and then reuse the literal layout.  The first iteration uses the dry-run solver.
+    TopologySatHardEncoding enc;
+    {
+        TopologySatSolver probe;
+        if (!topology_sat_encode_hard_constraints(probe, graph_data, constraint_data, enc, validation_mode)) {
+            // Trivially UNSAT — no solutions exist.
+            return false;
+        }
+        // Discard the probe solver; the real loop will create its own fresh instances.
     }
 
-    // Enumerate: after each SAT solve that succeeds, decode the assignment, store it, and add a
-    // blocking clause that forbids exactly that assignment before solving again.
+    // Enumerate: each iteration builds a fresh solver, re-encodes all constraints, replays
+    // blocking clauses, solves, and — if SAT — records the new blocking clause.
     while (all_mappings_out.size() < max_solutions) {
+        TopologySatSolver solver;
+        TopologySatHardEncoding iter_enc;  // enc indices are deterministic; we keep outer enc for decoding.
+        if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, iter_enc, validation_mode)) {
+            break;
+        }
+
+        // Replay all blocking clauses found so far.
+        for (const auto& bc : blocking_clauses) {
+            for (int lit : bc) {
+                solver.add(lit);
+            }
+            solver.add(0);
+        }
+
         const int status = solver.solve();
         if (status != TopologySatSolver::kSat) {
             break;  // UNSAT — no more solutions.
         }
 
-        // Decode the current satisfying assignment.
+        // Decode the current satisfying assignment using iter_enc (same literal layout as enc).
         std::vector<int> current_mapping;
-        if (!topology_sat_decode_hard_solution<TargetNode, GlobalNode>(solver, enc, current_mapping)) {
+        if (!topology_sat_decode_hard_solution<TargetNode, GlobalNode>(solver, iter_enc, current_mapping)) {
             // Decoding failed unexpectedly — stop enumeration to avoid an infinite loop.
             break;
         }
         all_mappings_out.push_back(current_mapping);
 
-        // Add a blocking clause: NOT (assign_lit[t][k] for the k chosen in this solution, for every t).
-        // This clause prevents Kissat from returning the same assignment again.
-        // A blocking clause is the disjunction of the negations of all chosen literals, i.e.,
-        //   (-x_{0,g0}) v (-x_{1,g1}) v ... v (-x_{n-1,g_{n-1}})
-        // If Kissat returns any other assignment at least one of these literals will differ.
-        const size_t nt = enc.assign_lit.size();
+        // Build and store the blocking clause for this solution.
+        // Clause: (-x_{0,g0}) v (-x_{1,g1}) v ... — forbids exactly this assignment.
+        const size_t nt = iter_enc.assign_lit.size();
+        std::vector<int> new_blocking;
+        new_blocking.reserve(nt);
         bool block_ok = true;
         for (size_t t = 0; t < nt && block_ok; ++t) {
             const int chosen_global = current_mapping[t];
             if (chosen_global < 0) {
-                // Should not happen after a successful decode, but handle defensively.
                 block_ok = false;
                 break;
             }
-            // Find which position k in enc.allowed_global_idx[t] corresponds to chosen_global.
-            const auto& globs = enc.allowed_global_idx[t];
-            const auto& lits = enc.assign_lit[t];
+            const auto& globs = iter_enc.allowed_global_idx[t];
+            const auto& lits  = iter_enc.assign_lit[t];
             bool found_k = false;
             for (size_t k = 0; k < globs.size(); ++k) {
                 if (static_cast<int>(globs[k]) == chosen_global) {
-                    // Add the negation of this literal to the blocking clause.
-                    solver.add(-lits[k]);
+                    new_blocking.push_back(-lits[k]);
                     found_k = true;
                     break;
                 }
@@ -1403,8 +1424,7 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
         if (!block_ok) {
             break;
         }
-        // Terminate the blocking clause.
-        solver.add(0);
+        blocking_clauses.push_back(std::move(new_blocking));
     }
 
     // Update state for reporting: use the last found solution if any.
