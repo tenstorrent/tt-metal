@@ -5,6 +5,8 @@
 import dataclasses
 import sqlite3
 import json
+import re
+from pathlib import Path
 
 from loguru import logger
 import networkx as nx
@@ -133,6 +135,47 @@ class ErrorRecord:
     timestamp: str
 
 
+_PYTHON_STACK_FILE_PATTERN = re.compile(r'^\s*File "([^"]+)", line \d+, in ')
+_PATH_WITH_LINE_PATTERN = re.compile(r"^\s*([^:\n]+):(\d+)(?::\d+)?\s*$")
+
+
+def _extract_last_stack_trace_file(stack_trace_text):
+    if not stack_trace_text:
+        return None
+    for line in stack_trace_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = _PYTHON_STACK_FILE_PATTERN.match(line)
+        if match:
+            return match.group(1)
+        match = _PATH_WITH_LINE_PATTERN.match(line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _normalize_existing_source_file_path(file_path):
+    if not file_path:
+        return None
+
+    candidate = Path(file_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).resolve(strict=False)
+
+    if not candidate.is_file():
+        return None
+
+    return str(candidate.resolve(strict=False))
+
+
+def _read_source_file_contents(file_path):
+    try:
+        return Path(file_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
 def get_or_create_sqlite_db(report_path):
     global SQLITE_CONNECTION
     sqlite_db_path = report_path / SQLITE_DB_PATH
@@ -197,8 +240,12 @@ def get_or_create_sqlite_db(report_path):
                 (operation_id int, name text, value text)"""
     )
     cursor.execute(
+        """CREATE TABLE IF NOT EXISTS source_files
+                (id INTEGER PRIMARY KEY, path text UNIQUE NOT NULL, contents text)"""
+    )
+    cursor.execute(
         """CREATE TABLE IF NOT EXISTS stack_traces
-                (operation_id int, stack_trace text)"""
+                (operation_id int, stack_trace text, source_file_id int REFERENCES source_files(id))"""
     )
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS input_tensors
@@ -239,6 +286,7 @@ def get_or_create_sqlite_db(report_path):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_buffers_buffer_type ON buffers (buffer_type)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_output_tensors_tensor_id ON output_tensors (tensor_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_input_tensors_tensor_id ON input_tensors (tensor_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stack_traces_source_file_id ON stack_traces (source_file_id)")
     sqlite_connection.commit()
     return sqlite_connection
 
@@ -316,8 +364,22 @@ def insert_stack_trace(report_path, operation_id, stack_trace):
     formatted_stack_trace = "\n".join(stack_trace[:-2][::-1])
 
     # let sqlite handle formatting strings with mixed quotes
-    statement = "INSERT INTO stack_traces (operation_id, stack_trace) VALUES (?, ?)"
-    cursor.execute(statement, (operation_id, formatted_stack_trace))
+    source_file_id = None
+    source_file_path = _extract_last_stack_trace_file(formatted_stack_trace)
+    normalized_path = _normalize_existing_source_file_path(source_file_path)
+    if normalized_path is not None:
+        file_contents = _read_source_file_contents(normalized_path)
+        if file_contents is not None:
+            cursor.execute(
+                "INSERT OR IGNORE INTO source_files (path, contents) VALUES (?, ?)",
+                (normalized_path, file_contents),
+            )
+            cursor.execute("SELECT id FROM source_files WHERE path = ?", (normalized_path,))
+            source_file_id = cursor.fetchone()[0]
+
+    statement = "INSERT INTO stack_traces (operation_id, stack_trace, source_file_id) VALUES (?, ?, ?)"
+    cursor.execute(statement, (operation_id, formatted_stack_trace, source_file_id))
+
     sqlite_connection.commit()
 
 
@@ -744,12 +806,9 @@ def query_stack_trace(report_path, operation_id):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
-    cursor.execute("SELECT * FROM stack_traces WHERE operation_id = ?", (operation_id,))
-    stack_trace = None
-    for row in cursor.fetchall():
-        _, stack_trace = row
-        break
-    return stack_trace
+    cursor.execute("SELECT stack_trace FROM stack_traces WHERE operation_id = ?", (operation_id,))
+    row = cursor.fetchone()
+    return row[0] if row else None
 
 
 def query_buffers(report_path, operation_id):

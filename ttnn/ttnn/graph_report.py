@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS to avoid conflicts with comparison mode data.
 
 import json
 import math
+import re
 import sqlite3
 from pathlib import Path
 from typing import Union
@@ -29,7 +30,9 @@ from typing import Union
 from loguru import logger
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 3
+_PYTHON_STACK_FILE_PATTERN = re.compile(r'^\s*File "([^"]+)", line \d+, in ')
+_PATH_WITH_LINE_PATTERN = re.compile(r"^\s*([^:\n]+):(\d+)(?::\d+)?\s*$")
 
 
 def _int_param(params, key):
@@ -43,6 +46,70 @@ def _int_param(params, key):
 def _tid_int(tid):
     """Coerce a tensor ID (possibly a string) to int."""
     return int(tid) if isinstance(tid, str) else tid
+
+
+def _extract_last_stack_trace_file(stack_trace_text: str) -> str | None:
+    if not stack_trace_text:
+        return None
+    for line in stack_trace_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = _PYTHON_STACK_FILE_PATTERN.match(line)
+        if match:
+            return match.group(1)
+        match = _PATH_WITH_LINE_PATTERN.match(line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _normalize_existing_source_file_path(file_path: str | None) -> str | None:
+    if not file_path:
+        return None
+
+    candidate = Path(file_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).resolve(strict=False)
+
+    if not candidate.is_file():
+        return None
+
+    return str(candidate.resolve(strict=False))
+
+
+def _read_source_file_contents(file_path: str) -> str | None:
+    try:
+        return Path(file_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _prepare_stack_traces_with_source_refs(
+    stack_traces_batch: list[tuple[int, str]],
+) -> tuple[list[tuple[str, str]], list[tuple[int, str, str | None]]]:
+    """Return deduped (path, contents) rows and per-row (op_id, trace, path_or_none for FK lookup)."""
+    source_files_by_path: dict[str, str] = {}
+    stack_rows: list[tuple[int, str, str | None]] = []
+
+    for operation_id, stack_trace in stack_traces_batch:
+        source_path = _extract_last_stack_trace_file(stack_trace)
+        normalized_path = _normalize_existing_source_file_path(source_path)
+        if normalized_path is None:
+            stack_rows.append((operation_id, stack_trace, None))
+            continue
+
+        if normalized_path not in source_files_by_path:
+            file_contents = _read_source_file_contents(normalized_path)
+            if file_contents is None:
+                stack_rows.append((operation_id, stack_trace, None))
+                continue
+            source_files_by_path[normalized_path] = file_contents
+
+        stack_rows.append((operation_id, stack_trace, normalized_path))
+
+    source_files_batch = list(source_files_by_path.items())
+    return source_files_batch, stack_rows
 
 
 def create_database_schema(cursor: sqlite3.Cursor) -> None:
@@ -197,12 +264,22 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
-    # Stack traces table (when stack trace capture is enabled)
+    # Source files (deduped); stack_traces optionally reference source_files.id
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_files (
+            id INTEGER PRIMARY KEY,
+            path text UNIQUE NOT NULL,
+            contents text
+        )
+    """
+    )
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS stack_traces (
             operation_id int,
-            stack_trace text
+            stack_trace text,
+            source_file_id int REFERENCES source_files(id)
         )
     """
     )
@@ -272,6 +349,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         )
     """
     )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stack_traces_source_file_id ON stack_traces (source_file_id)")
 
 
 def save_database_schema_version(cursor: sqlite3.Cursor) -> None:
@@ -1084,6 +1162,7 @@ def import_graph(
             seen_dt.add(key)
             filtered_dt.append(dt)
     device_tensors_batch = filtered_dt
+    source_files_batch, stack_traces_with_paths = _prepare_stack_traces_with_source_refs(stack_traces_batch)
 
     # Batch inserts
     if captured_graph_batch:
@@ -1098,8 +1177,22 @@ def import_graph(
         cursor.executemany("""INSERT INTO nodes VALUES (?, ?, ?, ?)""", nodes_batch)
     if edges_batch:
         cursor.executemany("""INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)""", edges_batch)
-    if stack_traces_batch:
-        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?)""", stack_traces_batch)
+    if source_files_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO source_files (path, contents) VALUES (?, ?)""",
+            source_files_batch,
+        )
+    path_to_source_id: dict[str, int] = {}
+    for path, _ in source_files_batch:
+        cursor.execute("SELECT id FROM source_files WHERE path = ?", (path,))
+        row = cursor.fetchone()
+        if row:
+            path_to_source_id[path] = row[0]
+    stack_traces_rows = [
+        (op_id, trace, path_to_source_id[path] if path else None) for op_id, trace, path in stack_traces_with_paths
+    ]
+    if stack_traces_rows:
+        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?)""", stack_traces_rows)
     if operations_batch:
         cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?)""", operations_batch)
     if operation_arguments_batch:
