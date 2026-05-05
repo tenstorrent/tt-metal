@@ -108,13 +108,17 @@ on:
     - cron: "0 */8 * * *" # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
@@ -152,7 +156,7 @@ jobs:
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
   blackhole-multi-card-unit-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_unit_tests }}
-    needs: [build-artifact, blackhole-multi-card-tests-matrix]
+    needs: [check-harbor, build-artifact, blackhole-multi-card-tests-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
@@ -160,7 +164,7 @@ jobs:
       matrix: ${{ fromJSON(needs.blackhole-multi-card-tests-matrix.outputs.matrix) }}
     with:
       arch: blackhole
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       runner-label: ${{ matrix.test-group.runner-label }}
@@ -168,18 +172,18 @@ jobs:
       model: ${{ inputs.model || 'all' }}
   blackhole-grid-override-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_grid_override_tests }}
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/blackhole-grid-override-tests-impl.yaml
     with:
       arch_name: blackhole
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       runner-label: P150b
   blackhole-ttnn-stress-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_bh_ttnn_stress_tests }}
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
     strategy:
@@ -194,6 +198,6 @@ jobs:
       arch: blackhole
       runner-label: ${{ matrix.test-group.runner-label }}
       timeout: 45
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

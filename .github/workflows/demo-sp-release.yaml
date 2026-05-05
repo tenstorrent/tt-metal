@@ -56,12 +56,16 @@ permissions:
   id-token: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -69,12 +73,12 @@ jobs:
 
   deepseek-prefill-tests:
     name: "DeepSeek Prefill Tests"
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_prefill' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: bh_galaxy,wh_llmbox_perf,bh_loudbox,bh_llmbox
@@ -84,12 +88,12 @@ jobs:
 
   deepseek-decode-tests:
     name: "DeepSeek Decode Tests (B1 Decoder Block)"
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_decode' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: bh_p150b_civ2_viommu,bh_p300
@@ -99,12 +103,12 @@ jobs:
 
   wan22-tests:
     name: "Wan 2.2 Tests"
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'wan22' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-release-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: wh_galaxy_perf,wh_llmbox_perf
@@ -114,24 +118,24 @@ jobs:
 
   deepseek-sp1-tests:
     name: "SP1 DeepSeek Tests"
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp1_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-multihost-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       sp-config: sp1
 
   deepseek-sp4-tests:
     name: "SP4 DeepSeek Tests"
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sp4_deepseek' || github.event_name == 'schedule' }}
     secrets: inherit
     uses: ./.github/workflows/demo-sp-multihost-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       sp-config: sp4
