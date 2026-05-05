@@ -88,6 +88,20 @@
 
 - name: "Pipeline Test (DeepSeek V3 B1 Superpod 4)"
   cmd: |
+    RECOVERY_HOSTS=$(paste -sd, /ci/ttrun/hostfile)
+
+    if [ ! -x /ci/tt-metal/build/tools/scaleout/run_cluster_validation ]; then
+      echo "=== SP4 superpod: unpacking build artifact for recover.sh ==="
+      tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /ci/tt-metal
+    fi
+
+    echo "=== SP4 superpod: running recover.sh ==="
+    bash /ci/tt-metal/tools/scaleout/exabox/recover.sh \
+      --hosts "$RECOVERY_HOSTS" \
+      --config 4x32 \
+      --num-iterations 10 \
+      --sleep-duration 300
+
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
     PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
     mkdir -p $PIPELINE_DIR
@@ -112,7 +126,7 @@
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
     bh_sp4:
-      timeout: 120
+      timeout: 150
   owner_id: U08E1JCMAJF
   team: scaleout
   sp_config: sp4
