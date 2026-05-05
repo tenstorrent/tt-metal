@@ -37,17 +37,17 @@ constexpr bool load_balance_across_two_routes = true;  // TODO hardcoded, = true
 
 inline constexpr uint32_t sharded_args_start_idx = 10;
 
-constexpr uint32_t num_out_pages_per_packet = packet_size / out_page_size;
-constexpr uint32_t outputs_per_cb_page = cb_page_size / out_page_size;
+constexpr uint32_t pages_per_packet = packet_size / out_page_size;
+constexpr uint32_t pages_per_cb_entry = cb_page_size / out_page_size;
 
 constexpr bool unicast = packet_size <= out_page_size;
 constexpr bool scatter = !unicast;
 
 static_assert(
     (unicast && out_page_size % packet_size == 0)  // will be able to cover output page with unicast writes
-    || (scatter && outputs_per_cb_page % num_out_pages_per_packet == 0 &&
+    || (scatter && pages_per_cb_entry % pages_per_packet == 0 &&
         // will be able to cover cb page with scattered writes with one type of header
-        num_out_pages_per_packet <= NOC_SCATTER_WRITE_MAX_CHUNKS));
+        pages_per_packet <= NOC_SCATTER_WRITE_MAX_CHUNKS));
 
 class FabricUnicastWriter {
 public:
@@ -97,9 +97,9 @@ public:
         scatter_header({}, {}) {
         scatter_header.chunk_count = 0;
         const auto default_scatter_header = [] {
-            if constexpr (num_out_pages_per_packet == 2) {
+            if constexpr (pages_per_packet == 2) {
                 return NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(out_page_size)});
-            } else if constexpr (num_out_pages_per_packet == 3) {
+            } else if constexpr (pages_per_packet == 3) {
                 return NocUnicastScatterCommandHeader(
                     {0, 0, 0}, {static_cast<uint16_t>(out_page_size), static_cast<uint16_t>(out_page_size)});
             } else {
@@ -111,11 +111,18 @@ public:
             }
         }();
 
+        // PacketHeaderPool::allocate_header_n (vs allocate_header) allows sending the same packet along multiple
+        // paths in a single API invocation
         fabric_multicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            fabric_connection, route_id_1, starts.data(), ranges.data(), default_scatter_header, packet_size);
+            fabric_connection,
+            route_id_1,
+            starts.data(),
+            ranges.data(),
+            default_scatter_header,
+            pages_per_packet * out_page_size);
 
-        // Ring topology: alternate between two routes for load balancing.
+        // Ring topology: create a second route to alternate with for load balancing.
         // Example for 8 device ring:
         //    route_1 = 4 devices forward and 3 devices backward
         //    route_2 = 3 devices forward and 4 devices backward
@@ -128,7 +135,7 @@ public:
                 starts.data(),
                 swapped_ranges.data(),
                 default_scatter_header,
-                packet_size);
+                pages_per_packet * out_page_size);
         }
     }
 
@@ -140,14 +147,12 @@ public:
         }
         scatter_header.noc_address[scatter_header.chunk_count++] = tensor_page_addr;
 
-        if (scatter_header.chunk_count == num_out_pages_per_packet) {
+        if (scatter_header.chunk_count == pages_per_packet) {
             noc_async_writes_flushed();
+            // TODO for variable pages_per_packet, add UnicastScatterWriteUpdateMask::PayloadSize and payload_size as
+            // last arg
             fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                fabric_connection,
-                use_route_1 ? route_id_1 : route_id_2,
-                packet_data_read_ptr,
-                scatter_header,
-                out_page_size * num_out_pages_per_packet);
+                fabric_connection, use_route_1 ? route_id_1 : route_id_2, packet_data_read_ptr, scatter_header);
 
             scatter_header.chunk_count = 0;
             if constexpr (load_balance_across_two_routes) {
@@ -191,13 +196,13 @@ void kernel_main() {
     constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
     auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 
-    // DPRINT << "out_page_size=" << out_page_size << " pages_per_packet=" << num_out_pages_per_packet << "
-    // pages_per_cb=" << outputs_per_cb_page << ENDL();
+    // DPRINT << "out_page_size=" << out_page_size << " pages_per_packet=" << pages_per_packet << " pages_per_cb=" <<
+    // pages_per_cb_entry << ENDL();
     DEVICE_PRINT(
         "out_page_size={} pages_per_packet={} pages_per_cb={} scatter={}\n",
         out_page_size,
-        num_out_pages_per_packet,
-        outputs_per_cb_page,
+        pages_per_packet,
+        pages_per_cb_entry,
         scatter);
 
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
@@ -238,7 +243,7 @@ void kernel_main() {
         cb_wait_front(cb0_id, 1);
         auto l1_read_addr = get_read_ptr(cb0_id);
 
-        const auto page_id_end = page_id + outputs_per_cb_page;
+        const auto page_id_end = page_id + pages_per_cb_entry;
         for (; page_id < page_id_end && page_id < output_page_id_end; ++page_id) {
             auto fabric_tensor_page_addr =
                 tt::tt_fabric::linear::addrgen_detail::get_noc_address(tensor0_addrgen, page_id, 0);
