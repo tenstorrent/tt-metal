@@ -232,7 +232,8 @@ RealtimeProfilerManager::DeviceState::DeviceState(DeviceState&& o) noexcept :
     sync_request_addr(o.sync_request_addr),
     sync_host_ts_addr(o.sync_host_ts_addr),
     sync_response_received(o.sync_response_received.load(std::memory_order_relaxed)),
-    sync_host_time_before(o.sync_host_time_before) {}
+    sync_host_time_before(o.sync_host_time_before),
+    last_finish_sync_at(o.last_finish_sync_at) {}
 
 RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device) {
     // HAL offsets are the same for all devices (same arch).
@@ -611,6 +612,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 dev_state.chip_id, sync_check_host_anchor, device_time, dev_state.sync_frequency);
             tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
 
+            dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
+
             log_info(
                 tt::LogMetal,
                 "[Real-time profiler] Device {} sync check: device_time={} cycles",
@@ -976,6 +979,21 @@ void RealtimeProfilerManager::trigger_sync_check() {
     constexpr uint32_t kPageWords = kPageSize / sizeof(uint32_t);
     constexpr uint32_t kSyncTimeoutMs = 5000;
     constexpr uint32_t kPauseTimeoutMs = 2000;
+    constexpr auto kMinIntervalBetweenFinishSync = std::chrono::seconds(1);
+
+    const auto throttle_now = std::chrono::steady_clock::now();
+    std::vector<size_t> device_indices_to_sync;
+    device_indices_to_sync.reserve(devices_.size());
+    for (size_t i = 0; i < devices_.size(); i++) {
+        const auto& dev_state = devices_[i];
+        if (!dev_state.last_finish_sync_at.has_value() ||
+            throttle_now - *dev_state.last_finish_sync_at >= kMinIntervalBetweenFinishSync) {
+            device_indices_to_sync.push_back(i);
+        }
+    }
+    if (device_indices_to_sync.empty()) {
+        return;
+    }
 
     // 1. Pause the receiver thread for exclusive socket access. This breaks a potential
     //    GIL deadlock: the receiver may be waiting on the GIL for a Python callback while
@@ -996,7 +1014,11 @@ void RealtimeProfilerManager::trigger_sync_check() {
 
     std::vector<uint32_t> page_buf(kPageWords);
 
-    for (auto& dev_state : devices_) {
+    // Only devices in device_indices_to_sync enter sync mode and emit FINISH_SYNC; others
+    // keep receiving via the receiver thread once it resumes (no device-side sync_request).
+    for (size_t dev_index : device_indices_to_sync) {
+        auto& dev_state = devices_[dev_index];
+
         // 2. Drain pending data pages so the socket has room for the sync response. Each
         //    page is processed the same way the receiver thread would.
         while (dev_state.socket->pages_available() > 0) {
@@ -1065,6 +1087,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
                 tracy_handler_->CalibrateDevice(
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+                dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
                 got_sync = true;
             } else {
                 uint64_t start_time = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];
