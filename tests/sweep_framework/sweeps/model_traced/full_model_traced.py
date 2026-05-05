@@ -113,15 +113,21 @@ def _torch_dtype_from_dict(value):
     return torch.float32
 
 
-def _master_device_state(traced_device_kwarg, absent_keys):
+_ABSENT = object()  # sentinel: traced_device_kwarg key was not present in the vector
+
+
+def _master_device_state(traced_device_kwarg):
     """Decide how to forward ``device`` to ``ttnn.full`` to match the master.
 
     Returns one of:
         ``"omit"``   — master never passed ``device``; do not include it.
         ``"none"``   — master passed ``device=None`` explicitly; pass None.
         ``"mesh"``   — master passed ``device=mesh_device``; forward the fixture.
+
+    Pass ``_ABSENT`` (the module sentinel) when the key was missing from the
+    vector, so ``None`` unambiguously means the master traced ``device=None``.
     """
-    if "traced_device_kwarg" in (absent_keys or set()):
+    if traced_device_kwarg is _ABSENT:
         return "omit"
     if isinstance(traced_device_kwarg, dict):
         return "mesh"
@@ -160,11 +166,6 @@ def run(
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
-    absent_keys = kwargs.get("__absent_keys__") or set()
-    if not isinstance(absent_keys, (set, frozenset, list, tuple)):
-        absent_keys = set()
-    else:
-        absent_keys = set(absent_keys)
 
     # Sample-suite path: explicit fill_value and a flag to drive whether to
     # forward device= to ttnn.full. model_traced uses the traced kwarg below.
@@ -192,7 +193,7 @@ def run(
     if sample_device_was_traced is not None:
         device_state = "mesh" if sample_device_was_traced else "omit"
     else:
-        device_state = _master_device_state(kwargs.get("traced_device_kwarg"), absent_keys)
+        device_state = _master_device_state(kwargs.get("traced_device_kwarg", _ABSENT))
 
     full_kwargs = dict(fill_value=fill_value_t, dtype=dtype_v, layout=layout_v)
     if device_state == "mesh":
