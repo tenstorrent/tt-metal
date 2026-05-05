@@ -57,7 +57,8 @@ class Experts(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
-        output_path: Path,
+        routed_output_path: Path,
+        shared_output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
         if is_quad_mesh(mesh_device) and is_ring_fabric(get_fabric_config()):

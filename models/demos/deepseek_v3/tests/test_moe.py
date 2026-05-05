@@ -161,7 +161,7 @@ def run_test_forward_pass_moe(
     )
 
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(moe_cls, mode, tt_input, run_config, handle_tensor_parallel=True)
+    tt_output = run_module_forward(moe_cls, mode, tt_input, run_config)
 
     expected_output_memory_config = run_config["output_memory_config"]
     actual_output_memory_config = tt_output.memory_config()

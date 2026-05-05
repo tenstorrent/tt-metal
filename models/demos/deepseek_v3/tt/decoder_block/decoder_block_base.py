@@ -77,10 +77,15 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         )
 
         # Get the input_memory_config for the mlp_reshard
-        # For MoE blocks, input_memory_config is nested inside shared_expert
-        if "shared_expert" in mlp_config:
+        # For MoE blocks, input_memory_config is nested inside moe or shared_expert
+        if "moe" in mlp_config:
+            # MoE blocks - use moe's input_memory_config
+            mlp_input_memory_config = mlp_config["moe"]["input_memory_config"]
+        elif "shared_expert" in mlp_config:
+            # Legacy path for when shared_expert was separate
             mlp_input_memory_config = mlp_config["shared_expert"]["input_memory_config"]
         else:
+            # Regular MLP blocks
             mlp_input_memory_config = mlp_config["input_memory_config"]
 
         return {

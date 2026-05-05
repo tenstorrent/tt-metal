@@ -693,51 +693,43 @@ class MoEOptimized(SharedStateAddOn, AbstractModule):
         return ttnn.reduce_scatter(post_combine_output_tensor, **rs_kwargs)
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, handle_tensor_parallel: bool = False) -> ttnn.Tensor:
-        # Handle all_gather if tensor parallel is enabled
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        # Handle all_gather
         num_tokens_per_row = x.shape[-2]
-        if handle_tensor_parallel:
-            x = cls._fwd_all_gather(x, cfg)
+        x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
         output = cls._forward_decode(x, cfg)
 
-        # Handle sum_experts and reduce_scatter if tensor parallel is enabled
-        if handle_tensor_parallel:
-            ccl = cfg["ccl"]
-            tp_size = cfg["mesh_device"].shape[1]
+        # Handle sum_experts and reduce_scatter
+        ccl = cfg["ccl"]
+        tp_size = cfg["mesh_device"].shape[1]
 
-            if is_ring_fabric(cfg["fabric_config"]) and tp_size == 8 and num_tokens_per_row == ttnn.TILE_SIZE:
-                output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
-                    output,
-                    dim=0,
-                    split_size=output.shape[-1] // tp_size,
-                    output_memory_config=cfg["ring_sum_experts_output_memory_config"],
-                )
-                output = ttnn.experimental.deepseek_moe_reduce_scatter(
-                    output, **cfg["ring_final_output_reduce_scatter"]
-                )
-            else:
-                output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
-                output = cls._fwd_reduce_scatter(output, cfg, ccl)
+        if is_ring_fabric(cfg["fabric_config"]) and tp_size == 8 and num_tokens_per_row == ttnn.TILE_SIZE:
+            output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                output,
+                dim=0,
+                split_size=output.shape[-1] // tp_size,
+                output_memory_config=cfg["ring_sum_experts_output_memory_config"],
+            )
+            output = ttnn.experimental.deepseek_moe_reduce_scatter(output, **cfg["ring_final_output_reduce_scatter"])
+        else:
+            output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
+            output = cls._fwd_reduce_scatter(output, cfg, ccl)
 
         return output
 
     @classmethod
-    def forward_prefill(
-        cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
-    ) -> ttnn.Tensor:
-        # Handle all_gather if tensor parallel is enabled
-        if handle_tensor_parallel:
-            x = cls._fwd_all_gather(x, cfg)
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        # Handle all_gather
+        x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
         output = cls._forward_prefill(x, cfg)
 
-        # Handle sum_experts and reduce_scatter if tensor parallel is enabled
-        if handle_tensor_parallel:
-            ccl = cfg["ccl"]
-            output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
-            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+        # Handle sum_experts and reduce_scatter
+        ccl = cfg["ccl"]
+        output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
+        output = cls._fwd_reduce_scatter(output, cfg, ccl)
 
         return output
