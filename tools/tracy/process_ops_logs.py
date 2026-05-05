@@ -368,12 +368,7 @@ def import_tracy_op_logs(
         tt_df = df[tt_mask]
         for op in tt_df.to_dict(orient="records"):
             opID = int(op["zone_text"].split(":")[-1])
-            if opID not in ops:
-                # Op data was dropped upstream (Tracy 64 KiB message limit in
-                # op_profiler_json.cpp, or malformed/cached-without-prior-data
-                # skips above). Timing exists but data doesn't — drop the timing too.
-                logger.warning(f"Skipping host_time for op {opID} ({op['name']}): no matching op data entry")
-                continue
+            assert opID in ops, f"Op time for op {opID} must present. OpID: {opID}, Name: {op['name']}"
             ops[opID]["host_time"] = op
 
     # Similar to df["name"], ensure special_parent_text is string type before using .str accessor.
@@ -1324,12 +1319,8 @@ def generate_reports(
         def add_io_data(tensors, ioType, target_row):
             ioFields = ["shape", "layout", "dtype", "storage_type"]
             for count, tensor in enumerate(tensors):
-                # Skip entries missing the standard fields (e.g. truncation
-                # markers emitted when the host-side message overflowed Tracy's
-                # 64 KiB cap and the tensor list was trimmed).
-                if not all(f in tensor for f in ioFields):
-                    continue
                 for ioField in ioFields:
+                    assert ioField in tensor, "Wrong io tensor fields"
                     ioData = tensor[ioField]
                     fields, data = io_tensor_to_csv(ioField, ioData)
                     for field in fields:
