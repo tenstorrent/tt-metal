@@ -1045,15 +1045,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
                 reader_mcast_sender_desc.runtime_args.emplace_back(core, std::move(mcast_sender_args));
             } else {  // mcast receiver
-                reader_mcast_receiver_desc.emplace_runtime_args(
+                // NOTE: do not pass Buffer* here. in0_start_id/out_tile_start_id/Wt/mcast
+                // coords are per-core and shape-derived; using BufferBinding would skip
+                // create_descriptor() on cache hits and leave those scalars stale when a
+                // later call collides on the same cache entry with different shape/grid.
+                reader_mcast_receiver_desc.runtime_args.emplace_back(
                     core,
-                    {a.buffer(),
-                     output.buffer(),
-                     in0_start_id,
-                     out_tile_start_id,
-                     Wt,
-                     static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).x),
-                     static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).y)});
+                    tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
+                        a.buffer()->address(),
+                        output.buffer()->address(),
+                        in0_start_id,
+                        out_tile_start_id,
+                        Wt,
+                        static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).x),
+                        static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).y)});
             }
         }
     }
