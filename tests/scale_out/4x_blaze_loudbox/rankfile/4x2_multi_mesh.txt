@@ -1,0 +1,4 @@
+rank 0=bh-lb-39 slot=0
+rank 1=bh-lb-37 slot=0
+rank 2=bh-lb-40 slot=0
+rank 3=bh-lb-38 slot=0
