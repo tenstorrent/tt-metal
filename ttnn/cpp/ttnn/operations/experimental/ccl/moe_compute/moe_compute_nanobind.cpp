@@ -100,7 +100,8 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("output_memory_config") = nb::none(),
         nb::arg("optional_output_tensor") = nb::none(),
         nb::arg("optional_cross_device_semaphore") = nb::none(),
-        nb::arg("activation_type") = nb::none());
+        nb::arg("activation_type") = nb::none(),
+        nb::arg("compute_only") = false);
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {

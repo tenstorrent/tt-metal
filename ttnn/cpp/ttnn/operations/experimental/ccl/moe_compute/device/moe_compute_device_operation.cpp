@@ -74,13 +74,24 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     // validate that 32 (token dim) * output_shard_width * output_shard_height >= total tokens
     const auto& tilize_input_shape = tensor_args.tilize_input_tensor.logical_shape();
     const auto total_tokens = tilize_input_shape[0] * tilize_input_shape[1];
-    const auto combine_token_parallel_cores = args.combine_params.num_token_parallel_cores;
-    const auto combine_data_parallel_cores = args.combine_params.num_data_parallel_cores;
+    const auto combine_token_parallel_cores = args.num_token_parallel_cores;
+    const auto combine_data_parallel_cores = args.num_data_parallel_cores;
 
     // make sure the shared L1 buffer is sufficiently large enough to contain all output tokens
     const auto max_tokens = detail::TOKEN_SIZE * combine_data_parallel_cores * combine_token_parallel_cores;
     TT_FATAL(
         max_tokens >= total_tokens, "Too many tokens in input, got: {} but expected max: {}", total_tokens, max_tokens);
+
+    // compute_only mode: combine_params must be nullopt and the optional output tensor (which
+    // would normally be the combine output) must not be provided.
+    if (args.compute_only) {
+        TT_FATAL(!args.combine_params.has_value(), "compute_only=true requires combine_params to be std::nullopt");
+        TT_FATAL(
+            !tensor_args.optional_output_tensor.has_value(),
+            "compute_only=true requires optional_output_tensor to be std::nullopt (no combine output is produced)");
+    } else {
+        TT_FATAL(args.combine_params.has_value(), "compute_only=false requires combine_params to be set");
+    }
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -207,6 +218,18 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     //-------------------------------------------------------------------------
     using namespace tt::tt_metal;
 
+    if (args.compute_only) {
+        // No combine output in compute_only mode; matmul_output_spec is the final output (slot 4).
+        return {
+            tilize_per_expert_total_tokens_spec,
+            tilize_expert_activation_spec,
+            tilize_e_t_spec,
+            tilize_output_spec,
+            matmul_output_spec};
+    }
+
+    TT_FATAL(args.combine_params.has_value(), "combine_params required when compute_only is false");
+
     ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
         .dense_input_tensor = tilize_input_tensor,
         .dense_activations_tensor = tilize_input_tensor,
@@ -215,7 +238,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
         .optional_output_tensor = std::nullopt,
     };
     const auto output_spec = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation::compute_output_specs(
-        args.combine_params, combine_tensor_args);
+        *args.combine_params, combine_tensor_args);
 
     return {
         tilize_per_expert_total_tokens_spec,
@@ -238,6 +261,17 @@ MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::crea
     TT_FATAL(
         matmul_output_tensor.tensor_spec() == output_specs[4],
         "Reinterpreted tensor spec does not match expected output_specs[4]");
+
+    if (args.compute_only) {
+        // 5-tensor return: matmul_output is the final output (no combine output produced).
+        return {
+            create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),
+            create_device_tensor(output_specs[1], tensor_args.tilize_input_tensor.device()),
+            create_device_tensor(output_specs[2], tensor_args.tilize_input_tensor.device()),
+            tilize_output_tensor,
+            matmul_output_tensor};
+    }
+
     const auto& combine_output_tensor = tensor_args.optional_output_tensor.value_or(
         create_device_tensor(output_specs[5], tensor_args.tilize_input_tensor.device()));
 
@@ -271,7 +305,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
-    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type) {
+    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
+    const bool compute_only) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -285,7 +320,7 @@ std::vector<ttnn::Tensor> moe_compute(
     const auto& num_token_parallel_cores = output_height_shard_dim;
 
     // Determine num_data_parallel_cores based on hidden size. Bias does not matter for these values
-    uint32_t num_data_parallel_cores;
+    uint32_t num_data_parallel_cores = 0;
     if (hidden_size == 7168) {
         num_data_parallel_cores = moe_ring::DeepSeekRingConfig</*HasBias=*/false>::OUTPUT_WIDTH_SHARD_DIM;
     } else if (hidden_size == 2880) {
@@ -294,30 +329,52 @@ std::vector<ttnn::Tensor> moe_compute(
         TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
     }
 
+    // In compute_only mode, the public-layer must not pass any CCL-related optionals.
+    if (compute_only) {
+        TT_FATAL(!cluster_axis.has_value(), "moe_compute(compute_only=true) requires cluster_axis to be std::nullopt");
+        TT_FATAL(!topology.has_value(), "moe_compute(compute_only=true) requires topology to be std::nullopt");
+        TT_FATAL(!num_links.has_value(), "moe_compute(compute_only=true) requires num_links to be std::nullopt");
+        TT_FATAL(
+            !mux_core_range_set.has_value(),
+            "moe_compute(compute_only=true) requires mux_core_range_set to be std::nullopt");
+        TT_FATAL(
+            !optional_cross_device_semaphore.has_value(),
+            "moe_compute(compute_only=true) requires optional_cross_device_semaphore to be std::nullopt");
+        TT_FATAL(
+            !optional_output_tensor.has_value(),
+            "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
+    }
+
     auto* mesh_device = tilize_input_tensor.device();
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
-    ttnn::experimental::prim::SelectiveReduceCombineParams combine_params{
-        .hidden_size = hidden_size,
-        .batch_size = 1,
-        .seq_size = total_tokens,
-        .select_experts_k = select_experts_k,
-        .experts = experts,
-        .num_links = num_links.value_or(4),
-        .axis = cluster_axis,
-        .topology = topology.value_or(tt::tt_fabric::Topology::Ring),
-        .num_token_parallel_cores = num_token_parallel_cores,
-        .num_data_parallel_cores = num_data_parallel_cores,
-        .worker_cores = combine_cores,
-        .mux_core_range_set = mux_core_range_set.value_or(CoreRangeSet{}),
-        .output_memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
-        .optional_cross_device_semaphore = optional_cross_device_semaphore};
+    std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
+    if (!compute_only) {
+        combine_params = ttnn::experimental::prim::SelectiveReduceCombineParams{
+            .hidden_size = hidden_size,
+            .batch_size = 1,
+            .seq_size = total_tokens,
+            .select_experts_k = select_experts_k,
+            .experts = experts,
+            .num_links = num_links.value_or(4),
+            .axis = cluster_axis,
+            .topology = topology.value_or(tt::tt_fabric::Topology::Ring),
+            .num_token_parallel_cores = num_token_parallel_cores,
+            .num_data_parallel_cores = num_data_parallel_cores,
+            .worker_cores = combine_cores,
+            .mux_core_range_set = mux_core_range_set.value_or(CoreRangeSet{}),
+            .output_memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+            .optional_cross_device_semaphore = optional_cross_device_semaphore};
+    }
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
             .has_bias = has_bias,
+            .num_token_parallel_cores = num_token_parallel_cores,
+            .num_data_parallel_cores = num_data_parallel_cores,
+            .compute_only = compute_only,
             .combine_params = combine_params,
             .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},
         OperationType::tensor_args_t{

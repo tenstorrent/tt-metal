@@ -43,6 +43,14 @@ void kernel_main() {
     constexpr uint32_t matmul_combine_sync_semaphore_id =
         get_named_compile_time_arg_val("matmul_combine_sync_semaphore_id");
 
+    // When compute_only=1, the fused selective_reduce_combine path is bypassed: no combine kernels
+    // run on the combine cores, but the combine cores' L1 IS still allocated (the matmul output
+    // tensor is sharded across the entire compute grid, including combine cores). dm1 still issues
+    // its NOC writes to combine-core L1 because the unit test reads slot 4 back via
+    // prepare_output_tensor_from_combine_writer. What IS gated off in compute_only: the
+    // matmul<->combine semaphore wait/inc (no consumer to coordinate with).
+    constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
+
     std::array<uint32_t, 2 * height_shard_dim * width_shard_dim> output_shard_core_map = OUTPUT_SHARD_CORE_MAP;
 
     constexpr auto w0_w1_args = TensorAccessorArgs<0>();
@@ -264,6 +272,17 @@ void kernel_main() {
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
             const uint32_t elts_per_page = source_width_tiles * tile_width;
 
+            // Write per-step matmul output tiles into the combine cores' L1 buffers via unicast
+            // NOC writes. In production the combine kernels read from there; in compute_only the
+            // combine cores have no kernel running but their L1 is still allocated (the matmul
+            // output tensor is sharded across the entire compute grid including combine cores —
+            // it's an alias of `tilize_output_tensor`). The unit test reads slot 4 (matmul_output)
+            // and reconstructs the matmul output from the combine-cores shards via
+            // `prepare_output_tensor_from_combine_writer`. So the writes are required either way.
+            //
+            // What's compute_only-specific: the matmul<->combine sync semaphore. In production,
+            // combine kernels signal it back to pace dm1's writes (consumer-producer); in
+            // compute_only there's no consumer, so we skip the wait and the inc.
             while (width_tiles_to_send > 0) {
                 const uint32_t width_tile_start = width_tile_base + width_tiles_sent;
                 const uint32_t dest_width_shard = width_tile_start / combine_shard_width_tiles;
@@ -275,8 +294,18 @@ void kernel_main() {
                     combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
                 const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
 
-                // wait for combine to signal that the buffer segment is available
-                noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
+                // In production: wait for combine to signal that the buffer segment is available.
+                // The wait also acts as an implicit barrier between chunks — `noc_async_write_one_packet_set_state`
+                // sets a global size state for subsequent posted writes, and consecutive chunks may use
+                // different `width_transfer_bytes`. Without the inter-chunk barrier, queued writes from a
+                // prior chunk could be issued with the next chunk's state.
+                // In compute_only there's no consumer to wait for, so we explicitly flush previous chunk's
+                // writes before reissuing set_state for this chunk.
+                if constexpr (compute_only) {
+                    noc_async_posted_writes_flushed(/*noc=*/1);
+                } else {
+                    noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
+                }
 
                 uint32_t dest_height_shard = dest_height_shard_start;
                 uint32_t shard_row = shard_row_start;
@@ -324,10 +353,17 @@ void kernel_main() {
             noc_semaphore_inc</*posted=*/true>(
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         }
-        combine_semaphore_inc();
+        if constexpr (!compute_only) {
+            combine_semaphore_inc();
+            combine_semaphore_val += height_shard_dim;
+        }
+        // (compute_only branch: nothing to do — the next expert's first chunk flushes any
+        //  in-flight writes via the inter-chunk flush before its set_state. Output buffer
+        //  toggle below picks the other half so there's no destination overlap either.)
         output_buffer_idx = !output_buffer_idx;
-        combine_semaphore_val += height_shard_dim;
     }
-    noc_semaphore_set(combine_semaphore_ptr, 0);
+    if constexpr (!compute_only) {
+        noc_semaphore_set(combine_semaphore_ptr, 0);
+    }
     noc_async_posted_writes_flushed(/*noc=*/1);
 }

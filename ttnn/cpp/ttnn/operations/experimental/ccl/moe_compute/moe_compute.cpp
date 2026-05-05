@@ -27,7 +27,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore,
-    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type) {
+    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
+    const bool compute_only) {
     return ttnn::prim::moe_compute(
         tilize_input_tensor,
         tilize_expert_indices_tensor,
@@ -45,7 +46,8 @@ std::vector<ttnn::Tensor> moe_compute(
         output_memory_config,
         optional_output_tensor,
         optional_cross_device_semaphore,
-        activation_type);
+        activation_type,
+        compute_only);
 }
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
