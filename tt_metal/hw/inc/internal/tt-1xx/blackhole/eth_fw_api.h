@@ -73,6 +73,8 @@ struct chip_info_t {
     uint32_t req_ack;
 };
 
+static_assert(sizeof(chip_info_t) == 32, "chip_info_t size is not 32 bytes");
+
 struct eth_status_t {
     // Basic status
     uint32_t postcode;
@@ -85,6 +87,8 @@ struct eth_status_t {
     // Heartbeat
     uint32_t heartbeat[4];
 };
+
+static_assert(sizeof(eth_status_t) == 128, "eth_status_t size is not 128 bytes");
 
 struct serdes_results_t {
     uint32_t postcode;
@@ -138,6 +142,8 @@ struct serdes_results_t {
     uint32_t serdes_reset_deassert_timestamp_lo;
 };
 
+static_assert(sizeof(serdes_results_t) == 256, "serdes_results_t size is not 256 bytes");
+
 struct macpcs_results_t {
     uint32_t postcode;
 
@@ -154,6 +160,8 @@ struct macpcs_results_t {
     uint32_t macpcs_reset_deassert_timestamp_hi;
     uint32_t macpcs_reset_deassert_timestamp_lo;
 };
+
+static_assert(sizeof(macpcs_results_t) == 128, "macpcs_results_t size is not 128 bytes");
 
 struct eth_live_status_t {
     uint32_t retrain_count;
@@ -217,6 +225,8 @@ struct eth_mailbox_t {
 struct all_eth_mailbox_t {
     eth_mailbox_t mailbox[4];  // 4 mailbox entries, 0 - Host, 1 - RSIC1, 2 - CMFW, 3 - Other
 };
+
+static_assert(sizeof(all_eth_mailbox_t) == 64, "all_eth_mailbox_t size is not 64 bytes");
 
 struct boot_results_t {
     eth_status_t eth_status;
