@@ -59,12 +59,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         4 /* num_faces */);
 
     _llk_unpack_tilize_init_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1, FACE_R_DIM, false);
+#ifdef ARCH_BLACKHOLE
+    _llk_unpack_tilize_(L1_ADDRESS(params.buffer_A[0]), 0, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, FACE_R_DIM, 4, false);
+#else
     _llk_unpack_tilize_(
         L1_ADDRESS(params.buffer_A[0]), 0, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, block_ct_dim, FACE_R_DIM, 4, false);
+#endif
 
     _llk_unpack_tilize_init_(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, 1, FACE_R_DIM, false);
+#ifdef ARCH_BLACKHOLE
+    _llk_unpack_tilize_(L1_ADDRESS(params.buffer_B[0]), 0, formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, FACE_R_DIM, 4, false);
+#else
     _llk_unpack_tilize_(
         L1_ADDRESS(params.buffer_B[0]), 0, formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, block_ct_dim, FACE_R_DIM, 4, false);
+#endif
 
     /*
     In this test we fuse two LLK pipeline runs, one is to unpack untilized buffers/operands from L1 (39-45) and pack them in tilized format(130-145).

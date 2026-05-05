@@ -29,7 +29,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false);
 
     // Unpack and tilize single tile A (stored in src A register - index 0)
+#ifdef ARCH_BLACKHOLE
+    _llk_unpack_tilize_(L1_ADDRESS(params.buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, FACE_R_DIM, 4, false);
+#else
     _llk_unpack_tilize_(L1_ADDRESS(params.buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, 4, false);
+#endif
 }
 
 #endif

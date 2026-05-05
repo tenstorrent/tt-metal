@@ -59,6 +59,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         std::uint32_t tile_row_addr = L1_ADDRESS(params.buffer_A[read_offset]);
         for (std::uint32_t col = 0; col < params.BLOCK_CT_DIM; ++col)
         {
+#ifdef ARCH_BLACKHOLE
+            _llk_unpack_tilize_(
+                tile_row_addr,
+                col,
+                formats.unpack_A_src,
+                formats.unpack_A_dst,
+                FACE_R_DIM,
+                num_faces,
+                false // narrow_tile disabled for now
+            );
+#else
             _llk_unpack_tilize_(
                 tile_row_addr,
                 col,
@@ -69,6 +80,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 num_faces,
                 false // narrow_tile disabled for now
             );
+#endif
         }
         read_offset += params.BLOCK_CT_DIM;
     }

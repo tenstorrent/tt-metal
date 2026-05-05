@@ -76,7 +76,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
                 for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                 {
+#ifdef ARCH_BLACKHOLE
+                    _llk_unpack_tilize_(tile_row_addr, j, formats.unpack_A_src, formats.unpack_A_dst, FACE_R_DIM, 4, false);
+#else
                     _llk_unpack_tilize_(tile_row_addr, j, formats.unpack_A_src, formats.unpack_A_dst, 0, FACE_R_DIM, 4, false);
+#endif
                 }
             }
         }
