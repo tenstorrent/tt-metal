@@ -315,6 +315,9 @@ def gated_attention_forward_ttnn(
         )
         # Paged SDPA decode
         q_decode = ttnn.transpose(query_states, 1, 2)  # [B, H_q, 1, D] -> [B, 1, H_q, D] = [1, B, H_q, D] for B=1
+        # paged_scaled_dot_product_attention_decode requires Q in DRAM when not sharded
+        # (sdpa_decode_device_operation.cpp:89). transpose preserves L1 layout from query_states.
+        q_decode = ttnn.to_memory_config(q_decode, ttnn.DRAM_MEMORY_CONFIG)
         attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q_decode,
             paged_kv_cache_key,
