@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 import diffusers
@@ -21,16 +21,51 @@ import ttnn
 
 from ...models.transformers.transformer_flux2 import Flux2Transformer
 from ...models.vae.vae_flux2 import Flux2VaeDecoder
-from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
+from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 from .prompt_encoder import PromptEncoder
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
+    from collections.abc import Sequence
 
     from PIL import Image
+
+
+class StateTensor:
+    def __init__(self) -> None:
+        self._value: ttnn.Tensor | None = None
+
+    def update(
+        self,
+        value: torch.Tensor | ttnn.Tensor,
+        traced: bool,
+        mesh_axes: list[int] | None = None,
+        device: ttnn.Device | None = None,
+    ) -> None:
+        if torch.is_tensor(value):
+            assert device is not None, "device must be provided if using torch tensor"
+            value = tensor.from_torch(value, device=device, mesh_axes=mesh_axes)
+        if self._value is None or not traced:
+            self._value = value
+        else:
+            ttnn.copy(value, self._value)
+
+
+class Flux2TransformerState:
+    def __init__(self) -> None:
+        self._tt_prompt_embeds = StateTensor()
+        self._tt_latents_step = StateTensor()
+        self._tt_guidance = StateTensor()
+        self._tt_spatial_rope_cos = StateTensor()
+        self._tt_spatial_rope_sin = StateTensor()
+        self._tt_prompt_rope_cos = StateTensor()
+        self._tt_prompt_rope_sin = StateTensor()
+        self._tt_timestep = StateTensor()
+
+    def __getattr__(self, name: str) -> ttnn.Tensor | None:
+        return object.__getattribute__(self, f"_{name}")._value
 
 
 class Flux2Pipeline:
@@ -39,9 +74,7 @@ class Flux2Pipeline:
         *,
         mesh_device: ttnn.MeshDevice,
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
-        encoder_on_device: bool = True,
-        vae_on_device: bool = True,
-        parallel_config: DiTParallelConfig,
+        parallel_config: DiTGParallelConfigNoCFG,
         encoder_parallel_config: EncoderParallelConfig | None = None,
         vae_parallel_config: VAEParallelConfig | None = None,
         topology: ttnn.Topology,
@@ -50,6 +83,7 @@ class Flux2Pipeline:
         width: int = 1024,
         is_fsdp: bool = False,
         dynamic_load: bool = False,
+        trace_warmup: bool = False,
     ) -> None:
         self.timing_collector = None
 
@@ -82,26 +116,9 @@ class Flux2Pipeline:
         self._encoder_parallel_config = encoder_parallel_config
         self._vae_parallel_config = vae_parallel_config
 
-        # Create submeshes based on CFG parallel configuration
-        submesh_shape = list(mesh_device.shape)
-        submesh_shape[parallel_config.sequence_parallel.mesh_axis] = parallel_config.sequence_parallel.factor
-        submesh_shape[parallel_config.tensor_parallel.mesh_axis] = parallel_config.tensor_parallel.factor
         logger.info(f"Parallel config: {parallel_config}")
-        # logger.info(f"Original mesh shape: {mesh_device.shape}")
-        # logger.info(f"Creating submeshes with shape {submesh_shape}")
-        self._submesh_devices = self._mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape))[
-            0 : parallel_config.cfg_parallel.factor
-        ]
-        self._ccl_managers = [
-            CCLManager(submesh_device, num_links=num_links, topology=topology)
-            for submesh_device in self._submesh_devices
-        ]
 
-        self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
-        self.vae_submesh_idx = len(self._submesh_devices) - 1  # Use other submesh for VAE.
-        self.encoder_device = self._submesh_devices[self.encoder_submesh_idx] if encoder_on_device else None
-        self.encoder_mesh_shape = self.encoder_device.shape
-        self.vae_device = self._submesh_devices[self.vae_submesh_idx]
+        self._ccl_manager = CCLManager(self._mesh_device, num_links=num_links, topology=topology)
 
         logger.info("loading models...")
 
@@ -136,153 +153,119 @@ class Flux2Pipeline:
         else:
             padding_config = None
 
-        self.transformers = []
-        for i, submesh_device in enumerate(self._submesh_devices):
-            tt_transformer = Flux2Transformer(
-                in_channels=128,
-                num_layers=8,
-                num_single_layers=48,
-                attention_head_dim=head_dim,
-                num_attention_heads=num_heads,
-                joint_attention_dim=15360,
-                out_channels=128,
-                device=submesh_device,
-                ccl_manager=self._ccl_managers[i],
-                parallel_config=parallel_config,
-                padding_config=padding_config,
-                is_fsdp=self.is_fsdp,
-            )
-            self.transformers.append(tt_transformer)
+        self.transformer = Flux2Transformer(
+            in_channels=128,
+            num_layers=8,
+            num_single_layers=48,
+            attention_head_dim=head_dim,
+            num_attention_heads=num_heads,
+            joint_attention_dim=15360,
+            out_channels=128,
+            device=mesh_device,
+            ccl_manager=self._ccl_manager,
+            parallel_config=parallel_config,
+            padding_config=padding_config,
+            is_fsdp=self.is_fsdp,
+        )
 
         self._pos_embed = self._torch_transformer.pos_embed
 
         self._image_processor = VaeImageProcessor()
 
         logger.info("creating TT-NN text encoder...")
-        with self.encoder_reshape(self.encoder_device):
-            self._prompt_encoder = PromptEncoder(
-                checkpoint_name=checkpoint_name,
-                use_torch_encoder=not encoder_on_device,
-                device=self.encoder_device,
-                parallel_config=self._encoder_parallel_config,
-                ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
-            )
+        self._prompt_encoder = PromptEncoder(
+            checkpoint_name=checkpoint_name,
+            use_torch_encoder=False,
+            device=self._mesh_device,
+            parallel_config=self._encoder_parallel_config,
+            ccl_manager=self._ccl_manager,
+        )
 
-        if vae_on_device:
-            logger.info("creating TT-NN VAE decoder...")
-            self._vae_decoder = Flux2VaeDecoder(
-                out_channels=3,
-                block_out_channels=[128, 256, 512, 512],
-                layers_per_block=2,
-                z_channels=32,
-                device=self.vae_device,
-                parallel_config=self._vae_parallel_config,
-                ccl_manager=self._ccl_managers[self.vae_submesh_idx],
-            )
-        else:
-            self._vae_decoder = None
+        logger.info("creating TT-NN VAE decoder...")
+        self._vae_decoder = Flux2VaeDecoder(
+            out_channels=3,
+            block_out_channels=[128, 256, 512, 512],
+            layers_per_block=2,
+            z_channels=32,
+            device=self._mesh_device,
+            parallel_config=self._vae_parallel_config,
+            ccl_manager=self._ccl_manager,
+        )
 
         if self.dynamic_load:
-            if encoder_on_device:
-                self.transformers[self.encoder_submesh_idx].register_coresident_exclusions(
-                    self._prompt_encoder._encoder
-                )
-                self._prompt_encoder._encoder.register_coresident_exclusions(
-                    self.transformers[self.encoder_submesh_idx]
-                )
-
-            if vae_on_device:
-                self.transformers[self.vae_submesh_idx].register_coresident_exclusions(self._vae_decoder)
-                self._vae_decoder.register_coresident_exclusions(self.transformers[self.vae_submesh_idx])
+            self.transformer.register_coresident_exclusions(self._prompt_encoder._encoder, self._vae_decoder)
+            self._prompt_encoder._encoder.register_coresident_exclusions(self.transformer)
+            self._vae_decoder.register_coresident_exclusions(self.transformer)
 
         # Load in reverse order of use so the first-used model (encoder) stays loaded before __call__.
         self._prepare_vae()
-        for i in range(len(self.transformers)):
-            self._prepare_transformer(i)
+        self._prepare_transformer()
         self._prepare_prompt_encoder()
-        if self.encoder_device is not None:
-            ttnn.synchronize_device(self.encoder_device)
-        if self.vae_device is not None:
-            ttnn.synchronize_device(self.vae_device)
 
-        self.warmup()
+        self.ts = Flux2TransformerState()
 
-    def warmup(self) -> None:
+        self.warmup()  # E2E warmup
+        if trace_warmup:  # warmup for trace capture
+            self.warmup(traced=True)
+
+    def warmup(self, traced: bool = False) -> None:
+        logger.info(f"Warming up pipeline with trace {'enabled' if traced else 'disabled'}...")
         self.__call__(
             prompts=["warmup"],
             num_inference_steps=2,
             seed=0,
-            traced=False,
+            traced=traced,
         )
 
-    def _prepare_transformer(self, i: int) -> None:
+    def _prepare_transformer(self) -> None:
         cache.load_model(
-            tt_model=self.transformers[i],
+            tt_model=self.transformer,
             get_torch_state_dict=self._torch_transformer.state_dict,
             model_name=os.path.basename(self.checkpoint_name),
             subfolder="transformer",
             parallel_config=self._parallel_config,
-            mesh_shape=tuple(self._submesh_devices[i].shape),
+            mesh_shape=tuple(self._mesh_device.shape),
             is_fsdp=self.is_fsdp,
         )
+        ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_prompt_encoder(self) -> None:
-        with self.encoder_reshape(self.encoder_device):
-            self._prompt_encoder.load_weights()
+        self._prompt_encoder.load_weights()
+        ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_vae(self) -> None:
-        if self._vae_decoder is not None:
-            cache.load_model(
-                tt_model=self._vae_decoder,
-                get_torch_state_dict=self._torch_vae.state_dict,
-                model_name=os.path.basename(self.checkpoint_name),
-                subfolder="vae",
-                parallel_config=self._vae_parallel_config,
-                mesh_shape=tuple(self.vae_device.shape),
-            )
-
-    @contextmanager
-    def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
-        if device is None:
-            yield
-            return
-
-        original_mesh_shape = ttnn.MeshShape(tuple(device.shape))
-        assert (
-            original_mesh_shape.mesh_size() == self.encoder_mesh_shape.mesh_size()
-        ), f"Device cannot be reshaped device shape: {device.shape} encoder mesh shape: {self.encoder_mesh_shape}"
-        if original_mesh_shape != self.encoder_mesh_shape:
-            device.reshape(self.encoder_mesh_shape)
-        yield
-        if original_mesh_shape != device.shape:
-            device.reshape(original_mesh_shape)
+        cache.load_model(
+            tt_model=self._vae_decoder,
+            get_torch_state_dict=self._torch_vae.state_dict,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="vae",
+            parallel_config=self._vae_parallel_config,
+            mesh_shape=tuple(self._mesh_device.shape),
+        )
+        ttnn.synchronize_device(self._mesh_device)
 
     @staticmethod
     def create_pipeline(
         *,
         mesh_device: ttnn.MeshDevice,
-        dit_cfg: tuple[int, int],
         dit_sp: tuple[int, int],
         dit_tp: tuple[int, int],
         encoder_tp: tuple[int, int],
         vae_tp: tuple[int, int],
-        encoder_on_device: bool = True,
-        vae_on_device: bool = True,
         num_links: int,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         width: int = 1024,
         height: int = 1024,
         is_fsdp: bool = False,
         dynamic_load: bool = False,
+        trace_warmup: bool = False,
     ) -> Flux2Pipeline:
-        cfg_factor, cfg_axis = dit_cfg
         sp_factor, sp_axis = dit_sp
         tp_factor, tp_axis = dit_tp
         encoder_tp_factor, encoder_tp_axis = encoder_tp
         vae_tp_factor, vae_tp_axis = vae_tp
 
-        dit_parallel_config = DiTParallelConfig(
-            cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
+        dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
             sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
         )
@@ -300,8 +283,6 @@ class Flux2Pipeline:
 
         return Flux2Pipeline(
             mesh_device=mesh_device,
-            encoder_on_device=encoder_on_device,
-            vae_on_device=vae_on_device,
             parallel_config=dit_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             vae_parallel_config=vae_parallel_config,
@@ -311,6 +292,7 @@ class Flux2Pipeline:
             height=height,
             is_fsdp=is_fsdp,
             dynamic_load=dynamic_load,
+            trace_warmup=trace_warmup,
         )
 
     def __call__(
@@ -328,7 +310,6 @@ class Flux2Pipeline:
         prompt_count = len(prompts)
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
-        cfg_factor = self._parallel_config.cfg_parallel.factor
 
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
@@ -351,10 +332,9 @@ class Flux2Pipeline:
                     )
 
             with timer.time_section("total_encoding") if timer else nullcontext():
-                with self.encoder_reshape(self.encoder_device):
-                    prompt_embeds, _mask = self._prompt_encoder.encode(
-                        prompts, num_images_per_prompt=num_images_per_prompt, sequence_length=512
-                    )
+                prompt_embeds, _mask = self._prompt_encoder.encode(
+                    prompts, num_images_per_prompt=num_images_per_prompt, sequence_length=512
+                )
             _, prompt_sequence_length, _ = prompt_embeds.shape
 
             logger.info("preparing timesteps...")
@@ -379,65 +359,33 @@ class Flux2Pipeline:
             prompt_rope_cos, prompt_rope_sin = self._pos_embed.forward(text_ids)
             spatial_rope_cos, spatial_rope_sin = self._pos_embed.forward(image_ids)
 
-            tt_prompt_embeds_list = []
-            tt_latents_step_list = []
-            tt_guidance_list = []
-            tt_spatial_rope_cos_list = []
-            tt_spatial_rope_sin_list = []
-            tt_prompt_rope_cos_list = []
-            tt_prompt_rope_sin_list = []
-            for i, submesh_device in enumerate(self._submesh_devices):
-                tt_prompt_embeds = tensor.from_torch(prompt_embeds, device=submesh_device)
-
-                tt_initial_latents = tensor.from_torch(latents, device=submesh_device, mesh_axes=[None, sp_axis, None])
-
-                tt_guidance = tensor.from_torch(guidance.unsqueeze(1), device=submesh_device)
-
-                tt_spatial_rope_cos = tensor.from_torch(
-                    spatial_rope_cos, device=submesh_device, mesh_axes=[sp_axis, None]
-                )
-                tt_spatial_rope_sin = tensor.from_torch(
-                    spatial_rope_sin, device=submesh_device, mesh_axes=[sp_axis, None]
-                )
-                tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos, device=submesh_device)
-                tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin, device=submesh_device)
-
-                tt_prompt_embeds_list.append(tt_prompt_embeds)
-                tt_latents_step_list.append(tt_initial_latents)
-                tt_guidance_list.append(tt_guidance)
-                tt_spatial_rope_cos_list.append(tt_spatial_rope_cos)
-                tt_spatial_rope_sin_list.append(tt_spatial_rope_sin)
-                tt_prompt_rope_cos_list.append(tt_prompt_rope_cos)
-                tt_prompt_rope_sin_list.append(tt_prompt_rope_sin)
+            self.ts._tt_prompt_embeds.update(prompt_embeds, traced, device=self._mesh_device)
+            self.ts._tt_latents_step.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
+            self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
+            self.ts._tt_spatial_rope_cos.update(
+                spatial_rope_cos, traced, mesh_axes=[sp_axis, None], device=self._mesh_device
+            )
+            self.ts._tt_spatial_rope_sin.update(
+                spatial_rope_sin, traced, mesh_axes=[sp_axis, None], device=self._mesh_device
+            )
+            self.ts._tt_prompt_rope_cos.update(prompt_rope_cos, traced, device=self._mesh_device)
+            self.ts._tt_prompt_rope_sin.update(prompt_rope_sin, traced, device=self._mesh_device)
 
             logger.info("denoising...")
-            for i in range(len(self.transformers)):
-                self._prepare_transformer(i)
+            self._prepare_transformer()
 
             for i, t in enumerate(tqdm.tqdm(timesteps)):
                 with timer.time_step("denoising_step") if timer else nullcontext():
                     sigma_difference = (sigmas[i + 1] - sigmas[i]).item()
 
-                    tt_timestep_list = []
-                    for submesh_device in self._submesh_devices:
-                        tt_timestep = tensor.float32_tensor(
-                            torch.full([1, 1], fill_value=float(t)),
-                            device=None if traced else submesh_device,
-                        )
-                        tt_timestep_list.append(tt_timestep)
+                    self.ts._tt_timestep.update(
+                        tensor.float32_tensor(torch.full([1, 1], fill_value=float(t)), device=self._mesh_device),
+                        traced,
+                    )
 
-                    tt_latents_step_list = self._step(
-                        timestep=tt_timestep_list,
-                        guidance=tt_guidance_list,
-                        latents=tt_latents_step_list,
-                        cfg_enabled=False,
-                        prompt_embeds=tt_prompt_embeds_list,
-                        cfg_scale=1.0,
+                    self._step(
+                        ts=self.ts,
                         sigma_difference=sigma_difference,
-                        spatial_rope_cos=tt_spatial_rope_cos_list,
-                        spatial_rope_sin=tt_spatial_rope_sin_list,
-                        prompt_rope_cos=tt_prompt_rope_cos_list,
-                        prompt_rope_sin=tt_prompt_rope_sin_list,
                         spatial_sequence_length=spatial_sequence_length,
                         prompt_sequence_length=prompt_sequence_length,
                         traced=traced,
@@ -447,11 +395,8 @@ class Flux2Pipeline:
 
             with timer.time_section("vae_decoding") if timer else nullcontext():
                 self._prepare_vae()
-                # Sync because we don't pass a persistent buffer or a barrier semaphore.
-                ttnn.synchronize_device(self.vae_device)
-
-                tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
-                    tt_latents_step_list[self.vae_submesh_idx],
+                tt_latents = self._ccl_manager.all_gather_persistent_buffer(
+                    self.ts.tt_latents_step,
                     dim=1,
                     mesh_axis=sp_axis,
                     use_hyperparams=True,
@@ -488,17 +433,14 @@ class Flux2Pipeline:
                     with torch.no_grad():
                         decoded_output = vae.decode(torch_latents).sample
                 else:
-                    with self.encoder_reshape(self.encoder_device):
-                        tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
-                        tt_latents = self._vae_decoder.preprocess_and_unpatchify(
-                            tt_latents,
-                            height=self._height // self._vae_scale_factor,
-                            width=self._width // self._vae_scale_factor,
-                        )
-                        tt_decoded_output = self._vae_decoder.forward(tt_latents)
-                        decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(
-                            0, 3, 1, 2
-                        )
+                    tt_latents = tensor.from_torch(torch_latents, device=self._mesh_device)
+                    tt_latents = self._vae_decoder.preprocess_and_unpatchify(
+                        tt_latents,
+                        height=self._height // self._vae_scale_factor,
+                        width=self._width // self._vae_scale_factor,
+                    )
+                    tt_decoded_output = self._vae_decoder.forward(tt_latents)
+                    decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
 
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 assert isinstance(image, torch.Tensor)
@@ -510,7 +452,6 @@ class Flux2Pipeline:
     def _step_inner(
         self,
         *,
-        cfg_enabled: bool,
         latent: ttnn.Tensor,
         prompt: ttnn.Tensor,
         timestep: ttnn.Tensor,
@@ -521,13 +462,9 @@ class Flux2Pipeline:
         prompt_rope_sin: ttnn.Tensor,
         spatial_sequence_length: int,
         prompt_sequence_length: int,
-        submesh_id: int,
         traced: bool,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        if cfg_enabled and self._parallel_config.cfg_parallel.factor == 1:
-            latent = ttnn.concat([latent, latent])
-
-        noise_pred = self.transformers[submesh_id].forward(
+    ) -> ttnn.Tensor:
+        return self.transformer.forward(
             spatial=latent,
             prompt=prompt,
             timestep=timestep,
@@ -539,82 +476,32 @@ class Flux2Pipeline:
             traced=traced,
         )
 
-        return latent, noise_pred
-
     def _step(
         self,
         *,
-        cfg_enabled: bool,
-        cfg_scale: float,
+        ts: Flux2TransformerState,
         sigma_difference: float,
-        latents: list[ttnn.Tensor],
-        timestep: list[ttnn.Tensor],
-        guidance: list[ttnn.Tensor],
-        prompt_embeds: list[ttnn.Tensor],
-        spatial_rope_cos: list[ttnn.Tensor],
-        spatial_rope_sin: list[ttnn.Tensor],
-        prompt_rope_cos: list[ttnn.Tensor],
-        prompt_rope_sin: list[ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
         traced: bool,
-    ) -> list[ttnn.Tensor]:
-        sp_axis = self._parallel_config.sequence_parallel.mesh_axis
+    ) -> None:
+        noise_pred = self._step_inner(
+            latent=ts.tt_latents_step,
+            prompt=ts.tt_prompt_embeds,
+            timestep=ts.tt_timestep,
+            guidance=ts.tt_guidance,
+            spatial_rope_cos=ts.tt_spatial_rope_cos,
+            spatial_rope_sin=ts.tt_spatial_rope_sin,
+            prompt_rope_cos=ts.tt_prompt_rope_cos,
+            prompt_rope_sin=ts.tt_prompt_rope_sin,
+            spatial_sequence_length=spatial_sequence_length,
+            prompt_sequence_length=prompt_sequence_length,
+            traced=traced,
+        )
 
-        latents_out = []
-        noise_pred_list = []
-
-        for submesh_id in range(len(self._submesh_devices)):
-            latent, noise_pred = self._step_inner(
-                cfg_enabled=cfg_enabled,
-                latent=latents[submesh_id],
-                prompt=prompt_embeds[submesh_id],
-                timestep=timestep[submesh_id],
-                guidance=guidance[submesh_id],
-                spatial_rope_cos=spatial_rope_cos[submesh_id],
-                spatial_rope_sin=spatial_rope_sin[submesh_id],
-                prompt_rope_cos=prompt_rope_cos[submesh_id],
-                prompt_rope_sin=prompt_rope_sin[submesh_id],
-                spatial_sequence_length=spatial_sequence_length,
-                prompt_sequence_length=prompt_sequence_length,
-                submesh_id=submesh_id,
-                traced=traced,
-            )
-
-            latents_out.append(latent)
-            noise_pred_list.append(noise_pred)
-
-        if cfg_enabled:
-            if self._parallel_config.cfg_parallel.factor == 1:
-                split_pos = noise_pred_list[0].shape[0] // 2
-                uncond = noise_pred_list[0][0:split_pos]
-                cond = noise_pred_list[0][split_pos:]
-                noise_pred_list[0] = uncond + cfg_scale * (cond - uncond)
-            else:
-                # uncond and cond are replicated, so it is fine to get a single tensor from each
-                uncond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[0])[0].cpu(blocking=True)).to(
-                    torch.float32
-                )
-                cond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[1])[0].cpu(blocking=True)).to(
-                    torch.float32
-                )
-
-                torch_noise_pred = uncond + cfg_scale * (cond - uncond)
-
-                noise_pred_list[0] = tensor.from_torch(
-                    torch_noise_pred, device=self._submesh_devices[0], mesh_axes=[None, sp_axis, None]
-                )
-
-                noise_pred_list[1] = tensor.from_torch(
-                    torch_noise_pred, device=self._submesh_devices[1], mesh_axes=[None, sp_axis, None]
-                )
-
-        for submesh_id, submesh_device in enumerate(self._submesh_devices):
-            ttnn.synchronize_device(submesh_device)  # Helps with accurate time profiling.
-            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference)
-            ttnn.add_(latents_out[submesh_id], noise_pred_list[submesh_id])
-
-        return latents_out
+        ttnn.synchronize_device(self._mesh_device)  # Helps with accurate time profiling.
+        ttnn.multiply_(noise_pred, sigma_difference)
+        ttnn.add_(ts.tt_latents_step, noise_pred)
 
     def _patchify(self, latents: torch.Tensor) -> torch.Tensor:
         # N, H, W, C -> N, (H / P) * (W / P), C * P * P

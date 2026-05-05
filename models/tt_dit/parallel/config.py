@@ -28,6 +28,11 @@ class DiTParallelConfig(NamedTuple):
         )
 
 
+class DiTGParallelConfigNoCFG(NamedTuple):
+    tensor_parallel: ParallelFactor
+    sequence_parallel: ParallelFactor
+
+
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
     sequence_parallel: ParallelFactor | None = None
