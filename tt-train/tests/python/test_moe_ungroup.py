@@ -132,8 +132,24 @@ def _round_up_32(x: int) -> int:
     return ((x + 31) // 32) * 32
 
 
+def _hal_l1_alignment_bytes() -> int:
+    """L1 NOC alignment in bytes from the same HAL-backed API the op uses."""
+    try:
+        import ttnn
+
+        return int(ttnn.get_l1_alignment())
+    except Exception:
+        # Reference-only tests can run without a visible device.
+        return 16
+
+
+def _cursor_align() -> int:
+    return _hal_l1_alignment_bytes() // 2
+
+
 def moe_group_t_cap(e_local: int, k: int, d: int, b: int, s: int, num_total_cores: int = 64) -> int:
-    return min(e_local, k) * d * b * s + e_local * (32 + 3 * num_total_cores)
+    cursor_align = _cursor_align()
+    return min(e_local, k) * d * b * s + e_local * (32 + (cursor_align - 1) * num_total_cores)
 
 
 def _make_dispatched(D: int, B: int, S: int, H: int, seed: int = 0) -> torch.Tensor:

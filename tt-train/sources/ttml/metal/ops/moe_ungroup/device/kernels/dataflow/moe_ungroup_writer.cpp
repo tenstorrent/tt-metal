@@ -40,8 +40,9 @@ constexpr uint32_t e_local = get_compile_time_arg_val(6);
 constexpr uint32_t num_total_cores = get_compile_time_arg_val(7);
 constexpr uint32_t brisc_done_sem_id = get_compile_time_arg_val(8);
 constexpr uint32_t brisc_release_sem_id = get_compile_time_arg_val(9);
+constexpr uint32_t l1_align = get_compile_time_arg_val(10);
 
-constexpr auto ungrouped_args = TensorAccessorArgs<10>();
+constexpr auto ungrouped_args = TensorAccessorArgs<11>();
 constexpr auto plan_args = TensorAccessorArgs<ungrouped_args.next_compile_time_args_offset()>();
 constexpr auto offsets_args = TensorAccessorArgs<plan_args.next_compile_time_args_offset()>();
 constexpr auto gs_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
@@ -84,7 +85,7 @@ void kernel_main() {
     // ---------------------------------------------------------------
     // L1 scratch layout in cb_scratch (BRISC):
     //   [zero_buf    (h*2 bytes)]
-    //   [offsets_buf ((e_local+1)*4 bytes, aligned 32)]
+    //   [offsets_buf (offset TensorAccessor page bytes)]
     //   [plan_buf    (32*4 bytes)]
     //   [w_buf       (32*2 bytes — bf16, read directly from grouped_scores)]
     //   [stage_buf   (32 * hidden_chunk_bytes — barrier-coalesced writeback)]
@@ -94,18 +95,22 @@ void kernel_main() {
     uint32_t off = 0U;
 
     uint32_t zero_buf_addr = scratch + off;
-    off += round_up(h * 2U, 32U);
+    // offsets_buf is read with a TensorAccessor page. BH requires the L1
+    // destination start to be aligned to that page size (64B for small rows).
+    off += round_up(h * 2U, off_page_bytes);
 
     uint32_t offsets_buf_addr = scratch + off;
-    off += round_up((e_local + 1U) * 4U, 32U);
+    // The DMA below reads a full TensorAccessor page. On BH, row-major uint32
+    // DRAM pages are 64B-aligned; reserving only L1/32B here corrupts plan/w_buf.
+    off += off_page_bytes;
     volatile tt_l1_ptr uint32_t* offsets_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_buf_addr);
 
     uint32_t plan_buf_addr = scratch + off;
-    off += round_up(32U * 4U, 32U);
+    off += round_up(32U * 4U, l1_align);
     volatile tt_l1_ptr uint32_t* plan_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_buf_addr);
 
     uint32_t w_buf_addr = scratch + off;
-    off += round_up(32U * sizeof(uint16_t), 32U);
+    off += round_up(32U * sizeof(uint16_t), l1_align);
     volatile tt_l1_ptr uint16_t* w_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(w_buf_addr);
 
     // OPT 1: 32 contiguous slots of hidden_chunk_bytes each — one per row of
