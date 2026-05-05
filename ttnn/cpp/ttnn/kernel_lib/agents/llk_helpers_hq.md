@@ -96,6 +96,20 @@ artifact is harder to redline once it exists than to design on paper.
 
 Compression modes (caveman, ultra, terse) do NOT override these gates.
 
+### Commit the artifact on acceptance
+
+The moment a proposal artifact (Gate 1: `{category}_helper_proposal.md`) or a test plan artifact (Gate 2: `{category}_test_plan.md`) clears its gate, **commit the approved file before starting the next phase**. The commit message names the gate and the user's approval message.
+
+Reason: the artifact must be git-permanent at the version that was approved. If implementation reveals a needed delta, the new version is a *new* commit that re-enters the gate — not an in-place edit of the approved file. In-place edits dissolve the audit trail of "what was actually signed off."
+
+Concretely:
+
+1. After Gate 1 sign-off, commit `{category}_helper_proposal.md` verbatim, then begin Phase 3.5 (Test Plan).
+2. After Gate 2 sign-off, commit `{category}_test_plan.md` verbatim, then begin Phase 4 (Validation).
+3. If the user lists deltas instead of a clean approval, revise the artifact, re-post for second sign-off, and commit only after that explicit approval — never before.
+
+Compression modes do NOT skip the commit step.
+
 ## Helper Design Principles (general)
 
 Rules below apply across every helper family, not just eltwise. Per-helper specifics (policy enum values, op-struct catalog, batching pitfalls) live in the helper's own header doc-comment.
@@ -109,6 +123,20 @@ A helper that asks the caller to do `cb_wait_front(cb_in0, 1)` *before* invoking
 ### DEST capacity is compile-time, never literal
 
 Half-sync fp16 has 8 DEST slots; full-sync has 16; fp32-DEST mode halves both. Use `DEST_AUTO_LIMIT` from `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp` (constexpr, derived from `get_dest_limit()` / `DST_ACCUM_MODE`) anywhere a helper bounds DEST slot indices, batch sizes, or chain widths. A literal `8` in an enum or `static_assert` ships a helper that silently miscompiles the moment the kernel runs in a different DEST mode. `DEST_AUTO_LIMIT` is already used across `binary_op_helpers.inl`, `sfpu_helpers.hpp`, `untilize_helpers.inl` — match that convention.
+
+### Helper API takes `uint32_t` cb id; `experimental::CircularBuffer` supported internally
+
+Public helper signatures take **only** the raw `uint32_t` cb id — never an `experimental::CircularBuffer` reference, never a templated CB-type wrapper. The single `uint32_t` parameter is the helper's contract with the caller.
+
+Internally, the helper is free to use `experimental::CircularBuffer` machinery — e.g. constructing an `experimental::CircularBuffer` from the id to query metadata, drive iterator-based access, or invoke features only the experimental type exposes. That is an implementation detail, not part of the API.
+
+Reason: kernels mid-transition to `experimental::CircularBuffer` and legacy kernels on the bare uint id share one API surface. The id is what every kernel already has; constructing the experimental wrapper inside the helper is cheap. Lifting the type into the signature forces every caller to construct one (or maintain two helper variants), and the surface drifts as some helpers take the wrapper and others don't.
+
+Where the helper queries CB metadata (page size, num pages, dtype), prefer compile-time `static_assert` paths when the metadata is reachable through the `experimental::CircularBuffer` constructed from the id, falling back to runtime reads when it is not. `if constexpr` selects between paths.
+
+### Reconfig is a first-class helper capability
+
+Every helper that bridges init / dtype / format state must expose reconfiguring as an in-helper option (policy enum, not caller-side fixup). Use `with_dt_tree`-style decomposition to map each reconfig variant to its underlying LLK calls — the mapping is the canonical reference for migration and pattern matching.
 
 ## Validation Tests
 
@@ -140,6 +168,8 @@ Run via:
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py
 ```
 
+Do NOT prefix with the shell `timeout` command — `run_safe_pytest.sh` and `tt-probe.sh` have built-in dispatch-timeout detection that runs `tt-triage` and emits the JSON triage report. An outer `timeout` kills the wrapper before triage runs and the hang artifact is lost.
+
 Phase 2 (Validate) of the pipeline is responsible for adding these tests —
 see [llk_validation_agent.md](llk_validation_agent.md) for the concrete
 sub-stage 2c / 2d steps.
@@ -150,7 +180,28 @@ Migration is the FINAL step — it consumes helpers that already exist and are v
 
 The steps below are helper-agnostic. Helper-specific guidance (policy enums, batching rules, op-struct catalog, fusion patterns) lives in the per-helper `.hpp` doc-comments and the helper's section of `llk_helpers_conventions.md` — read those for the helper you are migrating to before Step 1.
 
-### Step 1 — Audit the target kernel
+### Step 0 — Slim context before migration
+
+Before auditing the first kernel of a migration cycle, drop stale context that would mislead pattern matching:
+
+- Archive prior `agent_logs/` entries from helper-creation runs that preceded this migration cycle.
+- Strip closed gap-map entries; keep only open `GAP-N` rows that the migration may hit.
+- Drop superseded proposal artifacts and old investigation outputs that no longer reflect the helper's current API.
+
+Reason: bloated migration context surfaces dead op names, rejected enums, and pre-redesign claims as phantom requirements during audit. Pipeline-wide cycles (catalog → implementation) do NOT need this reset between phases — only the migration phase does.
+
+### Step 1 — Find tests that exercise the migration path
+
+Before reading a single LLK call in the kernel under migration:
+
+1. Look up the kernel's pytest in the [Pytest Manifest](#pytest-manifest).
+2. If the manifest row is missing, run the discovery procedure ([Pytest Manifest → Discovery procedure](#pytest-manifest)) and append the row before continuing.
+3. Verify the test JIT-compiles THIS exact kernel file (per [Verifying the Test Exercises the Changed Kernel](#verifying-the-test-exercises-the-changed-kernel)). Same-named files in other directories silently shadow the one being migrated; finding out post-migration that the test never touched the kernel is the worst failure mode.
+4. Run the test once UNCHANGED to establish a green baseline. A test that was already failing pre-migration is not a regression detector.
+
+Only after a green-baseline test exists does the migration proceed to audit (Step 2). Migration without a known-exercising test is unsupported — the result cannot be verified.
+
+### Step 2 — Audit the target kernel
 
 For the kernel being migrated, enumerate:
 
@@ -168,7 +219,7 @@ For the kernel being migrated, enumerate:
   - `if (runtime_bool)` → emit one helper call per branch; do NOT try to lift the runtime condition inside a compile-time helper composition.
   - Interleaved op classes in one DEST window (e.g. FPU+SFPU, matmul+eltwise) → only migratable if the target helper exposes a fusion / post-op extension point. Otherwise split into separate helper calls with an intermediate CB.
 
-### Step 2 — Gate-check against the helper API
+### Step 3 — Gate-check against the helper API
 
 If the audit turns up ANY of these, return to a prior step before writing the migration:
 
@@ -176,7 +227,7 @@ If the audit turns up ANY of these, return to a prior step before writing the mi
 - A required policy / enum value is missing (e.g. a CB lifecycle the helper does not yet model, a dtype-reconfig mode it does not emit) → Helper Update via pipeline, then resume.
 - The control-flow or LLK pattern is fundamentally unsupported (cumulative waits, deeply interleaved op classes with no fusion point, exotic pack patterns) → leave that block on raw LLK and move on.
 
-### Step 3 — Write the migration
+### Step 4 — Write the migration
 
 Keep the scope surgical:
 
@@ -186,7 +237,7 @@ Keep the scope surgical:
 - **Preserve surrounding CB lifecycle the helper does not own.** If the helper's policy declares it does not wait/pop a given CB (caller-managed / persistent), the kernel's existing `cb_wait_front` / `cb_pop_front` at the surrounding scope MUST stay.
 - **Trim includes only when fully unused.** Swap `api/compute/*.h` includes for `ttnn/cpp/ttnn/kernel_lib/*_helpers.hpp` only after every raw LLK call from that header is gone. Headers still needed by unmigrated paths in the same file stay.
 
-### Step 4 — Verify on device
+### Step 5 — Verify on device
 
 Build is necessary but **not** sufficient — kernels JIT at runtime, so a clean `./build_metal.sh` says nothing about correctness. Every migration MUST pass on real device.
 
@@ -196,7 +247,8 @@ Build is necessary but **not** sufficient — kernels JIT at runtime, so a clean
 - Run the operation's pytest(s). Resolve the path via the [Pytest Manifest](#pytest-manifest) instead of re-searching the tree each session.
 - Confirm the test exercises THIS kernel file — see [Verifying the Test Exercises the Changed Kernel](#verifying-the-test-exercises-the-changed-kernel). Same-named files in other directories silently shadow the one you changed.
 - Cover the dtype matrix the kernel supported pre-migration. Read the **program-factory dispatch table** for the original kernel and mirror that exact list as pytest params — do NOT just run the dtype the migration author happened to test on. Common silent omissions: `float32` input, `int32` input, `bfloat8_b` packed format, mixed `bfloat16 × float32`. At minimum run `fp32_dest_acc_en` ∈ {False, True} when the op tests FP32 accumulation, and any mixed-dtype combos the original kernel handled. If a dtype is intentionally dropped, document why in the test file. "It worked on bf16" is not coverage.
-- If any test fails: diagnose whether it's a helper gap (→ Step 2) or a migration mistake (→ Step 3). Do NOT relax the test or skip dtype combos to make it pass.
+- During a multi-kernel migration cycle, run ONE representative pytest per kernel (the row from the Pytest Manifest). Defer the full kernel_lib suite + cross-helper regression set to the end of the cycle. Per-kernel full-suite runs multiply wall time without adding coverage.
+- If any test fails: diagnose whether it's a helper gap (→ Step 3) or a migration mistake (→ Step 4). Do NOT relax the test or skip dtype combos to make it pass.
 
 #### Migrations untestable on the local agent
 
@@ -227,9 +279,9 @@ pipeline run; later runs append rows as new kernels are encountered.
 
 | Pipeline step | Write responsibility |
 |---|---|
-| Step 1 (audit) | If the target kernel is missing from the manifest, find its pytest (grep program factories → test imports), verify it runs, then append a row. |
-| Step 4 (verify) | Run every pytest listed for the touched kernel(s). If the manifest row was stale (path moved, test renamed), fix the row before reporting the migration done. |
-| Step 5 (record) | If the migration adds coverage on a *new* kernel that the test file didn't previously exercise, note that in the `*_analysis.md`; the manifest row needs no change (same pytest still covers it). |
+| Step 1 (find tests) | If the target kernel is missing from the manifest, run the discovery procedure (grep program factories → test imports), verify the test JIT-compiles the kernel, then append a row before continuing. |
+| Step 5 (verify) | Run every pytest listed for the touched kernel(s). If the manifest row was stale (path moved, test renamed), fix the row before reporting the migration done. |
+| Step 6 (record) | If the migration adds coverage on a *new* kernel that the test file didn't previously exercise, note that in the `*_analysis.md`; the manifest row needs no change (same pytest still covers it). |
 
 **Infrastructure regression set**: a separate section at the top of the
 manifest lists pytests that must run after any change to the shared helpers
@@ -250,7 +302,7 @@ manifest):
    and confirm the test fails to compile).
 5. Append the row; commit the manifest change alongside the migration.
 
-### Step 5 — Record the migration
+### Step 6 — Record the migration
 
 - Update `migration_blockers.md` or the relevant `*_analysis.md` to mark the kernel as migrated.
 - Cross-reference the helper feature(s) it now consumes so later removals notice the dependency.
@@ -330,6 +382,12 @@ Rules below govern the migration pipeline / orchestration layer itself. These ar
 ### HQ doc carries helper-agnostic blockers only
 
 This document must list only blockers that apply across **every** helper family — control-flow shape, CB lifecycle hand-off across helper boundaries, in-DEST hold loops, init-state clobbering, dtype dispatch matching. Helper-specific blockers (e.g. eltwise's `WaitAndPop + cb_tile_idx == 0` rule, `Auto + PerTile` deadlock at small CB capacity) live in the helper's own header doc-comment. When this doc accumulates eltwise-only or reduce-only items it sets a false ceiling on what other helper families think is migratable. Audit this doc on every cycle: if a blocker mentions a specific policy enum value or a specific op struct, it does not belong here — move it to the helper header.
+
+### Catalog-coverage audit and remediation before close-out
+
+Every pipeline run ends with a diff of the Phase 0 catalog against the final helper export list. The audit is **remediation-first, not log-first** — every catalogued LLK missing from the final API gets **added** (op struct via the appropriate CRTP base, ~4 lines) before close-out. Drop is an exception, not a co-equal option: a `dropped: <reason>` row in the gap map is only acceptable when the LLK is genuinely out of scope (e.g. macro-injection-only, hardware-not-yet-landed) and a justification is recorded. If the audit produces drops, the pipeline does NOT close out — it loops back into implementation to add the missing op structs first.
+
+Silent omission has shipped helpers without coverage the catalog promised. Logging the gap without fixing it is the same failure with extra paperwork.
 
 ### Phase 2 has an explicit handoff step
 

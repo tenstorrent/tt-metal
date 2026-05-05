@@ -85,8 +85,9 @@ Launch ONE investigation agent per functional group, all in parallel. Each agent
 | **Encapsulation** | Compile-time feature matrix, cross-iteration state analysis, side-effect operations, parameter independence analysis |
 | **CB Management** | Every `cb_reserve_back`/`cb_push_back`/`cb_wait_front`/`cb_pop_front` in the production kernel with purpose annotation. Flag reserves that don't pair with an obvious push (shared memory protection), reserves used for flow control, and any CB overlap assumptions (e.g., out_cb and interm_cb sharing L1). Document which CBs share memory and what ordering constraints that creates. |
 | **Existing Helpers** | Grep all `.inl` files in `ttnn/cpp/ttnn/kernel_lib/` for `ASSERT`, `static_assert`, CB validation, DEST limit checks, and policy enum patterns. Produce a table of mandatory validation patterns that the new helper must include. Also note any reusable infrastructure (e.g., `get_cb_num_pages` from `cb_helpers.hpp`, `DEST_AUTO_LIMIT` from `dest_helpers.hpp`). |
+| **Init Surface** | For each op group, determine whether the chain prologue genuinely needs `compute_kernel_hw_startup(...)`, or whether a minimal subset of `*_init` / `*_init_short` / `hw_configure_*` / `reconfig_data_format_*` reproduces the same hw state. Output: per-op recommendation + reasoning, to be written into the helper's `.hpp` doc-comment when the helper is implemented. |
 
-All six focus areas are covered by a single agent per group. The agent's prompt specifies which focus areas to prioritize based on the category.
+All seven focus areas are covered by a single agent per group. The agent's prompt specifies which focus areas to prioritize based on the category.
 
 **Output**: `{category}_investigation.md` (orchestrator consolidates per-group outputs)
 
@@ -198,6 +199,8 @@ tests inline.
 
 Runs 4 sub-stages sequentially. Each gates the next.
 
+> Before sub-stage 4d, validation agent re-reads the Phase 0 catalog and verifies every catalogued LLK is reachable through the helper API. Missing ops loop back into implementation per [llk_helpers_hq.md → Catalog-coverage audit and remediation before close-out](llk_helpers_hq.md#catalog-coverage-audit-and-remediation-before-close-out).
+
 ### 4a: Raw LLK Validation
 
 Generate test kernels using raw LLK calls (not the helper) that exercise the EXACT proposed LLK sequences. Run on device against golden references.
@@ -233,6 +236,18 @@ Write test kernels using the ACTUAL helper API (.hpp). Test:
 
 - Helper fails but raw passed -> bug in .hpp/.inl, fix and re-run 4c only
 
+### Migration sub-loop: one test per kernel, full suite at end
+
+When Phase 5 (Implementation) migrates multiple kernels in sequence, each per-kernel migration runs ONE representative pytest from the Pytest Manifest. Run
+
+```
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py
+```
+
+once at the end across all kernels touched in the cycle.
+
+Rule lives at [llk_helpers_hq.md → Step 5](llk_helpers_hq.md#step-5--verify-on-device).
+
 ### 4d: Performance
 
 Benchmark helper vs raw LLK. Reuse raw kernels from 4a as baseline.
@@ -257,6 +272,7 @@ Thresholds: <2% OK, 2-5% REVIEW, >5% BLOCKER
 **Input**: Validated proposal + validation outputs
 
 Steps:
+0. Slim migration context — archive prior `agent_logs/`, strip closed gap-map entries, drop superseded proposal artifacts before auditing the first kernel. Rule at [llk_helpers_hq.md → Step 0 — Slim context before migration](llk_helpers_hq.md#step-0--slim-context-before-migration).
 1. Read validated proposal (signatures, op structs, LLK sequences, parameter support)
 2. Create `{name}_helpers.hpp` + `{name}_helpers.inl`
 3. Migrate Tier 1 call sites
@@ -277,6 +293,7 @@ Generate `{category}_report.md` containing:
 3. Validation results: per-op pass/fail, parameter support matrix, performance table
 4. Migration status: which call sites were updated
 5. Open items: Tier 2/3 sites, unsupported parameter combos
+6. **Catalog-vs-coverage diff**: every op enumerated in `{category}_catalog.md` either appears in the final helper export list OR has an explicit `dropped: <reason>` row in the gap map. No silent omissions. Audit is remediation-first — drops force a loop back into implementation, not a sign-off. Rule lives at [llk_helpers_hq.md → Catalog-coverage audit and remediation before close-out](llk_helpers_hq.md#catalog-coverage-audit-and-remediation-before-close-out).
 
 Commit the report.
 

@@ -13,12 +13,15 @@ The order is the order you should think in: type system → policy surface → c
 Three bases cover every eltwise SFPU op shape. Derived structs only define `init()` + `call()`:
 
 ```cpp
-template <typename Derived, Dst Slot>                                 struct UnaryOp;
-template <typename Derived, Dst In0, Dst In1, Dst Out>                struct BinaryOp;
-template <typename Derived, Dst In0, Dst In1, Dst In2, Dst Out>       struct TernaryOp;
+template <typename Derived, Dst Slot>                                          struct UnaryOp;
+template <typename Derived, Dst In0, Dst In1, Dst Out>                         struct BinaryOp;
+template <typename Derived, Dst In0, Dst In1, Dst In2, Dst Out>                struct TernaryOp;
+template <typename Derived, Dst In0, Dst In1, Dst In2, Dst In3, Dst Out>       struct QuaternaryOp;
 ```
 
 The base provides `dst_idx`/`in0`/`in1`/`out`, `max_dst`, `static_assert(<8)`, `exec()`, and `apply()` (which calls `init()` + `exec()`). Derived structs are 4 lines. Don't reintroduce hand-written `apply()`/`exec()` per op.
+
+`QuaternaryOp` covers 4-input SFPU ops (e.g. fused mask + scale + bias). DEST `static_assert` checks `Out + 1 < DEST_AUTO_LIMIT` and that all input slots are distinct.
 
 ### 1.2 Op struct templates carry ALL compile-time state
 
@@ -80,6 +83,14 @@ Same idea — static constexpr traits — used to enforce cross-element rules at
 
 `CopyTile` declares `static constexpr bool is_upfront` and `static constexpr uint32_t cb`. `DestReuseOp` declares the same pair. The chain walks every pair of elements and asserts no duplicate `cb` among those with `is_upfront == true`. Any future CB-input op opts in by declaring the same two statics — the `chain_has_duplicate_upfront_cbs_v` check covers it for free.
 
+### 1.8 Fill / rand tiles tagged distinctly from CB-load ops
+
+`FillTileTag {}` and `RandTileTag {}` are 0-byte markers separate from `CopyTileTag`. They denote chain elements that *write* a DEST slot from constants / RNG state — they do NOT consume from a CB.
+
+Why a separate tag: chain traits like `chain_loads_share_cb_v`, `chain_has_duplicate_upfront_cbs_v`, and `is_copy_tile_op_v` would mis-classify fill/rand under `CopyTileTag` (no CB to wait/pop, no indexing, no fan-out semantics). Conflating the two has shipped double-wait bugs in past chain combinator logic.
+
+`FillScalar`, `RandTile` derive from the new tag. They expose `is_upfront = false`, `clashes_with_fpu = false` by default.
+
 ---
 
 ## 2. Policy surface
@@ -123,7 +134,9 @@ The pipeline does not override per-tile wait/pop. Two same-CB elements with conf
 
 ### 2.3 Independent A/B policies for binary ops
 
-`binary_op` has independent `input_a_policy` and `input_b_policy` template params (with `input_b_policy = input_a_policy` as the default). This unlocks "A streams, B persists" patterns (`mul<ROW, WaitAndPopPerTile, WaitUpfrontNoPop>`) without forcing the helper to grow per-pattern entry points.
+The binary FPU chain element exposes independent `input_a_policy` and `input_b_policy` template params (with `input_b_policy = input_a_policy` as the default). This unlocks "A streams, B persists" patterns (`Mul<ROW, WaitAndPopPerTile, WaitUpfrontNoPop>{}` placed inside `eltwise_chain(...)`) without forcing the chain to grow per-pattern element types.
+
+Note: this section talks about the **binary FPU chain element**, not a separate `binary_op` helper. Per §3.8, binary FPU is a chain element; `binary_op` (if it appears in older prose or shipped code) is the historical standalone-helper shape that should be collapsed into the chain.
 
 ### 2.4 Reconfig naming parity across enums
 
@@ -139,7 +152,7 @@ Don't ship `Reconfig=true/false` template params. `DestReuseReconfig::None / Inp
 
 ### 2.7 CB indexing modes — constrained by the wait shape
 
-Every chain element that reads from a CB (CopyTile, `binary_op` A/B operands, `DestReuseOp` CB side, any future CB-input op) must support the four indexing patterns kernels actually use:
+Every chain element that reads from a CB (CopyTile, binary FPU A/B operands, `DestReuseOp` CB side, any future CB-input op) must support the four indexing patterns kernels actually use:
 
 | Index mode | Tile read each iteration | Used for |
 |---|---|---|
@@ -163,7 +176,7 @@ Two observations from the matrix:
 1. The four "single-tile-window" policies (`WaitAndPop`, `WaitNoPop`, `NoWaitPop`) admit only `FirstTile` (or `Pinned k=0`, which is the same tile). `BlockIter` and `Absolute` are structurally unsafe under them — pop-per-tile or wait-of-1 invalidate any index ≠ 0.
 2. `BlockIter` and `Absolute` only become legal when the wait shape stages a multi-tile window: explicit `WaitUpfrontPopAtEnd(N)`, or `NoWaitNoPop` where the caller staged it externally.
 
-Surface as a small enum (`CbIndexMode::FirstTile / BlockIter / Pinned / Absolute`) on the element, plus a runtime `cb_tile_idx_` field for `Pinned` / `Absolute`. `FirstTile` and `BlockIter` need no field. Mode is per-CB-operand — `binary_op` lets A and B pick independently (e.g. `A=BlockIter, B=Pinned` for `block * scalar` under `WaitUpfrontPopAtEnd`).
+Surface as a small enum (`CbIndexMode::FirstTile / BlockIter / Pinned / Absolute`) on the element, plus a runtime `cb_tile_idx_` field for `Pinned` / `Absolute`. `FirstTile` and `BlockIter` need no field. Mode is per-CB-operand — the binary FPU element lets A and B pick independently (e.g. `A=BlockIter, B=Pinned` for `block * scalar` under `WaitUpfrontPopAtEnd`).
 
 Validation:
 
@@ -171,13 +184,21 @@ Validation:
 - For runtime-supplied indices (`Pinned k`, `Absolute idx`), the `WaitUpfrontPopAtEnd(N)` path runtime-`ASSERT`s `idx < N`; the single-tile-window policies runtime-`ASSERT` the index is `0` (per §4.1).
 - `NoWaitNoPop` is the only escape hatch — caller asserts the window externally; helper trusts it - this can be unsafe, and shouldn't be default.
 
+### 2.8 Unary broadcast is a chain element, not a separate helper
+
+Unary bcast (one-tile-into-many, scalar-into-tile, row/col bcast on a single input) is a **chain element type** that participates in `eltwise_chain` the same way FPU `binary_op` does. It is NOT a separate `unary_bcast_op` helper, and NOT a flag on `CopyTile`.
+
+Surface: a chain element parameterized on `BroadcastDim::{NONE, ROW, COL, SCALAR}` (the same enum already in use by `binary_op`). Caller passes `BroadcastDim` explicitly — per §9, no inference. The element plugs into `eltwise_chain(...)` like any other chain participant; chain traits (`chain_has_any_copy_tile_v`, fan-out, reuse) extend to cover it via the existing trait machinery rather than special-case branches.
+
 ---
 
 ## 3. Composition
 
-### 3.1 One dispatch path, one extension point
+### 3.1 One dispatch path: the chain
 
-When the helper exposes an extension point (post-op slot, fusion hook, callback), give it a single canonical type. Don't accept "either a lambda OR a chain OR a single op." Pick one — the chain — and require single-op uses to wrap (`eltwise_chain(Rsqrt<...>{})`). One mental model for the user, one set of compile-time guarantees, one path through the implementation. Multiple accepted forms each grow their own corner-case rules and validation static_asserts; collapsing to one wins on every axis.
+There is no "post-op slot," "fusion hook," or "callback" extension point — that vocabulary is a remnant of the standalone-`binary_op` shape (§3.8) where binary FPU was the helper and everything else was an addendum. Once binary FPU is a chain element, "post" is just the next chain element; "fusion" is just two chain elements; "callback" is just a chain element. The chain is the dispatch path.
+
+Don't accept "either a lambda OR a chain OR a single op." Single ops wrap in `eltwise_chain(Rsqrt<...>{})`. One mental model for the user, one set of compile-time guarantees, one path through the implementation. Multiple accepted forms each grow their own corner-case rules and validation static_asserts; collapsing to one wins on every axis.
 
 ### 3.2 Express FPU-clobbering as a trait, not a special case
 
@@ -240,6 +261,39 @@ The eltwise chain pipeline wraps a full `tile_regs_acquire / commit / wait / rel
 
 Investigate before refusing: confirm the kernel genuinely holds DEST (vs. re-loading from a CB each iteration). If it does, leave that block on raw LLK and flag the missing policy (split-acquire, `DestRetainPolicy`, or equivalent — caller takes the final release). Hoisting the outer loop into the helper just relocates the problem. Mark blocked kernels in the gap map until the policy lands.
 
+### 3.8 One eltwise helper, specialised convenience entry points — not parallel helpers
+
+Eltwise has **one** helper surface (`eltwise_chain` + the chain element type system). Frequently-used patterns ship as **specialised convenience entry points** that wrap the chain — not as parallel standalone helpers (`binary_op`, `unary_bcast_op`, `dest_reuse_op`, etc. living as peer top-level APIs).
+
+Pattern:
+
+```cpp
+// Underlying primitive (always available, fully expressive):
+eltwise_chain(CopyTile<cb_a>{}, CopyTile<cb_b>{}, Add{}, ...);
+
+// Convenience wrapper for the common case — thin, expands to the chain:
+binary_add(cb_a, cb_b, cb_out);              // == eltwise_chain(...)
+unary_bcast_mul(cb_in, BroadcastDim::ROW);   // == eltwise_chain(...)
+dest_reuse_mul(cb_in, dst_slot);             // == eltwise_chain(...)
+```
+
+Why:
+
+- Shared trait machinery (FPU clash, hoist safety, fan-out, CB lifecycle, reconfig deduction) lives once on the chain. Parallel helpers each grow their own copy and drift.
+- Fast call sites stay one-liners (the convenience wrapper is the same ergonomics as a standalone helper would be).
+- The "drop down to chain when convenience doesn't fit" path is trivial — convenience and chain are the same machinery.
+- Helper-design rules (Gate 1 / Gate 2, validation suite, gap map) apply to one surface, not N.
+
+Convenience entry points:
+
+- Are picked by frequency-of-use, not "every binary op gets one." A one-line wrapper for a pattern used in three kernels is noise; one for the pattern used in fifty kernels saves real call-site code.
+- Are pure inline forwarders to `eltwise_chain` — no logic of their own, no parallel policy enums, no separate validation kernels (the chain validation already covers them).
+- Live in the same `eltwise_chain.{hpp,inl}` (or a sibling `eltwise_convenience.hpp` aggregator), not in standalone files named after the pattern.
+
+**Binary FPU is a chain element, not a standalone helper.** The same rule that disqualified `unary_bcast_op` (§2.8) applies to `add_tiles` / `sub_tiles` / `mul_tiles` / every binary FPU op: each one is a chain element type that participates in `eltwise_chain` next to `CopyTile`, `DestReuseOp`, and the SFPU op structs. The only thing that ships *outside* `eltwise_chain` is the one-line convenience wrapper (`binary_add(...)`) — and that wrapper is a forwarder, not a separate helper API.
+
+Anti-pattern: shipping `binary_op` as a top-level helper with its own policy enums, its own reconfig surface, its own validation suite, parallel to `eltwise_chain`. That is the historical shape and it is wrong even though it shipped — it splits the trait machinery, splits the test surface, and forces every kernel that mixes binary FPU + SFPU + DEST reuse to know which helper owns which CB. Same critique applies to a hypothetical `unary_bcast_op`, `dest_reuse_op`, or `ternary_op` peer. There is one eltwise helper. Everything else is a chain element or a thin convenience wrapper.
+
 ---
 
 ## 4. Internal state hygiene
@@ -271,16 +325,21 @@ Catch bad chains at compile time. Runtime asserts are the fallback for things th
 Original monolithic `eltwise_helpers.{hpp,inl}` (~2600 lines, 1700 of header) was split into:
 
 ```
-eltwise_chain.{hpp,inl}        # core: Dst, policies, CRTP bases, CopyTile, EltwiseChain, eltwise_pipeline
-eltwise_activations / binary / math / misc / predicates / rounding / scalar / special / ternary / trig
+eltwise_chain.{hpp,inl}        # core: Dst, policies, CRTP bases, CopyTile, EltwiseChain, eltwise_pipeline,
+                               # all chain element types (binary FPU, unary bcast, dest reuse, fill, rand)
+eltwise_activations / math / misc / predicates / rounding / scalar / special / trig
 eltwise_helpers.hpp            # aggregator; backward-compat include
 ```
 
 Each file pulls in only the LLK headers it needs. Build time and "where does this op live" both improve. Keep the aggregator so existing call sites don't break.
 
+Note: the older split also carried separate `binary` / `ternary` files for `binary_op` / `ternary_op` standalone helpers. Per §3.8, binary FPU and ternary FPU are chain element types — they live in `eltwise_chain.{hpp,inl}` next to `CopyTile`, not in their own files.
+
 ### 5.2 Examples in the header doc-comment, not a separate guide
 
-`binary_op_helpers.hpp`'s opening doc-comment has 10 worked examples covering basic add, broadcast variants, `WaitUpfrontNoPop` for softmax, `NoWaitNoPop` for sharded, independent A/B policies, skip-reconfig, `eltwise_chain(Rsqrt)` post-op, low-level `binary_op<>` form. Examples in the file the user already opened beat external docs that decay.
+`eltwise_chain.hpp`'s opening doc-comment carries the worked examples — basic `Add`, broadcast variants, `WaitUpfrontNoPop` for softmax, `NoWaitNoPop` for sharded, independent A/B policies, skip-reconfig, multi-element chains (binary FPU + SFPU + DEST reuse). Examples in the file the user already opened beat external docs that decay.
+
+(Historical note: examples used to live in `binary_op_helpers.hpp`. After the §3.8 collapse they move into `eltwise_chain.hpp` alongside the chain element types.)
 
 ### 5.3 BroadcastDim and Reduce↔Broadcast tables in the header
 
@@ -319,7 +378,7 @@ The eltwise validation suite at `ttnn/cpp/ttnn/kernel_lib/tests/chain_and_binary
 1. `chain_fanout_x_times_exp_x` — fan-out CB read with `WaitNoPop + NoWaitPop`, single-compute-op chain.
 2. `binary_same_cb_add` — same-CB wait/pop dedup. A broken dedup deadlocks or skips tiles.
 3. `binary_dest_reuse_mul` — `DestReuseOp` as chain element, FPU-clash reinit.
-4. `binary_postop_with_copy_tile` — `CopyTile` inside a PostOp chain.
+4. `chain_binary_then_copy_tile_reinit` — `CopyTile` chained after a binary FPU element (multi-element chain, FPU-clash reinit).
 
 Each parameterized over `num_tiles ∈ {1, 8, 64}` (single tile, fits in DEST, multi-DEST window). Tolerance accommodates compounded bf16 ULPs (rtol≈5e-2, atol≈1e-1 for products on `[-3, 3]`); a too-tight tolerance flags legit rounding.
 
@@ -333,9 +392,9 @@ Standard FPU binary (`add_tiles`, `sub_tiles`, `mul_tiles`) consumes srcA *and* 
 
 Test matrix must cover:
 
-- `binary_op` srcA-reconfig: A operand changes dtype, B unchanged.
-- `binary_op` srcB-reconfig: B operand changes dtype, A unchanged.
-- `binary_op` both reconfigured: A and B both change dtype between calls.
+- binary FPU element srcA-reconfig: A operand changes dtype, B unchanged.
+- binary FPU element srcB-reconfig: B operand changes dtype, A unchanged.
+- binary FPU element both reconfigured: A and B both change dtype between calls.
 - `DestReuseOp` srcA-reconfig (`CB_TO_SRCA`-style ReuseType): CB operand changes dtype.
 - `DestReuseOp` srcB-reconfig (`DEST_TO_SRCB`): DEST → srcB path with CB-side dtype change.
 
@@ -376,7 +435,7 @@ Close gaps by yield: kernels-unblocked-per-LOC. The gap map is the only roadmap;
 
 - **Auto fast paths.** Single-op fast paths in chains, auto-batching, auto-merge of same-CB CopyTiles. Make optimizations explicit, never silent.
 - **Default init hoisting.** Hoisting is opt-in and gated on the strict precondition set in §3.4 (chain = `CopyTile + 1 SFPU op`, single CB input, no clobbering element). Never the default — wrong output is not a perf win.
-- **Lambda/functor PostOp.** One dispatch path through `binary_op`. Single ops wrap in `eltwise_chain`.
+- **Lambdas / functors / "PostOp" extension points.** None of these exist as separate concepts. The chain is the dispatch path; "post" is just the next chain element (§3.1). Single ops wrap in `eltwise_chain`.
 - **Hidden broadcast inference.** `BroadcastDim` is always passed explicitly by the caller — the helper does NOT default-pick based on operand shape. Every value of the enum (e.g. `NONE` for no broadcast, `ROW` / `COL` for 1-D broadcasts, `SCALAR` for a 1×1 tile, plus any others the helper supports) is a distinct dispatch path the caller chooses; "infer it from `Ht`/`Wt`" is forbidden.
 - **Mid-loop dtype swaps without policy support.** Helpers do one entry-time reconfig. If the kernel switches dtypes mid-loop, that path stays raw or grows a mid-chain reinit policy.
 - **Skipping `fp32_dest_acc_en=True` testing.** Every binary migration runs against `fp32_dest_acc_en ∈ {False, True}` and any mixed-dtype combo the original supported.
