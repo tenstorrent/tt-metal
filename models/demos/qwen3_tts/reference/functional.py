@@ -2254,6 +2254,7 @@ def res2net_block(
     weights: dict,
     prefix: str,
     scale: int = 8,
+    dilation: int = 1,
 ) -> torch.Tensor:
     """
     Res2Net block with multi-scale feature extraction (matching official exactly).
@@ -2280,30 +2281,26 @@ def res2net_block(
     parts = list(torch.chunk(x, scale, dim=1))
     outputs = []
 
+    # Use the dilation passed in by the caller (HF passes dilation=2/3/4 for
+    # blocks 1/2/3 respectively). The previous code had a local
+    # `dilation = conv_weight.shape[-1] // 2 if ... else 1` that shadowed the
+    # parameter and forced dilation=1 — wrong receptive field for these blocks.
     output_part = None  # Track previous output for cumulative addition
     for i, hidden_part in enumerate(parts):
         if i == 0:
-            # First part passes through unchanged
             output_part = hidden_part
-        elif i == 1:
-            # Second part goes through first TDNN block
-            conv_weight = weights.get(f"{prefix}blocks.{i-1}.conv.weight")
-            conv_bias = weights.get(f"{prefix}blocks.{i-1}.conv.bias")
-            if conv_weight is not None:
-                dilation = conv_weight.shape[-1] // 2 if conv_weight.shape[-1] > 1 else 1
-                # Get dilation from the kernel and match official behavior
-                output_part = time_delay_net_block(hidden_part, conv_weight, conv_bias)
-            else:
-                output_part = hidden_part
         else:
-            # Parts 2+ add previous output before TDNN
             conv_weight = weights.get(f"{prefix}blocks.{i-1}.conv.weight")
             conv_bias = weights.get(f"{prefix}blocks.{i-1}.conv.bias")
             if conv_weight is not None:
-                output_part = time_delay_net_block(hidden_part + output_part, conv_weight, conv_bias)
+                if i == 1:
+                    output_part = time_delay_net_block(hidden_part, conv_weight, conv_bias, dilation=dilation)
+                else:
+                    output_part = time_delay_net_block(
+                        hidden_part + output_part, conv_weight, conv_bias, dilation=dilation
+                    )
             else:
-                output_part = hidden_part + output_part
-
+                output_part = hidden_part if i == 1 else (hidden_part + output_part)
         outputs.append(output_part)
 
     # Concatenate all outputs
@@ -2367,8 +2364,12 @@ def se_res2net_block(
     if tdnn1_weight is not None:
         x = time_delay_net_block(x, tdnn1_weight, tdnn1_bias, dilation=1)
 
-    # Res2Net block
-    x = res2net_block(x, weights, f"{prefix}res2net_block.", scale)
+    # Res2Net block — dilation comes from config.enc_dilations: blocks[1]=2, blocks[2]=3, blocks[3]=4.
+    # HF's SqueezeExcitationRes2NetBlock(dilation=...) passes this through to its
+    # internal Res2NetBlock(dilation=...) which makes each TDNN inside use the
+    # given dilation. We had been hard-coding dilation=1 → wrong receptive field.
+    res2net_dilation = block_idx + 1  # 2, 3, 4 for blocks 1, 2, 3
+    x = res2net_block(x, weights, f"{prefix}res2net_block.", scale, dilation=res2net_dilation)
 
     # TDNN2 (kernel=1, dilation=1)
     tdnn2_weight = weights.get(f"{prefix}tdnn2.conv.weight")
@@ -2416,9 +2417,16 @@ def attentive_statistics_pooling(
     mask = torch.ones(batch, 1, seq_len, device=x.device, dtype=x.dtype)
     total = mask.sum(dim=2, keepdim=True)
 
-    # Compute global statistics (mean, std over time)
-    mean = (mask * x).sum(dim=2)  # [batch, channels]
-    std = torch.sqrt(((mask * (x - mean.unsqueeze(2)).pow(2)).sum(dim=2)).clamp(eps))  # [batch, channels]
+    # Compute global statistics (mean, std over time) — must use the NORMALIZED
+    # mask (mask/total) so this is an average, not a sum. HF's
+    # AttentiveStatisticsPooling._compute_statistics does:
+    #     mean, std = self._compute_statistics(hidden_states, mask / total)
+    # We had been passing the unnormalized mask, which made `mean` equal to
+    # seq_len × mean (a sum) and broke every downstream value — the speaker
+    # embedding diverged from HF at PCC≈0.96, RMS_diff/RMS≈30%.
+    m_norm = mask / total
+    mean = (m_norm * x).sum(dim=2)  # [batch, channels]
+    std = torch.sqrt(((m_norm * (x - mean.unsqueeze(2)).pow(2)).sum(dim=2)).clamp(eps))  # [batch, channels]
 
     # Expand back to seq_len for concatenation
     mean_expanded = mean.unsqueeze(2).repeat(1, 1, seq_len)  # [batch, channels, seq_len]
@@ -2427,8 +2435,14 @@ def attentive_statistics_pooling(
     # Concatenate [x, mean, std] -> [batch, channels*3, seq_len]
     attention_input = torch.cat([x, mean_expanded, std_expanded], dim=1)
 
-    # Apply TDNN -> tanh -> conv -> softmax
+    # Apply TDNN(=conv+ReLU) -> tanh -> conv -> softmax. HF's
+    # AttentiveStatisticsPooling does:
+    #   attention = self.conv(self.tanh(self.tdnn(attention)))
+    # where self.tdnn = TimeDelayNetBlock = conv + ReLU.
+    # So the full sequence is conv → ReLU → tanh → conv. We had been doing
+    # conv → tanh → conv (missing the ReLU between conv and tanh).
     attention = _conv1d_same_padding(attention_input, tdnn_weight, tdnn_bias)
+    attention = F.relu(attention)
     attention = torch.tanh(attention)
     attention = _conv1d_same_padding(attention, conv_weight, conv_bias)
 
