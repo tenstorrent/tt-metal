@@ -102,7 +102,20 @@ RUNNER_PROFILES = {
     },
     "galaxy-topology-6u": {
         "arch": "wormhole_b0",
-        "runs_on": ["topology-6u", "in-service", "bare-metal"],
+        # ``topology-6u`` is shared by Wormhole and Blackhole 6U Galaxy chassis;
+        # without ``arch-wormhole_b0`` the runner pool can schedule Wormhole
+        # jobs onto Blackhole hosts. That divergence shows up in the validation
+        # flow as ``hash_mismatch`` (args match, ``_extract_hardware_and_mesh``
+        # produces a different tuple) — pin the arch to keep WH-Galaxy traces
+        # reproducible.
+        "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "bare-metal"],
+        "runner_label": "topology-6u",
+        "tt_smi_cmd": "tt-smi -glx_reset_auto",
+        "matrix_output_key": "galaxy",
+    },
+    "galaxy-topology-6u-blackhole": {
+        "arch": "blackhole",
+        "runs_on": ["topology-6u", "arch-blackhole", "in-service", "bare-metal"],
         "runner_label": "topology-6u",
         "tt_smi_cmd": "tt-smi -glx_reset_auto",
         "matrix_output_key": "galaxy",
@@ -128,6 +141,7 @@ TEST_GROUPS = {
     "blackhole-p150b-sweeps": {"runner_profile": "p150b"},
     "wormhole-t3k-sweeps": {"runner_profile": "t3k"},
     "wormhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u"},
+    "blackhole-galaxy-sweeps": {"runner_profile": "galaxy-topology-6u-blackhole"},
     "lead-models-single-chip": {"runner_profile": "n150"},
     "lead-models-galaxy": {"runner_profile": "galaxy-g04glx03"},
 }
@@ -202,6 +216,7 @@ TEST_GROUP_HARDWARE_CAPABILITY_RULES = {
     ),
     "wormhole-t3k-sweeps": ({"device_series": "n300", "card_count": 4},),
     "wormhole-galaxy-sweeps": ({"device_series": "tt_galaxy_wh"},),
+    "blackhole-galaxy-sweeps": ({"device_series": "tt_galaxy_bh"},),
     "lead-models-single-chip": ({"max_card_count": 1, "excluded_device_series": ("tt_galaxy_wh",)},),
     "lead-models-galaxy": (
         {"device_series": "tt_galaxy_wh"},
@@ -232,6 +247,10 @@ LOCAL_HARDWARE_MESH_CAPABILITY_RULES = (
     },
     {
         "match": {"device_series": "tt_galaxy_wh"},
+        "allowed_mesh_shapes": ("1x1", "1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2", "1x32", "32x1"),
+    },
+    {
+        "match": {"device_series": "tt_galaxy_bh"},
         "allowed_mesh_shapes": ("1x1", "1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2", "1x32", "32x1"),
     },
     {
@@ -273,10 +292,12 @@ def get_test_group_name_for_hardware_group(hardware_group):
 
     board_type, device_series, card_count = hardware_group
 
-    if board_type == "blackhole" or device_series == "p150b":
-        return "blackhole-p150b-sweeps"
+    if device_series == "tt_galaxy_bh":
+        return "blackhole-galaxy-sweeps"
     if device_series == "tt_galaxy_wh":
         return "wormhole-galaxy-sweeps"
+    if board_type == "blackhole" or device_series == "p150b":
+        return "blackhole-p150b-sweeps"
     if device_series == "n300" and card_count == 4:
         return "wormhole-t3k-sweeps"
     if device_series == "n300":
