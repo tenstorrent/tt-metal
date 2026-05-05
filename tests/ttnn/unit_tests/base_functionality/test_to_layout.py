@@ -97,7 +97,6 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_input_tensor, output_tensor)
-    assert torch.allclose(torch_input_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -130,7 +129,6 @@ def test_to_layout_wide_tensor(device, shape, on_device, from_layout, to_layout)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_input_tensor, output_tensor)
-    assert torch.allclose(torch_input_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
@@ -258,7 +256,7 @@ def test_to_from_01d(device, shape):
     ttnn_input = ttnn.to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)
     ttnn_input = ttnn.to_torch(ttnn_input)
 
-    assert_equal(ttnn_input, torch_input)
+    assert_equal(torch_input, ttnn_input)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -1001,7 +999,6 @@ def _run_to_layout_nd_sharded(device, tensor_shape, input_mem_config, target_lay
     output_torch = ttnn.to_torch(output_tensor)
     assert tuple(output_torch.shape) == tuple(tensor_shape)
     assert_equal(torch_input, output_torch)
-    assert torch.allclose(torch_input, output_torch)
 
 
 @pytest.mark.parametrize(

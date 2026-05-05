@@ -612,7 +612,6 @@ def test_mnist_max_pool_s2i(
 
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
 
-    pcc_thresh = 1.0
     assert_equal(output_pytorch, golden_pytorch)
 
 
@@ -661,7 +660,7 @@ def test_reshard_conv(device, shape, orientation, core_grid_1, core_grid_2):
     ttnn_tensor_2_interleaved_to_sharded = ttnn.to_memory_config(ttnn_tensor_1_dram, memory_config_2)
     out_tensor_2_interleaved_to_sharded = ttnn.to_torch(ttnn_tensor_2_interleaved_to_sharded)
 
-    passing, pcc_msg = assert_equal(out_tensor_1, out_tensor_2_interleaved_to_sharded)
+    assert_equal(out_tensor_1, out_tensor_2_interleaved_to_sharded)
 
     ttnn_tensor_2_resharded = ttnn.reshard(ttnn_tensor_1, memory_config_2)
     out_tensor_2_resharded = ttnn.to_torch(ttnn_tensor_2_resharded)
@@ -670,4 +669,4 @@ def test_reshard_conv(device, shape, orientation, core_grid_1, core_grid_2):
         print("Output Tensor 2 Resharded:", out_tensor_2_resharded)
         torch.set_printoptions(profile="default")
 
-    passing, pcc_msg = assert_equal(out_tensor_1, out_tensor_2_resharded)
+    assert_equal(out_tensor_1, out_tensor_2_resharded)

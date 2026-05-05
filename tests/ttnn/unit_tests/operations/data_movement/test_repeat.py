@@ -9,7 +9,6 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
