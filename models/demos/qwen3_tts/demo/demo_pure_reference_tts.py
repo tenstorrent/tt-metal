@@ -93,7 +93,7 @@ class TTSConfig:
     top_k: int = 50
     top_p: float = 1.0
     greedy: bool = False  # Use greedy decoding (causes repetitive output - not recommended)
-    repetition_penalty: float = 1.0  # >1.0 discourages repetition (e.g., 1.1-1.3)
+    repetition_penalty: float = 1.05  # Match official Qwen3-TTS default (qwen3_tts_model.py:generate)
 
     # Code predictor
     num_code_groups: int = 16
@@ -715,8 +715,8 @@ def main():
     parser.add_argument(
         "--repetition-penalty",
         type=float,
-        default=1.0,
-        help="Repetition penalty >1.0 discourages repetition (e.g., 1.1-1.3, default: 1.0)",
+        default=1.05,
+        help="Repetition penalty >1.0 discourages repetition (default: 1.05, matches official Qwen3-TTS)",
     )
     parser.add_argument(
         "--save-inputs",
@@ -816,23 +816,26 @@ def main():
         print("ERROR: Failed to generate codes")
         return
 
-    # HF-style bleed trim: prepend ORIGINAL reference codes, decode the full
-    # sequence, then cut the leading samples in proportion to the prepended
-    # length. This is what demo_full_ttnn_tts.py does (line 2941) and what HF's
-    # generate_voice_clone does internally — without it, the first ~0.3 s of
-    # generated audio bleeds the reference speaker's last word.
+    # Voice-clone post-processing per QwenLM/Qwen3-TTS qwen3_tts_model.py:
+    #   codes_for_decode = torch.cat([ref_code, codes], dim=0)
+    #   wav = decoder(codes_for_decode)
+    #   cut = int(ref_len / total_len * wav.shape[0])
+    #   wav = wav[cut:]
+    # That is THE bleed-cancellation mechanism — no separate frame-level trim.
+    # The model is trained so that, when prepended with the reference codec
+    # frames, the decoder boundary continues the reference speaker through
+    # the cut point and the cut removes both the reference audio AND the
+    # smeared boundary at once.
     ref_codes_len = ref_codes_original.shape[0]
     codes_for_decode = torch.cat([ref_codes_original, codes], dim=0)
     total_codes_len = codes_for_decode.shape[0]
     print(f"  Decoding: {ref_codes_len} ref (original) + {len(codes)} gen = {total_codes_len} total frames")
 
     audio = decode_audio(codes_for_decode, decoder_weights)
-
-    # Trim leading reference portion proportionally (HF formula)
     audio_np = audio.squeeze().detach().cpu().float().numpy()
-    cut_samples = int(ref_codes_len / total_codes_len * len(audio_np))
-    audio_np = audio_np[cut_samples:]
-    print(f"  HF-style trim: removed {cut_samples} samples ({cut_samples/24000:.2f}s) of reference")
+    cut = int(ref_codes_len / max(total_codes_len, 1) * audio_np.shape[0])
+    audio_np = audio_np[cut:]
+    print(f"  Voice-clone cut: removed {cut} samples ({cut/24000:.2f}s) per HF formula")
 
     sf.write(args.output, audio_np, 24000)
     print(f"\nSaved to: {args.output}")
