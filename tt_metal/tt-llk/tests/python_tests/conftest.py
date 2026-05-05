@@ -301,9 +301,7 @@ def pytest_configure(config):
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         if TestConfig.TEST_TARGET.run_simulator:
-            simulator_path = os.environ.get("TT_UMD_SIMULATOR_PATH")
-
-            if simulator_path is None:
+            if _SIMULATOR_PATH is None:
                 pytest.exit(
                     "ERROR: --run-simulator requires TT_METAL_SIMULATOR "
                     "(or TT_UMD_SIMULATOR_PATH) environment variable to be set.",
@@ -325,7 +323,7 @@ def pytest_configure(config):
                 # just connect to the already-running instance.
                 global _exalens_server
                 _exalens_server = ExalensServer(
-                    simulator_path=simulator_path,
+                    simulator_path=_SIMULATOR_PATH,
                     port=TestConfig.TEST_TARGET.simulator_port,
                 )
         else:
