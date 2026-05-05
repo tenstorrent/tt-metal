@@ -200,13 +200,17 @@ def run_model_device_perf_test_with_merge(
     )
 
 
-def _perf_param(op, worker_file, worker_test, topo, nlinks, expected_ns, op_filter, margin=0.1, layout="tile"):
+def _perf_param(
+    op, worker_file, worker_test, topo, nlinks, expected_ns, op_filter, margin=0.1, layout="tile", dtype_filter=""
+):
     """Build one pytest.param tuple for the perf tests."""
     worker_id = f"{topo}-8-{nlinks}link"
     model_name = f"deepseek_v3_{op}_{topo}_8_{nlinks}link"
     if layout != "tile":
         model_name += f"_{layout}"
-    k_filter = f"perf_no_pcc and {worker_id} and random and {layout} and bf16_out"
+    k_filter = f"perf_no_pcc and {worker_id} and random and {layout}"
+    if dtype_filter:
+        k_filter += f" and {dtype_filter}"
     return (
         f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} " f"-k '{k_filter}'",
         expected_ns,
@@ -226,8 +230,19 @@ def _perf_param(op, worker_file, worker_test, topo, nlinks, expected_ns, op_filt
 
 # CI set (BH LoudBox pipeline): keep small.
 _DISPATCH_PERF_PARAMS = [
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "linear", 2, 4_108_262, ""),
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 3_683_084, ""),
+    _perf_param(
+        "dispatch",
+        "test_prefill_dispatch.py",
+        "test_ttnn_dispatch",
+        "linear",
+        2,
+        4_108_262,
+        "",
+        dtype_filter="bf16_out",
+    ),
+    _perf_param(
+        "dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", "ring", 2, 3_683_084, "", dtype_filter="bf16_out"
+    ),
 ]
 _COMBINE_PERF_PARAMS = [
     _perf_param(
@@ -242,7 +257,16 @@ _COMBINE_PERF_PARAMS = [
 # Payload is auto-selected by get_max_payload_size() (7k on WH, 14k on BH).
 # Baselines below are from BH (14k payload).
 _DISPATCH_PERF_PARAMS_FULL = [
-    _perf_param("dispatch", "test_prefill_dispatch.py", "test_ttnn_dispatch", topo, nlinks, expected, "")
+    _perf_param(
+        "dispatch",
+        "test_prefill_dispatch.py",
+        "test_ttnn_dispatch",
+        topo,
+        nlinks,
+        expected,
+        "",
+        dtype_filter="bf16_out",
+    )
     for topo, nlinks, expected in [
         ("linear", 1, 6_564_151),
         ("linear", 2, 3_907_070),
