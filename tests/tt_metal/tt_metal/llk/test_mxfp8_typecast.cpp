@@ -129,12 +129,16 @@ static vector<uint32_t> run_mxfp8_typecast(
 
 // Data generators follow the fp8_typecast tests' convention: generate
 // row-major floats in U(0, rand_max_float) + offset, then pack into tiles.
-static vector<uint32_t> create_random_vector_of_mxfp8_e5m2(
-    uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
-    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp8R);
+static vector<uint32_t> create_random_vector_of_mxfp8(
+    tt::DataFormat fmt, uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
+    TT_FATAL(
+        fmt == tt::DataFormat::MxFp8R || fmt == tt::DataFormat::MxFp8P,
+        "Unsupported MXFP8 DataFormat: {}",
+        static_cast<int>(fmt));
+    uint32_t single_tile_size = tt::tile_size(fmt);
     TT_FATAL(
         num_bytes % single_tile_size == 0,
-        "num_bytes {} must be divisible by MXFP8 (E5M2) tile_size {}",
+        "num_bytes {} must be divisible by MXFP8 tile_size {}",
         num_bytes,
         single_tile_size);
     uint32_t num_tiles = num_bytes / single_tile_size;
@@ -148,38 +152,13 @@ static vector<uint32_t> create_random_vector_of_mxfp8_e5m2(
         v = dist(rng) + offset;
     }
 
-    vector<uint32_t> packed = pack_as_mxfp8_e5m2_tiles(tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
+    auto span = tt::stl::make_const_span(fp32_vec);
+    vector<uint32_t> packed = (fmt == tt::DataFormat::MxFp8R)
+                                  ? pack_as_mxfp8_e5m2_tiles(span, /*row_major_input=*/true)
+                                  : pack_as_mxfp8_e4m3_tiles(span, /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
-        "MXFP8 (E5M2) packed size {} bytes does not match expected {} bytes",
-        packed.size() * sizeof(uint32_t),
-        num_tiles * single_tile_size);
-    return packed;
-}
-
-static vector<uint32_t> create_random_vector_of_mxfp8_e4m3(
-    uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
-    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp8P);
-    TT_FATAL(
-        num_bytes % single_tile_size == 0,
-        "num_bytes {} must be divisible by MXFP8 (E4M3) tile_size {}",
-        num_bytes,
-        single_tile_size);
-    uint32_t num_tiles = num_bytes / single_tile_size;
-
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
-
-    constexpr uint32_t kNumFloatsPerTile = 1024;
-    vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
-    for (float& v : fp32_vec) {
-        v = dist(rng) + offset;
-    }
-
-    vector<uint32_t> packed = pack_as_mxfp8_e4m3_tiles(tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
-    TT_FATAL(
-        packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
-        "MXFP8 (E4M3) packed size {} bytes does not match expected {} bytes",
+        "MXFP8 packed size {} bytes does not match expected {} bytes",
         packed.size() * sizeof(uint32_t),
         num_tiles * single_tile_size);
     return packed;
@@ -187,12 +166,15 @@ static vector<uint32_t> create_random_vector_of_mxfp8_e4m3(
 
 // --- Format-to-float unpackers ---
 
-static vector<float> mxfp8_e5m2_to_floats(const vector<uint32_t>& packed) {
-    return unpack_mxfp8_e5m2_tiles_into_float_vec(tt::stl::make_const_span(packed), /*row_major_output=*/false);
-}
-
-static vector<float> mxfp8_e4m3_to_floats(const vector<uint32_t>& packed) {
-    return unpack_mxfp8_e4m3_tiles_into_float_vec(tt::stl::make_const_span(packed), /*row_major_output=*/false);
+static vector<float> mxfp8_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
+    auto span = tt::stl::make_const_span(packed);
+    if (fmt == tt::DataFormat::MxFp8R) {
+        return unpack_mxfp8_e5m2_tiles_into_float_vec(span, /*row_major_output=*/false);
+    }
+    if (fmt == tt::DataFormat::MxFp8P) {
+        return unpack_mxfp8_e4m3_tiles_into_float_vec(span, /*row_major_output=*/false);
+    }
+    TT_THROW("Unsupported MXFP8 DataFormat: {}", static_cast<int>(fmt));
 }
 
 static vector<float> bf16_to_floats(const vector<uint32_t>& packed) {
@@ -272,8 +254,8 @@ constexpr float kOffset = -10.0f;  // U(0, kRandMaxFloat) + kOffset = U(-10, 10)
 static vector<uint32_t> generate_random_src(tt::DataFormat fmt, uint32_t num_tiles) {
     uint32_t bytes = tt::tile_size(fmt) * num_tiles;
     switch (fmt) {
-        case tt::DataFormat::MxFp8R: return create_random_vector_of_mxfp8_e5m2(bytes, kRandMaxFloat, kSeed, kOffset);
-        case tt::DataFormat::MxFp8P: return create_random_vector_of_mxfp8_e4m3(bytes, kRandMaxFloat, kSeed, kOffset);
+        case tt::DataFormat::MxFp8R:
+        case tt::DataFormat::MxFp8P: return create_random_vector_of_mxfp8(fmt, bytes, kRandMaxFloat, kSeed, kOffset);
         case tt::DataFormat::Float16_b: return create_random_vector_of_bfloat16(bytes, kRandMaxFloat, kSeed, kOffset);
         default: TT_THROW("Unsupported source DataFormat for mxfp8 typecast test: {}", static_cast<int>(fmt));
     }
@@ -281,8 +263,8 @@ static vector<uint32_t> generate_random_src(tt::DataFormat fmt, uint32_t num_til
 
 static vector<float> unpack_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
     switch (fmt) {
-        case tt::DataFormat::MxFp8R: return mxfp8_e5m2_to_floats(packed);
-        case tt::DataFormat::MxFp8P: return mxfp8_e4m3_to_floats(packed);
+        case tt::DataFormat::MxFp8R:
+        case tt::DataFormat::MxFp8P: return mxfp8_to_floats(fmt, packed);
         case tt::DataFormat::Float16_b: return bf16_to_floats(packed);
         default: TT_THROW("Unsupported DataFormat for mxfp8 unpack: {}", static_cast<int>(fmt));
     }
@@ -824,7 +806,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
 
     // Block 3: +1.0 sanity — verify each element round-trips exactly via the
     // float unpack (1.0 is exactly representable in E5M2 with scale=2^0).
-    auto floats = mxfp8_tc::mxfp8_e5m2_to_floats(result);
+    auto floats = mxfp8_tc::mxfp8_to_floats(tt::DataFormat::MxFp8R, result);
     for (uint32_t i = 96; i < 128; ++i) {
         EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
     }
@@ -882,7 +864,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
     }
 
     // Block 3: +1.0 sanity.
-    auto floats = mxfp8_tc::mxfp8_e4m3_to_floats(result);
+    auto floats = mxfp8_tc::mxfp8_to_floats(tt::DataFormat::MxFp8P, result);
     for (uint32_t i = 96; i < 128; ++i) {
         EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
     }
