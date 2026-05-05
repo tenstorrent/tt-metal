@@ -67,6 +67,8 @@ class RoutedExpertTensors(NamedTuple):
     down_proj_weights: Any
     sram_gate_proj_weights: Any  # T L1-resident CTs (None when no SRAM placement)
     sram_gate_proj_out_tensor: Any  # SRAM matmul output, sharded on 64 cores (read for PCC)
+    sram_up_proj_weights: Any  # T L1-resident CTs (None when no SRAM placement)
+    sram_up_proj_out_tensor: Any  # SRAM up_proj output, sharded on 64 cores
     final_output_tensor: Any
     gate_proj_expert_tensors: Any
     up_proj_expert_tensors: Any
@@ -517,6 +519,8 @@ def create_routed_expert_tensors(
     # the placed eids. Mirrors how DRAM CTs come from prepare_routed_expert_weights.
     sram_gate_proj_weights = None
     sram_gate_proj_out_tensor = None
+    sram_up_proj_weights = None
+    sram_up_proj_out_tensor = None
     if sram_expert_ids and is_moe and enable_routing:
         from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
         from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RE
@@ -532,8 +536,9 @@ def create_routed_expert_tensors(
             ]
             for eid in sram_expert_ids
         }
-        a_cores, _b_cores = SharedExpertOp.build_ab_grids()
+        a_cores, b_cores = SharedExpertOp.build_ab_grids()
         sram_gate_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores])
+        sram_up_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores])
         _sram_per_core_N = (N_per_dev // 32) // 8  # 1 N-tile per core
         sram_gate_proj_weights = build_sram_expert_weights(
             sram_expert_ids=sram_expert_ids,
@@ -546,9 +551,35 @@ def create_routed_expert_tensors(
             sram_per_core_N=_sram_per_core_N,
         )
 
+        # SRAM up_proj weights: same shape as gate_proj (K, N); use up_proj_weights_dict.
+        full_torch_per_device_up = {
+            eid: [
+                up_proj_weights_dict[eid]
+                .reshape(_RE.K, _RE.GATE_PROJ_N)[:, d * N_per_dev : (d + 1) * N_per_dev]
+                .contiguous()
+                for d in range(moe_tp)
+            ]
+            for eid in sram_expert_ids
+        }
+        sram_up_proj_weights = build_sram_expert_weights(
+            sram_expert_ids=sram_expert_ids,
+            full_torch_weights_per_device=full_torch_per_device_up,
+            assigner=CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"]),
+            mesh_device=device,
+            core_grid=sram_up_core_grid,
+            sram_k_per_core=(_RE.K // 32) // 8,
+            sram_n_parallel=8,
+            sram_per_core_N=_sram_per_core_N,
+        )
+
         # SRAM gate_proj output tensor — WIDTH_SHARDED on 64 cores, per core
         # holds num_active_experts × per_core_N × tile_w bf16 elements (8 × 1 × 32 = 256).
         # Mirrors `_build_sram_output` in test_matmul_expert.py.
+        # TODO: this tensor (and sram_up_proj_out_tensor below) is only needed
+        # for PCC readback in this unit test. Once the SRAM gate/up cb_out CBs
+        # are overlapped with the SDPA buffer inside _overlap_cbs_with_sdpa_buffer
+        # (same treatment as the DRAM gate/up cb_outs), drop these tensors and
+        # the matching MoeOp.op kwargs.
         _num_active = 8
         _tile_w = 32
         _sram_out_per_core = _num_active * _sram_per_core_N * _tile_w  # 256
@@ -569,6 +600,23 @@ def create_routed_expert_tensors(
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
+        # SRAM up_proj output tensor — same shape as gate_proj output, sharded
+        # on the 64 shared up compute cores.
+        sram_up_out_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(sram_up_core_grid, [1, _sram_out_per_core], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        sram_up_proj_out_tensor = ttnn.from_torch(
+            torch.zeros((1, _sram_out_total), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=sram_up_out_mem,
+            tile=ttnn.Tile([1, _tile_w]),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+
     return RoutedExpertTensors(
         ttnn_residual_mcast_src=ttnn_residual_mcast_src,
         ttnn_rmsnorm_gamma=ttnn_rmsnorm_gamma,
@@ -583,6 +631,8 @@ def create_routed_expert_tensors(
         down_proj_weights=down_proj_weights,
         sram_gate_proj_weights=sram_gate_proj_weights,
         sram_gate_proj_out_tensor=sram_gate_proj_out_tensor,
+        sram_up_proj_weights=sram_up_proj_weights,
+        sram_up_proj_out_tensor=sram_up_proj_out_tensor,
         final_output_tensor=final_output_tensor,
         gate_proj_expert_tensors=gate_proj_expert_tensors,
         up_proj_expert_tensors=up_proj_expert_tensors,
@@ -1175,6 +1225,8 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         noc_mode=noc_mode,
         sram_gate_proj_weights_tensor=r.sram_gate_proj_weights,
         sram_gate_proj_out_tensor=r.sram_gate_proj_out_tensor,
+        sram_up_proj_weights_tensor=r.sram_up_proj_weights,
+        sram_up_proj_out_tensor=r.sram_up_proj_out_tensor,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")

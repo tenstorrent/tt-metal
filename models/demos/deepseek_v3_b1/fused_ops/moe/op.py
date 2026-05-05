@@ -315,8 +315,21 @@ class _MoeRoutedExpertContext:
     # per device since each mesh coord has its own L1 layout.
     # cb_out backs the user-provided output tensor so the test can read it via
     # ttnn.to_torch for PCC.
+    # TODO: cb_out_descriptor (and the caller-provided sram_*_out_tensor) is
+    # only needed for unit-test PCC readback. Once we overlap these output CBs
+    # with the SDPA buffer in _overlap_cbs_with_sdpa_buffer (matching how
+    # gate_proj_cb_out / up_proj_cb_mm_out are handled), drop the
+    # sram_*_out_tensor kwargs and these *_cb_out_descriptor fields.
     sram_gate_proj_cb_in1_descriptors_per_device: Any = None  # dict[MeshCoordinate -> list of CBDescriptors]
     sram_gate_proj_cb_out_descriptor: Any = None
+
+    # SRAM routed up_proj — mirror of sram_gate_proj_*; runs on shared up cores.
+    # Same TODO applies: sram_up_proj_cb_out_descriptor is unit-test scaffolding.
+    sram_up_proj_cb_in1: int = 0
+    sram_up_proj_out_cb: int = 0
+    sram_up_proj_params: dict = None
+    sram_up_proj_cb_in1_descriptors_per_device: Any = None
+    sram_up_proj_cb_out_descriptor: Any = None
 
 
 @dataclass
@@ -1254,6 +1267,11 @@ class MoeRoutedExpertOp:
         # readable via ttnn.to_torch for PCC validation. Required when
         # sram_gate_proj_weights_tensor is provided.
         sram_gate_proj_out_tensor=None,
+        # SRAM routed up_proj weights/output — same contract as gate_proj. Runs
+        # on the shared up compute cores (mirror of shared gate cores). None
+        # = no SRAM up_proj; kernel skips via sram_up_proj_active=0.
+        sram_up_proj_weights_tensor=None,
+        sram_up_proj_out_tensor=None,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
 
@@ -1400,6 +1418,10 @@ class MoeRoutedExpertOp:
         TD_32x32_bfp4 = ttnn.TileDescriptor(ttnn.Tile((32, 32)))
         sram_gate_proj_cb_in1 = cb_id_context.get_cb_id(ttnn.bfloat4_b, TD_32x32_bfp4)
         sram_gate_proj_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # SRAM routed up_proj CBs — same layout as gate_proj; separate IDs so
+        # both kernels can be live concurrently on their respective compute grids.
+        sram_up_proj_cb_in1 = cb_id_context.get_cb_id(ttnn.bfloat4_b, TD_32x32_bfp4)
+        sram_up_proj_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
 
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
@@ -1722,6 +1744,43 @@ class MoeRoutedExpertOp:
                 "after the TP8 changes. Pass weights as a list[CompressedTensor] (TP8) so "
                 "MoeRoutedExpertOp dispatches to setup_matmul_expert_dram. Dense MLPs use "
                 "prepare_dense_routed_experts_compressed_tp8; MoE layers use compressed_tp8=True."
+            )
+
+        # SRAM routed up_proj setup — mirror of SRAM gate_proj. Caller passes
+        # pre-built L1 CompressedTensors; we derive K/N tiling and call
+        # setup_matmul_expert_sram. cb_in1 descriptors are per-device.
+        sram_up_proj_params = None
+        sram_up_proj_cb_in1_descriptors_per_device = None
+        sram_up_proj_cb_out_descriptor = None
+        if sram_up_proj_weights_tensor:
+            _ct0_up = sram_up_proj_weights_tensor[0]
+            _first_coord_up = next(iter(_ct0_up._multi_device_data_per_core))
+            _num_cores_up = len(_ct0_up._multi_device_data_per_core[_first_coord_up])
+            _sram_num_tiles_k_up = _ct0_up._per_device_tiles_h // _num_cores_up
+            _sram_per_core_n_up = _ct0_up._per_device_tiles_w
+            _per_core_tensors_up = list(_ct0_up._multi_device_data_per_core[_first_coord_up].values())
+            _grid_cores_up = [t.memory_config().shard_spec.grid.bounding_box().start for t in _per_core_tensors_up]
+            _grid_up = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _grid_cores_up])
+            sram_up_proj_params = MoeRoutedExpertOp.setup_matmul_expert_sram(
+                mesh_device=mesh_device_for_matmul_expert,
+                sram_cts_list=sram_up_proj_weights_tensor,
+                core_grid=_grid_up,
+                num_tiles_k=_sram_num_tiles_k_up,
+                per_core_n=_sram_per_core_n_up,
+                Kt=num_tiles_k,
+                num_active_experts=gate_up_num_active_experts,
+                accum_experts=False,
+            )
+            sram_up_proj_cb_in1_descriptors_per_device = {}
+            for coord in sram_up_proj_params["sram_fmt_l1_addr_per_device"]:
+                sram_up_proj_cb_in1_descriptors_per_device[coord] = _ct0_up.cb_descriptor_from_compressed_tensor(
+                    sram_up_proj_cb_in1, device_coord=coord
+                )
+            assert (
+                sram_up_proj_out_tensor is not None
+            ), "sram_up_proj_out_tensor required when sram_up_proj_weights_tensor is provided"
+            sram_up_proj_cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                sram_up_proj_out_cb, sram_up_proj_out_tensor
             )
 
         # ==================================================================
@@ -2189,6 +2248,12 @@ class MoeRoutedExpertOp:
             sram_gate_proj_params=sram_gate_proj_params,
             sram_gate_proj_cb_in1_descriptors_per_device=sram_gate_proj_cb_in1_descriptors_per_device,
             sram_gate_proj_cb_out_descriptor=sram_gate_proj_cb_out_descriptor,
+            # SRAM routed up_proj (always-allocated CBs; params=None = no-op)
+            sram_up_proj_cb_in1=sram_up_proj_cb_in1,
+            sram_up_proj_out_cb=sram_up_proj_out_cb,
+            sram_up_proj_params=sram_up_proj_params,
+            sram_up_proj_cb_in1_descriptors_per_device=sram_up_proj_cb_in1_descriptors_per_device,
+            sram_up_proj_cb_out_descriptor=sram_up_proj_cb_out_descriptor,
         )
 
     @staticmethod
@@ -2684,6 +2749,30 @@ class MoeRoutedExpertOp:
         ]
         ncrisc_named_compile_time_args += sram_uniform_args
         trisc_named_compile_time_args += sram_uniform_args
+
+        # ---- SRAM routed up_proj CT args (mirror of gate_proj) ----
+        sup = ctx.sram_up_proj_params or {}
+        sram_up_uniform_args = [
+            ("sram_up_proj_cb_in0", ctx.gate_mm_input_cb),
+            ("sram_up_proj_cb_in1", ctx.sram_up_proj_cb_in1),
+            ("sram_up_proj_cb_out", ctx.sram_up_proj_out_cb),
+            ("sram_up_proj_cb_index", ctx.gate_proj_cb_index if ctx.enable_routing else 0),
+            ("sram_up_proj_num_tiles_k", sup.get("num_tiles_k", 0)),
+            ("sram_up_proj_out_w", sup.get("out_w", 0)),
+            ("sram_up_proj_cb_in0_num_pages", sup.get("num_tiles_k", 0)),
+            ("sram_up_proj_num_active_experts", sup.get("num_active_experts", 0)),
+            (
+                "sram_up_proj_index_l1_addr",
+                ctx.gate_proj_params.get("index_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+            ("sram_up_proj_k_per_core", sup.get("num_tiles_k", 0)),
+            ("sram_up_proj_meta_words_per_expert", sup.get("meta_words_per_expert", 0)),
+            ("sram_up_proj_in0_page_size", sup.get("in0_page_size", 0)),
+            ("sram_up_proj_accum_experts", sup.get("accum_experts", 0)),
+            ("sram_up_proj_cb_out_sram", 0),
+        ]
+        ncrisc_named_compile_time_args += sram_up_uniform_args
+        trisc_named_compile_time_args += sram_up_uniform_args
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
 
     @staticmethod
@@ -2715,6 +2804,8 @@ class MoeRoutedExpertOp:
         # and are appended in _setup_per_device_args.
         if ctx.sram_gate_proj_cb_out_descriptor is not None:
             descriptors.append(ctx.sram_gate_proj_cb_out_descriptor)
+        if ctx.sram_up_proj_cb_out_descriptor is not None:
+            descriptors.append(ctx.sram_up_proj_cb_out_descriptor)
 
         if ctx.enable_routing:
             descriptors.append(ctx.gate_proj_cb_index_descriptor)
@@ -2956,6 +3047,37 @@ class MoeRoutedExpertOp:
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="sram_gate_proj_k_offset",
                 core_values=sram_k_offsets,
+                other_value=0,
+            ),
+        ]
+
+        # ---- SRAM up_proj per-core CT args (mirror of gate_proj) ----
+        sup = getattr(ctx, "sram_up_proj_params", None) or {}
+        first_coord_fmt_up = []
+        first_coord_base_up = []
+        if sup.get("num_sram_experts", 0) > 0:
+            fmt_per_dev_up = sup.get("sram_fmt_l1_addr_per_device", {}) or {}
+            base_per_dev_up = sup.get("sram_base_addrs_l1_addr_per_device", {}) or {}
+            if fmt_per_dev_up:
+                first_coord_fmt_up = fmt_per_dev_up[next(iter(fmt_per_dev_up))]
+            if base_per_dev_up:
+                first_coord_base_up = base_per_dev_up[next(iter(base_per_dev_up))]
+        sram_k_offsets_up = sup.get("sram_k_offsets") or []
+
+        per_core_compile_time_descriptors += [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_up_proj_fmt_l1_addr",
+                core_values=first_coord_fmt_up,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_up_proj_base_addrs_l1_addr",
+                core_values=first_coord_base_up,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_up_proj_k_offset",
+                core_values=sram_k_offsets_up,
                 other_value=0,
             ),
         ]
@@ -5488,6 +5610,8 @@ class MoeOp:
         metadata_l1_addr=0,
         sram_gate_proj_weights_tensor=None,
         sram_gate_proj_out_tensor=None,
+        sram_up_proj_weights_tensor=None,
+        sram_up_proj_out_tensor=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -5540,6 +5664,8 @@ class MoeOp:
             worker_core_grid=worker_core_grid,
             sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
             sram_gate_proj_out_tensor=sram_gate_proj_out_tensor,
+            sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
+            sram_up_proj_out_tensor=sram_up_proj_out_tensor,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
@@ -5918,6 +6044,26 @@ class MoeOp:
             if cb_in1_descs:
                 self.device_cb_descs.extend(cb_in1_descs)
 
+        # SRAM up_proj per-device per-core overrides — mirror of gate_proj.
+        sup = routed_ctx.sram_up_proj_params
+        if sup and sup.get("num_sram_experts", 0) > 0:
+            sram_up_overrides = {
+                "sram_up_proj_fmt_l1_addr": sup["sram_fmt_l1_addr_per_device"][coord],
+                "sram_up_proj_base_addrs_l1_addr": sup["sram_base_addrs_l1_addr_per_device"][coord],
+            }
+            for i, desc in enumerate(self.device_per_core_descs):
+                name = desc.named_compile_time_arg
+                if name in sram_up_overrides:
+                    self.device_per_core_descs[i] = PerCoreCompileTimeDescriptor(
+                        named_compile_time_arg=name,
+                        core_values=sram_up_overrides[name],
+                        other_value=0,
+                    )
+
+            cb_in1_descs_up = routed_ctx.sram_up_proj_cb_in1_descriptors_per_device.get(coord)
+            if cb_in1_descs_up:
+                self.device_cb_descs.extend(cb_in1_descs_up)
+
         # Apply reduce-to-one modifications (no-op when reduce disabled)
         self._build_reduce_per_device(reduce_root_coord, coord, row, col, chip_id)
 
@@ -5987,6 +6133,9 @@ class MoeOp:
         # is provided. Caller-allocated, sharded on the 64 SRAM gate compute cores;
         # readable post-run for PCC validation.
         sram_gate_proj_out_tensor=None,
+        # SRAM routed up_proj weights/output — same contract as gate_proj.
+        sram_up_proj_weights_tensor=None,
+        sram_up_proj_out_tensor=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -6063,6 +6212,8 @@ class MoeOp:
             persistent_mode=persistent_mode,
             sram_gate_proj_weights_tensor=sram_gate_proj_weights_tensor,
             sram_gate_proj_out_tensor=sram_gate_proj_out_tensor,
+            sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
+            sram_up_proj_out_tensor=sram_up_proj_out_tensor,
         )
 
         # ==================================================================
