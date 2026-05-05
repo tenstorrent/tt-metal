@@ -38,13 +38,13 @@ SENTINEL = np.uint32(0xFFFFFFFF)
 
 
 def _hal_l1_alignment_bytes() -> int:
-    """L1 NOC alignment in bytes from the running runtime (16 on WH, may
-    differ on BH/future archs). Falls back to 16 if ttnn isn't importable."""
+    """L1 NOC alignment in bytes from the same HAL-backed API the op uses."""
     try:
         import ttnn
 
-        return int(ttnn._ttnn.bfp_utils.get_l1_alignment())
+        return int(ttnn.get_l1_alignment())
     except Exception:
+        # Reference-only tests can run without a visible device.
         return 16
 
 
@@ -56,8 +56,8 @@ def _l1_align_u32() -> int:
 def _cursor_align() -> int:
     """Per-core cursor alignment in element-count units. Must satisfy 16 B
     alignment for ALL three side tensors written per active row (uint32 plan,
-    bf16 grouped_scores, uint16 k_slot). uint16/bf16 needs L1_align/2 = 8 on
-    WH/BH; uint32 only needs L1_align/4 = 4. Use the larger.
+    bf16 grouped_scores, uint16 k_slot). uint16/bf16 needs L1_align/2 entries;
+    uint32 only needs L1_align/4. Use the larger.
     """
     return _hal_l1_alignment_bytes() // 2
 

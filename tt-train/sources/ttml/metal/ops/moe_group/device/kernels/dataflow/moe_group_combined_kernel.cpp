@@ -49,7 +49,6 @@
 //   11: scores_addr         12: grouped_scores_addr 13: k_slot_addr
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 constexpr uint32_t cb_src0 = tt::CBIndex::c_0;
@@ -184,9 +183,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* shared_local_counts =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + shared_tables_offset);
     volatile tt_l1_ptr uint32_t* shared_per_core_start = shared_local_counts + num_total_cores * SHARED_SLOT_U32;
-    // md_block 32B aligned, after shared tables
+    // md_block aligned to the actual metadata page. BH metadata DRAM reads use
+    // 64B pages, and a 32B-only destination alignment returns bad data.
     uint32_t md_block_addr_raw = (uint32_t)(shared_per_core_start + num_total_cores * SHARED_SLOT_U32);
-    uint32_t md_block_addr = round_up(md_block_addr_raw, 32U);
+    uint32_t md_block_addr = round_up(md_block_addr_raw, md_aligned_page);
     volatile tt_l1_ptr uint16_t* md_block = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(md_block_addr);
     // BLOCK_ROWS for streaming metadata + scores. Use slice size if it fits, else 1024.
     uint32_t my_slice_size = my_slice_end - my_slice_start;
@@ -195,7 +195,7 @@ void kernel_main() {
     // sc_block: scores in lock-step with md_block. bf16, same row stride as
     // metadata (also K element-wide), stored as raw uint16 bits and copied
     // through to grouped_scores DRAM.
-    uint32_t sc_block_addr = round_up(md_block_addr + md_block_bytes, 32U);
+    uint32_t sc_block_addr = round_up(md_block_addr + md_block_bytes, sc_aligned_page);
     volatile tt_l1_ptr uint16_t* sc_block = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sc_block_addr);
     uint32_t sc_block_bytes = block_rows * sc_aligned_page;
     uint32_t plan_stage_addr = round_up(sc_block_addr + sc_block_bytes, 32U);
