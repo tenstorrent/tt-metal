@@ -1,0 +1,71 @@
+name: (temp) Slack Owner Extraction Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_name:
+        description: "Workflow name shown in Slack payload"
+        required: true
+        default: "blackhole-post-commit"
+        type: string
+      job_name:
+        description: "Exact job name to match in parent Slack message"
+        required: true
+        default: "ops-unit-tests (P150b) / blackhole deepseek blitz op tests (slow dispatch) blackhole P150b"
+        type: string
+      slack_ts:
+        description: "Thread parent timestamp (e.g. 1777943319.045329)"
+        required: true
+        type: string
+      slack_channel_id:
+        description: "Slack channel ID where parent message lives"
+        required: true
+        default: "C09EC0QNSB0"
+        type: string
+
+jobs:
+  slack-owner-extraction-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare minimal auto-triage files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .auto_triage/output .auto_triage/data .auto_triage/auto_triage/data
+          cat > .auto_triage/output/slack_message.json <<'EOF'
+          {
+            "case": 1,
+            "scenario": "Deterministic failure with identified commit",
+            "failing_test_name": "temp_slack_owner_extraction_test",
+            "failure_message": "Temporary extraction-only Slack test run",
+            "notes": "This temporary workflow validates parent-thread owner extraction and group representative resolution.",
+            "commits": [],
+            "relevant_developers": []
+          }
+          EOF
+
+      - name: Download Slack directory for group resolution
+        shell: bash
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install requests
+          python3 .github/actions/auto-triage/auto_triage/download_slack_directory.py \
+            --output .auto_triage/auto_triage/data/slack_directory.json \
+            --groups-output .auto_triage/auto_triage/data/slack_groups.json
+
+      - name: Run Slack reporter action only
+        uses: tenstorrent/tt-auto-triage/.github/actions/slack-report-auto-triage@fix/job-owner-representative-note
+        with:
+          channel_id: ${{ inputs.slack_channel_id }}
+          slack_message_path: .auto_triage/output/slack_message.json
+          job_name: ${{ inputs.job_name }}
+          workflow_name: ${{ inputs.workflow_name }}
+          slack_ts: ${{ inputs.slack_ts }}
+          allow_pings: true
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
