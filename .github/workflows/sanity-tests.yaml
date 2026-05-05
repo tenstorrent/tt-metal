@@ -206,7 +206,6 @@ jobs:
     if: ${{ inputs.dev-docker-image == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      contents: read
       packages: write
     secrets: inherit
     with:
@@ -275,7 +274,7 @@ jobs:
 
   tests-to-run:
     needs: [resolve-artifacts]
-    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' }}
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     outputs:
       ttnn-unit-tests: ${{ steps.set-ttnn-unit-tests.outputs.should-run }}
@@ -310,9 +309,9 @@ jobs:
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: [resolve-docker-pull-refs, tests-to-run]
+    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
     secrets: inherit
-    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       enabled-skus: "wh_n300_civ2"
@@ -326,13 +325,15 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
-    needs: [resolve-docker-pull-refs, tests-to-run]
+    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
-    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -346,13 +347,15 @@ jobs:
       timeout: ${{ inputs.enable-watcher && 120 || 35 }}
 
   tt-train-cpp-unit-tests:
-    needs: [resolve-docker-pull-refs, tests-to-run]
+    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
-    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -366,13 +369,15 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   run-profiler-regression:
-    needs: [resolve-docker-pull-refs, tests-to-run]
+    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
 
     strategy:
       fail-fast: false
       matrix:
-        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
-    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
@@ -387,8 +392,8 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
-    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
-    needs: [resolve-docker-pull-refs, tests-to-run]
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
+    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
@@ -401,13 +406,15 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   ops-unit-tests:
-    needs: [resolve-docker-pull-refs, tests-to-run]
+    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
-    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
     uses: ./.github/workflows/ops-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -421,8 +428,8 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   ttsim-integration-tests:
-    needs: [resolve-docker-pull-refs, tests-to-run]
-    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-integration-tests == 'true' }}
+    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttsim-integration-tests == 'true' }}
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml
