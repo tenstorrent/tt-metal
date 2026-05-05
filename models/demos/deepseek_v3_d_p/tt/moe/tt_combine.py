@@ -31,7 +31,6 @@ from other dispatch groups contain uninitialized values. The per-device output s
 TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 """
 
-from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -150,13 +149,5 @@ class TtCombineModule(LightweightModule):
             init_zeros=self.init_zeros,
             use_fp8_combine=self.fp8_output,
         )
-
-        if output.dtype == ttnn.uint8:
-            logger.warning(
-                """combine output dtype is uint8 but the actual content is fp8_e4m3fn. \
-                Workaround until fp8_e4m3fn is supported as a data type. \
-                Use custom kernels to typecast. See test_fp8_typecast.py
-                """
-            )
 
         return output
