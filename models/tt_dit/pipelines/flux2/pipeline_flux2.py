@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager, nullcontext
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,7 @@ class Flux2Pipeline:
         self,
         *,
         mesh_device: ttnn.MeshDevice,
+        checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         encoder_on_device: bool = True,
         vae_on_device: bool = True,
         parallel_config: DiTParallelConfig,
@@ -103,7 +105,7 @@ class Flux2Pipeline:
 
         logger.info("loading models...")
 
-        checkpoint_name = "black-forest-labs/FLUX.2-dev"
+        self.checkpoint_name = checkpoint_name
 
         self._torch_transformer = diffusers.Flux2Transformer2DModel.from_pretrained(
             checkpoint_name,
@@ -200,6 +202,8 @@ class Flux2Pipeline:
         self._prepare_prompt_encoder()
         if self.encoder_device is not None:
             ttnn.synchronize_device(self.encoder_device)
+        if self.vae_device is not None:
+            ttnn.synchronize_device(self.vae_device)
 
         self.warmup()
 
@@ -215,7 +219,7 @@ class Flux2Pipeline:
         cache.load_model(
             tt_model=self.transformers[i],
             get_torch_state_dict=self._torch_transformer.state_dict,
-            model_name="flux2-dev",
+            model_name=os.path.basename(self.checkpoint_name),
             subfolder="transformer",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._submesh_devices[i].shape),
@@ -231,7 +235,7 @@ class Flux2Pipeline:
             cache.load_model(
                 tt_model=self._vae_decoder,
                 get_torch_state_dict=self._torch_vae.state_dict,
-                model_name="flux2-dev",
+                model_name=os.path.basename(self.checkpoint_name),
                 subfolder="vae",
                 parallel_config=self._vae_parallel_config,
                 mesh_shape=tuple(self.vae_device.shape),
