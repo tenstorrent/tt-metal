@@ -34,6 +34,7 @@ Table of Contents
       - [Saving the commit to origin and create a pull request](#saving-the-commit-to-origin-and-create-a-pull-request)
       - [Rebasing your branch](#rebasing-your-branch)
       - [Merging to main](#merging-to-main)
+    - [PR categories](#pr-categories)
     - [Code reviews](#code-reviews)
     - [New feature and design specifications](#new-feature-and-design-specifications)
     - [Release flows](#release-flows)
@@ -797,6 +798,23 @@ option to merge without squashing. You should use `Squash and merge` unless you
 have a good reason not to.
 
 After that, the UI will usually delete your branch.
+
+### PR categories
+
+All PRs must be bucketed into exactly one of the following categories. Include
+the category name in your PR title (e.g. `[Feature] Add new op`). Reviewers
+should reject PRs that span multiple categories — use `git rebase -i` to split
+them first.
+
+| Category | When to use |
+|---|---|
+| **Feature** | Implements new functionality. Tests encouraged. |
+| **Performance** | No new functionality, no bug fixes — only performance improves. Tests encouraged. |
+| **Bug fix** | Fixes an issue with existing functionality. New regression tests strongly encouraged. |
+| **Cleanup** | Refactor, rename, restructure, or cosmetic change. No functional change. Tests OK to add. |
+| **Test Only** | Adds or modifies tests with no production code change. |
+
+Exceptions are rare and must be justified. When in doubt, split the PR.
 
 ### Code reviews
 
