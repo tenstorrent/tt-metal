@@ -2,159 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SAT / Kissat implementation: not part of the public header graph. Include only from TUs that run the SAT
-// topology backend (fabric mapper / grouping sources and fabric unit tests). `topology_solver.hpp` / `.tpp` stay
-// solver-agnostic; `control_plane.hpp` forward-declares TopologyMapper so llrt does not compile this file.
-
-// ── Architecture Overview ────────────────────────────────────────────────────
-//
-// This file implements a SAT-based graph embedding engine layered as follows:
-//
-//  Layer 1 – TopologySatSolver
-//      Thin IPASIR-style wrapper around Kissat.  Manages variable allocation
-//      (declare_one_more_variable), clause addition (add / add(0) terminators),
-//      and the solve / val query interface.
-//
-//  Layer 2 – Cardinality / combinatorial primitives  (free functions, public)
-//      topology_sat_combinations_exceed_limit
-//      topology_sat_emit_combinations_indices
-//      topology_sat_add_at_least_k_counter     – sequential counter (Sinz 2005)
-//      topology_sat_add_at_least_k_literals    – combinatorial or counter fallback
-//      topology_sat_add_at_most_one_sequential – sequential (Sinz) AMO
-//
-//  Layer 3 – Domain-preprocessing helpers  (anonymous namespace)
-//      are_globals_adjacent                    – sorted adjacency binary search
-//      topology_sat_check_edge_feasibility     – partial-mapping edge check
-//      topology_sat_preferred_upper_bound      – remaining preferred capacity UB
-//      topology_sat_preferred_exact_lower_bound – exhaustive/budget DFS LB
-//      topology_sat_preferred_greedy_lower_bound – greedy multi-order LB
-//
-//  Layer 4 – Hard constraint encoding  (free functions, public)
-//      topology_sat_build_initial_domains      – degree + constraint filtering
-//      topology_sat_apply_arc_consistency      – AC-3 propagation loop
-//      topology_sat_create_assignment_variables – one SAT literal per (t, g)
-//      topology_sat_encode_exactly_one_per_target – ALO unit + AMO sequential
-//      topology_sat_encode_injectivity         – AMO over globals
-//      topology_sat_encode_adjacency_support   – support clauses for edges
-//      topology_sat_encode_same_rank_groups    – binary incompatibility clauses
-//      topology_sat_encode_cardinality_constraints – at-least-k per entry
-//      topology_sat_encode_hard_constraints    – thin orchestrator (public API)
-//
-//  Layer 5 – Soft / objective encoding  (free functions, public)
-//      topology_sat_append_preferred_hit_indicators
-//      topology_sat_define_indicator_as_or_of_pairwise_and
-//      topology_sat_relaxed_channel_threshold_literal_count_upper_bound
-//      topology_sat_append_relaxed_channel_threshold_literals
-//
-//  Layer 6 – SatSearchEngine::search  (member function, public API entry point)
-//      Ties all layers together: encodes hard constraints, optionally computes
-//      preferred-hit lower bounds and adds soft at-least-k clauses, runs Kissat,
-//      and decodes the model back to a target->global mapping.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-
-#pragma once
-
-#ifndef TT_METALIUM_TOPOLOGY_SOLVER_SAT_DETAIL_HPP
-#define TT_METALIUM_TOPOLOGY_SOLVER_SAT_DETAIL_HPP
-
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
-#include <set>
 #include <limits>
 #include <numeric>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <vector>
-
-extern "C" {
-#include <kissat.h>
-}
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "topology_solver_sat_solver.hpp"
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_fabric::detail {
 
-/**
- * Thin IPASIR-style wrapper around Kissat (positive DIMACS literals; 0 ends a clause).
- * Matches the IPASIR-style API expected by topology_sat_* encodings.
- */
-struct TopologySatSolver {
-    kissat* k = nullptr;
-    int next_var = 0;
-
-    TopologySatSolver() : k(kissat_init()) { kissat_set_option(k, "quiet", 1); }
-    ~TopologySatSolver() {
-        if (k != nullptr) {
-            kissat_release(k);
-            k = nullptr;
-        }
-    }
-    TopologySatSolver(const TopologySatSolver&) = delete;
-    TopologySatSolver& operator=(const TopologySatSolver&) = delete;
-    TopologySatSolver(TopologySatSolver&& o) noexcept : k(o.k), next_var(o.next_var) {
-        o.k = nullptr;
-        o.next_var = 0;
-    }
-    TopologySatSolver& operator=(TopologySatSolver&& o) noexcept {
-        if (this != &o) {
-            if (k != nullptr) {
-                kissat_release(k);
-            }
-            k = o.k;
-            next_var = o.next_var;
-            o.k = nullptr;
-            o.next_var = 0;
-        }
-        return *this;
-    }
-
-    int declare_one_more_variable() {
-        ++next_var;
-        kissat_reserve(k, next_var);
-        return next_var;
-    }
-
-    void add(int lit) { kissat_add(k, lit); }
-
-    int solve() { return kissat_solve(k); }
-
-    static constexpr int kSat = 10;
-    static constexpr int kUnsat = 20;
-
-    // For DIMACS literal `lit`, returns `lit` if satisfied, `-lit` if falsified, else 0 (unknown).
-    int val(int lit) const {
-        const int a = std::abs(lit);
-        const int r = kissat_value(k, a);
-        if (r == 0) {
-            return 0;
-        }
-        if (lit > 0) {
-            return (r > 0) ? lit : -lit;
-        }
-        return (r < 0) ? lit : -lit;
-    }
-};
-
-struct TopologySatHardEncoding {
-    bool trivial_unsat = false;
-    std::string trivial_reason;
-    std::vector<std::vector<size_t>> allowed_global_idx;
-    std::vector<std::vector<int>> assign_lit;
-};
-
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
 namespace {
 
-template <typename TargetNode, typename GlobalNode>
-bool are_globals_adjacent(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data, size_t global_i, size_t global_j) {
+bool are_globals_adjacent(const TopologySatGraphView& graph_data, size_t global_i, size_t global_j) {
     if (global_i >= graph_data.n_global || global_j >= graph_data.n_global) {
         return false;
     }
@@ -162,12 +33,8 @@ bool are_globals_adjacent(
     return std::binary_search(adj.begin(), adj.end(), global_j);
 }
 
-template <typename TargetNode, typename GlobalNode>
 bool topology_sat_check_edge_feasibility(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const std::vector<int>& mapping,
-    size_t target_idx,
-    size_t global_idx) {
+    const TopologySatGraphView& graph_data, const std::vector<int>& mapping, size_t target_idx, size_t global_idx) {
     for (size_t tn : graph_data.target_adj_idx[target_idx]) {
         if (mapping[tn] < 0) {
             continue;
@@ -182,9 +49,8 @@ bool topology_sat_check_edge_feasibility(
 
 // ── Preferred-Hit Bound Helpers ───────────────────────────────────────────────
 
-template <typename TargetNode, typename GlobalNode>
 size_t topology_sat_preferred_upper_bound(
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const TopologySatConstraintView& constraint_data,
     const TopologySatHardEncoding& enc,
     const std::vector<bool>& used_global,
     size_t ti_start,
@@ -220,10 +86,9 @@ size_t topology_sat_preferred_upper_bound(
 // upper bound on remaining preferred-capable targets.  When max_nodes is huge (n_target <= kExactLbMaxTargets), this
 // becomes an exhaustive search -> exact optimum for small instances; otherwise it stops after max_nodes expansions and
 // returns the best complete mapping found (still a safe lower bound for at-least-k).
-template <typename TargetNode, typename GlobalNode>
 size_t topology_sat_preferred_exact_lower_bound(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
     const TopologySatHardEncoding& enc,
     size_t max_nodes) {
     const size_t nt = graph_data.n_target;
@@ -281,10 +146,9 @@ size_t topology_sat_preferred_exact_lower_bound(
     return best;
 }
 
-template <typename TargetNode, typename GlobalNode>
 size_t topology_sat_preferred_greedy_lower_bound(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
     const TopologySatHardEncoding& enc) {
     const size_t nt = graph_data.n_target;
     std::vector<std::vector<size_t>> orders;
@@ -570,10 +434,9 @@ inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, c
 // Step 1: Build per-target candidate domains by applying degree and constraint filtering.
 // Any global whose degree is below the target degree, or that fails is_valid_mapping, is
 // excluded.  Returns false (and sets enc.trivial_unsat) if any target has an empty domain.
-template <typename TargetNode, typename GlobalNode>
 bool topology_sat_build_initial_domains(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
     std::vector<std::vector<size_t>>& domain_out) {
     const size_t nt = graph_data.n_target;
@@ -608,10 +471,9 @@ bool topology_sat_build_initial_domains(
 // The worklist starts with every arc (t, t_neigh).  Whenever a domain shrinks, all arcs
 // pointing INTO t are re-added so their support can be re-checked.  The iteration cap of
 // 100 prevents quadratic blow-up on pathological inputs while handling real topologies.
-template <typename TargetNode, typename GlobalNode>
 bool topology_sat_apply_arc_consistency(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    [[maybe_unused]] const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const TopologySatGraphView& graph_data,
+    [[maybe_unused]] const TopologySatConstraintView& constraint_data,
     ConnectionValidationMode validation_mode,
     TopologySatHardEncoding& enc,
     std::vector<std::vector<size_t>>& domain) {
@@ -704,10 +566,9 @@ bool topology_sat_apply_arc_consistency(
 // them in enc.assign_lit / enc.allowed_global_idx.  Preferred globals for a target are
 // listed first in the row so that Kissat's internal variable-order heuristic naturally
 // tries preferred assignments first under a single solve (no MaxSAT needed).
-template <typename TargetNode, typename GlobalNode>
 void topology_sat_create_assignment_variables(
     TopologySatSolver& solver,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
     std::vector<std::vector<size_t>>& domain) {
     const size_t nt = domain.size();
@@ -738,9 +599,7 @@ void topology_sat_create_assignment_variables(
 // For each target t:
 //   - At-least-one: unit clause (x_{t,g0} v x_{t,g1} v ... v x_{t,gk}).
 //   - At-most-one:  sequential (Sinz) encoding to avoid O(domain^2) pairwise clauses.
-template <typename TargetNode, typename GlobalNode>
-void topology_sat_encode_exactly_one_per_target(
-    TopologySatSolver& solver, const TopologySatHardEncoding& enc) {
+void topology_sat_encode_exactly_one_per_target(TopologySatSolver& solver, const TopologySatHardEncoding& enc) {
     const size_t nt = enc.assign_lit.size();
     for (size_t t = 0; t < nt; ++t) {
         const auto& lits = enc.assign_lit[t];
@@ -755,11 +614,8 @@ void topology_sat_encode_exactly_one_per_target(
 
 // Step 5: Injectivity -- each global node may be used by at most one target.
 // Collect all assign literals that reference each global, then add AMO over that set.
-template <typename TargetNode, typename GlobalNode>
 void topology_sat_encode_injectivity(
-    TopologySatSolver& solver,
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const TopologySatHardEncoding& enc) {
+    TopologySatSolver& solver, const TopologySatGraphView& graph_data, const TopologySatHardEncoding& enc) {
     const size_t nt = enc.assign_lit.size();
     const size_t ng = graph_data.n_global;
 
@@ -785,10 +641,9 @@ void topology_sat_encode_injectivity(
 //   O(edges x domain_size^2) pairwise incompatibility clauses.  When a candidate has NO
 //   compatible partner the clause degenerates to the unit clause not x_{t1,g_a}, giving
 //   implicit arc-consistency filtering inside the solver.
-template <typename TargetNode, typename GlobalNode>
 void topology_sat_encode_adjacency_support(
     TopologySatSolver& solver,
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const TopologySatGraphView& graph_data,
     const TopologySatHardEncoding& enc,
     ConnectionValidationMode validation_mode) {
     const size_t nt = enc.assign_lit.size();
@@ -860,11 +715,10 @@ void topology_sat_encode_adjacency_support(
 // Targets in the same group (target_to_group[t] == tg, tg != SIZE_MAX) must all map to
 // globals that share the same global_to_same_rank_group label.  Pairs with different
 // labels get a binary incompatibility clause not x_{t1,g1} v not x_{t2,g2}.
-template <typename TargetNode, typename GlobalNode>
 void topology_sat_encode_same_rank_groups(
     TopologySatSolver& solver,
-    [[maybe_unused]] const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    [[maybe_unused]] const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
     const TopologySatHardEncoding& enc) {
     const size_t nt = enc.assign_lit.size();
     const auto& target_to_group = constraint_data.target_to_group;
@@ -915,11 +769,8 @@ void topology_sat_encode_same_rank_groups(
 // For each entry in constraint_data.cardinality_constraints, collect the assign literals
 // corresponding to feasible pairs in the current domains and encode at-least-k using
 // either the combinatorial or sequential counter encoding (whichever is cheaper).
-template <typename TargetNode, typename GlobalNode>
 bool topology_sat_encode_cardinality_constraints(
-    TopologySatSolver& solver,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-    TopologySatHardEncoding& enc) {
+    TopologySatSolver& solver, const TopologySatConstraintView& constraint_data, TopologySatHardEncoding& enc) {
     static constexpr size_t kMaxCardinalityCombClauses = 500000;
 
     for (const auto& card_entry : constraint_data.cardinality_constraints) {
@@ -982,13 +833,12 @@ bool topology_sat_encode_cardinality_constraints(
 //   6. Adjacency support clauses
 //   7. Same-rank group incompatibility clauses
 //   8. Cardinality at-least-k constraints
-template <typename TargetNode, typename GlobalNode>
 bool topology_sat_encode_hard_constraints(
     TopologySatSolver& solver,
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
     TopologySatHardEncoding& enc,
-    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED) {
+    ConnectionValidationMode validation_mode) {
     enc = TopologySatHardEncoding{};
     const size_t nt = graph_data.n_target;
 
@@ -1014,7 +864,7 @@ bool topology_sat_encode_hard_constraints(
     topology_sat_create_assignment_variables(solver, constraint_data, enc, domain);
 
     // 4. Exactly one global choice per target.
-    topology_sat_encode_exactly_one_per_target<TargetNode, GlobalNode>(solver, enc);
+    topology_sat_encode_exactly_one_per_target(solver, enc);
 
     // 5. Injective: each global node used by at most one target.
     topology_sat_encode_injectivity(solver, graph_data, enc);
@@ -1052,11 +902,10 @@ bool topology_sat_encode_hard_constraints(
 // The resulting p_t literals are collected into pref_hit_literals_out and later
 // fed into topology_sat_add_at_least_k_literals to force Kissat toward the
 // maximum simultaneously achievable preferred-hit count.
-template <typename TargetNode, typename GlobalNode>
 void topology_sat_append_preferred_hit_indicators(
     TopologySatSolver& solver,
     const TopologySatHardEncoding& enc,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    const TopologySatConstraintView& constraint_data,
     std::vector<int>& pref_hit_literals_out) {
     pref_hit_literals_out.clear();
     const size_t nt = enc.assign_lit.size();
@@ -1144,9 +993,7 @@ inline bool topology_sat_define_indicator_as_or_of_pairwise_and(
 
 // Upper bound on how many relaxed-channel threshold literals would be created (one per (edge, k) level). Cheap
 // O(edges) count so we can skip building the auxiliary channel CNF when the k-descent pass would be too expensive.
-template <typename TargetNode, typename GlobalNode>
-size_t topology_sat_relaxed_channel_threshold_literal_count_upper_bound(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data) {
+size_t topology_sat_relaxed_channel_threshold_literal_count_upper_bound(const TopologySatGraphView& graph_data) {
     static constexpr size_t kMaxKPerEdge = 24;
     size_t cnt = 0;
     const size_t nt = graph_data.n_target;
@@ -1179,11 +1026,10 @@ size_t topology_sat_relaxed_channel_threshold_literal_count_upper_bound(
 // RELAXED: for each undirected target edge (t1,t2) and each k in 1..min(R,kMaxK), add literal I_{e,k} true iff the
 // chosen globals for t1,t2 use an adjacent host edge with parallel link count >= k. Maximizing sum_{e,k} I_{e,k}
 // equals maximizing sum_e min(R_e, actual_e) (same objective shape DFS uses for channel_match_score ordering).
-template <typename TargetNode, typename GlobalNode>
 bool topology_sat_append_relaxed_channel_threshold_literals(
     TopologySatSolver& solver,
     const TopologySatHardEncoding& enc,
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const TopologySatGraphView& graph_data,
     std::vector<int>& channel_threshold_literals_out,
     std::string* fail_reason) {
     channel_threshold_literals_out.clear();
@@ -1274,7 +1120,6 @@ bool topology_sat_append_relaxed_channel_threshold_literals(
     return true;
 }
 
-template <typename TargetNode, typename GlobalNode>
 bool topology_sat_decode_hard_solution(
     TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out) {
     if (enc.trivial_unsat) {
@@ -1305,29 +1150,26 @@ bool topology_sat_decode_hard_solution(
     return true;
 }
 
-// ── SatSearchEngine::search -- Main Entry Point ───────────────────────────────
-
-template <typename TargetNode, typename GlobalNode>
-bool SatSearchEngine<TargetNode, GlobalNode>::search(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+bool topology_sat_search(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
     ConnectionValidationMode validation_mode,
-    bool quiet_mode) {
-    state_ = TopologySearchState{};
-    state_.mapping.assign(graph_data.n_target, -1);
-    state_.used.assign(graph_data.n_global, false);
-    quiet_mode_ = quiet_mode;
+    bool quiet_mode,
+    TopologySearchState& state) {
+    state = TopologySearchState{};
+    state.mapping.assign(graph_data.n_target, -1);
+    state.used.assign(graph_data.n_global, false);
 
     if (graph_data.n_global < graph_data.n_target) {
-        state_.error_message = fmt::format(
+        state.error_message = fmt::format(
             "Cannot map target graph to global graph: target graph is larger with {} nodes, but global graph only has "
             "{} nodes",
             graph_data.n_target,
             graph_data.n_global);
         if (quiet_mode) {
-            log_debug(tt::LogFabric, "{}", state_.error_message);
+            log_debug(tt::LogFabric, "{}", state.error_message);
         } else {
-            log_error(tt::LogFabric, "{}", state_.error_message);
+            log_error(tt::LogFabric, "{}", state.error_message);
         }
         return false;
     }
@@ -1337,20 +1179,20 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
     }
 
     auto finalize_success = [&](TopologySatSolver& solver, const TopologySatHardEncoding& enc) -> bool {
-        if (!topology_sat_decode_hard_solution<TargetNode, GlobalNode>(solver, enc, state_.mapping)) {
-            state_.error_message = "Topology SAT: decode failed (model inconsistent with encoding)";
+        if (!topology_sat_decode_hard_solution(solver, enc, state.mapping)) {
+            state.error_message = "Topology SAT: decode failed (model inconsistent with encoding)";
             if (quiet_mode) {
-                log_debug(tt::LogFabric, "{}", state_.error_message);
+                log_debug(tt::LogFabric, "{}", state.error_message);
             } else {
-                log_error(tt::LogFabric, "{}", state_.error_message);
+                log_error(tt::LogFabric, "{}", state.error_message);
             }
             return false;
         }
-        std::fill(state_.used.begin(), state_.used.end(), false);
-        for (size_t t = 0; t < state_.mapping.size(); ++t) {
-            const int gi = state_.mapping[t];
-            if (gi >= 0 && static_cast<size_t>(gi) < state_.used.size()) {
-                state_.used[static_cast<size_t>(gi)] = true;
+        std::fill(state.used.begin(), state.used.end(), false);
+        for (size_t t = 0; t < state.mapping.size(); ++t) {
+            const int gi = state.mapping[t];
+            if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                state.used[static_cast<size_t>(gi)] = true;
             }
         }
         return true;
@@ -1358,37 +1200,33 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
 
     auto solve_hard_only = [&](TopologySatSolver& solver, TopologySatHardEncoding& enc) -> bool {
         if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
-            state_.error_message = enc.trivial_reason.empty()
-                                       ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
-                                       : enc.trivial_reason;
+            state.error_message = enc.trivial_reason.empty()
+                                      ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
+                                      : enc.trivial_reason;
             if (quiet_mode) {
-                log_debug(tt::LogFabric, "{}", state_.error_message);
+                log_debug(tt::LogFabric, "{}", state.error_message);
             } else {
-                log_error(tt::LogFabric, "{}", state_.error_message);
+                log_error(tt::LogFabric, "{}", state.error_message);
             }
             return false;
         }
         const int status = solver.solve();
         if (status != TopologySatSolver::kSat) {
-            state_.error_message = fmt::format(
+            state.error_message = fmt::format(
                 "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} "
                 "nodes under hard constraints",
                 graph_data.n_target,
                 graph_data.n_global);
             if (quiet_mode) {
-                log_debug(tt::LogFabric, "{}", state_.error_message);
+                log_debug(tt::LogFabric, "{}", state.error_message);
             } else {
-                log_error(tt::LogFabric, "{}", state_.error_message);
+                log_error(tt::LogFabric, "{}", state.error_message);
             }
             return false;
         }
         return finalize_success(solver, enc);
     };
 
-    // No preferred constraints: one hard CNF + one solve.  RELAXED still uses the same hard encoding (channel-aware
-    // support is weaker in AC-3 than STRICT; see topology_sat_encode_hard_constraints).  We intentionally skip
-    // iterative relaxed-channel k-descent here: it repeated full SAT for parallel target edges (mapper auto-discovery
-    // scale) and dominated wall time without changing feasibility.
     bool has_preferred = false;
     for (size_t t = 0; t < graph_data.n_target && !has_preferred; ++t) {
         if (t < constraint_data.preferred_global_indices.size() &&
@@ -1402,102 +1240,86 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search(
         return solve_hard_only(solver, enc);
     }
 
-    // Preferred: one encode + one kissat_solve.  We first compute a lower bound k_lb on the maximum number of
-    // preferred targets simultaneously satisfiable, using the same AC-3 domains as the CNF (see enc).  Adding
-    // at-least-k on preferred-hit Tseitin literals forces Kissat toward that bound in a single solve (exact when the
-    // lower-bound search completes).  Optional relaxed-channel literals are appended when cheap.
-    if (has_preferred) {
-        TopologySatSolver solver;
-        TopologySatHardEncoding enc;
-        if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
-            state_.error_message = enc.trivial_reason.empty()
-                                       ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
-                                       : enc.trivial_reason;
-            if (quiet_mode) {
-                log_debug(tt::LogFabric, "{}", state_.error_message);
-            } else {
-                log_error(tt::LogFabric, "{}", state_.error_message);
-            }
-            return false;
+    TopologySatSolver solver;
+    TopologySatHardEncoding enc;
+    if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+        state.error_message = enc.trivial_reason.empty() ? std::string("Topology SAT: encoding failed (trivial UNSAT)")
+                                                         : enc.trivial_reason;
+        if (quiet_mode) {
+            log_debug(tt::LogFabric, "{}", state.error_message);
+        } else {
+            log_error(tt::LogFabric, "{}", state.error_message);
         }
-        std::vector<int> pref_hit_literals;
-        topology_sat_append_preferred_hit_indicators(solver, enc, constraint_data, pref_hit_literals);
+        return false;
+    }
+    std::vector<int> pref_hit_literals;
+    topology_sat_append_preferred_hit_indicators(solver, enc, constraint_data, pref_hit_literals);
 
-        if (!pref_hit_literals.empty()) {
-            static constexpr size_t kExactPreferredLbMaxTargets = 10;
-            static constexpr size_t kMidPreferredLbMaxTargets = 20;
-            static constexpr size_t kPreferredLbDfsBudgetSmall = 80'000'000;
-            static constexpr size_t kPreferredLbDfsBudgetMid = 400'000;
-            const size_t nt = graph_data.n_target;
-            size_t k_lb = 0;
-            if (nt <= kExactPreferredLbMaxTargets) {
-                k_lb = topology_sat_preferred_exact_lower_bound(
-                    graph_data, constraint_data, enc, kPreferredLbDfsBudgetSmall);
-            } else if (nt <= kMidPreferredLbMaxTargets) {
-                k_lb = topology_sat_preferred_exact_lower_bound(
-                    graph_data, constraint_data, enc, kPreferredLbDfsBudgetMid);
-            } else {
-                k_lb = topology_sat_preferred_greedy_lower_bound(graph_data, constraint_data, enc);
-                if (k_lb == 0) {
-                    k_lb =
-                        topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, 600'000);
-                }
+    if (!pref_hit_literals.empty()) {
+        static constexpr size_t kExactPreferredLbMaxTargets = 10;
+        static constexpr size_t kMidPreferredLbMaxTargets = 20;
+        static constexpr size_t kPreferredLbDfsBudgetSmall = 80'000'000;
+        static constexpr size_t kPreferredLbDfsBudgetMid = 400'000;
+        const size_t nt = graph_data.n_target;
+        size_t k_lb = 0;
+        if (nt <= kExactPreferredLbMaxTargets) {
+            k_lb =
+                topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, kPreferredLbDfsBudgetSmall);
+        } else if (nt <= kMidPreferredLbMaxTargets) {
+            k_lb = topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, kPreferredLbDfsBudgetMid);
+        } else {
+            k_lb = topology_sat_preferred_greedy_lower_bound(graph_data, constraint_data, enc);
+            if (k_lb == 0) {
+                k_lb = topology_sat_preferred_exact_lower_bound(graph_data, constraint_data, enc, 600'000);
             }
-            if (k_lb > 0) {
-                const size_t k_use = std::min(k_lb, pref_hit_literals.size());
-                static constexpr size_t kPrefCardinalityCombClauses = 500000;
-                std::string card_reason;
-                if (!topology_sat_add_at_least_k_literals(
-                        solver, pref_hit_literals, k_use, kPrefCardinalityCombClauses, &card_reason)) {
-                    if (!quiet_mode && !card_reason.empty()) {
-                        log_debug(tt::LogFabric, "Topology SAT: preferred at-least-k skipped: {}", card_reason);
-                    }
+        }
+        if (k_lb > 0) {
+            const size_t k_use = std::min(k_lb, pref_hit_literals.size());
+            static constexpr size_t kPrefCardinalityCombClauses = 500000;
+            std::string card_reason;
+            if (!topology_sat_add_at_least_k_literals(
+                    solver, pref_hit_literals, k_use, kPrefCardinalityCombClauses, &card_reason)) {
+                if (!quiet_mode && !card_reason.empty()) {
+                    log_debug(tt::LogFabric, "Topology SAT: preferred at-least-k skipped: {}", card_reason);
                 }
             }
         }
-
-        if (validation_mode == ConnectionValidationMode::RELAXED) {
-            static constexpr size_t kMaxRelaxedChannelLiteralsSingleSolve = 256;
-            const size_t ch_mc_ub = topology_sat_relaxed_channel_threshold_literal_count_upper_bound(graph_data);
-            if (ch_mc_ub <= kMaxRelaxedChannelLiteralsSingleSolve) {
-                std::vector<int> ch_lits;
-                std::string ch_reason;
-                if (!topology_sat_append_relaxed_channel_threshold_literals(
-                        solver, enc, graph_data, ch_lits, &ch_reason)) {
-                    if (!ch_reason.empty() && !quiet_mode) {
-                        log_debug(
-                            tt::LogFabric, "Topology SAT: relaxed channel threshold literals skipped: {}", ch_reason);
-                    }
-                }
-            } else if (!quiet_mode) {
-                log_debug(
-                    tt::LogFabric,
-                    "Topology SAT: relaxed channel literals skipped for preferred pass (upper_bound {} > {})",
-                    ch_mc_ub,
-                    kMaxRelaxedChannelLiteralsSingleSolve);
-            }
-        }
-        const int status = solver.solve();
-        if (status != TopologySatSolver::kSat) {
-            state_.error_message = fmt::format(
-                "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} "
-                "nodes under hard constraints",
-                graph_data.n_target,
-                graph_data.n_global);
-            if (quiet_mode) {
-                log_debug(tt::LogFabric, "{}", state_.error_message);
-            } else {
-                log_error(tt::LogFabric, "{}", state_.error_message);
-            }
-            return false;
-        }
-        return finalize_success(solver, enc);
     }
 
-    state_.error_message = "Topology SAT: internal error (unhandled search branch)";
-    return false;
+    if (validation_mode == ConnectionValidationMode::RELAXED) {
+        static constexpr size_t kMaxRelaxedChannelLiteralsSingleSolve = 256;
+        const size_t ch_mc_ub = topology_sat_relaxed_channel_threshold_literal_count_upper_bound(graph_data);
+        if (ch_mc_ub <= kMaxRelaxedChannelLiteralsSingleSolve) {
+            std::vector<int> ch_lits;
+            std::string ch_reason;
+            if (!topology_sat_append_relaxed_channel_threshold_literals(solver, enc, graph_data, ch_lits, &ch_reason)) {
+                if (!ch_reason.empty() && !quiet_mode) {
+                    log_debug(tt::LogFabric, "Topology SAT: relaxed channel threshold literals skipped: {}", ch_reason);
+                }
+            }
+        } else if (!quiet_mode) {
+            log_debug(
+                tt::LogFabric,
+                "Topology SAT: relaxed channel literals skipped for preferred pass (upper_bound {} > {})",
+                ch_mc_ub,
+                kMaxRelaxedChannelLiteralsSingleSolve);
+        }
+    }
+    const int status = solver.solve();
+    if (status != TopologySatSolver::kSat) {
+        state.error_message = fmt::format(
+            "Failed to find mapping (SAT): target graph with {} nodes cannot be embedded in global graph with {} "
+            "nodes under hard constraints",
+            graph_data.n_target,
+            graph_data.n_global);
+        if (quiet_mode) {
+            log_debug(tt::LogFabric, "{}", state.error_message);
+        } else {
+            log_error(tt::LogFabric, "{}", state.error_message);
+        }
+        return false;
+    }
+    return finalize_success(solver, enc);
 }
 
 }  // namespace tt::tt_fabric::detail
-
-#endif  // TT_METALIUM_TOPOLOGY_SOLVER_SAT_DETAIL_HPP

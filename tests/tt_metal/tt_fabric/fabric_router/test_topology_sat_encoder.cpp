@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include <fabric/topology_solver_sat_detail.hpp>
+#include <fabric/topology_solver_sat_solver.hpp>
 
 namespace tt::tt_fabric {
 
@@ -63,7 +63,7 @@ TEST(TopologySatEncoderTest, SingleIsolatedNode_MapsAndValidates) {
     ASSERT_TRUE(topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc));
     ASSERT_EQ(solver.solve(), TopologySatSolver::kSat);
     std::vector<int> mapping;
-    ASSERT_TRUE((topology_sat_decode_hard_solution<int, int>(solver, enc, mapping)));
+    ASSERT_TRUE(topology_sat_decode_hard_solution(solver, enc, mapping));
     ASSERT_EQ(mapping.size(), 1u);
     EXPECT_EQ(mapping[0], 0);
     std::vector<std::string> warnings;
@@ -83,7 +83,7 @@ TEST(TopologySatEncoderTest, TwoNodeChain_EmbedsIntoPath_Validates) {
     ASSERT_TRUE(topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc));
     ASSERT_EQ(solver.solve(), TopologySatSolver::kSat);
     std::vector<int> mapping;
-    ASSERT_TRUE((topology_sat_decode_hard_solution<int, int>(solver, enc, mapping)));
+    ASSERT_TRUE(topology_sat_decode_hard_solution(solver, enc, mapping));
     ASSERT_EQ(mapping.size(), 2u);
     std::vector<std::string> warnings;
     const bool valid = MappingValidator<int, int>::validate_mapping(

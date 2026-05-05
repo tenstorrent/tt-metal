@@ -3178,6 +3178,35 @@ MappingResult<TargetNode, GlobalNode> MappingValidator<TargetNode, GlobalNode>::
     return result;
 }
 
+template <typename TargetNode, typename GlobalNode>
+bool SatSearchEngine<TargetNode, GlobalNode>::search(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    ConnectionValidationMode validation_mode,
+    bool quiet_mode) {
+    return topology_sat_search(
+        TopologySatGraphView(graph_data),
+        TopologySatConstraintView(constraint_data),
+        validation_mode,
+        quiet_mode,
+        state_);
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool topology_sat_encode_hard_constraints(
+    TopologySatSolver& solver,
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED) {
+    return topology_sat_encode_hard_constraints(
+        solver,
+        TopologySatGraphView(graph_data),
+        TopologySatConstraintView(constraint_data),
+        enc,
+        validation_mode);
+}
+
 }  // namespace tt::tt_fabric::detail
 
 #endif  // TOPOLOGY_SOLVER_TPP

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <climits>
 #include <cstddef>
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <set>
@@ -761,6 +762,94 @@ struct ConstraintIndexData {
         const std::string& label = "Resolved mapping constraints",
         bool quiet_mode = false) const;
 };
+
+/** SAT encoder state (no Kissat types). */
+struct TopologySatHardEncoding {
+    bool trivial_unsat = false;
+    std::string trivial_reason;
+    std::vector<std::vector<size_t>> allowed_global_idx;
+    std::vector<std::vector<int>> assign_lit;
+};
+
+/**
+ * Index-only view of GraphIndexData for the Kissat backend (implemented in topology_solver_sat.cpp).
+ */
+struct TopologySatGraphView {
+    size_t n_target = 0;
+    size_t n_global = 0;
+    const std::vector<std::vector<size_t>>& target_adj_idx;
+    const std::vector<std::vector<size_t>>& global_adj_idx;
+    const std::vector<std::map<size_t, size_t>>& target_conn_count;
+    const std::vector<std::map<size_t, size_t>>& global_conn_count;
+    const std::vector<size_t>& target_deg;
+    const std::vector<size_t>& global_deg;
+
+    template <typename TargetNode, typename GlobalNode>
+    explicit TopologySatGraphView(const GraphIndexData<TargetNode, GlobalNode>& g) :
+        n_target(g.n_target),
+        n_global(g.n_global),
+        target_adj_idx(g.target_adj_idx),
+        global_adj_idx(g.global_adj_idx),
+        target_conn_count(g.target_conn_count),
+        global_conn_count(g.global_conn_count),
+        target_deg(g.target_deg),
+        global_deg(g.global_deg) {}
+};
+
+struct TopologySatConstraintView {
+    const std::vector<std::vector<size_t>>& restricted_global_indices;
+    const std::vector<std::vector<size_t>>& forbidden_global_indices;
+    const std::vector<std::vector<size_t>>& preferred_global_indices;
+    const std::vector<std::pair<std::set<std::pair<size_t, size_t>>, size_t>>& cardinality_constraints;
+    const std::vector<int>& global_to_same_rank_group;
+    const std::vector<std::set<size_t>>& same_rank_groups;
+    const std::vector<size_t>& target_to_group;
+
+    template <typename TargetNode, typename GlobalNode>
+    explicit TopologySatConstraintView(const ConstraintIndexData<TargetNode, GlobalNode>& c) :
+        restricted_global_indices(c.restricted_global_indices),
+        forbidden_global_indices(c.forbidden_global_indices),
+        preferred_global_indices(c.preferred_global_indices),
+        cardinality_constraints(c.cardinality_constraints),
+        global_to_same_rank_group(c.global_to_same_rank_group),
+        same_rank_groups(c.same_rank_groups),
+        target_to_group(c.target_to_group) {}
+
+    bool is_valid_mapping(size_t target_idx, size_t global_idx) const {
+        if (target_idx < forbidden_global_indices.size() && !forbidden_global_indices[target_idx].empty()) {
+            const auto& forbidden = forbidden_global_indices[target_idx];
+            if (std::binary_search(forbidden.begin(), forbidden.end(), global_idx)) {
+                return false;
+            }
+        }
+        if (target_idx >= restricted_global_indices.size() || restricted_global_indices[target_idx].empty()) {
+            return true;
+        }
+        const auto& candidates = restricted_global_indices[target_idx];
+        return std::binary_search(candidates.begin(), candidates.end(), global_idx);
+    }
+};
+
+struct TopologySatSolver;
+
+struct TopologySearchState;
+
+bool topology_sat_encode_hard_constraints(
+    TopologySatSolver& solver,
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED);
+
+bool topology_sat_decode_hard_solution(
+    TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& mapping_out);
+
+bool topology_sat_search(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    ConnectionValidationMode validation_mode,
+    bool quiet_mode,
+    TopologySearchState& state);
 
 /**
  * @brief Unified heuristic for node selection and candidate generation
