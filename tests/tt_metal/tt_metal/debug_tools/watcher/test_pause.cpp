@@ -74,11 +74,13 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     constexpr const char* DM_KERNEL_NAME = "pause_dm";
 
     if (is_quasar) {
+        // On Quasar, launch kernel on all DMs
         // TODO: Watcher features for ERISCs and TRISCs are temporarily skipped on Quasar until basic runtime bring-up.
+        auto num_dms = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         experimental::metal2_host_api::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
             .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
-            .num_threads = 8,
+            .num_threads = static_cast<uint8_t>(num_dms),
             .runtime_arguments_schema = {.num_common_runtime_varargs = 1},
             .config_spec =
                 experimental::metal2_host_api::DataMovementConfiguration{
