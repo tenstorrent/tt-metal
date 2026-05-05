@@ -55,6 +55,9 @@ class DeepseekSamplingArgs:
     sampling_dp: int
     cluster_shape: tuple[int, int]
     sampling_all_gather_axis: int = 1
+    # When set, TTSampling can use gather + ttnn.argmax (deterministic greedy) instead of
+    # local top-k + ttnn.sampling. See SAMPLING_AG_CONFIG in models/common/sampling/tt_sampling.py.
+    model_config: dict | None = None
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
