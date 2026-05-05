@@ -1314,27 +1314,25 @@ bool topology_sat_search(
     return finalize_success(solver, enc);
 }
 
-// ── SatSearchEngine::search_n -- Enumerate up to max_solutions with blocking clauses ───────────
+// ── topology_sat_search_n — enumerate up to max_solutions with blocking clauses ─────────────────
 
-template <typename TargetNode, typename GlobalNode>
-bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
-    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
-    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+bool topology_sat_search_n(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
     ConnectionValidationMode validation_mode,
     size_t max_solutions,
     std::vector<std::vector<int>>& all_mappings_out,
-    bool quiet_mode) {
-    state_ = TopologySearchState{};
-    state_.mapping.assign(graph_data.n_target, -1);
-    state_.used.assign(graph_data.n_global, false);
-    quiet_mode_ = quiet_mode;
+    bool quiet_mode,
+    TopologySearchState& state) {
+    state = TopologySearchState{};
+    state.mapping.assign(graph_data.n_target, -1);
+    state.used.assign(graph_data.n_global, false);
     all_mappings_out.clear();
 
     if (max_solutions == 0) {
         return false;
     }
 
-    // Trivial case: empty target — one valid (empty) solution.
     if (graph_data.n_target == 0) {
         all_mappings_out.push_back({});
         return true;
@@ -1344,37 +1342,26 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
         return false;
     }
 
-    // Kissat does NOT support incremental solving: kissat_add after kissat_solve is explicitly
-    // unsupported (kissat_require(!GET(searches), "incremental solving not supported")).
-    // We therefore reinitialise a fresh solver for every iteration, re-encoding all hard
-    // constraints plus all blocking clauses accumulated so far.  The encoding is deterministic
-    // so literal indices are stable across fresh instances.
-
-    // Accumulate blocking clauses as lists of (negated) literals; each inner vector is one clause.
+    // Kissat does NOT support incremental solving. Reinitialise a fresh solver for every
+    // iteration, re-encoding all hard constraints plus accumulated blocking clauses.
     std::vector<std::vector<int>> blocking_clauses;
 
-    // We need enc to persist across iterations (for decoding) so we initialise it once from a
-    // dry run and then reuse the literal layout.  The first iteration uses the dry-run solver.
+    // Dry-run to establish the literal layout (enc indices are stable across fresh instances).
     TopologySatHardEncoding enc;
     {
         TopologySatSolver probe;
         if (!topology_sat_encode_hard_constraints(probe, graph_data, constraint_data, enc, validation_mode)) {
-            // Trivially UNSAT — no solutions exist.
             return false;
         }
-        // Discard the probe solver; the real loop will create its own fresh instances.
     }
 
-    // Enumerate: each iteration builds a fresh solver, re-encodes all constraints, replays
-    // blocking clauses, solves, and — if SAT — records the new blocking clause.
     while (all_mappings_out.size() < max_solutions) {
         TopologySatSolver solver;
-        TopologySatHardEncoding iter_enc;  // enc indices are deterministic; we keep outer enc for decoding.
+        TopologySatHardEncoding iter_enc;
         if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, iter_enc, validation_mode)) {
             break;
         }
 
-        // Replay all blocking clauses found so far.
         for (const auto& bc : blocking_clauses) {
             for (int lit : bc) {
                 solver.add(lit);
@@ -1384,19 +1371,15 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
 
         const int status = solver.solve();
         if (status != TopologySatSolver::kSat) {
-            break;  // UNSAT — no more solutions.
+            break;
         }
 
-        // Decode the current satisfying assignment using iter_enc (same literal layout as enc).
         std::vector<int> current_mapping;
-        if (!topology_sat_decode_hard_solution<TargetNode, GlobalNode>(solver, iter_enc, current_mapping)) {
-            // Decoding failed unexpectedly — stop enumeration to avoid an infinite loop.
+        if (!topology_sat_decode_hard_solution(solver, iter_enc, current_mapping)) {
             break;
         }
         all_mappings_out.push_back(current_mapping);
 
-        // Build and store the blocking clause for this solution.
-        // Clause: (-x_{0,g0}) v (-x_{1,g1}) v ... — forbids exactly this assignment.
         const size_t nt = iter_enc.assign_lit.size();
         std::vector<int> new_blocking;
         new_blocking.reserve(nt);
@@ -1427,13 +1410,12 @@ bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
         blocking_clauses.push_back(std::move(new_blocking));
     }
 
-    // Update state for reporting: use the last found solution if any.
     if (!all_mappings_out.empty()) {
-        state_.mapping = all_mappings_out.back();
-        std::fill(state_.used.begin(), state_.used.end(), false);
-        for (int gi : state_.mapping) {
-            if (gi >= 0 && static_cast<size_t>(gi) < state_.used.size()) {
-                state_.used[static_cast<size_t>(gi)] = true;
+        state.mapping = all_mappings_out.back();
+        std::fill(state.used.begin(), state.used.end(), false);
+        for (int gi : state.mapping) {
+            if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                state.used[static_cast<size_t>(gi)] = true;
             }
         }
     }

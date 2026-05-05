@@ -3497,6 +3497,26 @@ bool topology_sat_encode_hard_constraints(
         validation_mode);
 }
 
+template <typename TargetNode, typename GlobalNode>
+bool SatSearchEngine<TargetNode, GlobalNode>::search_n(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
+    ConnectionValidationMode validation_mode,
+    size_t max_solutions,
+    std::vector<std::vector<int>>& all_mappings_out,
+    bool quiet_mode) {
+    quiet_mode_ = quiet_mode;
+    return topology_sat_search_n(
+        TopologySatGraphView(graph_data),
+        TopologySatConstraintView(constraint_data),
+        validation_mode,
+        max_solutions,
+        all_mappings_out,
+        quiet_mode,
+        state_);
+}
+
 }  // namespace tt::tt_fabric::detail
 
 #endif  // TOPOLOGY_SOLVER_TPP
+

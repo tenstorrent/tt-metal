@@ -938,6 +938,15 @@ bool topology_sat_search(
     bool quiet_mode,
     TopologySearchState& state);
 
+bool topology_sat_search_n(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    ConnectionValidationMode validation_mode,
+    size_t max_solutions,
+    std::vector<std::vector<int>>& all_mappings_out,
+    bool quiet_mode,
+    TopologySearchState& state);
+
 /**
  * @brief Unified heuristic for node selection and candidate generation
  *
@@ -1394,3 +1403,4 @@ struct MappingValidator {
 #endif
 // NOLINTNEXTLINE(misc-header-include-cycle) - Guard macro prevents actual circular dependency
 #include <tt-metalium/experimental/fabric/topology_solver.tpp>
+
