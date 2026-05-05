@@ -57,6 +57,11 @@ on:
         required: false
         type: string
         default: ""
+      llm-backend:
+        description: "LLM backend for the resolver agent fallback: 'cursor' (default) or 'copilot' (uses AUTO_TRIAGE_TOKEN, no Cursor quota)"
+        required: false
+        type: string
+        default: "cursor"
 
 permissions:
   contents: read
@@ -86,8 +91,10 @@ jobs:
       reassign-to-someone-else: ${{ inputs.reassign-to-someone-else }}
       refresh-owner-recommendation: ${{ inputs.refresh-owner-recommendation }}
       extra-context-for-agent: ${{ inputs.extra-context-for-agent }}
+      llm-backend: ${{ inputs.llm-backend }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.AUTO_TRIAGE_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
