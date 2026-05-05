@@ -28,7 +28,7 @@ Rank-binding YAMLs live in `tests/tt_metal/distributed/config/`:
 ```bash
 source python_env/bin/activate
 MESH_DEVICE=SINGLE_BH pytest \
-  tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/test_*.py::test_*_8x4
+  tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/test_*.py::test_*_8x4
 ```
 
 ### DUAL_BH (16×4, 2 hosts)
@@ -39,7 +39,7 @@ tt-run \
   --mpi-args "--host bh-glx-110-c08u02,bh-glx-110-c08u08" \
   bash -c "source python_env/bin/activate && MESH_DEVICE=DUAL_BH \
     pytest --timeout=240 \
-    tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/test_*.py::test_*_16x4"
+    tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/test_*.py::test_*_16x4"
 ```
 
 ### QUAD_BH (32×4, 4 hosts)
@@ -50,7 +50,7 @@ tt-run \
   --mpi-args "--host bh-glx-110-c07u02,bh-glx-110-c07u08,bh-glx-110-c08u02,bh-glx-110-c08u08" \
   bash -c "source python_env/bin/activate && MESH_DEVICE=QUAD_BH \
     pytest --timeout=240 \
-    tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/test_*.py::test_*_32x4"
+    tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/test_*.py::test_*_32x4"
 ```
 
 Always pass `--timeout=240` (or similar) per pytest case so a hang on one

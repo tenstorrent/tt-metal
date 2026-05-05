@@ -23,7 +23,9 @@ multi-host MPI ranks generate consistent goldens.
 import pytest
 
 import ttnn
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox._a2a_moe_helpers import run_all_to_all_combine_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.multi_host._a2a_moe_helpers import (
+    run_all_to_all_combine_test,
+)
 
 # ---------------------------------------------------------------------------
 # Fabric / topology parametrize combos (reused by multiple tests)

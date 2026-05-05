@@ -23,7 +23,9 @@ depend on tests/nightly/t3000/...
 import pytest
 
 import ttnn
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox._a2a_moe_helpers import run_all_to_all_dispatch_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.exabox.multi_host._a2a_moe_helpers import (
+    run_all_to_all_dispatch_test,
+)
 
 # ---------------------------------------------------------------------------
 # Fabric / topology parametrize combos (reused by multiple tests)
