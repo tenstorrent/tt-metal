@@ -351,12 +351,12 @@ private:
     void print_buffer_data(ChipId device_id, const umd::CoreDescriptor& logical_core, std::span<uint32_t> data);
 
     struct DispatchDramData {
-        uint64_t rw_pointers_address;
-        uint64_t buffer_address;
-        uint32_t buffer_size;
-        int dram_view;
-        bool disabled;
-        bool running_logged;
+        uint64_t rw_pointers_address = 0;
+        uint64_t buffer_address = 0;
+        uint32_t buffer_size = 0;
+        int dram_view = 0;
+        bool disabled = false;
+        bool running_logged = false;
         std::map<std::pair<uint32_t, uint32_t>, umd::CoreDescriptor> noc_to_core;
     };
     std::map<ChipId, DispatchDramData> dispatch_dram_data_;
