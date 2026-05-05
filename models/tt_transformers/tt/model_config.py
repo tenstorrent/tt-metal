@@ -1121,10 +1121,6 @@ class ModelArgs:
         # TODO: Add more model-specific filtering here
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
 
-        # RoPE / prefill buffers are allocated for this instance's max_seq_len; do not
-        # warm up at longer lengths (e.g. demos with max_seq_len=256 vs table [128, 1024]).
-        to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
-
         # TODO: https://github.com/tenstorrent/tt-metal/issues/33991 - for P100 only, P150 has assert for ISL > 1K
         if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P100":
             for seq_len in to_warmup_seq_lens:

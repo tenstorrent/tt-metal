@@ -638,23 +638,28 @@ def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
     return None, pt_out
 
 
-def get_padded_prefill_len(seq_len: int) -> int:
+def get_padded_prefill_len(seq_len: int, max_seq_len: Optional[int] = None) -> int:
     """
     Get the padded prefill length for a given sequence length.
-    This is used to pad the sequence length to the nearest power of 2.
+
+    Default rule matches large LM trace/warmup tiers: 128, then 1024 for lengths up to 1k,
+    then next power of two (same idea as ``get_all_padded_prefill_lengths``).
+
+    Pass ``max_seq_len`` only when the built model is shorter (e.g. small embedding
+    checkpoints): padding is clamped so RoPE/KV limits are never exceeded. Llama-scale
+    models omit this and keep coarse padding unchanged.
     """
     # TODO: https://github.com/tenstorrent/tt-metal/issues/34117
     if seq_len <= 128:
-        return 128
-    if seq_len <= 256:
-        return 256
-    if seq_len <= 512:
-        return 512
-    if seq_len <= 1024:
-        return 1024
+        padded = 128
+    elif seq_len <= 1024:
+        padded = 1024
     else:
-        # return next power of 2 greater than seq_len
-        return 2 ** (seq_len - 1).bit_length()
+        padded = 2 ** (seq_len - 1).bit_length()
+
+    if max_seq_len is not None:
+        padded = min(padded, max_seq_len)
+    return padded
 
 
 def get_all_padded_prefill_lengths(max_len):

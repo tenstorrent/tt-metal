@@ -512,7 +512,9 @@ class Generator(WarmupForwardMixin):
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
 
-        prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        prefill_seq_lens = [
+            get_padded_prefill_len(seq_len, max_seq_len=self.model_args[0].max_seq_len) for seq_len in prompt_lens
+        ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # Only used when device sampling is active (sampling_params is not None)
         # and the prompt uses the harmony chat template (first token is <|start|>=200006).
