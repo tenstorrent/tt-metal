@@ -229,25 +229,31 @@ class Attention(LightweightModule):
                 mesh_mapper=_mesh_mapper,
             )
 
+        # HiFi4 throughout the talker path: matches HF (fp32) more tightly so
+        # the AR sampling trajectory doesn't drift away from HF — was producing
+        # premature EOS and a noise burst at the ref→gen boundary on Ashley_en.
+        # Trades ~3-4x compute for matmul mantissa precision.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
-        # Keep fp32 accumulation for attention matmuls. HiFi2 is the current
-        # quality/speed tradeoff for this path.
+        # SDPA already runs on Q/K/V typecast to fp32 (lines below in forward).
+        # Bumping math_fidelity to HiFi4 and keeping fp32 dest accumulation
+        # makes the matmul/softmax/matmul chain effectively full fp32 fidelity.
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
-        # RoPE (P3): default kernel was HiFi4; LoFi + explicit L1 matches linears and avoids DRAM spill.
+        # RoPE: HiFi4 too — small op, accuracy matters for the cumulative
+        # AR-loop trajectory.
         self.rope_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
