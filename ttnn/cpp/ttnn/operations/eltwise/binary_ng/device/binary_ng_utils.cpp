@@ -418,6 +418,14 @@ std::pair<std::string, std::string> get_sfpu_init_fn(
             return {"sub_binary_tile_init();", "sub_binary_tile"};
         case MUL:
             if (int_data_format) {
+                if (enable_replay) {
+                    return {
+                        fmt::format(
+                            "mul_int_tile_init<DataFormat::{}>(); mul_int_binary_init_replay<DataFormat::{}>();",
+                            *int_data_format,
+                            *int_data_format),
+                        fmt::format("mul_int_binary_tile_replay<DataFormat::{}>", *int_data_format)};
+                }
                 return {
                     fmt::format("mul_int_tile_init<DataFormat::{}>();", *int_data_format),
                     fmt::format("mul_int_tile<DataFormat::{}>", *int_data_format)};
@@ -587,6 +595,9 @@ std::pair<std::string, std::string> get_sfpu_init_fn(
             return {"le_int32_tile_init();", "le_int32_tile"};
         case EQ:
             if (dtype == DataType::FLOAT32) {
+                if (enable_replay) {
+                    return {"eq_binary_tile_init(); eq_fp32_init_replay();", "eq_fp32_tile_replay"};
+                }
                 return {"eq_binary_tile_init();", "eq_binary_tile"};
             }
             TT_THROW("SFPU EQ binary tile is only defined for Float32");

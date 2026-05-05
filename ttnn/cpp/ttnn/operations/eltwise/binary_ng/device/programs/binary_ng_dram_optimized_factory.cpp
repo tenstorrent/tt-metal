@@ -83,31 +83,31 @@ using tt::tt_metal::IDevice;
 
 [[maybe_unused]] std::pair<CoreRangeSet, std::map<CoreCoord, bool>> double_dram_core_coords() {
     //
-    // std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = {// (y,x) physical core coords
-    //                                                                  // (11,0)
-    //                                                                  {{0, 1}},
-    //                                                                  // 1,0
-    //                                                                  {{0, 0}},
-    //                                                                  // 5,0
-    //                                                                  {{4, 0}},
-    //                                                                  // 7,0
-    //                                                                  {{5, 0}},
-    //                                                                  // 1,5
-    //                                                                  {{0, 4}},
-    //                                                                  // 11,5
-    //                                                                  {{0, 5}},
-    //                                                                  // 2,5
-    //                                                                  {{1, 4}},
-    //                                                                  // 9,5
-    //                                                                  {{7, 4}},
-    //                                                                  // 8,5
-    //                                                                  {{6, 4}},
-    //                                                                  // 3,5
-    //                                                                  {{2, 4}},
-    //                                                                  // 5,5
-    //                                                                  {{4, 4}},
-    //                                                                  // 7,5
-    //                                                                  {{5, 4}}};
+    std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = {// (y,x) physical core coords
+                                                                     // (11,0)
+                                                                     {{0, 1}},
+                                                                     // 1,0
+                                                                     {{0, 0}},
+                                                                     // 5,0
+                                                                     {{4, 0}},
+                                                                     // 7,0
+                                                                     {{5, 0}},
+                                                                     // 1,5
+                                                                     {{0, 4}},
+                                                                     // 11,5
+                                                                     {{0, 5}},
+                                                                     // 2,5
+                                                                     {{1, 4}},
+                                                                     // 9,5
+                                                                     {{7, 4}},
+                                                                     // 8,5
+                                                                     {{6, 4}},
+                                                                     // 3,5
+                                                                     {{2, 4}},
+                                                                     // 5,5
+                                                                     {{4, 4}},
+                                                                     // 7,5
+                                                                     {{5, 4}}};
 
     // noc swap for 4,7, 0,7, 5,7 0,3  1,3, 7,3  6,3  2,3, 4,3 5,3   (y,x)
     //  Need to swap all cores, I use y,x format , CoreCoord use x,y format.
@@ -138,31 +138,31 @@ using tt::tt_metal::IDevice;
     //                                                                  // 7,5
     //                                                                  {{5, 4}, {5, 5}}};
 
-    std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = {// (y,x) physical core coords
-                                                                     // (11,0)
-                                                                     {{0, 1}, {0, 2}, {0, 3}},
-                                                                     // 1,0
-                                                                     {{0, 0}, {1, 0}, {2, 0}},
-                                                                     // 5,0
-                                                                     {{4, 0}, {4, 1}, {4, 2}},
-                                                                     // 7,0
-                                                                     {{5, 0}, {5, 1}, {5, 2}},
-                                                                     // 1,5 +
-                                                                     {{0, 4}, {0, 5}, {0, 6}},
-                                                                     // 11,5 +
-                                                                     {{1, 6}, {0, 7}, {1, 7}},
-                                                                     // 2,5 +
-                                                                     {{1, 4}, {1, 5}, {2, 5}},
-                                                                     // 9,5
-                                                                     {{7, 4}, {7, 5}, {7, 6}},
-                                                                     // 8,5
-                                                                     {{6, 4}, {6, 5}, {6, 6}},
-                                                                     // 3,5 +d
-                                                                     {{2, 4}, {3, 5}, {3, 4}},
-                                                                     // 5,5
-                                                                     {{4, 4}, {4, 5}, {4, 6}},
-                                                                     // 7,5
-                                                                     {{5, 4}, {5, 5}, {5, 6}}};
+    // std::vector<std::vector<CoreCoord>> dram_worker_cores_ordered = {// (y,x) physical core coords
+    //                                                                  // (11,0)
+    //                                                                  {{0, 1}, {0, 2}, {0, 3}},
+    //                                                                  // 1,0
+    //                                                                  {{0, 0}, {1, 0}, {2, 0}},
+    //                                                                  // 5,0
+    //                                                                  {{4, 0}, {4, 1}, {4, 2}},
+    //                                                                  // 7,0
+    //                                                                  {{5, 0}, {5, 1}, {5, 2}},
+    //                                                                  // 1,5 +
+    //                                                                  {{0, 4}, {0, 5}, {0, 6}},
+    //                                                                  // 11,5 +
+    //                                                                  {{1, 6}, {0, 7}, {1, 7}},
+    //                                                                  // 2,5 +
+    //                                                                  {{1, 4}, {1, 5}, {2, 5}},
+    //                                                                  // 9,5
+    //                                                                  {{7, 4}, {7, 5}, {7, 6}},
+    //                                                                  // 8,5
+    //                                                                  {{6, 4}, {6, 5}, {6, 6}},
+    //                                                                  // 3,5 +d
+    //                                                                  {{2, 4}, {3, 5}, {3, 4}},
+    //                                                                  // 5,5
+    //                                                                  {{4, 4}, {4, 5}, {4, 6}},
+    //                                                                  // 7,5
+    //                                                                  {{5, 4}, {5, 5}, {5, 6}}};
     std::vector<CoreCoord> swap_noc_cores;
 
     auto num_of_cores_per_bank = dram_worker_cores_ordered[0].size();
@@ -211,28 +211,29 @@ uint32_t compute_num_tiles_per_batches(
     const ttnn::operations::binary_ng::BinaryNgParams& operation_attributes,
     const ttnn::operations::binary_ng::BinaryNgInputs& args,
     const ttnn::Tensor& output) {
+    (void)operation_attributes;
+    (void)output;
     auto* device = args.input_tensor_a.device();
     auto dtype = tt::tt_metal::datatype_to_dataformat_converter(args.input_tensor_a.dtype());
 
     uint32_t single_tile_size = tt::tile_size(dtype);
 
-    const auto b_data_format =
-        args.input_tensor_b.has_value() ? datatype_to_dataformat_converter(args.input_tensor_b->dtype()) : dtype;
-    const auto c_data_format = datatype_to_dataformat_converter(output.dtype());
+    // const auto b_data_format =
+    //     args.input_tensor_b.has_value() ? datatype_to_dataformat_converter(args.input_tensor_b->dtype()) : dtype;
+    // const auto c_data_format = datatype_to_dataformat_converter(output.dtype());
 
     // With fp32_dest_acc_en the DST register file holds only 4 tiles (vs 16 for 16-bit).
     // The SFPU binary section interleaves LHS/RHS in DST using 2*n_tiles slots,
     // so large_chunk (= num_batches * num_tiles_per_batch) must stay <= 2 for 32-bit.
     // num_tiles_per_batch = 4 supposed to match NOC_MAX_BURST_SIZE (bytes)
-    bool fp32_dest_acc_en =
-        ttnn::operations::binary_ng::program::is_fp32_dest_acc_en(dtype, b_data_format, c_data_format);
+    // bool fp32_dest_acc_en =
+    //     ttnn::operations::binary_ng::program::is_fp32_dest_acc_en(dtype, b_data_format, c_data_format);
 
     const uint32_t max_tiles_per_dst = dtype == tt::DataFormat::Bfp4_b ? 8 : 16;
-    return fp32_dest_acc_en or operation_attributes.is_sfpu
-               ? 2  // Why 1 for fp32 ???? , shuold be 2 for f32 to max noc burst size
-               : std::min(
-                     max_tiles_per_dst,
-                     CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / single_tile_size);
+
+    return std::min(
+        max_tiles_per_dst,
+        CMAKE_UNIQUE_NAMESPACE::get_noc_max_burst_size(*(device->get_mesh_device())) / single_tile_size);
 }
 
 template <bool initialize_args>
@@ -675,7 +676,7 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
                                       : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
 
-    auto compute_kernel_defines = op_config.as_defines(a_dtype);
+    auto compute_kernel_defines = op_config.as_defines(a_dtype, true);
 
     // TODO: create a common func and merge with op_config.as_defines(a_dtype);
     {
@@ -786,6 +787,11 @@ BinaryNgDramOptimizedProgram::cached_program_t BinaryNgDramOptimizedProgram::cre
     }
 
     log_info(tt::LogOp, "compute_kernel_defines: {}", compute_kernel_defines);
+    log_info(tt::LogOp, "num_tiles_per_batch : {}", num_tiles_per_batch);
+    log_info(tt::LogOp, "fp32_dest_acc_en : {}", fp32_dest_acc_en);
+    // Same config for sfpu and fpu kernels?
+    // MATH fidelity? ????
+    //  math_approx_mode ???
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         kernel_prefix + compute_kernel_path,

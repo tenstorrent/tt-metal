@@ -594,29 +594,31 @@ ALWI void binary_right_shift_tile_replay(std::uint32_t idst0, std::uint32_t idst
 }
 
 // ---------------------------------------------------------------------------
-// Replay-buffer based SFPU integer comparisons: LT / GT / GE on INT32 and
-// LT / GT on UINT16.
+// Replay-buffer based SFPU comparisons:
+//   * INT32  : LT / GT / GE
+//   * UINT16 : LT / GT
+//   * FP32   : LT / GT / LE / GE / EQ  (branchless, pure-TTI re-implementation)
 //
-// EQ and NE, plus the FP32 variants of LT / GT / GE (i.e. `eq_binary_tile`,
-// `ne_binary_tile`, `lt_binary_tile`, ...), are FP32-only in the upstream
-// factory and rely on sfpi `v_if` / `v_endif` blocks that compile to a
-// non-trivial, optimization-dependent number of instructions; baking those
-// into a fixed-length replay buffer is fragile, so they are intentionally
-// NOT covered by this replay path - callers should keep using the existing
-// non-replay tile functions for the FP32 variants. INT32 LE / UINT16 GE/LE
-// are similarly not added here yet (no upstream demand from the kernel).
+// NE is still routed through the non-replay path: it has no upstream demand
+// for replay yet, and the existing sfpi `binary_comp_fp32_equal_mask<ne>`
+// path is correct. INT32 LE and UINT16 GE/LE are similarly omitted.
 //
-// The recorded bodies match `calculate_binary_comp_int32` and
+// The INT32 and UINT16 bodies match `calculate_binary_comp_int32` and
 // `calculate_binary_comp_uint16` instruction-for-instruction (with hardcoded
 // `dst_index_in0 = 0`, `dst_index_in1 = 1`, `dst_index_out = 0`), so output
-// is bit-identical to the upstream non-replay path.
+// is bit-identical to the upstream non-replay path. The FP32 ordered bodies
+// (LT/GT/LE/GE) are branchless, pure-TTI re-implementations of the upstream
+// sfpi `binary_comp_fp32_ordered_mask` predicate; the FP32 EQ body is a
+// branchless re-implementation of `binary_comp_fp32_equal_mask<eq>`. All
+// FP32 bodies produce an FP32 0.0f/1.0f result that matches the upstream
+// FP32 comparison semantics for finite values, signed zeros, signed
+// infinities and NaNs.
 //
 // Layout (offsets in dest rows, relative to current dst_reg base):
 //   operand A at offset 0   (DST[base])
 //   operand B at offset 64  (DST[base + 1])
 //   result overwrites offset 0
-// matching the kernel pairing `<op>_int32_tile(i*2, i*2+1, i*2)` and
-// `<op>_uint16_tile(i*2, i*2+1, i*2)`.
+// matching the kernel pairing `<op>_<dtype>_tile(i*2, i*2+1, i*2)`.
 // ---------------------------------------------------------------------------
 
 // LT / GT (INT32):
@@ -638,6 +640,51 @@ constexpr std::uint32_t SFPU_BINARY_GE_INT32_REPLAY_LEN = 19;
 //   SFPLOAD x2 + SFPIADD (A-B / B-A as int) + SFPSHFT (sign bit -> 0/1)
 //   + SFPSTORE + INCRWC = 6 instructions.
 constexpr std::uint32_t SFPU_BINARY_LT_GT_UINT16_REPLAY_LEN = 6;
+
+// FP32 LT/GT (strict): 28 instructions.
+//   SFPLOAD x2 + SFPABS x2                           (loads + |in0|, |in1|)
+//   + SFPMAD + SFPNOP                                (signed diff)
+//   + SFPABS + SFPSHFT                               (|diff|, strict sign-bit)
+//   + SFPLOADI                                       (INF constant)
+//   + SFPMOV + SFPIADD + SFPSHFT
+//   + SFPIADD + SFPSHFT + SFPOR                      (nan_either)
+//   + SFPMOV + SFPIADD + SFPSHFT                     (is_nan(|diff|))
+//   + SFPIADD + SFPSHFT                              (is_zero_nonneg(|diff|))
+//   + SFPOR + SFPOR                                  (force_zero)
+//   + SFPNOT + SFPAND                                (result = strict & ~force_zero)
+//   + SFPIADD + SFPAND                               (0/1 -> 0.0f/1.0f)
+//   + SFPSTORE + INCRWC
+constexpr std::uint32_t SFPU_BINARY_LT_GT_FP32_REPLAY_LEN = 28;
+
+// FP32 LE/GE (non-strict): 35 instructions. Same prologue as LT/GT through
+// `nan_either`, then a different epilogue:
+//   + SFPIADD + SFPSHFT                              (zero_diff)
+//   + SFPMOV + SFPXOR + SFPABS + SFPIADD + SFPSHFT   (bits_eq(in0,in1))
+//   + SFPIADD + SFPABS + SFPIADD + SFPSHFT           (is_inf(|in0|))
+//   + SFPAND                                         (same_signed_inf)
+//   + SFPOR + SFPOR                                  (pre_result)
+//   + SFPNOT + SFPAND                                (result = pre_result & ~nan_either)
+//   + SFPIADD + SFPAND                               (0/1 -> 0.0f/1.0f)
+//   + SFPSTORE + INCRWC
+constexpr std::uint32_t SFPU_BINARY_LE_GE_FP32_REPLAY_LEN = 35;
+
+// FP32 EQ: 26 instructions. Branchless re-implementation of
+// `binary_comp_fp32_equal_mask`:
+//   bits_eq    = (in0 ^ in1) == 0      (same bit pattern; covers ±finite, ±inf)
+//   both_zero  = (|in0| | |in1|) == 0  (covers +0 vs -0 - different bits)
+//   nan_either = is_nan(|in0|) | is_nan(|in1|)
+//   result     = (bits_eq | both_zero) & ~nan_either
+// Instruction breakdown:
+//   SFPLOAD x2 + SFPABS x2 (FLOAT)                   (loads, |in0|, |in1|)
+//   + SFPLOADI                                       (INF constant)
+//   + SFPMOV + SFPXOR + SFPABS (INT) + SFPIADD + SFPSHFT  (bits_eq)
+//   + SFPMOV + SFPOR + SFPIADD + SFPSHFT             (both_zero)
+//   + SFPOR                                          (pre_eq = bits_eq | both_zero)
+//   + SFPIADD + SFPSHFT + SFPIADD + SFPSHFT + SFPOR  (nan_either)
+//   + SFPNOT + SFPAND                                (result = pre_eq & ~nan_either)
+//   + SFPIADD + SFPAND                               (0/1 -> 0.0f/1.0f)
+//   + SFPSTORE + INCRWC
+constexpr std::uint32_t SFPU_BINARY_EQ_FP32_REPLAY_LEN = 26;
 
 constexpr std::uint32_t SFPU_BINARY_COMP_DST_TILE_ROWS = 64;
 
@@ -697,8 +744,8 @@ inline void _record_sfpu_binary_lt_gt_int32_body_() {
     // Copy A,B into LREG2,LREG3 then logical-shift by -31 to extract sign bits.
     // Mod1 = 1 means immediate-shift mode with imm12 = -31 (sign-extended) =>
     // logical right shift by 31; result is 1 iff input had MSB = 1.
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);  // LREG2 <- A
-    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);  // LREG3 <- B
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);               // LREG2 <- A
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);               // LREG3 <- B
     TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);  // LREG2 = sign(A)
     TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);  // LREG3 = sign(B)
 
@@ -806,6 +853,215 @@ inline void _program_sfpu_binary_gt_uint16_replay_() {
     _record_sfpu_binary_lt_gt_uint16_body_</*SwapAB=*/true>();
 }
 
+// ---------------------------------------------------------------------------
+// Branchless FP32 ordered comparison (LT / GT / LE / GE), pure TTI macros.
+//
+// Per-lane 0/1 predicates are built from sign bits of FP/int subtracts and
+// combined with bitwise ops; the final 0/1 mask is then converted to
+// 0.0f/1.0f via:
+//   (-mask) & LCONST_1   // 0 -> 0, 1 -> 0xFFFFFFFF -> 0x3F800000
+// LREG layout during the body:
+//   LREG0: in0 (FP32)         (kept for in0^in1 in LE/GE)
+//   LREG1: in1 (FP32)         (kept for in0^in1 in LE/GE)
+//   LREG2: diff -> nan_either / final result
+//   LREG3: |in0| -> is_inf_in0 (LE/GE) / is_zero_nonneg(|diff|) (LT/GT)
+//   LREG4: |in1| -> is_nan(|in1|) -> zero_diff (LE/GE) / is_nan(|diff|) (LT/GT)
+//   LREG5: |diff| -> bits_eq scratch (LE/GE)
+//   LREG6: strict mask -> pre_result (LE/GE)
+//   LREG7: 0x7F800000 (kept alive)
+template <SfpuType OP>
+inline void _record_sfpu_binary_comp_fp32_body_() {
+    static_assert(
+        OP == SfpuType::lt || OP == SfpuType::gt || OP == SfpuType::le || OP == SfpuType::ge,
+        "FP32 replay body supports only ordered comparisons (lt/gt/le/ge).");
+    constexpr bool is_strict = (OP == SfpuType::lt || OP == SfpuType::gt);
+    constexpr bool is_lt_le = (OP == SfpuType::lt || OP == SfpuType::le);
+
+    // ----- 1. Loads + abs values --------------------------------------------
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 1 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPABS_MOD1_FLOAT);  // |in0|
+    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG4, sfpi::SFPABS_MOD1_FLOAT);  // |in1|
+
+    // ----- 2. diff = in0 - in1 (LT/LE) or in1 - in0 (GT/GE) -----------------
+    // SFPMAD(a, b, c, dst, mod) -> dst = a*b + c.
+    if constexpr (is_lt_le) {
+        TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, 0);  // -in1 + in0
+    } else {
+        TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0);  // -in0 + in1
+    }
+    TTI_SFPNOP;  // MAD latency
+
+    // ----- 3. |diff| and strict sign-bit mask -------------------------------
+    TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG5, sfpi::SFPABS_MOD1_FLOAT);  // |diff|
+    // Logical right shift by 31 (mod=1 = SHIFT_IMM | LOGICAL): 0/1 sign bit.
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG6, 1);  // strict (0/1)
+
+    // ----- 4. INF constant (reused 2 or 3 times) ----------------------------
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);  // 0x7F800000
+
+    // ----- 5. nan_either = is_nan(|in0|) | is_nan(|in1|), into LREG2 --------
+    // is_nan(|x|) = sign_bit(INF - |x|) (1 iff |x| > INF).
+    // SFPIADD mod=6 (ARG_2SCOMP|CC_NONE): dst = src_a - dst.
+    TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG2, 6);              // INF - |in0|
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);  // is_nan(|in0|)
+    TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG4, 6);              // INF - |in1| (overwrite |in1|)
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG4, p_sfpu::LREG4, 1);  // is_nan(|in1|)
+    TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG2, 0);                // LREG2 = nan_either
+
+    if constexpr (is_strict) {
+        // ----- 6a. LT/GT: result = strict & ~(nan_either | is_nan(|diff|) | (|diff|==0)) --
+        TTI_SFPMOV(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG4, 6);              // INF - |diff|
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG4, p_sfpu::LREG4, 1);  // is_nan(|diff|)
+
+        // is_zero_nonneg(|diff|) into LREG3 via (|diff| - 1) sign bit.
+        // SFPIADD mod=5 (ARG_IMM|CC_NONE): dst = src_a + imm. imm12=0xFFF = -1.
+        TTI_SFPIADD(0xFFF, p_sfpu::LREG5, p_sfpu::LREG3, 5);          // |diff| - 1
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);  // is_zero_nonneg
+
+        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG2, 0);  // |= is_nan(|diff|)
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // |= is_zero_nonneg
+
+        TTI_SFPNOT(0, p_sfpu::LREG2, p_sfpu::LREG2, 0);  // ~force_zero
+        TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG2, 0);  // & strict
+    } else {
+        // ----- 6b. LE/GE: result = (strict | zero_diff | same_signed_inf) & ~nan_either ---
+        TTI_SFPIADD(0xFFF, p_sfpu::LREG5, p_sfpu::LREG4, 5);          // |diff| - 1
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG4, p_sfpu::LREG4, 1);  // zero_diff
+
+        // bits_eq = is_zero_any(in0 ^ in1) into LREG5.
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);                      // in0 ^ in1
+        TTI_SFPABS(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPABS_MOD1_INT);  // |...| (2's-comp)
+        TTI_SFPIADD(0xFFF, p_sfpu::LREG5, p_sfpu::LREG5, 5);                 // |...| - 1
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG5, p_sfpu::LREG5, 1);         // bits_eq
+
+        // is_inf_in0 = is_zero_any(|in0| - INF) into LREG3 (overwrite |in0|).
+        TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG3, 6);                     // INF - |in0|
+        TTI_SFPABS(0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPABS_MOD1_INT);  // | INF - |in0| |
+        TTI_SFPIADD(0xFFF, p_sfpu::LREG3, p_sfpu::LREG3, 5);                 // - 1
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);         // is_inf_in0
+
+        // same_signed_inf = bits_eq & is_inf_in0 (in LREG5).
+        TTI_SFPAND(0, p_sfpu::LREG3, p_sfpu::LREG5, 0);
+
+        // pre_result = strict | zero_diff | same_signed_inf in LREG6.
+        TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG6, 0);  // |= zero_diff
+        TTI_SFPOR(0, p_sfpu::LREG5, p_sfpu::LREG6, 0);  // |= same_signed_inf
+
+        // result = pre_result & ~nan_either, into LREG2 (currently nan_either).
+        TTI_SFPNOT(0, p_sfpu::LREG2, p_sfpu::LREG2, 0);  // ~nan_either
+        TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG2, 0);  // & pre_result
+    }
+
+    // ----- 7. 0/1 -> 0.0f/1.0f ---------------------------------------------
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 6);  // -result (0 or -1)
+    TTI_SFPAND(0, p_sfpu::LCONST_1, p_sfpu::LREG2, 0);   // & 0x3F800000
+
+    // ----- 8. Store + advance dst ------------------------------------------
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_INCRWC(0, sfpi::SFP_DESTREG_STRIDE, 0, 0);
+}
+
+inline void _program_sfpu_binary_lt_fp32_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_LT_GT_FP32_REPLAY_LEN);
+    _record_sfpu_binary_comp_fp32_body_<SfpuType::lt>();
+}
+
+inline void _program_sfpu_binary_gt_fp32_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_LT_GT_FP32_REPLAY_LEN);
+    _record_sfpu_binary_comp_fp32_body_<SfpuType::gt>();
+}
+
+inline void _program_sfpu_binary_le_fp32_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_LE_GE_FP32_REPLAY_LEN);
+    _record_sfpu_binary_comp_fp32_body_<SfpuType::le>();
+}
+
+inline void _program_sfpu_binary_ge_fp32_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_LE_GE_FP32_REPLAY_LEN);
+    _record_sfpu_binary_comp_fp32_body_<SfpuType::ge>();
+}
+
+// ---------------------------------------------------------------------------
+// Branchless FP32 EQ comparison, pure TTI macros.
+//
+// Re-implementation of `binary_comp_fp32_equal_mask<eq>` without sfpi v_if:
+//   bits_eq    = (in0 ^ in1) == 0      // same bit pattern (covers finite ==
+//                                      // finite, +inf == +inf, -inf == -inf)
+//   both_zero  = (|in0| | |in1|) == 0  // ±0 vs ±0 (different sign bits)
+//   nan_either = is_nan(|in0|) | is_nan(|in1|)
+//   result     = (bits_eq | both_zero) & ~nan_either
+//
+// Final 0/1 -> 0.0f/1.0f via:
+//   (-mask) & LCONST_1   // 0 -> 0, 1 -> 0xFFFFFFFF -> 0x3F800000
+//
+// LREG layout during the body:
+//   LREG0: in0 (kept for in0 ^ in1)
+//   LREG1: in1 (kept for in0 ^ in1)
+//   LREG2: bits_eq -> pre_eq -> final result
+//   LREG3: |in0| -> nan_either
+//   LREG4: |in1| -> is_nan(|in1|)
+//   LREG6: |in0| | |in1| -> both_zero
+//   LREG7: 0x7F800000 (kept alive)
+inline void _record_sfpu_binary_eq_fp32_body_() {
+    // ----- 1. Loads + abs values --------------------------------------------
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 1 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPABS_MOD1_FLOAT);  // |in0|
+    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG4, sfpi::SFPABS_MOD1_FLOAT);  // |in1|
+
+    // ----- 2. INF constant (used by NaN check) -----------------------------
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0x7F80);  // 0x7F800000
+
+    // ----- 3. bits_eq = is_zero_any(in0 ^ in1) into LREG2 ------------------
+    // is_zero_any(x) = sign_bit(|x| - 1): 1 iff |x| == 0.
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);                      // in0 ^ in1
+    TTI_SFPABS(0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPABS_MOD1_INT);  // |...| (2's-comp)
+    TTI_SFPIADD(0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, 5);                 // - 1
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);         // bits_eq
+
+    // ----- 4. both_zero = is_zero_any(|in0| | |in1|) into LREG6 ------------
+    // FLOAT abs already cleared the sign bits, so |in0|, |in1| are
+    // non-negative magnitudes; their bitwise-OR is zero iff both are ±0.
+    TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG6, 0);
+    TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG6, 0);                // LREG6 = |in0| | |in1|
+    TTI_SFPIADD(0xFFF, p_sfpu::LREG6, p_sfpu::LREG6, 5);          // - 1
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG6, p_sfpu::LREG6, 1);  // both_zero
+
+    // ----- 5. pre_eq = bits_eq | both_zero (in LREG2) ----------------------
+    TTI_SFPOR(0, p_sfpu::LREG6, p_sfpu::LREG2, 0);
+
+    // ----- 6. nan_either = is_nan(|in0|) | is_nan(|in1|), into LREG3 -------
+    // is_nan(|x|) = sign_bit(INF - |x|) (1 iff |x| > INF).
+    // SFPIADD mod=6 (ARG_2SCOMP|CC_NONE): dst = src_a - dst.
+    TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG3, 6);              // INF - |in0|
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);  // is_nan(|in0|)
+    TTI_SFPIADD(0, p_sfpu::LREG7, p_sfpu::LREG4, 6);              // INF - |in1|
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG4, p_sfpu::LREG4, 1);  // is_nan(|in1|)
+    TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG3, 0);                // nan_either
+
+    // ----- 7. result = pre_eq & ~nan_either (in LREG2) ---------------------
+    TTI_SFPNOT(0, p_sfpu::LREG3, p_sfpu::LREG3, 0);  // ~nan_either
+    TTI_SFPAND(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);  // & pre_eq
+
+    // ----- 8. 0/1 -> 0.0f/1.0f ---------------------------------------------
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 6);  // -result (0 or -1)
+    TTI_SFPAND(0, p_sfpu::LCONST_1, p_sfpu::LREG2, 0);   // & 0x3F800000
+
+    // ----- 9. Store + advance dst ------------------------------------------
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_INCRWC(0, sfpi::SFP_DESTREG_STRIDE, 0, 0);
+}
+
+inline void _program_sfpu_binary_eq_fp32_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_EQ_FP32_REPLAY_LEN);
+    _record_sfpu_binary_eq_fp32_body_();
+}
+
 #endif  // TRISC_MATH
 
 // One-shot replay-buffer programming helpers, one per (op, dtype) pair.
@@ -816,6 +1072,11 @@ ALWI void gt_int32_init_replay() { MATH((_program_sfpu_binary_gt_int32_replay_()
 ALWI void ge_int32_init_replay() { MATH((_program_sfpu_binary_ge_int32_replay_())); }
 ALWI void lt_uint16_init_replay() { MATH((_program_sfpu_binary_lt_uint16_replay_())); }
 ALWI void gt_uint16_init_replay() { MATH((_program_sfpu_binary_gt_uint16_replay_())); }
+ALWI void lt_fp32_init_replay() { MATH((_program_sfpu_binary_lt_fp32_replay_())); }
+ALWI void gt_fp32_init_replay() { MATH((_program_sfpu_binary_gt_fp32_replay_())); }
+ALWI void le_fp32_init_replay() { MATH((_program_sfpu_binary_le_fp32_replay_())); }
+ALWI void ge_fp32_init_replay() { MATH((_program_sfpu_binary_ge_fp32_replay_())); }
+ALWI void eq_fp32_init_replay() { MATH((_program_sfpu_binary_eq_fp32_replay_())); }
 
 // Drop-in replacements for the corresponding non-replay tile functions.
 // Per (op, dtype) the replay length is fixed, so each tile_replay wrapper
@@ -850,6 +1111,265 @@ ALWI void gt_uint16_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::u
     (void)idst1;
     (void)odst;
     MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_LT_GT_UINT16_REPLAY_LEN>(idst0)));
+}
+
+ALWI void lt_fp32_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_LT_GT_FP32_REPLAY_LEN>(idst0)));
+}
+
+ALWI void gt_fp32_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_LT_GT_FP32_REPLAY_LEN>(idst0)));
+}
+
+ALWI void le_fp32_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_LE_GE_FP32_REPLAY_LEN>(idst0)));
+}
+
+ALWI void ge_fp32_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_LE_GE_FP32_REPLAY_LEN>(idst0)));
+}
+
+ALWI void eq_fp32_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_EQ_FP32_REPLAY_LEN>(idst0)));
+}
+
+// ---------------------------------------------------------------------------
+// Replay-buffer based SFPU integer multiplication: INT32 / UINT32 / UINT16.
+//
+// Mirrors the FP multiply replay path (`mul_binary_tile_replay` above), but
+// for the integer dispatch normally served by `mul_int_tile<DataFormat>`.
+// The recorded body is the per-iteration sequence of the upstream:
+//   * INT32 / UINT32: `ckernel::sfpu::mul_int32`
+//                     (sfpu/ckernel_sfpu_mul_int32.h, 30 instructions/iter)
+//   * UINT16        : DISABLE_SFPLOADMACRO branch of
+//                     `ckernel::sfpu::_mul_int_`
+//                     (sfpu/ckernel_sfpu_mul_int.h, 20 instructions/iter)
+//
+// Both bodies depend on programmable LREG12-14 constants set by the upstream
+// `mul_int_tile_init<DataFormat>` (which in turn calls `mul_int32_init` /
+// `_init_mul_int_`):
+//   INT32 / UINT32: vConstIntPrgm0 = 0x7ff, vConstIntPrgm1 = -11,
+//                   vConstFloatPrgm2 = 8388608.0
+//   UINT16        : vConstIntPrgm0 = 0xff, vConstIntPrgm1 = -8
+//
+// For UINT16, the non-DISABLE_SFPLOADMACRO build of `_init_mul_int_` instead
+// programs `vConstFloatPrgm1 = 8388608.0` (LREG13) for the macro pipeline,
+// which would break the discrete SFPSHFT2 used by this body. The
+// `_program_sfpu_binary_mul_uint16_replay_` helper therefore re-asserts
+// `vConstIntPrgm1 = -8` before recording, so the same discrete body is
+// correct in both build modes.
+//
+// Both bodies advance dst_reg by 2 rows via SFPSTORE with `ADDR_MOD_2`,
+// which `mul_int_tile_init` configures with `.dest.incr = 2`. No explicit
+// INCRWC is needed inside the recorded body. Eight replays per face leave
+// dst_reg advanced by 16 rows (= one face); the surrounding loop then
+// advances another 16 rows via two SETRWC pulses, matching the upstream
+// non-replay layout.
+//
+// Layout (offsets in dest rows, relative to current dst_reg base):
+//   operand A at offset 0   (DST[base])
+//   operand B at offset 64  (DST[base + 1])
+//   result overwrites offset 0
+// matching the kernel pairing `mul_int_tile(i*2, i*2 + 1, i*2)`.
+// ---------------------------------------------------------------------------
+
+constexpr std::uint32_t SFPU_BINARY_MUL_INT_DST_TILE_ROWS = 64;
+
+// INT32 / UINT32 (30 instructions/iter):
+//   SFPLOAD (in0)
+//   + SFPSHFT2 x2 (a1 raw, a2 raw)
+//   + SFPAND + SFPCAST + SFPCAST + SFPAND + SFPCAST  (a0/a1/a2 -> fp32 chunks)
+//   + SFPLOAD (in1)
+//   + SFPSHFT2 x2 (b1 raw, b2 raw)
+//   + SFPCAST                                       (b2 -> fp32)
+//   + SFPMAD                                        (top  = a0*b2 + 2**23)
+//   + SFPAND + SFPCAST                              (b1 -> fp32)
+//   + SFPMAD                                        (top += a1*b1)
+//   + SFPAND + SFPCAST                              (b0 -> fp32)
+//   + SFPMAD                                        (top += a2*b0)
+//   + SFPMAD                                        (mid = a0*b1 + 2**23)
+//   + SFPMAD                                        (low = a0*b0 + 2**23)
+//   + SFPMAD                                        (mid += a1*b0)
+//   + SFPEXMAN x3                                   (extract integer mantissas)
+//   + SFPSHFT x2                                    (top <<= 22, mid <<= 11)
+//   + SFPIADD x2                                    (low += mid + top)
+//   + SFPSTORE                                      (auto-advance via ADDR_MOD_2)
+constexpr std::uint32_t SFPU_BINARY_MUL_INT32_REPLAY_LEN = 30;
+
+// UINT16 discrete body (20 instructions/iter):
+//   SFPLOAD (in0)
+//   + SFPSHFT2 + SFPCAST + SFPAND + SFPCAST         (a1 / a0 -> fp32)
+//   + SFPLOAD (in1)
+//   + SFPSHFT2 + SFPCAST + SFPAND + SFPCAST         (b1 / b0 -> fp32)
+//   + SFPMAD x3                                     (hi0=a0*b1, lo=a0*b0, hi1=a1*b0)
+//   + SFP_STOCH_RND x3                              (round to u16)
+//   + SFPIADD                                       (hi = hi0 + hi1)
+//   + SFPSHFT                                       (hi <<= 8)
+//   + SFPIADD                                       (lo += hi)
+//   + SFPSTORE                                      (auto-advance via ADDR_MOD_2)
+constexpr std::uint32_t SFPU_BINARY_MUL_UINT16_REPLAY_LEN = 20;
+
+#ifdef TRISC_MATH
+
+// One-iteration body of `ckernel::sfpu::mul_int32`. Inputs are split into
+// 11-bit chunks (a0/a1/a2, b0/b1/b2), promoted to fp32 (lossless), multiplied
+// via three FMA streams (top/mid/low), then reassembled into a 32-bit int via
+// SFPEXMAN + SFPSHFT + SFPIADD. Bit-exact with the upstream non-replay path.
+inline void _program_sfpu_binary_mul_int32_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_MUL_INT32_REPLAY_LEN);
+
+    // a -> a0 (LREG0), a1 (LREG2), a2 (LREG4) as fp32. LREG12 = 0x7ff,
+    // LREG13 = -11 (logical right shift amount).
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_INT_DST_TILE_ROWS);
+    TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SHFT_LREG);  // a >> 11
+    TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SHFT_LREG);  // a >> 22
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG2, 0);  // a1 = (a >> 11) & 0x7ff
+    TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);     // a1 -> fp32
+    TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG4, 0);     // a2 -> fp32 (top 10 bits, no mask)
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // a0 = a & 0x7ff
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);     // a0 -> fp32
+
+    // b -> b0 (LREG1), b1 (LREG3), b2 (LREG5) as fp32.
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, 1 * SFPU_BINARY_MUL_INT_DST_TILE_ROWS);
+    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG13, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPCAST(p_sfpu::LREG5, p_sfpu::LREG5, 0);  // b2 -> fp32
+
+    // top = a0*b2 + 2**23 (LREG14 = 8388608.0). FMA writes back into LREG5.
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG14, p_sfpu::LREG5, 0);
+
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG3, 0);  // b1 = (b >> 11) & 0x7ff
+    TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);     // b1 -> fp32
+    // top += a1*b1
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG5, 0);
+
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);  // b0 = b & 0x7ff
+    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);     // b0 -> fp32
+    // top += a2*b0
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG5, 0);
+
+    // mid = a0*b1 + 2**23 (into LREG6)
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG6, 0);
+    // low = a0*b0 + 2**23 (overwrites LREG0)
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG0, 0);
+    // mid += a1*b0
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG6, 0);
+
+    // Extract the integer mantissas (PAD9 zero-extends bit 23 = 0).
+    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD9);
+    TTI_SFPEXMAN(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPEXMAN_MOD1_PAD9);
+    TTI_SFPEXMAN(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPEXMAN_MOD1_PAD9);
+
+    // SFPSHFT mod=1 = immediate-shift, logical fill (matches the rest of this
+    // file's `TTI_SFPSHFT(..., 1)` usage; the named sfpi constants for SHIFT
+    // mode use a different encoding convention than the SFPSHFT op).
+    TTI_SFPSHFT(22, 0, p_sfpu::LREG5, 1);                                      // top <<= 22
+    TTI_SFPSHFT(11, 0, p_sfpu::LREG6, 1);                                      // mid <<= 11
+    TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);  // low += mid
+    TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);  // low += top
+
+    // ADDR_MOD_2 (= entry 6 in the FPU table, configured by mul_int_tile_init
+    // with .dest.incr = 2) auto-advances dst_reg by 2 rows after the store.
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0 * SFPU_BINARY_MUL_INT_DST_TILE_ROWS);
+}
+
+// One-iteration body of `ckernel::sfpu::_mul_int_` (DISABLE_SFPLOADMACRO
+// branch). 16-bit inputs split into two 8-bit chunks each; partial products
+// are computed in fp32 (each fits in 16 bits before rounding) and stitched
+// back via SFP_STOCH_RND (FP32 -> u16) + SFPIADD + SFPSHFT.
+inline void _program_sfpu_binary_mul_uint16_replay_() {
+    // Force the discrete-body LREG13 constant. The upstream non-DISABLE init
+    // sets vConstFloatPrgm1 = 8388608.0 (LREG13) for the macro pipeline,
+    // which would break the SFPSHFT2 below; this re-asserts the value used
+    // by the DISABLE_SFPLOADMACRO branch. Safe in both build modes.
+    sfpi::vConstIntPrgm1 = -8;
+
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_MUL_UINT16_REPLAY_LEN);
+
+    // a -> a0 (LREG0), a1 (LREG2) as fp32. LREG12 = 0xff, LREG13 = -8.
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_3, 0 * SFPU_BINARY_MUL_INT_DST_TILE_ROWS);
+    TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SHFT_LREG);  // a >> 8
+    TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);                                               // a1 -> fp32
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);                                            // a0 = a & 0xff
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);                                               // a0 -> fp32
+
+    // b -> b0 (LREG1), b1 (LREG3) as fp32.
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_3, 1 * SFPU_BINARY_MUL_INT_DST_TILE_ROWS);
+    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SHFT_LREG);  // b >> 8
+    TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);                                               // b1 -> fp32
+    TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);                                            // b0 = b & 0xff
+    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);                                               // b0 -> fp32
+
+    // hi0 = a0*b1; lo = a0*b0; hi1 = a1*b0 (all written back to operand reg).
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+
+    // FP32 -> UINT16 (each partial < 2**16).
+    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+
+    // hi = hi0 + hi1; hi <<= 8; lo += hi.
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_CC_NONE);
+    // SFPSHFT mod=1 = immediate-shift, logical fill (see int32 body comment).
+    TTI_SFPSHFT(8, 0, p_sfpu::LREG2, 1);
+    TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+
+    // ADDR_MOD_2 auto-advance (see int32 body comment above). LO16 stores the
+    // low 16 bits of LREG0 (which now holds the combined u16 product).
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_2, 0 * SFPU_BINARY_MUL_INT_DST_TILE_ROWS);
+}
+
+#endif  // TRISC_MATH
+
+// One-shot replay-buffer programming helpers. Must be called once per kernel,
+// after `mul_int_tile_init<data_format>()`, on the MATH thread. The init
+// configures sfpi prgm constants (LREG12-14) and addr_mods (ADDR_MOD_6/7);
+// the helper records the body into replay slot 0 with `lltt::NoExec`.
+//
+// `data_format` selects the body: UInt16 -> 8-bit-chunk discrete body,
+// Int32 / UInt32 -> 11-bit-chunk fp32 body. UINT32 multiplication aliases
+// INT32 because two's-complement multiplication of equal-width integers
+// produces the same low 32 bits regardless of signedness.
+template <DataFormat data_format>
+ALWI void mul_int_binary_init_replay() {
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format for mul_int replay. Supported: Int32, UInt32, UInt16");
+    if constexpr (data_format == DataFormat::UInt16) {
+        MATH((_program_sfpu_binary_mul_uint16_replay_()));
+    } else {
+        MATH((_program_sfpu_binary_mul_int32_replay_()));
+    }
+}
+
+// Drop-in replacement for `mul_int_tile<data_format>(idst0, idst1, odst)`.
+// The format-specific body is baked into the replay buffer by the matching
+// `mul_int_binary_init_replay<data_format>()`. Requires `idst1 == idst0 + 1`
+// and `odst == idst0`, matching the kernel's `(i*2, i*2 + 1, i*2)` pairing.
+template <DataFormat data_format>
+ALWI void mul_int_binary_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format for mul_int replay. Supported: Int32, UInt32, UInt16");
+    (void)idst1;
+    (void)odst;
+    if constexpr (data_format == DataFormat::UInt16) {
+        MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_MUL_UINT16_REPLAY_LEN>(idst0)));
+    } else {
+        MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_MUL_INT32_REPLAY_LEN>(idst0)));
+    }
 }
 
 }  // namespace
