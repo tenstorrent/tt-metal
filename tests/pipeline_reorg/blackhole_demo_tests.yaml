@@ -343,7 +343,7 @@
       timeout: 15
     bh_quietbox_2:
       timeout: 15
-  owner_id: U08TJ70UFRT # Stuti Raizada
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss-20b
 
@@ -361,6 +361,6 @@
     #   timeout: 30
     bh_quietbox_2:
       timeout: 25
-  owner_id: U08TJ70UFRT # Stuti Raizada
+  owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss-120b
