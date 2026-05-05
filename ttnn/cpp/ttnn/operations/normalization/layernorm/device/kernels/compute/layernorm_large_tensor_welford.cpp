@@ -187,7 +187,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     reconfig_data_format_srca(cb_in);
     transpose_wh_init_short(cb_in);
     tile_regs_acquire();
-    welford_init(cb_in);
+    welford_init();
 
     // Process all but the last tile
     for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
