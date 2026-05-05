@@ -2947,6 +2947,18 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
             *neighbor_mesh_id);
     }
 
+    // Build once outside the per-exit-node loop: mesh_edge_ports_to_chip_id[my_mesh_id] is
+    // constant throughout this function, so there is no need to re-sort on every iteration.
+    std::vector<std::pair<port_id_t, ChipId>> sorted_edge_ports(
+        mesh_edge_ports_to_chip_id[*my_mesh_id].begin(),
+        mesh_edge_ports_to_chip_id[*my_mesh_id].end());
+    std::sort(sorted_edge_ports.begin(), sorted_edge_ports.end(), [](const auto& a, const auto& b) {
+        if (a.first.first != b.first.first) {
+            return static_cast<int>(a.first.first) < static_cast<int>(b.first.first);
+        }
+        return a.first.second < b.first.second;
+    });
+
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
@@ -2971,8 +2983,10 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
 
         // Deferred intermesh_* updates until after rank-0 pairing (Z/NESW may change).
+        // sorted_edge_ports is computed once before this loop (mesh_edge_ports_to_chip_id[my_mesh_id]
+        // is constant for the lifetime of this function).
         auto try_assign_port = [&](bool use_z_direction) -> bool {
-            for (const auto& [port_id_pair, port_chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
+            for (const auto& [port_id_pair, port_chip_id] : sorted_edge_ports) {
                 if (exit_node_chip != port_chip_id) {
                     continue;
                 }
@@ -3240,25 +3254,25 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
                 Rank{static_cast<int>(peer_rank)},
-                Tag{0});
+                Tag{1});
             distributed_context.send(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
                 Rank{static_cast<int>(peer_rank)},
-                Tag{0});
+                Tag{1});
         }
     } else {
         distributed_context.recv(
             tt::stl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
             Rank{0},
-            Tag{0});
+            Tag{1});
         serialized_connections.resize(serialized_table_size);
         distributed_context.recv(
             tt::stl::as_writable_bytes(
                 tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
             Rank{0},
-            Tag{0});
+            Tag{1});
         intermesh_connections = deserialize_intermesh_connections_from_bytes(serialized_connections);
     }
     distributed_context.barrier();
@@ -3285,7 +3299,9 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     for (const auto& [src_mesh, dest_mesh_to_proposals] : port_descriptors) {
         for (const auto& [dest_mesh, proposals] : dest_mesh_to_proposals) {
             for (const auto& proposal : proposals) {
-                occupied_nesw_port_ids[*src_mesh].insert(proposal.port_id);
+                if (proposal.port_id.first != RoutingDirection::Z) {
+                    occupied_nesw_port_ids[*src_mesh].insert(proposal.port_id);
+                }
             }
         }
     }
@@ -3411,7 +3427,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                             *src_mesh,
                             *dst_mesh,
                             src_proposal.connection_hash);
-                        break;
+                        continue;
                     }
                 }
 
@@ -3428,7 +3444,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                         *src_mesh,
                         *dst_mesh,
                         src_proposal.connection_hash);
-                    break;
+                    continue;
                 }
                 auto record_z_port_commit = [&](uint32_t mesh_id, port_id_t port, uint32_t neighbor_mesh_id) {
                     if (port.first == RoutingDirection::Z) {

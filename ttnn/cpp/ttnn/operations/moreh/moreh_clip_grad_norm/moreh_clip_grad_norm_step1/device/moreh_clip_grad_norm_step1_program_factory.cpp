@@ -14,6 +14,8 @@
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm_step1 {
 
+using namespace tt::tt_metal;
+
 std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float ord) {
     auto p = std::floor(ord);
     auto fractional_part = ord - p;
@@ -22,8 +24,17 @@ std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float ord) {
     return std::make_tuple(integer_part, fractional_part, p_is_negative);
 }
 
-MorehClipGradNormStep1Operation::ProgramFactory::cached_program_t
-MorehClipGradNormStep1Operation::ProgramFactory::create(
+static constexpr const char* READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
+    "reader_moreh_clip_grad_norm_step1.cpp";
+static constexpr const char* WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
+    "writer_moreh_clip_grad_norm_step1.cpp";
+static constexpr const char* COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
+    "moreh_clip_grad_norm_step1_kernel.cpp";
+
+ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tmp_pow_sum) {
@@ -35,7 +46,6 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = tmp_pow_sum.device();
-    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -64,7 +74,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
          core_group_1,
          core_group_2,
          num_inputs_per_core_group_1,
-         num_inputs_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_inputs);
+         num_inputs_per_core_group_2] = split_work_to_cores(grid, num_inputs);
     TT_FATAL(core_group_2.ranges().empty(), "core_group_2 must be empty");
     TT_FATAL(num_inputs_per_core_group_1 == 1, "num_inputs_per_core_group_1 must be 1");
     TT_FATAL(num_inputs_per_core_group_2 == 0, "num_inputs_per_core_group_2 must be 0");
@@ -86,62 +96,119 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     const uint32_t im4_t = 1;  // exp(log(|x|) * decimal)
     const uint32_t im5_t = 1;  // |x|^p * exp(log(|x|) * decimal)
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(tmp_pow_sum.dtype());
+    const uint32_t cb_tile_size = tile_size(cb_data_format);
 
-    CreateCircularBuffer(
-        program,
-        core_group_1,
-        cb_data_format,
-        {
-            {tt::CBIndex::c_0, in0_t},    // input(==x)
-            {tt::CBIndex::c_1, in1_t},    // one
-            {tt::CBIndex::c_2, in2_t},    // decimal
-            {tt::CBIndex::c_3, in3_t},    // mask_h_w
-            {tt::CBIndex::c_16, out0_t},  // output(==y)
-            {tt::CBIndex::c_24, im0_t},   // |x|
-            {tt::CBIndex::c_25, im1_t},   // |x|^p
-            {tt::CBIndex::c_26, im2_t},   // Add[|x|^p * exp(log(|x|) * decimal)]
-            {tt::CBIndex::c_27, im3_t},   // log(|x|)
-            {tt::CBIndex::c_28, im4_t},   // exp(log(|x|) * decimal)
-            {tt::CBIndex::c_29, im5_t},   // |x|^p * exp(log(|x|) * decimal)
-        });
+    ProgramDescriptor desc;
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_0, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // input(==x)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in1_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_1, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // one
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in2_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_2, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // decimal
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in3_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_3, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // mask_h_w
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_16, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // output(==y)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im0_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_24, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // |x|
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im1_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_25, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // |x|^p
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im2_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_26, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // Add[|x|^p * exp(log(|x|) * decimal)]
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im3_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_27, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // log(|x|)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im4_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_28, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // exp(log(|x|) * decimal)
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im5_t * cb_tile_size,
+        .core_ranges = core_group_1,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_29, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // |x|^p * exp(log(|x|) * decimal)
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto* const reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
-        "reader_moreh_clip_grad_norm_step1.cpp";
-    const auto* const writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
-        "writer_moreh_clip_grad_norm_step1.cpp";
-
-    std::vector<uint32_t> reader_ct_args = {};
+    // Use inputs.at(0) for compile-time accessor args (all inputs share same buffer layout)
+    KernelDescriptor::CompileTimeArgs reader_ct_args;
     TensorAccessorArgs(*inputs.at(0).buffer()).append_to(reader_ct_args);
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core_group_1, reader_ct_args);
 
-    std::vector<uint32_t> writer_ct_args = {};
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = READER_KERNEL_PATH;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_group_1;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.runtime_args.reserve(num_cores_to_be_used);
+
+    KernelDescriptor::CompileTimeArgs writer_ct_args;
     TensorAccessorArgs(*tmp_pow_sum.buffer()).append_to(writer_ct_args);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core_group_1, writer_ct_args);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = WRITER_KERNEL_PATH;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_group_1;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.runtime_args.reserve(num_cores_to_be_used);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> compute_defines{};
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
-
-    const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
-        "moreh_clip_grad_norm_step1_kernel.cpp";
-
-    const auto compute_kernel_id =
-        CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_inputs_per_core_group_1}, compute_defines);
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_group_1;
+    compute_desc.compile_time_args = {num_inputs_per_core_group_1};
+    compute_desc.defines = {{"REDUCE_OP", "PoolType::SUM"}, {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"}};
+    compute_desc.config = ComputeConfigDescriptor{};
+    compute_desc.runtime_args.reserve(num_cores_to_be_used);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-
     const auto output_addr = tmp_pow_sum.buffer()->address();
     auto cores = grid_to_cores(num_cores_to_be_used, num_cores_x, num_cores_y, false);
 
@@ -155,68 +222,27 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
         // reader
-        const std::array reader_runtime_args{
-            input_addr, num_tiles, *reinterpret_cast<uint32_t*>(&decimal), origin_h, origin_w};
-        SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+        reader_desc.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{
+                input_addr, num_tiles, std::bit_cast<uint32_t>(decimal), origin_h, origin_w});
 
         // writer
-        const std::array writer_runtime_args{output_addr, tile_offset};
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{output_addr, tile_offset});
 
         // compute
-        const std::array compute_runtime_args{
-            num_tiles,
-            p,
-            static_cast<uint32_t>(p_is_negative),
-            origin_h,
-            origin_w,
-        };
-        SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
+        compute_desc.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{num_tiles, p, static_cast<uint32_t>(p_is_negative), origin_h, origin_w});
 
         tile_offset++;
     }
 
-    return {
-        std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, num_cores_to_be_used, num_cores_y}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void MorehClipGradNormStep1Operation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tmp_pow_sum) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
-    auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    auto num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    const auto norm_type = operation_attributes.norm_type;
-    auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(norm_type);
-    auto* output_buffer = tmp_pow_sum.buffer();
-    const auto output_address = output_buffer->address();
-
-    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.inputs.at(i).buffer()->address();
-            runtime_args[2] = *reinterpret_cast<uint32_t*>(&decimal);
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output_address;
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
-            runtime_args[1] = p;
-            runtime_args[2] = static_cast<uint32_t>(p_is_negative);
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step1

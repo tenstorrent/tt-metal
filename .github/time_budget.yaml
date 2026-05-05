@@ -101,7 +101,7 @@ scaleout:
     wh_galaxy: 100
     bh_galaxy: 60
     bh_sp1: 90
-    bh_sp4: 120
+    bh_sp4: 150
 
 runtime:
   sanity:
@@ -172,7 +172,7 @@ models:
     bh_loudbox: 1200
 
     bh_p300: 800
-    bh_quietbox_2: 250
+    bh_quietbox_2: 280
   sweep:
     wh_n150: 10
     wh_llmbox_perf: 30

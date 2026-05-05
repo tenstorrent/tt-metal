@@ -17,16 +17,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
 namespace tt::tt_metal {
-
-// Pack (kernel_idx, core.x, core.y, arg_idx) into a single uint64_t for O(1) set lookup.
-static uint64_t rt_binding_key(uint32_t kernel_idx, CoreCoord core, uint32_t arg_idx) {
-    return ((uint64_t)(kernel_idx & 0xffu) << 48) | ((uint64_t)(core.x & 0xffu) << 40) |
-           ((uint64_t)(core.y & 0xffu) << 32) | (uint64_t)arg_idx;
-}
 
 ResolvedBindings resolve_bindings(
     Program& program, const ProgramDescriptor& desc, const std::vector<Buffer*>& tensor_buffers) {
@@ -43,16 +36,6 @@ ResolvedBindings resolve_bindings(
             context);
         return static_cast<uint32_t>(it - tensor_buffers.begin());
     };
-
-    // Track every registered (kernel, core, arg_idx) position and every buffer address.
-    // Used below to detect unregistered positions that hold a buffer address — i.e.,
-    // the push_back(buf->address()) mistake.
-    std::unordered_set<uint64_t> registered_positions;
-    std::unordered_set<uint32_t> registered_addresses;
-
-    // Sentinel used to key common (non-per-core) arg positions in registered_positions.
-    // Real device cores have small coordinates; 0xFF,0xFF is never a valid logical core.
-    static constexpr CoreCoord kCommonArgSentinel{0xFF, 0xFF};
 
     for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
         for (const auto& b : desc.kernels[k].buffer_bindings) {
@@ -74,8 +57,6 @@ ResolvedBindings resolve_bindings(
                 b.buffer->address());
 
             result.rt_args.push_back({k, b.core, b.arg_idx, find_idx(b.buffer, "buffer_bindings"), false});
-            registered_positions.insert(rt_binding_key(k, b.core, b.arg_idx));
-            registered_addresses.insert(b.buffer->address());
         }
 
         for (const auto& b : desc.kernels[k].common_buffer_bindings) {
@@ -92,49 +73,6 @@ ResolvedBindings resolve_bindings(
                 b.buffer->address());
 
             result.rt_args.push_back({k, {}, b.arg_idx, find_idx(b.buffer, "common_buffer_bindings"), true});
-            registered_positions.insert(rt_binding_key(k, kCommonArgSentinel, b.arg_idx));
-            registered_addresses.insert(b.buffer->address());
-        }
-    }
-
-    // Scan every per-core and common runtime arg.  If an arg's value matches a registered
-    // buffer's address but no binding was declared at that position, the factory called
-    // push_back(buf->address()) instead of push_back(buf).  On cache hits the fast path
-    // would skip that arg and leave it stale.
-    if (!registered_addresses.empty()) {
-        for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
-            for (const auto& [core, args] : desc.kernels[k].runtime_args) {
-                for (uint32_t i = 0; i < static_cast<uint32_t>(args.size()); ++i) {
-                    if (registered_addresses.contains(args[i]) &&
-                        !registered_positions.contains(rt_binding_key(k, core, i))) {
-                        TT_FATAL(
-                            false,
-                            "Kernel {} core ({},{}) arg[{}]={:#x} matches a registered buffer "
-                            "address but no BufferBinding was declared at this position. "
-                            "Use push_back(buffer) instead of push_back(buffer->address()) so "
-                            "the address is patched on cache hits.",
-                            k,
-                            core.x,
-                            core.y,
-                            i,
-                            args[i]);
-                    }
-                }
-            }
-            const auto& common = desc.kernels[k].common_runtime_args;
-            for (uint32_t i = 0; i < static_cast<uint32_t>(common.size()); ++i) {
-                if (registered_addresses.contains(common[i]) &&
-                    !registered_positions.contains(rt_binding_key(k, kCommonArgSentinel, i))) {
-                    TT_FATAL(
-                        false,
-                        "Kernel {} common arg[{}]={:#x} matches a registered buffer address "
-                        "but no CommonBufferBinding was declared at this position. "
-                        "Use emplace_common_runtime_args() with Buffer* instead of uint32_t.",
-                        k,
-                        i,
-                        common[i]);
-                }
-            }
         }
     }
 
