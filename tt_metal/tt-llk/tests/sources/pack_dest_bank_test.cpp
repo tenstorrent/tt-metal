@@ -53,7 +53,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t read_offset = i * params.BLOCK_RT_DIM;
             for (std::uint32_t j = 0; j < params.BLOCK_CT_DIM; j++)
             {
+#ifdef ARCH_BLACKHOLE
                 _llk_unpack_tilize_(L1_ADDRESS(params.buffer_A[read_offset]), j, formats.unpack_A_src, 0, FACE_R_DIM, 4, false);
+#else
+                _llk_unpack_tilize_(L1_ADDRESS(params.buffer_A[read_offset]), j, formats.unpack_A_src, 0, params.BLOCK_CT_DIM, FACE_R_DIM, 4, false);
+#endif
             }
         }
     }

@@ -29,7 +29,7 @@ template <bool zero_output = false>
 inline void llk_pack_block_contiguous_mop_config(const std::uint32_t output) {
     const std::uint32_t output_id = get_output_id(output);
     _llk_pack_block_contiguous_mop_config_<zero_output>(
-        pack_dst_format[output_id], get_output_face_r_dim(output_id), get_output_num_faces(output_id));
+        get_output_face_r_dim(output_id), get_output_num_faces(output_id));
 }
 
 // Pack num_tiles tiles from sparse DEST to dense L1 in a single call.

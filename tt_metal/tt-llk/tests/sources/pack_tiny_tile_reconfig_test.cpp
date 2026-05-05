@@ -146,7 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_<false, false, false>(formats.pack_src, formats.pack_dst, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, false, false, 1);
 
     // Replace MOP with the block-contiguous version (REPLAY + W-per-tile).
-    _llk_pack_block_contiguous_mop_config_<>(formats.pack_dst, params.TEST_FACE_R_DIM, params.num_faces);
+    _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.num_faces);
     _llk_pack_init_<false, false>(formats.pack_dst, params.TEST_FACE_R_DIM, params.num_faces);
