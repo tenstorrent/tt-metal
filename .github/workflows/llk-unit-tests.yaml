@@ -3,6 +3,15 @@ name: "[internal] LLK unit tests impl"
 on:
   workflow_call:
     inputs:
+      test-name:
+        required: false
+        type: string
+        default: ""
+      runs-on-labels:
+        required: false
+        type: string
+        default: ""
+        description: "JSON-encoded runs-on labels from .github/sku_config.yaml"
       arch:
         required: true
         type: string
@@ -46,12 +55,13 @@ on:
 jobs:
   llk-unit-tests:
     name: >-
-      LLK ${{ inputs.dispatch-mode }} ${{ inputs.arch }} ${{ inputs.runner-label }}${{
+      ${{ inputs.test-name || format('LLK {0} {1} {2}', inputs.dispatch-mode, inputs.arch, inputs.runner-label) }}${{
         inputs.gtest-shard-total > 1 && format(' shard {0}/{1}', inputs.gtest-shard-index, inputs.gtest-shard-total) || ''
       }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        inputs.runs-on-labels != '' && fromJSON(inputs.runs-on-labels)
+        || (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
         || (inputs.runner-label == 'p150b') && 'tt-ubuntu-2204-p150b-stable'
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
