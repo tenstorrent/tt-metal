@@ -44,25 +44,15 @@ except ImportError:
 
 @trace_enabled
 class TTNNGemma4Attention(TTNNModule):
-    """TTNN-accelerated Attention for Gemma4.
+    """Base class for Gemma4 attention. Use from_torch() as a factory.
 
-    Handles BOTH sliding and global attention layers. The from_torch method
-    inspects hf_attn.is_sliding to determine the variant.
+    Returns TTNNGemma4SlidingAttention (is_sliding=True, head_dim=256) or
+    TTNNGemma4GlobalAttention (is_sliding=False, head_dim=512) depending on
+    the HuggingFace attention layer passed to from_torch().
 
-    Sliding layers:
-    - 32 Q heads, 16 KV heads, head_dim=256
-    - Separate q_proj, k_proj, v_proj
-    - Q-norm, K-norm, V-norm (per-head RMSNorm)
-
-    Global layers:
-    - 32 Q heads, 4 KV heads, head_dim=512
-    - q_proj and k_proj only; v_proj is None (K=V sharing)
-    - After k_proj, the shared output gets k_norm -> K and v_norm -> V
-
-    Both use scaling=1.0 (norms replace 1/sqrt(d) scaling) and full RoPE.
-
-    Q/K/V head-split uses ``ttnn.experimental.nlp_create_qkv_heads(_decode)``
-    (no fallback).
+    Subclasses implement:
+    - _sdpa_transpose_output: controls SDPA output shape
+    - _concat_attn_output: variant-specific head-concat op (nlp_concat_heads vs reshape)
     """
 
     def __init__(self):
@@ -91,109 +81,81 @@ class TTNNGemma4Attention(TTNNModule):
 
     @classmethod
     def from_torch(cls, hf_attn, distributed: bool = True):
-        """Create TTNNGemma4Attention from HuggingFace Gemma4TextAttention.
+        """Factory: returns TTNNGemma4SlidingAttention or TTNNGemma4GlobalAttention.
 
-        Args:
-            hf_attn: HuggingFace Gemma4TextAttention module
-            distributed: Whether to use distributed linear layers (default True for T3K)
-
-        Returns:
-            TTNNGemma4Attention instance
+        Call on the base class; dispatches based on hf_attn.is_sliding.
         """
+        if cls is TTNNGemma4Attention:
+            if hf_attn.is_sliding:
+                return TTNNGemma4SlidingAttention.from_torch(hf_attn, distributed=distributed)
+            else:
+                return TTNNGemma4GlobalAttention.from_torch(hf_attn, distributed=distributed)
+        raise TypeError(
+            f"{cls.__name__}: subclasses must implement from_torch calling _build_common, "
+            f"not call super().from_torch()"
+        )
+
+    @classmethod
+    def _build_common(cls, hf_attn, num_kv_heads: int, distributed: bool = True):
+        """Build shared Gemma4 attention state. Called by subclass from_torch methods."""
         new_attn = cls()
         new_attn._fallback_torch_layer = hf_attn
 
-        # Extract configuration
         config = hf_attn.config
         new_attn.is_sliding = hf_attn.is_sliding
         new_attn.layer_idx = hf_attn.layer_idx
         new_attn.num_attention_heads = config.num_attention_heads  # 32
-        # nlp_create_qkv_heads_decode kernel caps at 32 Q heads
-        # (see nlp_create_qkv_heads_decode_device_operation.cpp:135-136).
-        # Gemma4 ships with 32 Q heads; assert defensively to surface config drift early.
         assert (
             new_attn.num_attention_heads <= 32
         ), f"nlp_create_qkv_heads supports num_heads<=32, got {new_attn.num_attention_heads}"
-        # num_key_value_heads is a local variable in HF's __init__, not stored as self attr.
-        # Replicate the HF logic: use num_global_key_value_heads for global (k=v) layers,
-        # otherwise use config.num_key_value_heads.
-        use_alternative_attention = getattr(config, "attention_k_eq_v", False) and not new_attn.is_sliding
-        num_kv_heads = config.num_global_key_value_heads if use_alternative_attention else config.num_key_value_heads
         new_attn.num_key_value_heads = num_kv_heads
         new_attn.num_key_value_groups = new_attn.num_attention_heads // new_attn.num_key_value_heads
         new_attn.head_dim = hf_attn.head_dim  # 256 sliding, 512 global
         new_attn.hidden_size = config.hidden_size
-
-        # Gemma4 uses per-head norms instead of 1/sqrt(d) scaling.
-        # Read scaling from the HF module if available, otherwise default to 1.0.
         new_attn.scaling = getattr(hf_attn, "scaling", 1.0)
-
-        # Store sliding window size for decode mask construction.
-        # Sliding layers enforce a window; global layers use None (full context).
         new_attn.sliding_window = getattr(hf_attn, "sliding_window", None)
 
-        # Choose linear layer class for output projection
         LinearClsOut = TTNNLinearIReplicatedWColSharded if distributed else TTNNLinear
 
-        # HF-style RoPE: use weights directly from HuggingFace, NO permutation needed.
-        # ttnn.experimental.rotary_embedding (not rotary_embedding_llama) expects HF format.
         q_weight = hf_attn.q_proj.weight.data.clone()
         k_weight = hf_attn.k_proj.weight.data.clone()
-        # Per-head norm weights: NO permutation needed with HF-style RoPE
 
-        # Fused QKV projection: concatenate Q, K, V weights into single matmul.
-        # Sliding layers: Q + K + V; Global layers: Q + K + V (where V = K copy).
-        # Uses TTNNLinearIColShardedWAllReduced: input col-sharded -> matmul -> all_reduce
-        # replaces 3 separate matmuls + 4 all_gather CCL ops with 1 matmul + 2 CCL ops.
         q_size = new_attn.num_attention_heads * new_attn.head_dim
         kv_size = new_attn.num_key_value_heads * new_attn.head_dim
 
         has_v_proj = hf_attn.v_proj is not None
-        new_attn._has_v_proj = True  # Always True now (V = K copy for global layers)
-        new_attn._is_kv_sharing = not has_v_proj  # True for global layers
+        new_attn._has_v_proj = True
+        new_attn._is_kv_sharing = not has_v_proj
 
         if has_v_proj:
             v_weight = hf_attn.v_proj.weight.data.clone()
-            fused_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
         else:
-            # K=V sharing: duplicate K weight as V weight in the fused QKV.
-            # After nlp_create_qkv_heads split, V will be in correct HF format
-            # (no de-interleave needed since no Meta permutation was applied).
+            # K=V sharing for global layers: duplicate K weight as V.
             v_weight = k_weight.clone()
-            fused_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
 
+        fused_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
         fused_linear = torch.nn.Linear(new_attn.hidden_size, fused_weight.shape[0], bias=False)
         fused_linear.weight.data = fused_weight
         new_attn.qkv_proj = TTNNLinearIColShardedWAllReduced.from_torch(fused_linear)
         new_attn._q_size = q_size
         new_attn._kv_size = kv_size
 
-        # Keep individual proj references as None (fused into qkv_proj)
         new_attn.q_proj = None
         new_attn.k_proj = None
         new_attn.v_proj = None
 
-        # O projection: row-parallel with reduce_scatter
         new_attn.o_proj = LinearClsOut.from_torch(hf_attn.o_proj)
 
-        # Per-head Q/K/V norms (Gemma4RMSNorm instances, used as-is from HF)
         new_attn.q_norm = TTNNLocalRMSNorm.from_torch(hf_attn.q_norm)
         new_attn.k_norm = TTNNLocalRMSNorm.from_torch(hf_attn.k_norm)
         if hasattr(hf_attn, "v_norm") and hf_attn.v_norm is not None:
-            # Gemma4RMSNorm(with_scale=False) doesn't store dim; stash it for _infer_dim
             if not hasattr(hf_attn.v_norm, "weight") or hf_attn.v_norm.weight is None:
                 hf_attn.v_norm._norm_dim = new_attn.head_dim
             new_attn.v_norm = TTNNLocalRMSNorm.from_torch(hf_attn.v_norm)
         else:
             new_attn.v_norm = None
 
-        # RoPE cos/sin caches are managed at the model level (TTNNGemma4TextModel)
-        # and passed to attention as position_embeddings arguments.
-
-        # SDPA for attention computation
         new_attn.sdpa = TTNNSDPAAttention()
-
-        # Default core grid (will be updated in move_weights_to_device_impl)
         new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
 
         return new_attn
@@ -210,16 +172,8 @@ class TTNNGemma4Attention(TTNNModule):
             # Prefill: auto-derive (no program_config), matching reference prefill.py
             self.sdpa.program_config = None
 
-            # Decode: layer-type-specific config matching reference decode.py
-            if self.head_dim >= 512:
-                self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=(8, 4),
-                    q_chunk_size=32,
-                    k_chunk_size=64,
-                    exp_approx_mode=False,
-                )
-            else:
-                self.sdpa.decode_program_config = None
+            # Decode: sliding default is None; TTNNGemma4GlobalAttention overrides this.
+            self.sdpa.decode_program_config = None
             self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -259,6 +213,13 @@ class TTNNGemma4Attention(TTNNModule):
         # No BailingRotarySetup needed per-layer.
         # HF's Gemma4TextRotaryEmbedding returns full-width cos/sin with
         # identity values for non-rotary dims, so no partial RoPE handling needed.
+
+    @property
+    def _sdpa_transpose_output(self) -> bool:
+        raise NotImplementedError(f"{type(self).__name__} must implement _sdpa_transpose_output")
+
+    def _concat_attn_output(self, attn_output: ttnn.Tensor) -> ttnn.Tensor:
+        raise NotImplementedError(f"{type(self).__name__} must implement _concat_attn_output")
 
     @property
     def _is_distributed(self):
@@ -710,7 +671,6 @@ class TTNNGemma4Attention(TTNNModule):
                 key_states = self._repeat_kv(cached_key, self.num_key_value_groups)
                 value_states = self._repeat_kv(cached_value, self.num_key_value_groups)
 
-        # Compute attention
         attn_output = self.sdpa(
             self,
             query_states,
@@ -720,14 +680,10 @@ class TTNNGemma4Attention(TTNNModule):
             dropout=0.0,
             scaling=self.scaling,
             is_causal=self.is_causal,
-            transpose_output=True,
+            transpose_output=self._sdpa_transpose_output,
         )
 
-        # Reshape output: [batch, seq_len, num_heads, head_dim] -> [batch, seq_len, hidden_dim]
-        attn_shape = list(attn_output.shape)
-        attn_batch = attn_shape[0]
-        attn_seq = attn_shape[1]
-        attn_output = ttnn.reshape(attn_output, (attn_batch, attn_seq, self.num_attention_heads * self.head_dim))
+        attn_output = self._concat_attn_output(attn_output)
 
         # Output projection
         attn_output = self.o_proj(attn_output)
@@ -942,6 +898,87 @@ class TTNNGemma4Attention(TTNNModule):
             )
 
         return ttnn_output, None
+
+
+class TTNNGemma4SlidingAttention(TTNNGemma4Attention):
+    """Sliding-window attention for Gemma4 (32Q/16KV, head_dim=256, sliding_window=1024).
+
+    Uses nlp_concat_heads for output concat: CB = H*D*128 = 1,048,576 B < L1 limit.
+    Created by TTNNGemma4Attention.from_torch() when hf_attn.is_sliding is True.
+    """
+
+    @classmethod
+    def from_torch(cls, hf_attn, distributed: bool = True):
+        assert hf_attn.is_sliding, (
+            f"TTNNGemma4SlidingAttention.from_torch expects is_sliding=True, " f"got is_sliding={hf_attn.is_sliding}"
+        )
+        return cls._build_common(hf_attn, num_kv_heads=hf_attn.config.num_key_value_heads, distributed=distributed)
+
+    @property
+    def module_name(self) -> str:
+        base = self._unique_name or f"{self.__class__.__name__}_{id(self)}"
+        return f"{base}[sliding]"
+
+    @property
+    def _sdpa_transpose_output(self) -> bool:
+        return False
+
+    def _concat_attn_output(self, attn_output: ttnn.Tensor) -> ttnn.Tensor:
+        # Fused permute+reshape: [B, H, S, D] → [B, 1, S, H*D] → [B, S, H*D]
+        attn_output_4d = ttnn.experimental.nlp_concat_heads(
+            attn_output,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(attn_output)
+        assert (
+            attn_output_4d.shape[1] == 1
+        ), f"nlp_concat_heads output expected unit dim-1, got shape {attn_output_4d.shape}"
+        return ttnn.squeeze(attn_output_4d, 1)
+
+
+class TTNNGemma4GlobalAttention(TTNNGemma4Attention):
+    """Global (full-context) attention for Gemma4 (32Q/4KV, head_dim=512, K=V sharing).
+
+    Uses ttnn.reshape for output concat: nlp_concat_heads CB = 2,097,152 B > L1 limit.
+    Created by TTNNGemma4Attention.from_torch() when hf_attn.is_sliding is False.
+    """
+
+    @classmethod
+    def from_torch(cls, hf_attn, distributed: bool = True):
+        assert not hf_attn.is_sliding, (
+            f"TTNNGemma4GlobalAttention.from_torch expects is_sliding=False, " f"got is_sliding={hf_attn.is_sliding}"
+        )
+        config = hf_attn.config
+        use_alternative_attention = getattr(config, "attention_k_eq_v", False)
+        num_kv_heads = config.num_global_key_value_heads if use_alternative_attention else config.num_key_value_heads
+        return cls._build_common(hf_attn, num_kv_heads=num_kv_heads, distributed=distributed)
+
+    @property
+    def module_name(self) -> str:
+        base = self._unique_name or f"{self.__class__.__name__}_{id(self)}"
+        return f"{base}[global]"
+
+    @property
+    def _sdpa_transpose_output(self) -> bool:
+        return True
+
+    def _concat_attn_output(self, attn_output: ttnn.Tensor) -> ttnn.Tensor:
+        # nlp_concat_heads CB = 2,097,152 B > L1 limit 1,499,136 B for head_dim=512.
+        attn_shape = list(attn_output.shape)
+        return ttnn.reshape(
+            attn_output,
+            (attn_shape[0], attn_shape[1], self.num_attention_heads * self.head_dim),
+        )
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+        # Global attention (head_dim=512) requires explicit SDPA program config for decode.
+        self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            q_chunk_size=32,
+            k_chunk_size=64,
+            exp_approx_mode=False,
+        )
 
 
 class TTNNGemma4PagedAttentionKVCache(Cache):
