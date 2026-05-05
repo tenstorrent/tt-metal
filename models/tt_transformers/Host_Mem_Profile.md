@@ -1,8 +1,8 @@
 # Model memory on host for performance and accuracy
 
-[Host memory usage results](models/sample_data/host_mem_profiling/) at peak memory (in MB) are collected from host_mem_profiler.py by running the target demo under memory_profiler at
+[Host memory usage results](../sample_data/host_mem_profiling/) at peak memory (in MB) are collected from host_mem_profiler.py by running the target demo under memory_profiler at
 100 ms sampling intervals. You can generate these results by running the script with --mesh-device, --hf-model, and
---test arguments in [demo/simple_text_demo.py](demo/simple_text_demo.py)); it produces a timestamped PNG plot under profiling_results/ and prints peak and baseline RSS to the
+--test arguments in [demo/simple_text_demo.py](demo/simple_text_demo.py); it produces a timestamped PNG plot under profiling_results/ and prints peak and baseline RSS to the
 console.
 
 Note that all measurements include child processes spawned by the TT device runtime, giving a realistic view of total
@@ -13,8 +13,8 @@ model work begins.
 Host memory (RSS) was profiled across three configurations — [Performance](#performance), [Accuracy](#accuracy), and [Multimodal](#multimodal-models) — using up to 200
 decode iterations on T3K (8-chip) and N300 (2-chip) devices.
 
-All [numbers](models/sample_data/host_mem_profiling/) below were captured with a maximum generation of 200 tokens (200 decode iterations) to match the
-conditions used in [performance table](models/tt_transformers/PERF.md).
+All [numbers](../sample_data/host_mem_profiling/) below were captured with a maximum generation of 200 tokens (200 decode iterations) to match the
+conditions used in [performance table](PERF.md).
 
 ## Performance
 
