@@ -282,7 +282,7 @@ jobs:
         with:
           config: |
             {
-              "model": "anthropic/claude-sonnet-4-6",
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries"
@@ -321,7 +321,7 @@ jobs:
         with:
           config: |
             {
-              "model": "anthropic/claude-sonnet-4-6",
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE",
               "input_dir": "ai_job_summaries",
               "output_dir": "ai_run_summaries"
