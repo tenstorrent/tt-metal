@@ -12,9 +12,15 @@
 #endif
 
 void kernel_main() {
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
+#ifdef ARCH_QUASAR
+    uint32_t dst_addr = get_vararg(0);
+    uint32_t bank_id = get_vararg(1);
+    uint32_t num_tiles = get_vararg(2);
+#else
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t bank_id = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
+#endif
 
     Noc noc;
     constexpr uint32_t ublock_size_tiles = 1;
@@ -22,8 +28,7 @@ void kernel_main() {
 
     // single-tile ublocks
 #ifdef ARCH_QUASAR
-    constexpr uint32_t dfb_out_id = get_compile_time_arg_val(0);
-    DataflowBuffer buff_out(dfb_out_id);
+    DataflowBuffer buff_out(dfb::in);
     ublock_size_bytes = buff_out.get_entry_size() * ublock_size_tiles;
 #else
     constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
