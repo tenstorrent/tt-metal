@@ -3,8 +3,6 @@
 
 #include "dit_rms_norm_unary_fused.hpp"
 
-#include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
-#include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
 
@@ -43,21 +41,16 @@ ttnn::Tensor dit_rms_norm_unary_fused(
 
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    return ttnn::prim::layer_norm(
-        input_tensor,
-        epsilon,
-        weight,
-        bias,
-        residual_input_tensor,
-        output_memory_config,
-        program_config.value_or(ttnn::prim::create_layernorm_program_config(input_tensor.shard_spec())),
-        kernel_config_val,
-        std::nullopt,  // dtype
-        ttnn::prim::LayerNormType::RMSNORM,
-        ttnn::prim::DistributedLayerNormStage::NOT_DISTRIBUTED,
-        std::nullopt,  // stats
-        std::nullopt,  // recip_tensor
-        activation);
+    (void)epsilon;
+    (void)weight;
+    (void)bias;
+    (void)residual_input_tensor;
+    (void)output_memory_config;
+    (void)program_config;
+    (void)kernel_config_val;
+    (void)activation;
+    // TODO(nuked-op layernorm): restore fused RMSNorm + activation implementation.
+    return input_tensor;
 }
 
 }  // namespace ttnn::experimental

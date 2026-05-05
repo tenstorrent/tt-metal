@@ -33,8 +33,6 @@ file(
     rotary_embedding_llama_fused_qk/device/kernels/*
     rotate_half/device/kernels/*
     split_query_key_value_and_split_heads/device/kernels/*
-    dit_layernorm_pre_all_gather/device/kernels/*
-    dit_layernorm_post_all_gather/device/kernels/*
 )
 target_sources(
     ttnn_op_experimental_transformer
@@ -104,12 +102,6 @@ target_sources(
         fused_distributed_rmsnorm/device/fused_rmsnorm_pre_all_gather_program_factory.cpp
         fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_device_operation.cpp
         fused_distributed_rmsnorm/device/fused_rmsnorm_post_all_gather_program_factory.cpp
-        dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather.cpp
-        dit_layernorm_pre_all_gather/device/dit_layernorm_pre_all_gather_device_operation.cpp
-        dit_layernorm_pre_all_gather/device/dit_layernorm_pre_all_gather_welford_program_factory.cpp
-        dit_layernorm_post_all_gather/dit_layernorm_post_all_gather.cpp
-        dit_layernorm_post_all_gather/device/dit_layernorm_post_all_gather_device_operation.cpp
-        dit_layernorm_post_all_gather/device/dit_layernorm_post_all_gather_welford_program_factory.cpp
         dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused.cpp
         dit_rms_norm_unary_fused/dit_rms_norm_unary_fused.cpp
         rotary_embedding/device/rotary_embedding_device_operation.cpp

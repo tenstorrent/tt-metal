@@ -7,8 +7,6 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
-#include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
 
 namespace ttnn {
@@ -28,6 +26,7 @@ Tensor rms_norm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    (void)program_config;
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
 
@@ -59,21 +58,15 @@ Tensor rms_norm(
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val = compute_kernel_config.value_or(rmsnorm_default_compute_config(arch));
-    return ttnn::prim::layer_norm(
-        input_tensor,
-        epsilon,
-        weight,
-        bias,
-        residual_input_tensor,
-        output_memory_config,
-        program_config.value_or(ttnn::prim::create_layernorm_program_config(
-            input_tensor.shard_spec(),
-            input_tensor.tensor_spec().tile().get_height(),
-            input_tensor.tensor_spec().tile().get_width())),
-        kernel_config_val,
-        std::nullopt,  // dtype
-        prim::LayerNormType::RMSNORM);
+    (void)arch;
+    (void)epsilon;
+    (void)weight;
+    (void)bias;
+    (void)residual_input_tensor;
+    (void)output_memory_config;
+    (void)compute_kernel_config;
+    // TODO(nuked-op layernorm): restore real ttnn::prim::layer_norm-backed RMSNorm path.
+    return input_tensor;
 }
 
 }  // namespace ttnn
