@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
+#include "hostdev/dev_msgs.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -20,6 +21,24 @@
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
+
+// Push one uint32 into the watcher debug ring buffer at the fixed L1 mailbox
+// address. Bypasses the WATCHER_ENABLED gate so values are captured even
+// under tracy/profiler runs (where DPRINT is forbidden). The triage tool's
+// dump_watcher_ringbuffer.py reads from this same buffer, so the values show
+// up in the standard hang triage output. Capacity is 32 entries per RISC,
+// wraps oldest-first.
+inline void race_probe_push(uint32_t val) {
+    auto buf = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
+    volatile tt_l1_ptr int16_t* curr_ptr = &buf->current_ptr;
+    volatile tt_l1_ptr uint16_t* wrapped = &buf->wrapped;
+    uint32_t* data = buf->data;
+    if (*curr_ptr >= DEBUG_RING_BUFFER_ELEMENTS - 1) {
+        *curr_ptr = -1;
+        *wrapped = 1;
+    }
+    data[++(*curr_ptr)] = val;
+}
 
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
@@ -166,6 +185,20 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
     noc_semaphore_wait(init_sem_ptr, combine_devices - 1);
+    // RACE-PROBE init: pushes 5 words to the watcher debug ring buffer:
+    //   [0xCAFEBABE, 1=init, chip, snap1, snap2]
+    // snap2 > snap1 means a partner's exit-inc landed in the post-wait reset
+    // window. Visible in triage's dump_watcher_ringbuffer.py output. Works
+    // under tracy (no DPRINT).
+    {
+        uint32_t init_sem_snap1 = *init_sem_ptr;
+        uint32_t init_sem_snap2 = *init_sem_ptr;
+        race_probe_push(0xCAFEBABEu);
+        race_probe_push(1u);
+        race_probe_push((uint32_t)linearized_mesh_coord);
+        race_probe_push(init_sem_snap1);
+        race_probe_push(init_sem_snap2);
+    }
     noc_semaphore_set(init_sem_ptr, 0);
 
     DPRINT_COMBINE << "Fabric setup complete" << ENDL();
@@ -220,11 +253,15 @@ void kernel_main() {
 #ifdef DEST_CHIP_ID
     noc_async_write_barrier();
 
-    // Exit semaphore exchange — uses a dedicated semaphore (exit_semaphore_address)
-    // and the dedicated sem_packet_header so neither can collide with anything from
-    // the init handshake or the data loop above.
+    // === DEBUG: REVERTED to pre-fix buggy pattern ===
+    // Exit handshake reuses init_semaphore_address on purpose so the race we
+    // hypothesized can actually fire. The RACE-PROBE prints below should now
+    // sometimes show snap2 > snap1 right after the post-init wait passes
+    // (because a fast partner's exit-inc lands inside the post-init reset
+    // window). Restore exit_semaphore_address here to re-enable the fix.
     {
-        const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
+        const uint64_t exit_noc_semaphore_addr =
+            get_noc_addr(init_semaphore_address);  // DEBUG: was exit_semaphore_address
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
             topology,
@@ -235,9 +272,19 @@ void kernel_main() {
             total_mesh_devices>(
             fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, exit_noc_semaphore_addr);
 
-        volatile tt_l1_ptr uint32_t* exit_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
+        volatile tt_l1_ptr uint32_t* exit_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            init_semaphore_address);  // DEBUG: was exit_semaphore_address
         noc_semaphore_wait(exit_sem_ptr, combine_devices - 1);
+        // RACE-PROBE exit: pushes 5 words [0xCAFEBABE, 2=exit, chip, snap1, snap2]
+        {
+            uint32_t exit_sem_snap1 = *exit_sem_ptr;
+            uint32_t exit_sem_snap2 = *exit_sem_ptr;
+            race_probe_push(0xCAFEBABEu);
+            race_probe_push(2u);
+            race_probe_push((uint32_t)linearized_mesh_coord);
+            race_probe_push(exit_sem_snap1);
+            race_probe_push(exit_sem_snap2);
+        }
         noc_semaphore_set(exit_sem_ptr, 0);
     }
 
