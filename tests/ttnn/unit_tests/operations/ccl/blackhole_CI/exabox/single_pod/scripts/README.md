@@ -52,7 +52,7 @@ That's it. Reset → run → (recover if needed) → reset → next test.
 
 ## Pre-flight assumptions
 
-1. `/tmp/single_pod_current_dir.txt` points to a generated pipeline config bundle (the runners auto-recreate the per-host scaffolding if `/tmp` aged out).
+1. `$TT_METAL_HOME/build/test/tt_metal/tt_fabric/test_physical_discovery` is built (`./build_metal.sh --build-tests` or `--build-tt-train`). Used by `bootstrap_pipeline_dir.sh` to discover per-host PCIe device IDs. The runner scripts auto-bootstrap on first launch.
 2. `/opt/openmpi-v5.0.7-ulfm/bin` is reachable.
 3. SSH to all 4 hosts works without a password prompt.
 
