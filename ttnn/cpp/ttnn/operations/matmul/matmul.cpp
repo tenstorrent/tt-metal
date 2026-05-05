@@ -110,9 +110,13 @@ static bool get_post_process_bias(
         if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {
             return true;
         }
+        const auto& bias_tensor = bias.value();
+        // Fused matmul+bias does not support batched bias; apply bias via add().
+        if (detail::is_input_batched(bias_tensor.logical_shape())) {
+            return true;
+        }
         // Check if bias shape is compatible with kernel fusion
         // Bias fusion requires bias_shape_aligned[-2] == tile_height
-        const auto& bias_tensor = bias.value();
         const auto& bias_padded_shape = bias_tensor.padded_shape();
         const auto& tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
         uint32_t tile_height = transpose_a ? tile_shape[1] : tile_shape[0];

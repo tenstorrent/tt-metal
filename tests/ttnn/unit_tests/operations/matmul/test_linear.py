@@ -1310,3 +1310,58 @@ def test_linear_fused_non_broadcast_bias_width_sharded_in0_in1(device, m, k, n):
         frobenius_threshold=0.001 * k,
         pcc_threshold=0.993,
     )
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, bias_shape",
+    [
+        ((1, 3, 128, 32), (1, 3, 32, 64), (1, 1, 1, 64)),
+        ((1, 3, 128, 32), (1, 3, 32, 32), (1, 1, 1, 32)),
+        ((1, 3, 128, 32), (1, 3, 32, 64), (1, 1, 1, 64)),
+        ((1, 3, 32, 32), (1, 3, 32, 64), (1, 1, 32, 64)),
+        ((1, 3, 32, 32), (1, 3, 32, 64), (1, 3, 32, 64)),
+        ((1, 2, 16, 64), (1, 2, 64, 64), (1, 2, 16, 64)),
+    ],
+)
+def test_linear_with_batched(a_shape, b_shape, bias_shape):
+    device = ttnn.open_device(device_id=0)
+
+    try:
+        torch.manual_seed(0)
+
+        # Create inputs
+        tensor_a_torch = torch.randn(a_shape)
+        tensor_b_torch = torch.randn(b_shape)
+        bias_torch = torch.randn(bias_shape)
+
+        # PyTorch reference
+        result_torch = torch.matmul(tensor_a_torch, tensor_b_torch) + bias_torch
+
+        # TTNN tensors
+        tensor_a_ttnn = ttnn.from_torch(tensor_a_torch, device=device)
+        tensor_b_ttnn = ttnn.from_torch(tensor_b_torch, device=device)
+        bias_ttnn = ttnn.from_torch(bias_torch, device=device)
+
+        # Convert to TILE layout
+        tensor_a_ttnn = ttnn.to_layout(tensor_a_ttnn, ttnn.Layout.TILE)
+        tensor_b_ttnn = ttnn.to_layout(tensor_b_ttnn, ttnn.Layout.TILE)
+        bias_ttnn = ttnn.to_layout(bias_ttnn, ttnn.Layout.TILE)
+
+        # Run TTNN
+        result_ttnn = ttnn.linear(
+            tensor_a_ttnn,
+            tensor_b_ttnn,
+            bias=bias_ttnn,
+        )
+
+        result_ttnn_torch = ttnn.to_torch(result_ttnn)
+        assert_numeric_metrics(
+            result_torch,
+            result_ttnn_torch,
+            atol=0.1,
+            rtol=0.1,
+            frobenius_threshold=0.002,
+            pcc_threshold=0.99,
+        )
+    finally:
+        ttnn.close_device(device)
