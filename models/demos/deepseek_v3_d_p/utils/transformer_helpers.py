@@ -320,6 +320,7 @@ def load_and_compute_layer_by_layer(
     shared_expert_activations_dtype=ttnn.bfloat16,
     shared_expert_weights_dtype=ttnn.bfloat8_b,
     causal_only=True,
+    dequant_method: str = "tt",
 ) -> LayerByLayerResult:
     """
     Process layers one-at-a-time: load → compute reference → build cache → clear → next.
@@ -349,6 +350,13 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
     from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+
+    if dequant_method == "hf":
+        from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict_hf as dequantize_state_dict
+
+        logger.info("Using HuggingFace-style FP8 dequantization (v2)")
+    elif dequant_method != "tt":
+        raise ValueError(f"Unknown dequant_method={dequant_method!r}, expected 'tt' or 'hf'")
 
     if gate_fallback_mode is None:
         gate_fallback_mode = GateComputeMode.HOST_ALL
@@ -409,7 +417,7 @@ def load_and_compute_layer_by_layer(
         hf_model.embed_tokens.weight.data = torch.empty(0)
         del embed_with_prefix
 
-    attention_mask = get_4d_causal_mask(attention_mask, causal_only=causal_only)
+        attention_mask = get_4d_causal_mask(attention_mask, causal_only=causal_only)
 
     if build_ttnn_cache:
         # Build embedding cache (device=None, no accumulation!)
@@ -821,3 +829,117 @@ def download_infinitebench_subset(subset: str) -> Path:
 
     logger.info(f"Saved {cached_path.name} ({cached_path.stat().st_size:,} bytes)")
     return cached_path
+
+
+# --- Debug trace helpers ---
+@dataclass
+class DebugTraceData:
+    """Data loaded from a bit_sculpt debug trace directory."""
+
+    token_ids: torch.Tensor  # [1, seq_len] int64
+    ref_snapshots: dict[str, torch.Tensor]  # label -> [1, seq, hidden_dim] bfloat16
+    ref_kvpe_list: list[torch.Tensor]  # per-layer [1, 1, seq, kv_lora_rank + qk_rope_head_dim]
+    logits: torch.Tensor | None  # [seq, vocab_size] float32
+    metadata: dict  # raw metadata.json contents
+
+
+def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTraceData:
+    """
+    Load reference tensors from a bit_sculpt debug trace directory.
+
+    The trace contains real intermediate outputs from a pretrained model run,
+    stored as safetensors files alongside a metadata.json.
+
+    Args:
+        trace_dir: Path to trace directory (must contain metadata.json + .safetensors)
+        num_layers: Number of layers to load (default: all layers from metadata)
+
+    Returns:
+        DebugTraceData with token_ids, per-layer reference snapshots, KVPE cache, and logits
+    """
+    from safetensors import safe_open
+
+    trace_dir = Path(trace_dir)
+    if not trace_dir.exists():
+        raise FileNotFoundError(f"Debug trace directory not found: {trace_dir}")
+
+    with open(trace_dir / "metadata.json") as f:
+        metadata = json.load(f)
+
+    if num_layers is None:
+        num_layers = metadata["n_layers"]
+
+    token_ids = torch.tensor([metadata["token_ids"]], dtype=torch.int64)
+    logger.info(f"Loaded {token_ids.shape[1]} tokens from {trace_dir.name}")
+
+    ref_snapshots = {}
+    hs_dir = trace_dir / "hidden_states"
+    hs_flat = trace_dir / "hidden_states.safetensors"
+    per_layer_format = hs_dir.is_dir()
+
+    if per_layer_format:
+        for i in range(num_layers):
+            layer_path = hs_dir / f"layer_{i}.safetensors"
+            with safe_open(layer_path, framework="pt") as f:
+                key = f"decoder_output_layer_{i}"
+                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+        logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states/ (per-layer files)")
+    else:
+        with safe_open(hs_flat, framework="pt") as f:
+            for i in range(num_layers):
+                key = f"decoder_output_layer_{i}"
+                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+        logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states.safetensors")
+
+    ref_kvpe_list = []
+    kv_dir = trace_dir / "kv_cache"
+    kv_flat = trace_dir / "kv_cache.safetensors"
+
+    if per_layer_format and kv_dir.is_dir():
+        # Detect key prefix from the first layer file
+        with safe_open(kv_dir / "layer_0.safetensors", framework="pt") as f:
+            available_keys = set(f.keys())
+        use_post_transform = "kv_post_transform_layer_0" in available_keys
+        key_prefix = "kv_post_transform_layer_" if use_post_transform else "compressed_kv_layer_"
+        if not use_post_transform:
+            logger.warning(
+                "kv_post_transform not found in trace — falling back to compressed_kv (pre-RMSNorm, pre-RoPE). "
+                "KVPE PCC will be unreliable. Re-generate the trace to fix."
+            )
+        for i in range(num_layers):
+            layer_path = kv_dir / f"layer_{i}.safetensors"
+            with safe_open(layer_path, framework="pt") as f:
+                kv = f.get_tensor(f"{key_prefix}{i}")
+                ref_kvpe_list.append(kv.unsqueeze(0).unsqueeze(0))
+        kv_format = "post-transform" if use_post_transform else "pre-transform (legacy)"
+        logger.info(f"Loaded {len(ref_kvpe_list)} KVPE layers from kv_cache/ (per-layer, {kv_format})")
+    else:
+        with safe_open(kv_flat, framework="pt") as f:
+            available_keys = set(f.keys())
+            use_post_transform = "kv_post_transform_layer_0" in available_keys
+            key_prefix = "kv_post_transform_layer_" if use_post_transform else "compressed_kv_layer_"
+            if not use_post_transform:
+                logger.warning(
+                    "kv_post_transform not found in trace — falling back to compressed_kv (pre-RMSNorm, pre-RoPE). "
+                    "KVPE PCC will be unreliable. Re-generate the trace to fix."
+                )
+            for i in range(num_layers):
+                kv = f.get_tensor(f"{key_prefix}{i}")
+                ref_kvpe_list.append(kv.unsqueeze(0).unsqueeze(0))
+        kv_format = "post-transform" if use_post_transform else "pre-transform (legacy)"
+        logger.info(f"Loaded {len(ref_kvpe_list)} KVPE layers from kv_cache.safetensors ({kv_format})")
+
+    logits = None
+    logits_path = trace_dir / "logits.safetensors"
+    if logits_path.exists():
+        with safe_open(logits_path, framework="pt") as f:
+            logits = f.get_tensor("logits")
+        logger.info(f"Loaded logits: shape={list(logits.shape)}, dtype={logits.dtype}")
+
+    return DebugTraceData(
+        token_ids=token_ids,
+        ref_snapshots=ref_snapshots,
+        ref_kvpe_list=ref_kvpe_list,
+        logits=logits,
+        metadata=metadata,
+    )
