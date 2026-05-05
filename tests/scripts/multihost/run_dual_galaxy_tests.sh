@@ -7,6 +7,57 @@ if [ -z "${ARCH_NAME}" ]; then
   exit 1
 fi
 
+validate_dual_hosts_csv() {
+  local hosts_csv="$1"
+  local parsed_hosts
+  IFS=',' read -r -a parsed_hosts <<< "$hosts_csv"
+  if [[ ${#parsed_hosts[@]} -ne 2 ]]; then
+    echo "Error: dual hosts must contain exactly 2 comma-separated hosts (got '${hosts_csv}')." >&2
+    return 1
+  fi
+
+  local host0="${parsed_hosts[0]//[[:space:]]/}"
+  local host1="${parsed_hosts[1]//[[:space:]]/}"
+  if [[ -z "${host0}" || -z "${host1}" ]]; then
+    echo "Error: dual hosts must not contain empty hostnames (got '${hosts_csv}')." >&2
+    return 1
+  fi
+
+  echo "${host0},${host1}"
+}
+
+resolve_dual_hosts() {
+  local hostfile="$1"
+  if [[ -n "${DUAL_GALAXY_HOSTS:-}" ]]; then
+    validate_dual_hosts_csv "${DUAL_GALAXY_HOSTS}"
+    return $?
+  fi
+
+  if [[ ! -f "${hostfile}" ]]; then
+    echo "Error: hostfile '${hostfile}' does not exist. Set DUAL_GALAXY_HOSTS=host0,host1 to choose dual hosts explicitly." >&2
+    return 1
+  fi
+
+  local inferred_hosts
+  inferred_hosts="$(
+    awk '!/^#/ && NF {print $1}' "${hostfile}" | awk '
+      NR == 1 {h1 = $1}
+      NR == 2 {h2 = $1}
+      END {
+        if (NR < 2) {
+          exit 1
+        }
+        printf "%s,%s", h1, h2
+      }
+    '
+  )" || {
+    echo "Error: unable to infer two hosts from '${hostfile}'. Set DUAL_GALAXY_HOSTS=host0,host1 to choose dual hosts explicitly." >&2
+    return 1
+  }
+
+  validate_dual_hosts_csv "${inferred_hosts}"
+}
+
 run_dual_galaxy_unit_tests() {
   # Record the start time
   fail=0
@@ -14,16 +65,26 @@ run_dual_galaxy_unit_tests() {
 
   echo "LOG_METAL: Running run_dual_galaxy_unit_tests"
 
-  local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
+  local rankfile="${DUAL_GALAXY_RANKFILE:-/etc/mpirun/rankfile}"
+  local hostfile="${DUAL_GALAXY_HOSTFILE:-/etc/mpirun/hostfile}"
+  if [[ ! -f "${rankfile}" ]]; then
+    echo "Error: rankfile '${rankfile}' does not exist. Set DUAL_GALAXY_RANKFILE to the rankfile for your selected dual hosts." >&2
+    exit 1
+  fi
+  local hosts
+  hosts="$(resolve_dual_hosts "${hostfile}")" || exit 1
+
+  local mpi_args_base="--map-by rankfile:file=${rankfile}"
   local tcp_interface="cnx1"
-  # heuristic to extract only 2 first hosts from the hostfile
-  local hosts="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | paste -sd,)"
 
   local mpi_args="--host $hosts $mpi_args_base"
 
-  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ${tcp_interface} --tag-output"
   local mpirun_args="--host $hosts $mpirun_args_base"
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
+
+  echo "LOG_METAL: Using dual hosts '${hosts}'"
+  echo "LOG_METAL: Using rankfile '${rankfile}'"
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail ; fail+=$?
