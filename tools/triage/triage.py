@@ -103,6 +103,20 @@ def _raise_open_file_limit(desired: int = 65536) -> None:
         )
 
 
+class TTTriageError(Exception):
+    """Base class for TT Triage errors."""
+
+    pass
+
+
+class TTTriageSkipped(Exception):
+    """Raised by a script's run() to signal it has nothing to do."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class ScriptPriority(Enum):
     LOW = 0
     MEDIUM = 1
@@ -755,20 +769,6 @@ def run_script(
     if force_exit:
         # Remove nanobind leak check to avoid false positives on exit
         os._exit(0)
-
-
-class TTTriageError(Exception):
-    """Base class for TT Triage errors."""
-
-    pass
-
-
-class TTTriageSkipped(Exception):
-    """Raised by a script's run() to signal it has nothing to do."""
-
-    def __init__(self, reason: str):
-        super().__init__(reason)
-        self.reason = reason
 
 
 def main():

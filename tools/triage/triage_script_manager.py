@@ -46,7 +46,7 @@ class TriageScriptManager:
         for script_file in script_files:
             script_path = os.path.join(application_path, script_file)
             try:
-                triage_script = self._load_script(script_path)
+                triage_script = _load_script(script_path)
                 if triage_script.config.disabled:
                     utils.DEBUG(f"Script {script_path} is disabled, skipping...")
                     continue
@@ -59,79 +59,14 @@ class TriageScriptManager:
         """Load one script plus its transitive deps via BFS. Used by run_script()."""
         script_path = os.path.abspath(script_path)
         loading: list[str] = []
-        self.scripts[script_path] = self._load_script(script_path)
+        self.scripts[script_path] = _load_script(script_path)
         loading.extend(self.scripts[script_path].config.depends)
         while loading:
             dep_path = loading.pop(0)
             if dep_path in self.scripts:
                 continue
-            self.scripts[dep_path] = self._load_script(dep_path)
+            self.scripts[dep_path] = _load_script(dep_path)
             loading.extend(self.scripts[dep_path].config.depends)
-
-    @staticmethod
-    def _load_script(script_path: str) -> TriageScript:
-        """Import a single script module and construct a TriageScript from it.
-        Validates that the module has script_config, an Owner: tag, and run(args, context)."""
-        script_path = os.path.abspath(script_path)
-        base_path = os.path.dirname(script_path)
-        appended = False
-        if base_path not in sys.path:
-            sys.path.append(base_path)
-            appended = True
-        try:
-            script_name = os.path.splitext(os.path.basename(script_path))[0]
-            script_module = importlib.import_module(script_name)
-
-            script_config: ScriptConfig = script_module.script_config
-            if script_config is None:
-                raise ValueError(f"Script {script_path} does not have script_config.")
-
-            if not script_module.__doc__:
-                raise ValueError(f"Script {script_path} must have a docstring, see relevant scripts for examples.\n")
-
-            if not re.search(r"^Owner:\s*\S+", script_module.__doc__, re.MULTILINE):
-                raise ValueError(
-                    f"Script {script_path} docstring must include an 'Owner:' field with the corresponding owner of the script.\n"
-                )
-
-            run_method = script_module.run if hasattr(script_module, "run") and callable(script_module.run) else None
-            if run_method is not None:
-                signature = inspect.signature(run_method)
-                if (
-                    len(signature.parameters) != 2
-                    or "args" not in signature.parameters
-                    or "context" not in signature.parameters
-                ):
-                    run_method = None
-            if run_method is None:
-                raise ValueError(
-                    f"Script {script_path} does not have a valid run method with two arguments (args, context)."
-                )
-
-            triage_script = TriageScript(
-                name=os.path.basename(script_path),
-                path=script_path,
-                config=deepcopy(script_config),
-                module=script_module,
-                run_method=run_method,
-                documentation=script_module.__doc__,
-            )
-
-            # Normalize string `depends` entries to absolute file paths so the
-            # registry keying lines up with what _load_script returns.
-            if triage_script.config.depends is None:
-                triage_script.config.depends = []
-            else:
-                triage_script.config.depends = [
-                    dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
-                    for dep in triage_script.config.depends
-                ]
-                triage_script.config.depends = [os.path.join(base_path, dep) for dep in triage_script.config.depends]
-
-            return triage_script
-        finally:
-            if appended:
-                sys.path.remove(base_path)
 
     def resolve_dependencies(self) -> None:
         """Wire up `depends=[...]` refs and topo-sort into script_queue.
@@ -173,7 +108,8 @@ class TriageScriptManager:
                 for script in self.script_queue:
                     progress.update(scripts_task, description=f"Running {script.name}")
 
-                    if self._propagate_skip_or_fail(script):
+                    if _propagate_skip(script):
+                        serialize_result(script, None)
                         progress.advance(scripts_task)
                         continue
 
@@ -183,11 +119,7 @@ class TriageScriptManager:
                     total_time += end_time - start_time
                     execution_time = f" [{end_time - start_time:.2f}s]" if print_script_times else ""
 
-                    if script.skipped:
-                        print()
-                        utils.INFO(f"{script.name}{execution_time}:")
-                        utils.INFO(f"  skipped: {script.status_message}")
-                    elif script.config.data_provider:
+                    if script.config.data_provider and not script.skipped:
                         if result is None:
                             print()
                             utils.INFO(f"{script.name}{execution_time}:")
@@ -218,23 +150,18 @@ class TriageScriptManager:
         args: ScriptArguments,
         context: Context,
     ) -> Any:
-        """Run the loaded subgraph with log_error=False (raises on failure).
-        Returns the result of `script_path` specifically -- not the last script in
-        topological order, even though those happen to coincide today."""
+        """Run the loaded subgraph for an explicit `--run X`.
+        Deps run with log_error=True so their failures/skips are captured and can cascade
+        cleanly to the target. The target itself runs with log_error=False so its own
+        failure raises rather than being silently swallowed."""
+        target_path = os.path.abspath(script_path)
         results: dict[str, Any] = {}
         for script in self.script_queue:
-            if self._propagate_skip_in_subgraph(script):
+            if _propagate_skip(script, raise_on_failed_dep=True):
                 results[script.path] = None
                 continue
-            if not all(not dep.failed for dep in script.depends):
-                raise TTTriageError(f"{script.name}: Cannot run script due to failed dependencies.")
-            result = script.run(args=args, context=context, log_error=False)
-            results[script.path] = result
-            if script.skipped:
-                continue
-            if script.config.data_provider and result is None:
-                raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
-        return results.get(os.path.abspath(script_path))
+            results[script.path] = script.run(args=args, context=context, log_error=script.path != target_path)
+        return results.get(target_path)
 
     def build_summary(self) -> str:
         """One line per script: FAIL, SKIP, or pass (data providers' pass status is omitted)."""
@@ -248,30 +175,91 @@ class TriageScriptManager:
                 lines.append(f"{script.name}: pass")
         return "\n".join(lines) if lines else "No triage scripts executed."
 
-    def _propagate_skip_or_fail(self, script: TriageScript) -> bool:
-        """Mark `script` skipped/failed if any dep was. Skip wins over fail.
-        Returns True when the script should not be invoked. Used by execute_all."""
-        skipped_dep = next((dep for dep in script.depends if dep.skipped), None)
-        if skipped_dep is not None:
-            script.status = "skipped"
-            script.status_message = f"dependency '{skipped_dep.name}' was skipped"
-            return True
-        if not all(not dep.failed for dep in script.depends):
-            utils.INFO(f"{script.name}:")
-            utils.WARN(f"  Cannot run script due to failed dependencies.")
-            script.status = "failed"
-            script.status_message = "Cannot run script due to failed dependencies."
-            return True
-        return False
 
-    def _propagate_skip_in_subgraph(self, script: TriageScript) -> bool:
-        """Skip-only propagation for execute_subgraph (which raises on fail elsewhere)."""
-        skipped_dep = next((dep for dep in script.depends if dep.skipped), None)
-        if skipped_dep is not None:
-            script.status = "skipped"
-            script.status_message = f"dependency '{skipped_dep.name}' was skipped"
-            return True
-        return False
+def _propagate_skip(script: TriageScript, raise_on_failed_dep: bool = False) -> bool:
+    """If any dep was skipped, cascade as skip on `script`.
+    If a dep failed: raise TTTriageError when `raise_on_failed_dep` is set (so an explicit
+    `--run X` surfaces the dep failure loudly), otherwise cascade as skip.
+    Returns True when the script should not be invoked."""
+    skipped_dep = next((dep for dep in script.depends if dep.skipped), None)
+    if skipped_dep is not None:
+        script.status = "skipped"
+        script.status_message = f"dependency '{skipped_dep.name}' was skipped"
+        return True
+    failed_dep = next((dep for dep in script.depends if dep.failed), None)
+    if failed_dep is not None:
+        if raise_on_failed_dep:
+            detail = f":\n{failed_dep.status_message}" if failed_dep.status_message else "."
+            raise TTTriageError(f"{script.name}: Cannot run script; dependency '{failed_dep.name}' failed{detail}")
+        script.status = "skipped"
+        script.status_message = f"dependency '{failed_dep.name}' failed"
+        return True
+    return False
+
+
+def _load_script(script_path: str) -> TriageScript:
+    """Import a single script module and construct a TriageScript from it.
+    Validates that the module has script_config, an Owner: tag, and run(args, context)."""
+    script_path = os.path.abspath(script_path)
+    base_path = os.path.dirname(script_path)
+    appended = False
+    if base_path not in sys.path:
+        sys.path.append(base_path)
+        appended = True
+    try:
+        script_name = os.path.splitext(os.path.basename(script_path))[0]
+        script_module = importlib.import_module(script_name)
+
+        script_config: ScriptConfig = script_module.script_config
+        if script_config is None:
+            raise ValueError(f"Script {script_path} does not have script_config.")
+
+        if not script_module.__doc__:
+            raise ValueError(f"Script {script_path} must have a docstring, see relevant scripts for examples.\n")
+
+        if not re.search(r"^Owner:\s*\S+", script_module.__doc__, re.MULTILINE):
+            raise ValueError(
+                f"Script {script_path} docstring must include an 'Owner:' field with the corresponding owner of the script.\n"
+            )
+
+        run_method = script_module.run if hasattr(script_module, "run") and callable(script_module.run) else None
+        if run_method is not None:
+            signature = inspect.signature(run_method)
+            if (
+                len(signature.parameters) != 2
+                or "args" not in signature.parameters
+                or "context" not in signature.parameters
+            ):
+                run_method = None
+        if run_method is None:
+            raise ValueError(
+                f"Script {script_path} does not have a valid run method with two arguments (args, context)."
+            )
+
+        triage_script = TriageScript(
+            name=os.path.basename(script_path),
+            path=script_path,
+            config=deepcopy(script_config),
+            module=script_module,
+            run_method=run_method,
+            documentation=script_module.__doc__,
+        )
+
+        # Normalize string `depends` entries to absolute file paths so the
+        # registry keying lines up with what _load_script returns.
+        if triage_script.config.depends is None:
+            triage_script.config.depends = []
+        else:
+            triage_script.config.depends = [
+                dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
+                for dep in triage_script.config.depends
+            ]
+            triage_script.config.depends = [os.path.join(base_path, dep) for dep in triage_script.config.depends]
+
+        return triage_script
+    finally:
+        if appended:
+            sys.path.remove(base_path)
 
 
 def _resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
