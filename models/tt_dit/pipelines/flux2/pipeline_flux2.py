@@ -406,45 +406,13 @@ class Flux2Pipeline:
                     use_hyperparams=True,
                 )
 
-                torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
-
-                if self._vae_decoder is None:
-                    vae = self._torch_vae
-
-                    torch_latents = torch_latents.reshape(
-                        [
-                            transformer_batch_size,
-                            latents_height // self._patch_size,
-                            latents_width // self._patch_size,
-                            self._num_channels_latents * self._patch_size**2,
-                        ]
-                    )
-                    torch_latents = torch_latents.permute(0, 3, 1, 2).to(torch.float32)
-
-                    latents_bn_mean = vae.bn.running_mean.view(1, -1, 1, 1)
-                    latents_bn_std = torch.sqrt(vae.bn.running_var.view(1, -1, 1, 1) + vae.config.batch_norm_eps)
-                    torch_latents = torch_latents * latents_bn_std + latents_bn_mean
-
-                    batch_size, num_channels_latents, height, width = torch_latents.shape
-                    torch_latents = torch_latents.reshape(
-                        batch_size, num_channels_latents // (2 * 2), 2, 2, height, width
-                    )
-                    torch_latents = torch_latents.permute(0, 1, 4, 2, 5, 3)
-                    torch_latents = torch_latents.reshape(
-                        batch_size, num_channels_latents // (2 * 2), height * 2, width * 2
-                    )
-
-                    with torch.no_grad():
-                        decoded_output = vae.decode(torch_latents).sample
-                else:
-                    tt_latents = tensor.from_torch(torch_latents, device=self._mesh_device)
-                    tt_latents = self._vae_decoder.preprocess_and_unpatchify(
-                        tt_latents,
-                        height=self._height // self._vae_scale_factor,
-                        width=self._width // self._vae_scale_factor,
-                    )
-                    tt_decoded_output = self._vae_decoder.forward(tt_latents)
-                    decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
+                tt_latents = self._vae_decoder.preprocess_and_unpatchify(
+                    tt_latents,
+                    height=self._height // self._vae_scale_factor,
+                    width=self._width // self._vae_scale_factor,
+                )
+                tt_decoded_output = self._vae_decoder.forward(tt_latents)
+                decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
 
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 assert isinstance(image, torch.Tensor)
