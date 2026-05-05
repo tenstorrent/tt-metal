@@ -1170,7 +1170,6 @@ class MatmulGolden(FidelityMasking):
         math_format: Optional[DataFormat],
         dest_acc: Optional[DestAccumulation],
     ):
-        torch_format = format_dict[data_format]
         math_format = math_format or data_format
         result_format = math_format if data_format.is_mx_format() else data_format
         result_torch_format = format_dict[result_format]
