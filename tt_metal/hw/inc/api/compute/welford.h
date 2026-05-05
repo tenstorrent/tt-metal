@@ -25,7 +25,7 @@ namespace ckernel {
  * Also calls transpose_wh_init_short to set state properly.
  * This call is blocking and is only available on the compute engine.
  */
-ALWI void welford_init(uint32_t cbid = 0, uint32_t call_line = __builtin_LINE()) {
+ALWI void welford_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
     MATH((llk_math_welfords_sfpu_init()));
     MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
     transpose_wh_init_short(cbid, call_line);
