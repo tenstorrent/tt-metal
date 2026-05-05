@@ -39,6 +39,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_vision_hf_to_meta,
     convert_vision_hf_to_meta_no_qkv_permute,
     load_hf_state_dict_filtered,
+    load_hf_state_dict_matching_substrings,
     reverse_permute,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
@@ -3026,6 +3027,38 @@ class ModelArgs:
         self._mistral3_vision_raw_hf_sd = raw
         return raw
 
+    def _load_mistral3_lm_head_only_raw_hf_state_dict(self) -> dict:
+        """Raw safetensors slice for LM head (fallback: tied embedding weights)."""
+        if getattr(self, "_mistral3_lm_head_raw_hf_sd", None) is not None:
+            return self._mistral3_lm_head_raw_hf_sd
+
+        prefixes = (
+            "lm_head.",
+            "model.lm_head.",
+            "model.language_model.embed_tokens.",
+            "language_model.embed_tokens.",
+            "model.embed_tokens.",
+            "embed_tokens.",
+        )
+        raw = load_hf_state_dict_filtered(
+            self.CKPT_DIR,
+            prefixes,
+            local_files_only=os.getenv("CI") == "true",
+        )
+        if not raw:
+            # Some checkpoints use non-standard names for tied/lm-head tensors; match by substring.
+            raw = load_hf_state_dict_matching_substrings(
+                self.CKPT_DIR,
+                (
+                    "lm_head",
+                    "embed_tokens",
+                    "tok_embeddings",
+                ),
+                local_files_only=os.getenv("CI") == "true",
+            )
+        self._mistral3_lm_head_raw_hf_sd = raw
+        return raw
+
     def _mistral3_outer_state_dict_keys_for_hf(self, raw_hf: dict) -> dict:
         """Mistral3ForConditionalGeneration parameters live under ``model.*``; shard keys may omit ``model.``."""
         out = {}
@@ -3138,6 +3171,9 @@ class ModelArgs:
                 self.cached_hf_model = model
             if mistral3_vision_fallback:
                 state_dict = self._load_mistral3_vision_only_raw_hf_state_dict()
+                # Best-effort: also load LM-head/tied-embedding tensors so lm_head tests can run
+                # even when full Mistral4 FP8 conversion fails on CPU.
+                state_dict.update(self._load_mistral3_lm_head_only_raw_hf_state_dict())
                 self.is_mixture_of_experts = False
             else:
                 state_dict = model.state_dict()
@@ -3169,6 +3205,32 @@ class ModelArgs:
             else:
                 # Standard: convert to Meta format
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+
+        # Keep both lm-head naming conventions available during transition:
+        # - HF style: lm_head.weight
+        # - TT/meta style: output.weight
+        if "output.weight" not in state_dict and "lm_head.weight" in state_dict:
+            state_dict["output.weight"] = state_dict["lm_head.weight"]
+        if "lm_head.weight" not in state_dict and "output.weight" in state_dict:
+            state_dict["lm_head.weight"] = state_dict["output.weight"]
+
+        if "output.weight" not in state_dict and "lm_head.weight" not in state_dict:
+            lm_head_like_key = next(
+                (k for k in state_dict.keys() if k.endswith("lm_head.weight") or k.endswith("output.weight")),
+                None,
+            )
+            if lm_head_like_key is None:
+                lm_head_like_key = next(
+                    (
+                        k
+                        for k in state_dict.keys()
+                        if k.endswith("embed_tokens.weight") or k.endswith("tok_embeddings.weight")
+                    ),
+                    None,
+                )
+            if lm_head_like_key is not None:
+                state_dict["lm_head.weight"] = state_dict[lm_head_like_key]
+                state_dict["output.weight"] = state_dict[lm_head_like_key]
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -3762,10 +3824,19 @@ class ModelArgs:
                         local_files_only=os.getenv("CI") == "true",
                     )
 
-        # HACK: Assume that we want the language model layers only
+        # HACK: Assume that we want the language model layers only.
+        # Some HF multimodal models expose language_model on the outer module,
+        # while others nest it under model.language_model.
         if hasattr(model, "language_model"):
             model.model = model.language_model
             # We keep language_model because transformers don't let us change or delete it
+        elif hasattr(model, "model") and hasattr(model.model, "language_model"):
+            model.model = model.model.language_model
+
+        if not (hasattr(model, "model") and hasattr(model.model, "layers")):
+            raise AttributeError(
+                f"reference_transformer expected model.model.layers after language-model selection, got type={type(model)}"
+            )
         model.model.layers = model.model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config, use_hf_rope=self.use_hf_rope)

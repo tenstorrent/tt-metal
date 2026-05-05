@@ -54,8 +54,40 @@ class LMHead(LightweightModule):
         self.split_sizes_ring_mm = [min(size_per_device, max_columns_per_device_ring_mm)] * (num_splits_ring_mm - 1)
         self.split_sizes_ring_mm.append(size_per_device - sum(self.split_sizes_ring_mm))  # remaining columns
 
-        # Split the output weights
-        torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+        # Split the output weights. Accept both meta-style and HF-style lm head keys.
+        output_weight_key = f"{state_dict_prefix}output.weight"
+        candidate_keys = (
+            output_weight_key,
+            "output.weight",
+            "lm_head.weight",
+            "model.lm_head.weight",
+            "model.output.weight",
+            "text_model.output.weight",
+        )
+        matched_key = next((k for k in candidate_keys if k in state_dict), None)
+        if matched_key is None:
+            suffix_candidates = (
+                "lm_head.weight",
+                "output.weight",
+                "embed_tokens.weight",
+                "tok_embeddings.weight",
+            )
+            matched_key = next(
+                (k for k in state_dict.keys() if any(k.endswith(suffix) for suffix in suffix_candidates)),
+                None,
+            )
+
+        if matched_key is None:
+            raise KeyError(
+                "LM head weight not found. Tried keys: "
+                + ", ".join([f"'{k}'" for k in candidate_keys])
+                + " and suffixes "
+                + ", ".join(
+                    ["'*.lm_head.weight'", "'*.output.weight'", "'*.embed_tokens.weight'", "'*.tok_embeddings.weight'"]
+                )
+            )
+
+        torch_output_weights = state_dict[matched_key].permute(1, 0)
 
         # Pad the output weights to the padded vocab size with zeros
         if self.vocab_size < self.padded_vocab_size:

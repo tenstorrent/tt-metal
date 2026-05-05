@@ -57,13 +57,58 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
 
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    output_weight_key = f"{state_dict_prefix}output.weight"
+    candidate_keys = (
+        output_weight_key,
+        "output.weight",
+        "lm_head.weight",
+        "model.lm_head.weight",
+        "model.output.weight",
+        "text_model.output.weight",
+    )
+    matched_key = next((k for k in candidate_keys if k in state_dict), None)
+    if matched_key is None:
+        suffix_candidates = (
+            "lm_head.weight",
+            "output.weight",
+            "embed_tokens.weight",
+            "tok_embeddings.weight",
+        )
+        matched_key = next(
+            (k for k in state_dict.keys() if any(k.endswith(suffix) for suffix in suffix_candidates)),
+            None,
+        )
+    if matched_key is None:
+        # Small-4/Mistral3 multimodal hubs may trigger vision-only fallback when HF FP8 conversion fails.
+        # In that case load_state_dict() intentionally returns only vision + projector tensors.
+        has_vision_only_keys = any(
+            k.startswith("vision_tower.") or k.startswith("multi_modal_projector.") for k in state_dict.keys()
+        )
+        if has_vision_only_keys and getattr(model_args, "is_mistral3_style_pixtral", False):
+            pytest.skip(
+                "LM head weights unavailable: model loaded in vision-only fallback mode (FP8 HF conversion failed)."
+            )
+
+        raise KeyError(
+            "Expected LM head/tied embedding weight in state_dict. Tried keys: "
+            + ", ".join([f"'{k}'" for k in candidate_keys])
+            + " and suffixes "
+            + ", ".join(
+                ["'*.lm_head.weight'", "'*.output.weight'", "'*.embed_tokens.weight'", "'*.tok_embeddings.weight'"]
+            )
+        )
+    output_weight = state_dict[matched_key]
+
     partial_state_dict = {
-        "weight": state_dict[f"{state_dict_prefix}output.weight"],
+        "weight": output_weight,
     }
 
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_lm_head()
     reference_model.load_state_dict(partial_state_dict)
+    import pdb
+
+    pdb.set_trace()
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = LMHead(
