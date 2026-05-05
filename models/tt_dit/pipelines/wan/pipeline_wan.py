@@ -184,9 +184,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
             checkpoint_name, subfolder="transformer", trust_remote_code=True
         )
-        self.torch_transformer_2 = TorchWanTransformer3DModel.from_pretrained(
-            checkpoint_name, subfolder="transformer_2", trust_remote_code=True
-        )
+        if boundary_ratio is not None:
+            self.torch_transformer_2 = TorchWanTransformer3DModel.from_pretrained(
+                checkpoint_name, subfolder="transformer_2", trust_remote_code=True
+            )
+        else:
+            self.torch_transformer_2 = None
 
         self.dit_ccl_manager = CCLManager(
             mesh_device=mesh_device,
@@ -249,25 +252,28 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             model_type=self.model_type,
         )
 
-        self.transformer_2 = WanTransformer3DModel(
-            patch_size=self.torch_transformer_2.config.patch_size,
-            num_heads=self.torch_transformer_2.config.num_attention_heads,
-            dim=self.torch_transformer_2.config.num_attention_heads
-            * self.torch_transformer_2.config.attention_head_dim,
-            in_channels=self.torch_transformer_2.config.in_channels,
-            out_channels=self.torch_transformer_2.config.out_channels,
-            text_dim=self.torch_transformer_2.config.text_dim,
-            freq_dim=self.torch_transformer_2.config.freq_dim,
-            ffn_dim=self.torch_transformer_2.config.ffn_dim,
-            cross_attn_norm=self.torch_transformer_2.config.cross_attn_norm,
-            eps=self.torch_transformer_2.config.eps,
-            rope_max_seq_len=self.torch_transformer_2.config.rope_max_seq_len,
-            mesh_device=self.mesh_device,
-            ccl_manager=self.dit_ccl_manager,
-            parallel_config=self.parallel_config,
-            is_fsdp=self.is_fsdp,
-            model_type=self.model_type,
-        )
+        if boundary_ratio is not None:
+            self.transformer_2 = WanTransformer3DModel(
+                patch_size=self.torch_transformer_2.config.patch_size,
+                num_heads=self.torch_transformer_2.config.num_attention_heads,
+                dim=self.torch_transformer_2.config.num_attention_heads
+                * self.torch_transformer_2.config.attention_head_dim,
+                in_channels=self.torch_transformer_2.config.in_channels,
+                out_channels=self.torch_transformer_2.config.out_channels,
+                text_dim=self.torch_transformer_2.config.text_dim,
+                freq_dim=self.torch_transformer_2.config.freq_dim,
+                ffn_dim=self.torch_transformer_2.config.ffn_dim,
+                cross_attn_norm=self.torch_transformer_2.config.cross_attn_norm,
+                eps=self.torch_transformer_2.config.eps,
+                rope_max_seq_len=self.torch_transformer_2.config.rope_max_seq_len,
+                mesh_device=self.mesh_device,
+                ccl_manager=self.dit_ccl_manager,
+                parallel_config=self.parallel_config,
+                is_fsdp=self.is_fsdp,
+                model_type=self.model_type,
+            )
+        else:
+            self.transformer_2 = None
 
         self.tt_vae = WanDecoder(
             base_dim=self.vae.config.base_dim,
@@ -291,8 +297,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         self.transformer_states = [
             TransformerState(self.transformer, "transformer", self.torch_transformer, guidance_scale=4.0),
-            TransformerState(self.transformer_2, "transformer_2", self.torch_transformer_2, guidance_scale=3.0),
         ]
+        if boundary_ratio is not None:
+            self.transformer_states.append(
+                TransformerState(self.transformer_2, "transformer_2", self.torch_transformer_2, guidance_scale=3.0)
+            )
 
         scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
             checkpoint_name, subfolder="scheduler", flow_shift=12.0
@@ -303,17 +312,23 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
             if ttnn.device.is_blackhole():
-                self.transformer.register_coresident_exclusions(self.transformer_2)
-                self.transformer_2.register_coresident_exclusions(self.transformer)
+                if self.transformer_2 is not None:
+                    self.transformer.register_coresident_exclusions(self.transformer_2)
+                    self.transformer_2.register_coresident_exclusions(self.transformer)
             else:
                 # WH T3K has tighter DRAM — include VAE in the unload chain so
                 # transformers and VAE never coexist in DRAM across pipeline runs.
-                self.transformer.register_coresident_exclusions(self.transformer_2, self.tt_vae)
-                self.transformer_2.register_coresident_exclusions(self.transformer, self.tt_vae)
-                self.tt_vae.register_coresident_exclusions(self.transformer, self.transformer_2)
+                if self.transformer_2 is not None:
+                    self.transformer.register_coresident_exclusions(self.transformer_2, self.tt_vae)
+                    self.transformer_2.register_coresident_exclusions(self.transformer, self.tt_vae)
+                    self.tt_vae.register_coresident_exclusions(self.transformer, self.transformer_2)
+                else:
+                    self.transformer.register_coresident_exclusions(self.tt_vae)
+                    self.tt_vae.register_coresident_exclusions(self.transformer)
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
-        self._prepare_transformer(1)
+        if self.transformer_2 is not None:
+            self._prepare_transformer(1)
         self._prepare_transformer(0)
         self._prepare_text_encoder()
         self._prepare_vae()
@@ -705,7 +720,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             raise ValueError(f"`negative_prompt` has to be of type `str` or `list` but is {type(negative_prompt)}")
 
         if self.config.boundary_ratio is None and guidance_scale_2 is not None:
-            raise ValueError("`guidance_scale_2` is only supported when the pipeline's `boundary_ratio` is not None.")
+            pass  # guidance_scale_2 is silently ignored for single-transformer pipelines
 
     def get_model_input(self, latents, cond_latents):
         """
@@ -854,7 +869,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             guidance_scale_2 = guidance_scale
 
         self.transformer_states[0].guidance_scale = guidance_scale
-        self.transformer_states[1].guidance_scale = guidance_scale_2
+        if len(self.transformer_states) > 1:
+            self.transformer_states[1].guidance_scale = guidance_scale_2
 
         # device = self._execution_device
         device = "cpu"
@@ -924,7 +940,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         sp_axis = self.transformer_states[0].model.parallel_config.sequence_parallel.mesh_axis
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
+                warmup_t2 = (
+                    i == 1 and len(timesteps) == 2 and self.transformer_2 is not None
+                )  # Ensure transformer_2 is also warmed up
 
                 # 0=> wan2.1 or high-noise stage in wan2.2 (transformer) | 1=> low-noise stage in wan2.2 (transformer_2)
                 transformer_idx = 0 if (t >= boundary_timestep) and not warmup_t2 else 1
@@ -1112,7 +1130,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         ttnn.synchronize_device(self.mesh_device)
 
     def release_traces(self):
-        for model in (self.transformer, self.transformer_2):
+        for model in (m for m in (self.transformer, self.transformer_2) if m is not None):
             tracer = WanTransformer3DModel.combined_step._tracers.get(model)
             if tracer is not None:
                 tracer.release_trace()
