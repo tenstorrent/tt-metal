@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import eltwise_typecast
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_equal
 
 mem_configs = [
     ttnn.DRAM_MEMORY_CONFIG,
@@ -126,7 +126,11 @@ class TestTypecast:
 
         torch_golden = eltwise_typecast(torch_input, tt_input_dtype=tt_input_dtype, tt_output_dtype=tt_output_dtype)
         pcc = 0.98 if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b else 0.99
-        assert_with_pcc(torch_golden, torch_output, pcc=pcc)
+
+        if tt_output_dtype == ttnn.float32 or tt_output_dtype == ttnn.bfloat16:
+            assert_with_ulp(torch_golden, torch_output, ulp_threshold=1)
+        else:
+            assert_with_pcc(torch_golden, torch_output, pcc=pcc)
 
 
 @pytest.mark.parametrize("tt_output_dtype", [ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32])
