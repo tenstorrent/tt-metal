@@ -1146,7 +1146,7 @@ bool topology_sat_search(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
     ConnectionValidationMode validation_mode,
-    bool quiet_mode,
+    [[maybe_unused]] bool quiet_mode,
     TopologySearchState& state) {
     state = TopologySearchState{};
     state.mapping.assign(graph_data.n_target, -1);
@@ -1322,7 +1322,7 @@ bool topology_sat_search_n(
     ConnectionValidationMode validation_mode,
     size_t max_solutions,
     std::vector<std::vector<int>>& all_mappings_out,
-    bool quiet_mode,
+    [[maybe_unused]] bool quiet_mode,
     TopologySearchState& state) {
     state = TopologySearchState{};
     state.mapping.assign(graph_data.n_target, -1);
