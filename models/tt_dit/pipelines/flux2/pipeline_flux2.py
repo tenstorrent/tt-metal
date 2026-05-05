@@ -96,11 +96,9 @@ class Flux2Pipeline:
         ]
 
         self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
-        self.vae_submesh_idx = 1  # Use submesh 0 for VAE
+        self.vae_submesh_idx = len(self._submesh_devices) - 1  # Use other submesh for VAE.
         self.encoder_device = self._submesh_devices[self.encoder_submesh_idx] if encoder_on_device else None
-        self.encoder_mesh_shape = (
-            self.encoder_device.shape
-        )  # ttnn.MeshShape(1, self._encoder_parallel_config.tensor_parallel.factor)
+        self.encoder_mesh_shape = self.encoder_device.shape
         self.vae_device = self._submesh_devices[self.vae_submesh_idx]
 
         logger.info("loading models...")
