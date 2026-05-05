@@ -593,6 +593,265 @@ ALWI void binary_right_shift_tile_replay(std::uint32_t idst0, std::uint32_t idst
     MATH((_llk_math_eltwise_binary_sfpu_right_shift_replay_(idst0)));
 }
 
+// ---------------------------------------------------------------------------
+// Replay-buffer based SFPU integer comparisons: LT / GT / GE on INT32 and
+// LT / GT on UINT16.
+//
+// EQ and NE, plus the FP32 variants of LT / GT / GE (i.e. `eq_binary_tile`,
+// `ne_binary_tile`, `lt_binary_tile`, ...), are FP32-only in the upstream
+// factory and rely on sfpi `v_if` / `v_endif` blocks that compile to a
+// non-trivial, optimization-dependent number of instructions; baking those
+// into a fixed-length replay buffer is fragile, so they are intentionally
+// NOT covered by this replay path - callers should keep using the existing
+// non-replay tile functions for the FP32 variants. INT32 LE / UINT16 GE/LE
+// are similarly not added here yet (no upstream demand from the kernel).
+//
+// The recorded bodies match `calculate_binary_comp_int32` and
+// `calculate_binary_comp_uint16` instruction-for-instruction (with hardcoded
+// `dst_index_in0 = 0`, `dst_index_in1 = 1`, `dst_index_out = 0`), so output
+// is bit-identical to the upstream non-replay path.
+//
+// Layout (offsets in dest rows, relative to current dst_reg base):
+//   operand A at offset 0   (DST[base])
+//   operand B at offset 64  (DST[base + 1])
+//   result overwrites offset 0
+// matching the kernel pairing `<op>_int32_tile(i*2, i*2+1, i*2)` and
+// `<op>_uint16_tile(i*2, i*2+1, i*2)`.
+// ---------------------------------------------------------------------------
+
+// LT / GT (INT32):
+//   SFPLOAD x2 + SFPMOV x2 (copy A,B)
+//   + SFPSHFT x2 (extract sign bits of A,B)
+//   + SFPXOR (different-sign mask in LREG3)
+//   + SFPSETCC + SFPIADD + SFPSHFT     (same-sign branch: sign of A-B / B-A)
+//   + SFPCOMPC + SFPLOADI               (opposite-sign branch: result = 0)
+//   + SFPSETCC + SFPLOADI + SFPENCC     (then result = 1 iff A < B / A > B)
+//   + SFPSTORE + INCRWC
+//   = 17 instructions
+constexpr std::uint32_t SFPU_BINARY_LT_GT_INT32_REPLAY_LEN = 17;
+
+// GE (INT32): LT body (15 instructions before SFPSTORE) + SFPLOADI + SFPXOR
+//             (invert) + SFPSTORE + INCRWC = 19 instructions.
+constexpr std::uint32_t SFPU_BINARY_GE_INT32_REPLAY_LEN = 19;
+
+// LT / GT (UINT16):
+//   SFPLOAD x2 + SFPIADD (A-B / B-A as int) + SFPSHFT (sign bit -> 0/1)
+//   + SFPSTORE + INCRWC = 6 instructions.
+constexpr std::uint32_t SFPU_BINARY_LT_GT_UINT16_REPLAY_LEN = 6;
+
+constexpr std::uint32_t SFPU_BINARY_COMP_DST_TILE_ROWS = 64;
+
+#ifdef TRISC_MATH
+
+// Shared per-tile loop. The existing mul / bitwise / shift paths each have
+// their own near-identical copy of this loop; this helper collapses that
+// duplication for the comparison ops by templating on the replay length.
+// Behaviour is identical to those copies: idst0 seeds the dst_reg base, the
+// recorded body is replayed 8 times per face for each of the 4 faces, and
+// the face boundary advances dst_reg by 16 rows via two SETRWC pulses.
+template <std::uint32_t REPLAY_LEN>
+inline void _llk_math_eltwise_binary_sfpu_run_replay_(std::uint32_t idst0) {
+    _llk_math_eltwise_binary_sfpu_start_<DST_SYNC_MODE>(idst0);
+
+#pragma GCC unroll 0
+    for (int face = 0; face < 4; face++) {
+#pragma GCC unroll 0
+        for (int d = 0; d < 8; d++) {
+            lltt::replay(0, REPLAY_LEN);
+        }
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    }
+
+    _llk_math_eltwise_binary_sfpu_done_();
+}
+
+// INT32 comparison body shared by LT, GT and GE up to the final write-back.
+// After this prologue:
+//   * For LT: LREG1 holds the result (0 or 1).
+//   * For GT: LREG0 holds the result (0 or 1).
+//   * For GE: LREG1 holds the LT result (caller XORs with 1 to invert).
+//
+// The same-sign branch uses an int32 subtract and the sign of the difference;
+// the opposite-sign branch is decided directly from `sign(A) != sign(B)`,
+// which is sufficient because two ints with different signs cannot subtract
+// without overflow. `LREG2` carries `sign(A)` into the opposite-sign branch
+// (used to decide which side of zero A is on). `LREG3` carries the
+// different-sign predicate that gates the SETCC.
+//
+// IMPORTANT: A is ALWAYS loaded into LREG0 and B into LREG1 - same as the
+// upstream `calculate_binary_comp_int32`. LT vs GT differ only in the
+// SFPIADD direction (and thus which LREG holds the result and which mode
+// the opposite-sign SETCC uses); they do NOT swap operand registers. Doing
+// so would also flip `LREG2` to hold sign(B), breaking the opposite-sign
+// branch which must test sign(A).
+//
+// `OutLREG` is the final result register: LREG1 for LT/GE, LREG0 for GT
+// (matching where the same-sign sign-of-diff is left).
+template <bool IsGt, std::uint8_t OutLREG>
+inline void _record_sfpu_binary_lt_gt_int32_body_() {
+    // Load A into LREG0 and B into LREG1 (same as LLK; never swapped).
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, 1 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+
+    // Copy A,B into LREG2,LREG3 then logical-shift by -31 to extract sign bits.
+    // Mod1 = 1 means immediate-shift mode with imm12 = -31 (sign-extended) =>
+    // logical right shift by 31; result is 1 iff input had MSB = 1.
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);  // LREG2 <- A
+    TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);  // LREG3 <- B
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);  // LREG2 = sign(A)
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);  // LREG3 = sign(B)
+
+    // LREG3 = sign(A) ^ sign(B): 0 if same sign, 1 if different signs.
+    TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+
+    // Same-sign branch: int32 subtract and take the sign of the result.
+    // imod = 6 makes SFPIADD compute `dst = src_c - dst` with operand-B 2's
+    // complement on the way in.
+    //   LT: SFPIADD(0, LREG0, LREG1, 6) -> LREG1 = LREG0 - LREG1 = A - B,
+    //       sign of which is 1 iff A < B; result lives in LREG1.
+    //   GT: SFPIADD(0, LREG1, LREG0, 6) -> LREG0 = LREG1 - LREG0 = B - A,
+    //       sign of which is 1 iff A > B; result lives in LREG0.
+    TTI_SFPSETCC(0, p_sfpu::LREG3, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    if constexpr (IsGt) {
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    } else {
+        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+    }
+
+    // Opposite-sign branch (CC predicate flipped by SFPCOMPC). With different
+    // signs the answer is determined entirely by sign(A) (still in LREG2):
+    //   LT: A < B  iff  A is negative      -> 1 if sign(A) != 0, else 0
+    //   GT: A > B  iff  A is non-negative  -> 1 if sign(A) == 0, else 0
+    // Initialize the result LREG to 0, then SETCC on LREG2 to overwrite with 1
+    // in the matching subset of lanes.
+    TTI_SFPCOMPC(0, 0, 0, 0);
+    TTI_SFPLOADI(OutLREG, sfpi::SFPLOADI_MOD0_USHORT, 0x00);
+    constexpr std::uint8_t setcc_mode = IsGt ? sfpi::SFPSETCC_MOD1_LREG_EQ0 : sfpi::SFPSETCC_MOD1_LREG_NE0;
+    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, setcc_mode);
+    TTI_SFPLOADI(OutLREG, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
+    TTI_SFPENCC(0, 0, 0, 0);
+}
+
+inline void _program_sfpu_binary_lt_int32_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_LT_GT_INT32_REPLAY_LEN);
+
+    _record_sfpu_binary_lt_gt_int32_body_</*IsGt=*/false, /*OutLREG=*/p_sfpu::LREG1>();
+
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, 0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_INCRWC(0, sfpi::SFP_DESTREG_STRIDE, 0, 0);
+}
+
+inline void _program_sfpu_binary_gt_int32_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_LT_GT_INT32_REPLAY_LEN);
+
+    _record_sfpu_binary_lt_gt_int32_body_</*IsGt=*/true, /*OutLREG=*/p_sfpu::LREG0>();
+
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_INCRWC(0, sfpi::SFP_DESTREG_STRIDE, 0, 0);
+}
+
+inline void _program_sfpu_binary_ge_int32_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_GE_INT32_REPLAY_LEN);
+
+    // Reuse the LT body and then invert the result.
+    _record_sfpu_binary_lt_gt_int32_body_</*IsGt=*/false, /*OutLREG=*/p_sfpu::LREG1>();
+
+    // GE = NOT LT: load 1 into a scratch register, then XOR with the LT
+    // result (LREG1) to flip bit 0. LREG7 is used to match the upstream
+    // sequence exactly (same opcode encoding -> same instruction word).
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
+    TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG1, 0);
+
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, 0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_INCRWC(0, sfpi::SFP_DESTREG_STRIDE, 0, 0);
+}
+
+// UINT16 LT / GT body. UINT16 inputs are zero-extended at SFPLOAD time, so
+// sign of `A - B` (interpreted as int32) directly tells us A < B without
+// the same-sign / opposite-sign disambiguation INT32 needs.
+//
+// `SwapAB` selects GT: loads operands in (B, A) order so the same SFPIADD +
+// SFPSHFT pair computes the correct sign.
+template <bool SwapAB>
+inline void _record_sfpu_binary_lt_gt_uint16_body_() {
+    // SFPLOAD with mode LO16: read 16-bit value from dst, zero-extend to 32 bits.
+    constexpr std::uint32_t off_a =
+        SwapAB ? (1 * SFPU_BINARY_COMP_DST_TILE_ROWS) : (0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    constexpr std::uint32_t off_b =
+        SwapAB ? (0 * SFPU_BINARY_COMP_DST_TILE_ROWS) : (1 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_3, off_a);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_3, off_b);
+
+    // LREG1 = LREG0 - LREG1 (imod=6 selects `dst = src_c - dst`); MSB of the
+    // 32-bit result is 1 iff "loaded A" < "loaded B" as unsigned 16-bit.
+    TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+
+    // Logical right shift by 31 -> 1 in lane iff the difference was negative.
+    TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_3, 0 * SFPU_BINARY_COMP_DST_TILE_ROWS);
+    TTI_INCRWC(0, sfpi::SFP_DESTREG_STRIDE, 0, 0);
+}
+
+inline void _program_sfpu_binary_lt_uint16_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_LT_GT_UINT16_REPLAY_LEN);
+    _record_sfpu_binary_lt_gt_uint16_body_</*SwapAB=*/false>();
+}
+
+inline void _program_sfpu_binary_gt_uint16_replay_() {
+    lltt::record<lltt::NoExec>(0, SFPU_BINARY_LT_GT_UINT16_REPLAY_LEN);
+    _record_sfpu_binary_lt_gt_uint16_body_</*SwapAB=*/true>();
+}
+
+#endif  // TRISC_MATH
+
+// One-shot replay-buffer programming helpers, one per (op, dtype) pair.
+// Must be called once, after the matching `<op>_<dtype>_tile_init`, on the
+// MATH thread. Each helper records into replay slot 0 with `lltt::NoExec`.
+ALWI void lt_int32_init_replay() { MATH((_program_sfpu_binary_lt_int32_replay_())); }
+ALWI void gt_int32_init_replay() { MATH((_program_sfpu_binary_gt_int32_replay_())); }
+ALWI void ge_int32_init_replay() { MATH((_program_sfpu_binary_ge_int32_replay_())); }
+ALWI void lt_uint16_init_replay() { MATH((_program_sfpu_binary_lt_uint16_replay_())); }
+ALWI void gt_uint16_init_replay() { MATH((_program_sfpu_binary_gt_uint16_replay_())); }
+
+// Drop-in replacements for the corresponding non-replay tile functions.
+// Per (op, dtype) the replay length is fixed, so each tile_replay wrapper
+// instantiates `_llk_math_eltwise_binary_sfpu_run_replay_` with the matching
+// `SFPU_BINARY_<...>_REPLAY_LEN`. Requires `idst1 == idst0 + 1` and
+// `odst == idst0`, matching the kernel's `(i*2, i*2+1, i*2)` pairing.
+ALWI void lt_int32_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_LT_GT_INT32_REPLAY_LEN>(idst0)));
+}
+
+ALWI void gt_int32_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_LT_GT_INT32_REPLAY_LEN>(idst0)));
+}
+
+ALWI void ge_int32_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_GE_INT32_REPLAY_LEN>(idst0)));
+}
+
+ALWI void lt_uint16_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_LT_GT_UINT16_REPLAY_LEN>(idst0)));
+}
+
+ALWI void gt_uint16_tile_replay(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+    (void)idst1;
+    (void)odst;
+    MATH((_llk_math_eltwise_binary_sfpu_run_replay_<SFPU_BINARY_LT_GT_UINT16_REPLAY_LEN>(idst0)));
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -657,7 +916,6 @@ void kernel_main() {
                 for (uint32_t i = 0; i < n_tiles; ++i) {
 #if HAS_ACTIVATIONS(POST)
                     BINARY_SFPU_INIT
-                    experimental::mul_binary_tile_init_replay();
 #endif
                     {
                         DeviceZoneScopedN("mul_replay");

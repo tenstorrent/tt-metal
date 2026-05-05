@@ -545,21 +545,39 @@ std::pair<std::string, std::string> get_sfpu_init_fn(
         case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
         case LT:
             if (dtype == DataType::FLOAT32) {
+                // FP32 path uses sfpi v_if/v_endif; not covered by the kernel's
+                // fixed-length replay buffer, so always dispatch to the
+                // non-replay tile function.
                 return {"lt_binary_tile_init();", "lt_binary_tile"};
             } else if (dtype == DataType::UINT16) {
+                if (enable_replay) {
+                    return {"lt_uint16_tile_init(); lt_uint16_init_replay();", "lt_uint16_tile_replay"};
+                }
                 return {"lt_uint16_tile_init();", "lt_uint16_tile"};
+            }
+            if (enable_replay) {
+                return {"lt_int32_tile_init(); lt_int32_init_replay();", "lt_int32_tile_replay"};
             }
             return {"lt_int32_tile_init();", "lt_int32_tile"};
         case GT:
             if (dtype == DataType::FLOAT32) {
                 return {"gt_binary_tile_init();", "gt_binary_tile"};
             } else if (dtype == DataType::UINT16) {
+                if (enable_replay) {
+                    return {"gt_uint16_tile_init(); gt_uint16_init_replay();", "gt_uint16_tile_replay"};
+                }
                 return {"gt_uint16_tile_init();", "gt_uint16_tile"};
+            }
+            if (enable_replay) {
+                return {"gt_int32_tile_init(); gt_int32_init_replay();", "gt_int32_tile_replay"};
             }
             return {"gt_int32_tile_init();", "gt_int32_tile"};
         case GE:
             if (dtype == DataType::FLOAT32) {
                 return {"ge_binary_tile_init();", "ge_binary_tile"};
+            }
+            if (enable_replay) {
+                return {"ge_int32_tile_init(); ge_int32_init_replay();", "ge_int32_tile_replay"};
             }
             return {"ge_int32_tile_init();", "ge_int32_tile"};
         case LE:
