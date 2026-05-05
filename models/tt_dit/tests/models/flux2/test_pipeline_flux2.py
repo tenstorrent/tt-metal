@@ -65,12 +65,28 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
             (8, 1),  # vae_tp
             ttnn.Topology.Linear,
             4,  # num_links
-            "4x8",
+            "wh_4x8",
             True,  # encoder_on_device
             True,  # vae_on_device
             True,  # is_fsdp
             False,  # dynamic_load
-            id="4x8",
+            id="wh_4x8",
+        ),
+        pytest.param(
+            (4, 8),  # mesh_device
+            (2, 0),  # cfg
+            (2, 0),  # sp
+            (8, 1),  # tp
+            (8, 1),  # encoder_tp
+            (8, 1),  # vae_tp
+            ttnn.Topology.Linear,
+            2,  # num_links
+            "bh_4x8",
+            True,  # encoder_on_device
+            True,  # vae_on_device
+            False,  # is_fsdp
+            False,  # dynamic_load
+            id="bh_4x8",
         ),
     ],
     indirect=["mesh_device"],
@@ -79,7 +95,7 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
     "traced",
     [
         pytest.param(True, id="traced"),
-        # pytest.param(False, id="not_traced"),
+        pytest.param(False, id="not_traced"),
     ],
 )
 def test_pipeline(
