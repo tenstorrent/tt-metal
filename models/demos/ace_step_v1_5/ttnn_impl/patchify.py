@@ -25,6 +25,8 @@ def _pad_seq_len_to_patch_size(hidden_states: ttnn.Tensor, patch_size: int, *, v
     """
     if len(hidden_states.shape) != 3:
         raise ValueError(f"Expected hidden_states rank-3 [B, T, C], got shape={hidden_states.shape}")
+    if not ttnn.is_tensor_storage_on_device(hidden_states):
+        raise AssertionError("Expected hidden_states to be device-resident (TTNN tensor on device).")
     if patch_size <= 0:
         raise ValueError(f"patch_size must be > 0, got {patch_size}")
 
@@ -114,9 +116,21 @@ class TtAceStepPatchEmbed1D(nn.Module):
         if int(torch_weight.shape[2]) != self.patch_size:
             raise ValueError(f"Unexpected proj_in kernel_size: got {torch_weight.shape[2]}, expected {self.patch_size}")
 
-        # Keep weights/bias on host in TTNN tensor form; conv1d will materialize device copies as needed.
-        self.weight = ttnn.from_torch(torch_weight, dtype=weights_dtype)
-        self.bias = ttnn.from_torch(torch_bias.reshape(1, 1, 1, -1), dtype=weights_dtype)
+        # Host -> device transfer happens once here (allowed). Keep weights device-resident for all forwards.
+        self.weight = ttnn.from_torch(
+            torch_weight,
+            dtype=weights_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.bias = ttnn.from_torch(
+            torch_bias.reshape(1, 1, 1, -1),
+            dtype=weights_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=weights_dtype, shard_layout=None, deallocate_activation=False
@@ -133,13 +147,17 @@ class TtAceStepPatchEmbed1D(nn.Module):
     def forward(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, PatchifyMetadata]:
         if len(hidden_states.shape) != 3:
             raise ValueError(f"Expected hidden_states shape [B, T, C], got {hidden_states.shape}")
+        if not ttnn.is_tensor_storage_on_device(hidden_states):
+            raise AssertionError("Expected hidden_states to be device-resident (TTNN tensor on device).")
+        if not ttnn.is_tensor_storage_on_device(self.weight):
+            raise AssertionError("Expected proj_in weight to be device-resident.")
+        if not ttnn.is_tensor_storage_on_device(self.bias):
+            raise AssertionError("Expected proj_in bias to be device-resident.")
         if int(hidden_states.shape[-1]) != self.in_channels:
             raise ValueError(f"Expected in_channels={self.in_channels}, got C={hidden_states.shape[-1]}")
 
         meta = _pad_seq_len_to_patch_size(hidden_states, self.patch_size, value=0.0)
         if meta.pad_length:
-            # `_pad_seq_len_to_patch_size` returns meta; actual tensor was padded in-place via TTNN ops,
-            # but we need to re-fetch the padded tensor. Recompute with padding and return it.
             hs4 = ttnn.unsqueeze(hidden_states, 1)
             hs4 = ttnn.pad(hs4, padding=((0, 0), (0, 0), (0, meta.pad_length), (0, 0)), value=0.0)
             hidden_states = ttnn.squeeze(hs4, 1)
@@ -243,8 +261,21 @@ class TtAceStepDePatchify1D(nn.Module):
         w = torch_weight.permute(1, 2, 0).contiguous()  # [out_channels, patch_size, in_channels]
         w2d = w.view(self.out_channels * self.patch_size, self.in_channels)  # [out_features, in_features]
 
-        self.weight = ttnn.from_torch(w2d, dtype=weights_dtype)
-        self.bias = ttnn.from_torch(torch_bias.reshape(1, 1, 1, -1), dtype=activation_dtype)
+        # Host -> device transfer happens once here (allowed). Keep weights device-resident for all forwards.
+        self.weight = ttnn.from_torch(
+            w2d,
+            dtype=weights_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.bias = ttnn.from_torch(
+            torch_bias.reshape(1, 1, 1, -1),
+            dtype=activation_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         self.activation_dtype = activation_dtype
 
     def forward(self, hidden_states: ttnn.Tensor, meta: PatchifyMetadata) -> ttnn.Tensor:
@@ -254,6 +285,12 @@ class TtAceStepDePatchify1D(nn.Module):
             )
         if len(hidden_states.shape) != 3:
             raise ValueError(f"Expected hidden_states shape [B, T_p, inner_dim], got {hidden_states.shape}")
+        if not ttnn.is_tensor_storage_on_device(hidden_states):
+            raise AssertionError("Expected hidden_states to be device-resident (TTNN tensor on device).")
+        if not ttnn.is_tensor_storage_on_device(self.weight):
+            raise AssertionError("Expected proj_out weight to be device-resident.")
+        if not ttnn.is_tensor_storage_on_device(self.bias):
+            raise AssertionError("Expected proj_out bias to be device-resident.")
         if int(hidden_states.shape[-1]) != self.in_channels:
             raise ValueError(f"Expected inner_dim={self.in_channels}, got {hidden_states.shape[-1]}")
 
