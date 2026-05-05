@@ -430,16 +430,18 @@ static MxFp6Class effective_mxfp6_class(tt::DataFormat fmt, uint8_t scale_byte, 
 static vector<uint32_t> build_bf16_tile_with_block_values(std::initializer_list<uint16_t> block_values) {
     constexpr uint32_t kNumBlocksPerTile = 32;
     constexpr uint32_t kElementsPerBlock = 32;
-    constexpr uint32_t kElementsPerTile = kNumBlocksPerTile * kElementsPerBlock;  // 1024
-    vector<uint32_t> packed(kElementsPerTile / 2, 0);                             // BF16 = 2 bytes; 2 elems per uint32
-    auto* bf16_bits = reinterpret_cast<uint16_t*>(packed.data());
+    constexpr uint32_t kWordsPerBlock = kElementsPerBlock / 2;  // 2 BF16 per uint32
+    vector<uint32_t> packed(kNumBlocksPerTile * kWordsPerBlock, 0);
 
     uint16_t default_val = block_values.size() > 0 ? *(block_values.end() - 1) : 0;
     const auto* it = block_values.begin();
     for (uint32_t b = 0; b < kNumBlocksPerTile; ++b) {
         uint16_t val = (it != block_values.end()) ? *it++ : default_val;
-        for (uint32_t i = 0; i < kElementsPerBlock; ++i) {
-            bf16_bits[b * kElementsPerBlock + i] = val;
+        // Pack two identical BF16 values per uint32 (LSB = lower face-major
+        // index, MSB = higher) — mirrors bf16_raw_at's read pattern.
+        uint32_t paired = (static_cast<uint32_t>(val) << 16) | static_cast<uint32_t>(val);
+        for (uint32_t w = 0; w < kWordsPerBlock; ++w) {
+            packed[b * kWordsPerBlock + w] = paired;
         }
     }
     return packed;
