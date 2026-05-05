@@ -56,7 +56,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
     sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
-    sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, FractionalHalf::High);
+    sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
     sfpi::vInt b_hi = b >> 23;
     b_hi = sfpi::fractional_mul(correction, b_hi);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
