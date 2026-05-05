@@ -104,14 +104,32 @@ def determine_compute_matmul_cores(mesh_device):
 def create_torch_prepared_compute_matmul_weight_tensors(
     torch_w0, torch_w1, torch_w2, num_layers, experts_per_device, hidden_size, N, ring2cores
 ):
+    # Convert ring2cores dict to shard_map lists expected by prepare functions
+    # ring2cores format: {ring_pos: (core_coord, dram_bank_id, pad_flag)}
+    # Extract shard sizes based on pad_flag (6 tiles for non-pad, 5 for pad cores)
+    w0_w1_shard_map = [6 if ring2cores[i][2] == 0 else 5 for i in range(len(ring2cores))]
+
+    # For w2, use DeepSeek-specific values
+    # Non-pad cores: (2, 2) - 2 tiles in last group, 2 padding tiles
+    # Pad cores: (3, 1) - 3 tiles in last group, 1 padding tile
+    w2_shard_map = []
+    for i in range(len(ring2cores)):
+        pad_flag = ring2cores[i][2]
+        if pad_flag == 0:
+            # Non-pad cores
+            w2_shard_map.append((2, 2))
+        else:
+            # Pad cores
+            w2_shard_map.append((3, 1))
+
     # Prepare w0_w1 tensor (interleaved, padded, and reordered)
     torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+        torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
     )
 
     # Prepare w2 tensor (padded and reordered)
     torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-        torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+        torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
     )
 
     return torch_w0_w1_reordered, torch_w2_reordered
@@ -1060,7 +1078,6 @@ def test_optimized_moe_decode_block(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=compute_output_height_shard_dim,
-            output_width_shard_dim=compute_output_width_shard_dim,
             has_bias=False,
             cluster_axis=cluster_axis,
             mux_core_range_set=combine_mux_cores,

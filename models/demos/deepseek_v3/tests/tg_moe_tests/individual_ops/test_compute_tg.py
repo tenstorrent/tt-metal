@@ -160,6 +160,24 @@ def run_moe_compute_test(
     torch_w0_w1_reordered_tensors = [None] * num_devices
     torch_w2_reordered_tensors = [None] * num_devices
 
+    # Convert ring2cores dict to shard_map lists expected by prepare functions
+    # ring2cores format: {ring_pos: (core_coord, dram_bank_id, pad_flag)}
+    # Extract shard sizes based on pad_flag (6 tiles for non-pad, 5 for pad cores)
+    w0_w1_shard_map = [6 if ring2cores[i][2] == 0 else 5 for i in range(len(ring2cores))]
+
+    # For w2, use DeepSeek-specific values
+    # Non-pad cores: (2, 2) - 2 tiles in last group, 2 padding tiles
+    # Pad cores: (3, 1) - 3 tiles in last group, 1 padding tile
+    w2_shard_map = []
+    for i in range(len(ring2cores)):
+        pad_flag = ring2cores[i][2]
+        if pad_flag == 0:
+            # Non-pad cores
+            w2_shard_map.append((2, 2))
+        else:
+            # Pad cores
+            w2_shard_map.append((3, 1))
+
     for e in range(0, experts, 2):
         # Concatenate pairs of experts
         torch_w0 = torch.cat([torch_w0_tensors[e], torch_w0_tensors[e + 1]], dim=1)
@@ -168,10 +186,10 @@ def run_moe_compute_test(
 
         # Reorder for optimal DRAM placement
         torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, ring2cores
+            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
         )
         torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-            torch_w2, num_layers, experts_per_device, N, hidden_size, ring2cores
+            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
         )
 
         # Calculate linearized mesh coordinate
@@ -334,7 +352,6 @@ def run_moe_compute_test(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=output_height_shard_dim,
-            output_width_shard_dim=output_width_shard_dim,
             cluster_axis=cluster_axis,
             mux_core_range_set=combine_mux_cores,
         )
