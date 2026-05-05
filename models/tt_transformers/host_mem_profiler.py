@@ -88,13 +88,7 @@ def _require(package, import_name=None):
         importlib.import_module(import_name)
     except ImportError:
         print(f"Installing missing dependency: {package}")
-        import shutil
-
-        uv = shutil.which("uv")
-        if uv:
-            subprocess.check_call([uv, "pip", "install", "--python", sys.executable, package])
-        else:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
         importlib.invalidate_caches()  # flush finder cache so the new package is visible
 
 
