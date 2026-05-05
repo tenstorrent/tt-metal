@@ -265,9 +265,13 @@ void kernel_main() {
                     transposed_offset = 0;           // The second transposed tile becomes front after popping the first
                     cb0 = transposed_val_cb_index;   // Source: transposed values
                     cb1 = transposed_ind_cb_index;   // Source: transposed indices
-                    cb2 = result_prep_val_cb_index;  // Dest: result prep values
-                    cb3 = result_prep_ind_cb_index;  // Dest: result prep indices
-                    ktiles_saved += 2;               // Mark 2 tiles as processed
+                    if constexpr (output_tiles > 1) {
+                        cb2 = result_prep_val_cb_index;  // Dest: result prep values
+                        cb3 = result_prep_ind_cb_index;  // Dest: result prep indices
+                        ktiles_saved += 2;               // Mark both sorted tiles as processed
+                    } else {
+                        ktiles_saved = 1;  // Keep only the top tile; discard the bottom tile after this iteration.
+                    }
                     index = output_tiles;            // Exit loop after this iteration
                     in_cb_offset = input_take;       // Use both input tiles
                     first_sort_from_transposed = true;
