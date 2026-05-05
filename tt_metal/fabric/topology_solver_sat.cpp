@@ -248,9 +248,7 @@ inline bool topology_sat_combinations_exceed_limit(size_t n, size_t r, size_t ma
     if (r == 0 || r == n) {
         return false;
     }
-    if (r > n - r) {
-        r = n - r;
-    }
+    r = std::min(r, n - r);
     double x = 1.0;
     for (size_t i = 1; i <= r; ++i) {
         x = x * static_cast<double>(n - r + i) / static_cast<double>(i);
@@ -267,7 +265,7 @@ void topology_sat_emit_combinations_indices(size_t n, size_t r, EmitCombination&
     cur.reserve(r);
     const auto dfs = [&](auto&& self, size_t start) -> void {
         if (cur.size() == r) {
-            emit_combination(cur);
+            std::forward<EmitCombination>(emit_combination)(cur);
             return;
         }
         for (size_t i = start; i < n; ++i) {
@@ -502,7 +500,7 @@ bool topology_sat_apply_arc_consistency(
             if (g2 == g) {
                 continue;
             }
-            if (domain_set[t_neigh].count(g2) == 0) {
+            if (!domain_set[t_neigh].contains(g2)) {
                 continue;
             }
             if (validation_mode == ConnectionValidationMode::STRICT && required_channels > 1) {
@@ -876,11 +874,7 @@ bool topology_sat_encode_hard_constraints(
     topology_sat_encode_same_rank_groups(solver, graph_data, constraint_data, enc);
 
     // 8. Cardinality: at least min_count of the listed (target, global) assignment literals must be true.
-    if (!topology_sat_encode_cardinality_constraints(solver, constraint_data, enc)) {
-        return false;
-    }
-
-    return true;
+    return topology_sat_encode_cardinality_constraints(solver, constraint_data, enc);
 }
 
 // ── Soft / Objective Encoding ─────────────────────────────────────────────────
