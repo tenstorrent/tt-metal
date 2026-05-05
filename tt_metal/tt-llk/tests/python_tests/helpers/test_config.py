@@ -1327,6 +1327,8 @@ class TestConfig:
             timeout: Maximum time to wait (in seconds) before timing out.
         """
 
+        SIMULATOR_POLL_INTERVAL = 0.01
+
         mailboxes = {core for core in device_module.Mailboxes}
         if self.CHIP_ARCH != ChipArchitecture.QUASAR:
             mailboxes -= {
@@ -1353,7 +1355,7 @@ class TestConfig:
 
             if TestConfig.TEST_TARGET.run_simulator:
                 time.sleep(
-                    0.01
+                    SIMULATOR_POLL_INTERVAL
                 )  # Poll every 10ms in simulator, because it takes a lot longer to execute the kernel
 
         handle_if_assert_hit(
