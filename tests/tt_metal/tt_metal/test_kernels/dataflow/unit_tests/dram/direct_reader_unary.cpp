@@ -21,16 +21,23 @@ void kernel_main() {
     const uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr bool use_dfbs = get_compile_time_arg_val(1) == 1;
 #endif
-    uint32_t src_addr  = get_arg_val<uint32_t>(0); // global base address
-    uint32_t src_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
     // DRAM page stride: the allocator may round page_size up (e.g. to
     // NOC_DRAM_READ_ALIGNMENT_BYTES = 64 on Quasar), so tiles are spaced
     // further apart in DRAM than their native size. Callers pass
     // Buffer::aligned_page_size() here; the kernel advances the DRAM
     // pointer by this stride while the DFB/CB still streams native-size
     // tiles into L1.
+#ifdef ARCH_QUASAR
+    uint32_t src_addr = get_vararg(0);     // global base address
+    uint32_t src_bank_id = get_vararg(1);  // data is in one bank
+    uint32_t num_tiles = get_vararg(2);
+    uint32_t dram_page_stride = get_vararg(3);
+#else
+    uint32_t src_addr = get_arg_val<uint32_t>(0);     // global base address
+    uint32_t src_bank_id = get_arg_val<uint32_t>(1);  // data is in one bank
+    uint32_t num_tiles = get_arg_val<uint32_t>(2);
     uint32_t dram_page_stride = get_arg_val<uint32_t>(3);
+#endif
 
     constexpr uint32_t ublock_size_tiles = 1;
 

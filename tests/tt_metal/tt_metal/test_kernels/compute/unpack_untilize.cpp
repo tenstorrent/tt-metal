@@ -6,9 +6,34 @@
 
 #include "api/compute/untilize.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#ifdef ARCH_QUASAR
+#include "api/dataflow/dataflow_buffer.h"
+#else
 #include "api/dataflow/circular_buffer.h"
+#endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
+    DataflowBuffer dfb_in0(dfb::in);
+    DataflowBuffer dfb_out0(dfb::out);
+
+    compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out0.get_id());
+    untilize_init(dfb_in0.get_id());
+
+    for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
+        dfb_in0.wait_front(per_core_block_tile_cnt);
+        dfb_out0.reserve_back(per_core_block_tile_cnt);
+
+        untilize_block(dfb_in0.get_id(), per_core_block_tile_cnt, dfb_out0.get_id());
+
+        dfb_out0.push_back(per_core_block_tile_cnt);
+        dfb_in0.pop_front(per_core_block_tile_cnt);
+    }
+
+    untilize_uninit(dfb_in0.get_id());
+#else
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
 
@@ -29,4 +54,5 @@ void kernel_main() {
     }
 
     untilize_uninit(tt::CBIndex::c_0);
+#endif
 }
