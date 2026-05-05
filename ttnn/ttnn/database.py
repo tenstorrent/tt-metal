@@ -13,7 +13,7 @@ import networkx as nx
 import ttnn
 from .stack_trace_source import (
     ensure_source_file_id,
-    extract_last_stack_trace_file,
+    extract_stack_trace_file,
     normalize_existing_source_file_path,
     read_source_file_contents,
 )
@@ -329,7 +329,7 @@ def insert_stack_trace(report_path, operation_id, stack_trace):
 
     # let sqlite handle formatting strings with mixed quotes
     source_file_id = None
-    source_file_path = extract_last_stack_trace_file(formatted_stack_trace)
+    source_file_path = extract_stack_trace_file(formatted_stack_trace)
     normalized_path = normalize_existing_source_file_path(source_file_path)
     if normalized_path is not None:
         file_contents = read_source_file_contents(normalized_path)

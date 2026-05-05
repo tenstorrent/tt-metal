@@ -31,14 +31,14 @@ from loguru import logger
 if __package__ in (None, ""):
     from stack_trace_source import (
         ensure_source_file_id,
-        extract_last_stack_trace_file,
+        extract_stack_trace_file,
         normalize_existing_source_file_path,
         read_source_file_contents,
     )
 else:
     from .stack_trace_source import (
         ensure_source_file_id,
-        extract_last_stack_trace_file,
+        extract_stack_trace_file,
         normalize_existing_source_file_path,
         read_source_file_contents,
     )
@@ -68,7 +68,7 @@ def _prepare_stack_traces_with_source_refs(
     stack_rows: list[tuple[int, str, str | None]] = []
 
     for operation_id, stack_trace in stack_traces_batch:
-        source_path = extract_last_stack_trace_file(stack_trace)
+        source_path = extract_stack_trace_file(stack_trace)
         normalized_path = normalize_existing_source_file_path(source_path)
         if normalized_path is None:
             stack_rows.append((operation_id, stack_trace, None))

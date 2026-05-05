@@ -12,7 +12,8 @@ _PYTHON_STACK_FILE_PATTERN = re.compile(r'^\s*File "([^"]+)", line \d+, in ')
 _PATH_WITH_LINE_PATTERN = re.compile(r"^\s*([^:\n]+):(\d+)(?::\d+)?\s*$")
 
 
-def extract_last_stack_trace_file(stack_trace_text: str | None) -> str | None:
+# Gets the first file path from a stack trace
+def extract_stack_trace_file(stack_trace_text: str | None) -> str | None:
     if not stack_trace_text:
         return None
     for line in stack_trace_text.splitlines():
