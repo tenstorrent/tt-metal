@@ -747,7 +747,6 @@ class WhisperGenerator:
             return self._generate_with_temperature(
                 temperature=temperature,
                 start_encode=start_encode,
-                input_features=input_features.unsqueeze(1),
                 unpadded_batch_size=unpadded_batch_size,
                 return_perf_metrics=return_perf_metrics,
                 return_timestamps=return_timestamps,
@@ -769,7 +768,6 @@ class WhisperGenerator:
                 output = self._generate_with_temperature(
                     temperature=temperature,
                     start_encode=start_encode,
-                    input_features=input_features.unsqueeze(1),
                     unpadded_batch_size=unpadded_batch_size,
                     return_perf_metrics=return_perf_metrics,
                     return_timestamps=return_timestamps,
@@ -884,7 +882,6 @@ class WhisperGenerator:
         self,
         temperature,
         start_encode,
-        input_features,
         unpadded_batch_size,
         return_perf_metrics=False,
         return_timestamps=False,
@@ -938,7 +935,6 @@ class WhisperGenerator:
 
         # When prompt is provided, the sequence becomes:
         # <|startofprev|> -> [prompt tokens] -> <|startoftranscript|> -> <|language|> -> <|task|> -> ...
-        prompt_offset = 0
         if prompt is not None:
             # Tokenize the prompt
             prompt_tokens = self.processor.tokenizer.encode(prompt, add_special_tokens=False)
@@ -976,7 +972,7 @@ class WhisperGenerator:
         prefix_len = len(prefix_sequence)
 
         # Initialize input_ids with the full prefix sequence for proper conditioning
-        input_ids = torch.tensor([prefix_sequence]).repeat(input_features.shape[0], 1).to(torch.long)
+        input_ids = torch.tensor([prefix_sequence]).repeat(unpadded_batch_size, 1).to(torch.long)
         logits_processor = get_logits_processor(input_ids, self.config)
 
         if not self.kv_cache_per_batch_size[trace_key]:
@@ -984,6 +980,7 @@ class WhisperGenerator:
             decoder_start_values = self.generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
 
         MAX_GEN_LEN = self.config.max_length
+        collect_output_ids = streaming and not return_timestamps_for_prefix
         output_ids = []
         total_decode_time = 0
         prompt_is_done = [False for _ in range(unpadded_batch_size)]
@@ -995,7 +992,7 @@ class WhisperGenerator:
 
         # Non-streaming mode: collect all results in a list
         if not streaming:
-            output = [[] for _ in range(input_features.shape[0])]
+            output = [[] for _ in range(unpadded_batch_size)]
         ttft = 0.0
         avg_decode_throughput = 0.0
 
@@ -1003,7 +1000,6 @@ class WhisperGenerator:
         # Batched path: one preprocess over full prefix (decode_pos=None) + one decoder(decoder_prefill=True).
         if self.kv_cache_per_batch_size[trace_key] and prefix_len > 1:
             logger.debug(f"Running prefill pass for {prefix_len} prefix tokens")
-            first_transcription_token = None
 
             # Full-prefix hidden states: same embedding path as multi-token decode_pos=None.
             self._reset_decode_pos(0, unpadded_batch_size)
@@ -1053,7 +1049,8 @@ class WhisperGenerator:
                     .squeeze(1)
                 )
 
-            output_ids.append(first_transcription_token)
+            if collect_output_ids:
+                output_ids.append(first_transcription_token)
 
             if return_timestamps_for_prefix:
                 for batch_idx in range(unpadded_batch_size):
@@ -1067,9 +1064,7 @@ class WhisperGenerator:
                 ttnn_transcription = self.processor.batch_decode(
                     first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
                 )
-                current_avg_logprob = log_probs[0].unsqueeze(0) if log_probs else torch.zeros(input_features.shape[0])
-                if len(log_probs) > 1:
-                    current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
+                current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
 
                 if return_perf_metrics:
                     yield ttnn_transcription, current_avg_logprob, no_speech_probs, ttft, 0.0, False
@@ -1079,7 +1074,7 @@ class WhisperGenerator:
                 ttnn_transcription = self.processor.batch_decode(
                     first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
                 )
-                for idx in range(input_features.shape[0]):
+                for idx in range(unpadded_batch_size):
                     output[idx].append(ttnn_transcription[idx])
 
             # Set decode position to prefix_len for generation to continue
@@ -1140,7 +1135,7 @@ class WhisperGenerator:
                     # tokenizer decode, streaming yield). The very first traced-2CQ iteration
                     # has no pending state yet, so we enqueue synchronously here to seed the pipeline.
                     if self._pending_token_host is None and self._pending_forced_tokens is None:
-                        self._enqueue_traced_decode_step(trace_key, i, forced_tokens_dict, input_features.shape[0])
+                        self._enqueue_traced_decode_step(trace_key, i, forced_tokens_dict, unpadded_batch_size)
 
                     next_tokens = self._consume_pending_decode_token()
                 else:
@@ -1148,7 +1143,7 @@ class WhisperGenerator:
 
                     # Handle forced tokens: overwrite on-device argmax result if needed
                     if i in forced_tokens_dict:
-                        next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
+                        next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(unpadded_batch_size)
                         forced_host = ttnn.from_torch(
                             next_tokens[:, None].int(),
                             dtype=ttnn.uint32,
@@ -1209,7 +1204,7 @@ class WhisperGenerator:
                 next_tokens_scores = logits_processor(input_ids, next_token_logits)
 
                 if i in forced_tokens_dict:
-                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
+                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(unpadded_batch_size)
                 else:
                     next_tokens = self._sample_token(next_tokens_scores, temperature)
 
@@ -1271,7 +1266,8 @@ class WhisperGenerator:
                             torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
                         )
 
-                output_ids.append(next_tokens)
+                if collect_output_ids:
+                    output_ids.append(next_tokens)
 
                 if return_timestamps_for_prefix:
                     for batch_idx in range(unpadded_batch_size):
@@ -1316,7 +1312,7 @@ class WhisperGenerator:
                 and i + 1 < MAX_GEN_LEN
                 and not all(prompt_is_done)
             ):
-                self._enqueue_traced_decode_step(trace_key, i + 1, forced_tokens_dict, input_features.shape[0])
+                self._enqueue_traced_decode_step(trace_key, i + 1, forced_tokens_dict, unpadded_batch_size)
 
             # Only output transcription tokens (skip prompt and forced prefix tokens)
             if i >= transcription_start_pos:
@@ -1328,11 +1324,11 @@ class WhisperGenerator:
                     if log_probs:
                         current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
                     else:
-                        current_avg_logprob = torch.zeros(input_features.shape[0])
+                        current_avg_logprob = torch.zeros(unpadded_batch_size)
 
                     # Use zeros for no_speech_probs if not yet calculated
                     if no_speech_probs is None:
-                        current_no_speech_probs = torch.zeros(input_features.shape[0])
+                        current_no_speech_probs = torch.zeros(unpadded_batch_size)
                     else:
                         current_no_speech_probs = no_speech_probs
 
@@ -1345,7 +1341,7 @@ class WhisperGenerator:
                         yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, False
                 else:
                     # Non-streaming mode: collect results
-                    for idx in range(input_features.shape[0]):
+                    for idx in range(unpadded_batch_size):
                         output[idx].append(ttnn_transcription[idx])
 
             if all(prompt_is_done):
@@ -1375,11 +1371,11 @@ class WhisperGenerator:
         if log_probs:
             avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
         else:
-            avg_logprob = torch.zeros(input_features.shape[0])
+            avg_logprob = torch.zeros(unpadded_batch_size)
 
         # Use zeros for no_speech_probs if not calculated
         if no_speech_probs is None:
-            no_speech_probs = torch.zeros(input_features.shape[0])
+            no_speech_probs = torch.zeros(unpadded_batch_size)
 
         # Process timestamps if requested
         if return_timestamps_for_prefix and full_token_sequences:
