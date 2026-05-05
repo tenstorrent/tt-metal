@@ -5,6 +5,7 @@ set(UNIT_TESTS_INTEGRATION_SRC
     test_basic_pipeline.cpp
     test_flatten.cpp
     test_sfpu_compute.cpp
+    asan/test_asan_negative.cpp
     matmul/test_matmul_large_block.cpp
     matmul/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast.cpp
     matmul/test_matmul_multi_core_multi_dram_inX_mcast.cpp
