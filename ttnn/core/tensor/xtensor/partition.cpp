@@ -262,7 +262,6 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim) {
         case tt::tt_metal::DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT32: return adaptor::concat_impl<uint32_t>(tensors, reference_layout, dim);
-        case tt::tt_metal::DataType::FP8_E4M3: return adaptor::concat_impl<float8_e4m3>(tensors, reference_layout, dim);
         default: TT_THROW("Unsupported data type: {}", reference_layout.get_data_type());
     }
 }

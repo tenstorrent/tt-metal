@@ -527,14 +527,7 @@ Tensor from_buffer_impl(
             auto cpp_buffer = nb::cast<std::vector<::bfloat16>>(buffer);
             return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
         }
-        case DataType::FP8_E4M3: {
-            // FP8_E4M3 host bytes are exposed via dlpack as uint8 (no native fp8 dlpack code yet),
-            // so accept a uint8 buffer from Python and reinterpret as float8_e4m3 for storage.
-            auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
-            std::vector<float8_e4m3> fp8_buffer(cpp_buffer.size());
-            std::memcpy(fp8_buffer.data(), cpp_buffer.data(), cpp_buffer.size());
-            return ttnn::from_buffer(std::move(fp8_buffer), shape, dtype, device, layout, memory_config);
-        }
+        case DataType::FP8_E4M3:
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
         case DataType::INVALID: {
