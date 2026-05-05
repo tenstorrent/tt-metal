@@ -71,6 +71,14 @@ class OperationRuntimeMap:
     def __len__(self) -> int:
         return len(self._map)
 
+    def items(self):
+        """Iterate over (raw_runtime_id, OperationInfo) pairs in the underlying map."""
+        return self._map.items()
+
+    def get_raw(self, raw_runtime_id: int) -> OperationInfo | None:
+        """Look up by raw runtime_id without any decoding/fallback logic."""
+        return self._map.get(raw_runtime_id)
+
     def lookup(self, host_assigned_id: int, dispatch_mode: str | None) -> OperationInfo | None:
         """Resolve host_assigned_id to its Inspector entry, or None if not found.
 
