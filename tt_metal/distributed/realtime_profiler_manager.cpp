@@ -979,7 +979,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
     constexpr uint32_t kPageWords = kPageSize / sizeof(uint32_t);
     constexpr uint32_t kSyncTimeoutMs = 5000;
     constexpr uint32_t kPauseTimeoutMs = 2000;
-    constexpr auto kMinIntervalBetweenFinishSync = std::chrono::seconds(5);
+    constexpr auto kMinIntervalBetweenFinishSync = std::chrono::seconds(60);
 
     const auto throttle_now = std::chrono::steady_clock::now();
     std::vector<size_t> device_indices_to_sync;
