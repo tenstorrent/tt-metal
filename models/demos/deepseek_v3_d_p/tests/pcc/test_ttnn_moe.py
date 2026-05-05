@@ -97,7 +97,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=2 * 1088),
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,

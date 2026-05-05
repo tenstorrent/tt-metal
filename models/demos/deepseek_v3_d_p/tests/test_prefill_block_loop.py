@@ -95,7 +95,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=2 * 1088),
             },
             2,  # num_links = 2
             ttnn.Topology.Linear,
