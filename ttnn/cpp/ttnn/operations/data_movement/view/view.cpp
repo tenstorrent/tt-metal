@@ -16,8 +16,9 @@ ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
         return tensor;
     }
 
-    const uint32_t tile_first_dim = tensor.tensor_spec().tile().get_width();
-    const uint32_t tile_second_dim = tensor.tensor_spec().tile().get_height();
+    const auto tile = tensor.layout() == ttnn::TILE_LAYOUT ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    const uint32_t tile_first_dim = tile.get_width();
+    const uint32_t tile_second_dim = tile.get_height();
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2] : 1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
     // Validate the operation

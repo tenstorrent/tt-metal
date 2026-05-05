@@ -41,8 +41,8 @@ PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if (layout == Layout::ROW_MAJOR) {
-        // TODO: add TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported")
-        config_ = RowMajorPageConfig(tile.value_or(Tile()));
+        TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported");
+        config_ = RowMajorPageConfig();
     } else {
         config_ = TilePageConfig(tile.value_or(Tile()));
     }
@@ -145,8 +145,6 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
-RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
-
 Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec().has_value()) {
         const auto& shard_spec = memory_config.shard_spec().value();
@@ -209,7 +207,11 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
     return size;
 }
 
-const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
+const Tile& RowMajorPageConfig::get_tile() const {
+    TT_THROW(
+        "get_tile() called on RowMajorPageConfig — tile is not a property of row-major layout. "
+        "This indicates tile-smuggling via RowMajorPageConfig that needs to be removed.");
+}
 
 Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
 

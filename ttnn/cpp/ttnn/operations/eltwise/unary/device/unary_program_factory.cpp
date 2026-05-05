@@ -289,8 +289,9 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     uint32_t num_cores;
     std::vector<CoreCoord> cores;
 
-    const uint32_t tile_height = output.tensor_spec().tile().get_height();
-    const uint32_t tile_width = output.tensor_spec().tile().get_width();
+    auto output_tile = output.layout() == Layout::TILE ? output.tensor_spec().tile() : tt::tt_metal::Tile();
+    const uint32_t tile_height = output_tile.get_height();
+    const uint32_t tile_width = output_tile.get_width();
     const uint32_t tile_hw = tile_height * tile_width;
 
     const auto input_df = datatype_to_dataformat_converter(input.dtype());
@@ -323,7 +324,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
         rm_interleaved ? (total_rows + rows_per_tile - 1) / rows_per_tile : output.physical_volume() / tile_hw;
     uint32_t out_shard_height{}, out_shard_width{}, num_shards_per_width{};
 
-    const uint32_t oWt = output.padded_shape()[-1] / output.tensor_spec().tile().get_width();
+    const uint32_t oWt = output.padded_shape()[-1] / output_tile.get_width();
 
     if (has_sharding) {
         core_group_1 = grid;

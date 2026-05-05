@@ -431,12 +431,8 @@ Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
     ::detail::ReadShard(*buffer, device_data, core_id);
 
     auto output_buffer = std::vector<T>(std::move(device_data));
-    return Tensor(
-        HostBuffer(std::move(output_buffer)),
-        shard_shape,
-        tensor.dtype(),
-        tensor.layout(),
-        tensor.tensor_spec().tile());
+    auto tile = tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    return Tensor(HostBuffer(std::move(output_buffer)), shard_shape, tensor.dtype(), tensor.layout(), tile);
 }
 
 template <>

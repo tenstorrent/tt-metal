@@ -228,10 +228,9 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, CustomTile) {
         /*on_destruction_callback=*/[]() {},
         /*tile=*/Tile({16, 16}));
 
-    // Retain row major layout, but use custom tile.
-    // TODO: #18536 - this should be illegal.
+    // Tile is smuggled into a ROW_MAJOR tensor; get_tile() must throw (#18536).
     EXPECT_EQ(tensor.tensor_spec().layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(tensor.tensor_spec().tile(), Tile({16, 16}));
+    EXPECT_THROW(tensor.tensor_spec().tile(), std::runtime_error);
 }
 
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};
