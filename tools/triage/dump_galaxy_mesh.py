@@ -20,9 +20,9 @@ Description:
          showing `(idle)` or `{host_assigned_id}: {op_name}` lines for any op currently
          running there.
 
-    The device label is suffixed with ⚠️ when any op on that device is **not the majority op**
-    (the op running on the most distinct devices). Tie-break is deterministic — alphabetical by
-    op name.
+    The device label is suffixed with `[!]` when any op on that device is **not the majority
+    op** (the op running on the most distinct devices). Tie-break is deterministic —
+    alphabetical by op name.
 
     Depends on:
       - `running_ops_aggregation` for the per-host_assigned_id aggregation,
