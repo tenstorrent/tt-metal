@@ -16,15 +16,11 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_b1.demo.decoder_stage import DenseDecoderStage, MoEDecoderStage
 from models.demos.deepseek_v3_b1.demo.stage import (
-    ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
     DEFAULT_ACTIVATION_FIFO_PAGES,
-    SINGLE_BUFFER_FIFO_PAGES,
-    TOKEN_META_PAGE_SIZE_BYTES,
     BaseLMHeadStage,
     EmbeddingStage,
     PassthroughPayload,
     PassthroughStage,
-    SpecLMHeadStage,
     SpecLMHeadWithEmbeddingStage,
     StageContext,
     StageKind,
@@ -37,9 +33,6 @@ def create_fabric_router_config(max_payload_size: int) -> Any:
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
-
-
-LMHEAD_SPECIAL_FIFO_PAGES = SINGLE_BUFFER_FIFO_PAGES
 
 
 def create_passthrough_pipeline_configuration(
@@ -72,152 +65,11 @@ def create_passthrough_pipeline_configuration(
     return PipelineConfiguration(stage_factories)
 
 
-def create_single_galaxy_pipeline_configuration(
-    weight_provider: WeightProvider,
-    *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
-    enable_mtp: bool = False,
-) -> PipelineConfiguration:
-    """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
-    fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
-
-    def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(
-            weight_provider.load_embedding(device),
-            d2h_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if enable_mtp else None,
-            forward_metadata=True,  # BaseLMHeadStage always expects ACTIVATION_W_TOKEN_META upstream
-        )
-
-    def stage_1(device: ttnn.MeshDevice) -> StageKind:
-        mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
-        return BaseLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            mtp_weights=mtp_weights,
-            send_mtp_output_downstream=enable_mtp,
-            embedding_weights=weight_provider.load_embedding(device) if enable_mtp else None,
-            upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
-            downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
-        )
-
-    return PipelineConfiguration(
-        {
-            0: stage_0,
-            1: stage_1,
-            2: lambda d: PassthroughStage(fwd_payload),
-            3: lambda d: PassthroughStage(fwd_payload),
-        }
-    )
-
-
-def create_single_galaxy_spec_decode_pipeline_configuration(
-    weight_provider: WeightProvider,
-    *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
-) -> PipelineConfiguration:
-    """4-stage single-galaxy MTP speculative decoding pipeline:
-    Embed -> LMHead+MTP -> Passthrough(ACTIVATION_W_TOKEN_META) -> Verify -> loopback(TOKEN_META)."""
-
-    def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(
-            weight_provider.load_embedding(device),
-            d2h_page_size=TOKEN_META_PAGE_SIZE_BYTES,
-            forward_metadata=True,
-        )
-
-    def stage_1(device: ttnn.MeshDevice) -> StageKind:
-        return BaseLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            mtp_weights=weight_provider.load_mtp(device),
-            send_mtp_output_downstream=True,
-            embedding_weights=weight_provider.load_embedding(device),
-            upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
-            downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
-        )
-
-    def stage_2(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
-
-    def stage_3(device: ttnn.MeshDevice) -> StageKind:
-        return SpecLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device),
-        )
-
-    return PipelineConfiguration(
-        {
-            0: stage_0,
-            1: stage_1,
-            2: stage_2,
-            3: stage_3,
-        }
-    )
-
-
-def create_single_galaxy_combined_spec_decode_pipeline_configuration(
-    weight_provider: WeightProvider,
-    *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
-) -> PipelineConfiguration:
-    """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
-    P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
-
-    def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return SpecLMHeadWithEmbeddingStage(
-            weights=weight_provider.load_lm_head(device),
-            embedding_weights=weight_provider.load_embedding(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device),
-            loopback_input_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
-        )
-
-    def stage_1(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
-
-    def stage_2(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(
-            PassthroughPayload.ACTIVATION_W_TOKEN_META,
-            downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
-        )
-
-    def stage_3(device: ttnn.MeshDevice) -> StageKind:
-        return BaseLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            mtp_weights=weight_provider.load_mtp(device),
-            send_mtp_output_downstream=True,
-            embedding_weights=weight_provider.load_embedding(device),
-            upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
-            downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
-        )
-
-    return PipelineConfiguration(
-        {
-            0: stage_0,
-            1: stage_1,
-            2: stage_2,
-            3: stage_3,
-        }
-    )
-
-
 def create_single_galaxy_deepseek_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
     lm_head_fp32_dest_acc_en: bool = True,
     lm_head_persistent_mode: bool = True,
-    dense_layer_id: int = 0,
-    moe_layer_id: int = 0,
     host_loopback: bool = True,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy: Embed -> LMHead -> Passthrough(TOKEN) -> Passthrough(TOKEN).
@@ -229,22 +81,6 @@ def create_single_galaxy_deepseek_pipeline_configuration(
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(
             weight_provider.load_embedding(device),
-            forward_metadata=True,
-            host_loopback=host_loopback,
-        )
-
-    def stage_1(device: ttnn.MeshDevice) -> StageKind:
-        return DenseDecoderStage(
-            weights=weight_provider.load_dense_layer(layer_id=dense_layer_id, device=device),
-            layer_idx=dense_layer_id,
-            forward_metadata=True,
-            host_loopback=host_loopback,
-        )
-
-    def stage_2(device: ttnn.MeshDevice) -> StageKind:
-        return MoEDecoderStage(
-            weights=weight_provider.load_moe_layer(layer_id=moe_layer_id, device=device),
-            layer_idx=moe_layer_id,
             forward_metadata=True,
             host_loopback=host_loopback,
         )
@@ -262,6 +98,49 @@ def create_single_galaxy_deepseek_pipeline_configuration(
             1: stage_3,
             2: lambda d: PassthroughStage(PassthroughPayload.TOKEN, host_loopback=host_loopback),
             3: lambda d: PassthroughStage(PassthroughPayload.TOKEN, host_loopback=host_loopback),
+        }
+    )
+
+
+def create_single_galaxy_spec_decode_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+) -> PipelineConfiguration:
+    """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
+    P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return SpecLMHeadWithEmbeddingStage(
+            embedding_weights=weight_provider.load_embedding(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            spec_weights=weight_provider.load_spec(device),
+        )
+
+    def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        return BaseLMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            mtp_weights=weight_provider.load_mtp(device),
+            send_mtp_output_downstream=True,
+            embedding_weights=weight_provider.load_embedding(device),
+        )
+
+    def stage_2(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    def stage_3(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    return PipelineConfiguration(
+        {
+            0: stage_0,
+            1: stage_1,
+            2: stage_2,
+            3: stage_3,
         }
     )
 
@@ -294,8 +173,6 @@ def create_single_pod_pipeline_configuration(
             mtp_weights=mtp_weights,
             send_mtp_output_downstream=enable_mtp,
             embedding_weights=weight_provider.load_embedding(device) if enable_mtp else None,
-            upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
-            downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
         )
 
     def _dense_stage(layer_id: int):
@@ -334,9 +211,131 @@ def create_single_pod_pipeline_configuration(
     if enable_mtp:
         stage_factories[13] = _decoder_stage(
             moe_layer_id if moe_layer_id is not None else 12,
-            downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
         )
     return PipelineConfiguration(stage_factories)
+
+
+def create_single_pod_spec_decode_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    enable_mtp: bool = False,
+    dense_layer_id_override: int | None = None,
+    moe_layer_id_override: int | None = None,
+    num_slots: int = 64,
+) -> PipelineConfiguration:
+    """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
+
+    If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
+    If moe_layer_id_override is set (e.g. 3), all decoder stages use that layer id.
+    """
+    fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return SpecLMHeadWithEmbeddingStage(
+            embedding_weights=weight_provider.load_embedding(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            spec_weights=weight_provider.load_spec(device),
+        )
+
+    def stage_14(device: ttnn.MeshDevice) -> StageKind:
+        mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
+        return BaseLMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            mtp_weights=mtp_weights,
+            send_mtp_output_downstream=enable_mtp,
+            embedding_weights=weight_provider.load_embedding(device),
+        )
+
+    def _dense_stage(layer_id: int):
+        return lambda d: DenseDecoderStage(
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+            num_slots=num_slots,
+            forward_metadata=True,
+        )
+
+    def _decoder_stage(
+        layer_id: int,
+        *,
+        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+    ):
+        return lambda d: MoEDecoderStage(
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+            num_slots=num_slots,
+            forward_metadata=True,
+            upstream_fifo_pages=upstream_fifo_pages,
+            downstream_fifo_pages=downstream_fifo_pages,
+        )
+
+    dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
+    moe_layer_id = moe_layer_id_override
+
+    stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
+        0: stage_0,
+        1: _dense_stage(dense_ids[0]),
+        2: _dense_stage(dense_ids[1]),
+        3: _dense_stage(dense_ids[2]),
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
+        14: stage_14,
+        15: _decoder_stage(61),
+    }
+    if enable_mtp:
+        stage_factories[13] = _decoder_stage(moe_layer_id if moe_layer_id is not None else 12)
+    return PipelineConfiguration(stage_factories)
+
+
+def create_single_pod_spec_decode_no_decoder_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+) -> PipelineConfiguration:
+    """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
+    P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return SpecLMHeadWithEmbeddingStage(
+            embedding_weights=weight_provider.load_embedding(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            spec_weights=weight_provider.load_spec(device),
+        )
+
+    def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    def stage_13(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    def stage_14(device: ttnn.MeshDevice) -> StageKind:
+        return BaseLMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            mtp_weights=weight_provider.load_mtp(device),
+            send_mtp_output_downstream=True,
+            embedding_weights=weight_provider.load_embedding(device),
+        )
+
+    def stage_15(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    return PipelineConfiguration(
+        {
+            0: stage_0,
+            **{i: passthrough_stage for i in range(1, 13)},
+            13: stage_13,
+            14: stage_14,
+            15: stage_15,
+        }
+    )
 
 
 def create_sp4_pipeline_configuration(
@@ -358,11 +357,10 @@ def create_sp4_pipeline_configuration(
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return SpecLMHeadWithEmbeddingStage(
-            weights=weight_provider.load_lm_head(device),
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device) if enable_mtp else None,
+            spec_weights=weight_provider.load_spec(device),
         )
 
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
@@ -374,8 +372,6 @@ def create_sp4_pipeline_configuration(
             mtp_weights=mtp_weights,
             send_mtp_output_downstream=enable_mtp,
             embedding_weights=weight_provider.load_embedding(device),
-            upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
-            downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
         )
 
     def _dense_stage(layer_id: int):
@@ -411,13 +407,10 @@ def create_sp4_pipeline_configuration(
         3: _dense_stage(dense_ids[2]),
         **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
         62: stage_62,
-        63: _decoder_stage(
-            61,
-            upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
-        ),
+        63: _decoder_stage(61),
     }
     if enable_mtp:
-        stage_factories[61] = _decoder_stage(60, downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES)
+        stage_factories[61] = _decoder_stage(60)
     return PipelineConfiguration(stage_factories)
 
 
@@ -657,129 +650,3 @@ class Pipeline:
 
         self._pipeline_block.terminate()
         ttnn.synchronize_device(self._mesh_device)
-
-
-def create_single_pod_spec_decode_pipeline_configuration(
-    weight_provider: WeightProvider,
-    *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
-    enable_mtp: bool = False,
-    dense_layer_id_override: int | None = None,
-    moe_layer_id_override: int | None = None,
-    num_slots: int = 64,
-) -> PipelineConfiguration:
-    """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
-
-    If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
-    If moe_layer_id_override is set (e.g. 3), all decoder stages use that layer id.
-    """
-    fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
-
-    def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return SpecLMHeadWithEmbeddingStage(
-            weights=weight_provider.load_lm_head(device),
-            embedding_weights=weight_provider.load_embedding(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device) if enable_mtp else None,
-        )
-
-    def stage_14(device: ttnn.MeshDevice) -> StageKind:
-        mtp_weights = weight_provider.load_mtp(device) if enable_mtp else None
-        return BaseLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            mtp_weights=mtp_weights,
-            send_mtp_output_downstream=enable_mtp,
-            embedding_weights=weight_provider.load_embedding(device),
-            upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
-            downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
-        )
-
-    def _dense_stage(layer_id: int):
-        return lambda d: DenseDecoderStage(
-            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
-            layer_idx=layer_id,
-            num_slots=num_slots,
-            forward_metadata=True,
-        )
-
-    def _decoder_stage(
-        layer_id: int,
-        *,
-        upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
-        downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
-    ):
-        return lambda d: MoEDecoderStage(
-            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
-            layer_idx=layer_id,
-            num_slots=num_slots,
-            forward_metadata=True,
-            upstream_fifo_pages=upstream_fifo_pages,
-            downstream_fifo_pages=downstream_fifo_pages,
-        )
-
-    dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
-    moe_layer_id = moe_layer_id_override
-
-    stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
-        0: stage_0,
-        1: _dense_stage(dense_ids[0]),
-        2: _dense_stage(dense_ids[1]),
-        3: _dense_stage(dense_ids[2]),
-        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
-        14: stage_14,
-        15: _decoder_stage(
-            61,
-            upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
-        ),
-    }
-    if enable_mtp:
-        stage_factories[13] = _decoder_stage(
-            moe_layer_id if moe_layer_id is not None else 12,
-            downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
-        )
-    return PipelineConfiguration(stage_factories)
-
-
-def create_single_pod_combined_spec_decode_pipeline_configuration(
-    weight_provider: WeightProvider,
-    *,
-    fp32_dest_acc_en: bool = True,
-    persistent_mode: bool = True,
-) -> PipelineConfiguration:
-    """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
-    P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
-
-    def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return SpecLMHeadWithEmbeddingStage(
-            weights=weight_provider.load_lm_head(device),
-            embedding_weights=weight_provider.load_embedding(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            spec_weights=weight_provider.load_spec(device),
-        )
-
-    def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
-
-    def stage_14(device: ttnn.MeshDevice) -> StageKind:
-        return BaseLMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            mtp_weights=weight_provider.load_mtp(device),
-            send_mtp_output_downstream=True,
-            embedding_weights=weight_provider.load_embedding(device),
-        )
-
-    return PipelineConfiguration(
-        {
-            0: stage_0,
-            **{i: passthrough_stage for i in range(1, 14)},
-            14: stage_14,
-            15: passthrough_stage,
-        }
-    )

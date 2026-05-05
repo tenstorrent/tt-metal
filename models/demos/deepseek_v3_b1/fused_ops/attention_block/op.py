@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     cb_descriptor_from_overlapped_tensors,
     record_cb_metadata,
 )
+from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_DIM
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args, _get_element_size_bytes
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_gather.op import AllGatherConfig
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
@@ -591,7 +592,7 @@ class AttentionBlock:
 
         # TP4 outer-dim: each device produces [1, per_device_out_w]
         num_sp = mesh_shape[0]
-        per_device_out_w = input_shape[1] // num_sp
+        per_device_out_w = ACTIVATION_DIM // num_sp
         per_device_out_tiles = per_device_out_w // tile_width
 
         # Full grid (union of all cores for semaphore allocation)
