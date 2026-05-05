@@ -30,6 +30,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Checkout tt-auto-triage tooling
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: fix/job-owner-representative-note
+          path: .temp_tt_auto_triage
+
       - name: Prepare minimal auto-triage files
         shell: bash
         run: |
@@ -54,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install requests
-          python3 .github/actions/auto-triage/auto_triage/download_slack_directory.py \
+          python3 .temp_tt_auto_triage/.github/actions/auto-triage/auto_triage/download_slack_directory.py \
             --output .auto_triage/auto_triage/data/slack_directory.json \
             --groups-output .auto_triage/auto_triage/data/slack_groups.json
 
