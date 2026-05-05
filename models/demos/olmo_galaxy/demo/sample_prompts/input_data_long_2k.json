@@ -1,0 +1,7 @@
+[
+  {
+    "prompt": "Please summarize what you just read in 3-4 sentences.",
+    "context": "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+    "max_length": 7000
+  }
+]

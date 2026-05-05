@@ -64,12 +64,12 @@ class TTSampling(LightweightModule):
         Changing this state between decode steps invalidates captured traces, so
         SamplingGenerator maintains separate trace slots keyed by force_argmax.
         """
-        return (
-            self._allow_force_argmax_sampling
-            and is_default_value(k, 1)
-            and is_default_value(p, 1.0)
-            and is_default_value(temp, 1.0)
-        )
+        # When k=1, the result is always the argmax token regardless of p and temp:
+        # only one candidate survives top-k, so top-p filtering and temperature scaling
+        # have nothing to act on. Strict checks on p/temp here block greedy paths whose
+        # callers pad unused batch slots with zeros (e.g. format_sampling_params for
+        # batch=1 with max_batch_size=32) — perf-sensitive path on Galaxy.
+        return self._allow_force_argmax_sampling and is_default_value(k, 1)
 
     def _select_topk_indices_dtype(self, per_device_vocab_size: int, multi_step_reduction: bool):
         # if vocab is larger than uint16 max, return uint32 for indices
@@ -400,7 +400,11 @@ class TTSampling(LightweightModule):
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
-                cluster_axis = 1
+                # Use sampling_all_gather_axis (defaults to 0) instead of hardcoding 1.
+                # OLMo Galaxy shards vocab across rows (axis=0); hardcoded axis=1 produces
+                # garbage tokens because the gather doesn't actually unify the vocab dim.
+                # Mirrors the non-argmax branch's sampling_cluster_axis logic below.
+                cluster_axis = None if 1 in self.cluster_shape else self.sampling_all_gather_axis
                 x = ttnn.experimental.all_gather_async(
                     x,
                     persistent_output_buffer=None,
