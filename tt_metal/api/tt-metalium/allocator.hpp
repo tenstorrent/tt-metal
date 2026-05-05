@@ -55,12 +55,6 @@ public:
     // Overrides the current state with the given state, deallocating all of existing buffers.
     void override_state(const AllocatorState& state);
 
-    // Merges the allocator states from the given source allocators into this allocator,
-    // replacing its current state. This is a convenience wrapper around extract_state(),
-    // AllocatorState::merge(), and override_state() that avoids exposing AllocatorState
-    // to callers.
-    void synchronize_state_from(const std::vector<Allocator*>& sources);
-
 private:
     AllocatorImpl* impl;
 };

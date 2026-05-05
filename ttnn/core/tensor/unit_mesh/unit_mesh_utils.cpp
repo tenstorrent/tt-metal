@@ -8,7 +8,7 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/allocator.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::experimental::unit_mesh {
@@ -27,7 +27,7 @@ void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::Mesh
         submesh_allocators.push_back(submesh_allocator);
     }
 
-    parent_allocator->synchronize_state_from(submesh_allocators);
+    tt::tt_metal::experimental::synchronize_allocator_state(parent_allocator, submesh_allocators);
 }
 
 }  // namespace
