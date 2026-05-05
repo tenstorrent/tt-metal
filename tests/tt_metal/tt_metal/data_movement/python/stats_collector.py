@@ -62,13 +62,8 @@ class StatsCollector:
                     dm_stats[risc]["analysis"]["stats"][core] = core_analysis[analysis_key]["stats"]
                     dm_stats[risc]["analysis"]["series"].extend(core_analysis[analysis_key]["series"])
 
-        # Gather test attributes
-        # Two views of attribute stamps:
-        #   - global: last-write-wins per (run_host_id, zone_name); stable for tests that
-        #     stamp the same value on every core.
-        #   - per-core: keyed by (run_host_id, core, zone_name); used when kernels stamp
-        #     role-specific values (e.g. matmul sender vs receiver). event[4] is the core
-        #     appended in tracy.process_device_log.core_to_device_timeseries.
+        # Gather test attributes. Two views: global (last-write-wins per zone_name) and
+        # per-core (keyed by core) for role-specific stamps like matmul sender vs receiver.
         for risc in dm_stats.keys():
             attributes = dm_stats[risc]["attributes"]
             attributes_per_core = dm_stats[risc]["attributes_per_core"]
@@ -171,14 +166,11 @@ class StatsCollector:
                 transaction_size = attributes.get("Transaction size in bytes", 0)
 
                 duration = entry["duration_cycles"]
-                # Effective bandwidth from global attrs — same formula on every core,
-                # represents "how fast did the multicast complete". Used for the aggregate
-                # (median) reported to performance_checker / plotter / stats_reporter.
+                # Effective (uniform) bandwidth — used as the aggregate median.
                 bandwidth = num_transactions * transaction_size / duration if duration else 0
 
-                # Per-core actual NOC bandwidth — uses the role-specific "Per-core bytes"
-                # stamp when available so the heatmap can show sender vs receiver asymmetry.
-                # Falls back to the effective bandwidth when no per-core stamp exists.
+                # Per-core NOC bandwidth from "Per-core bytes" stamp (heatmap shows
+                # sender/receiver asymmetry). Falls back to effective when not stamped.
                 core_attrs = attributes_per_core.get(run_host_id, {}).get(core, {})
                 per_core_bytes = core_attrs.get("Per-core bytes")
                 if per_core_bytes is not None and duration:
@@ -221,13 +213,9 @@ class StatsCollector:
                 wall_clock_time = max_end - min_start if max_end > min_start else float(np.max(durations))
                 transaction_size = attributes.get("Transaction size in bytes", 0)
                 num_transactions = attributes.get("Number of transactions", 1)
-                # Matmul-only override: when every core in the run stamped "Per-core bytes"
-                # (matmul multicast kernels), sum the per-core actual NOC bytes instead of
-                # using num_cores * transaction_size * num_transactions. The latter assumes
-                # every core multicasts every iteration, which over-counts by a factor of C
-                # for rotating-sender / fixed-sender multicast tests. Falls back to the
-                # original formula for every other test in the suite, including 1D in1
-                # (which doesn't stamp "Per-core bytes").
+                # If every core stamped "Per-core bytes" (matmul mcast kernels), sum the
+                # actual per-core NOC bytes; otherwise use the uniform formula (which
+                # over-counts by C for rotating/fixed-sender multicast tests).
                 run_per_core = attributes_per_core.get(run_host_id, {})
                 per_core_byte_values = [run_per_core.get(c, {}).get("Per-core bytes") for c in cores]
                 if cores and all(v is not None for v in per_core_byte_values):
@@ -246,8 +234,7 @@ class StatsCollector:
                     "bandwidth": agg_bandwidth,
                     "attributes": attributes,
                     "all_durations": durations,
-                    # Per-core values when "Per-core bytes" is stamped (e.g. matmul);
-                    # otherwise identical to the effective-bandwidth list.
+                    # Per-core when "Per-core bytes" is stamped, else effective.
                     "all_bandwidths": bandwidths_per_core,
                     "all_cores": cores,
                     "transaction_size": transaction_size,

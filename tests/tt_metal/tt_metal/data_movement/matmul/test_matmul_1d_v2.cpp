@@ -27,10 +27,8 @@ using MatmulTestConfig = unit_tests::dm::matmul::MatmulTestConfig;
 
 uint32_t runtime_host_id = 0;
 
-/// @brief 1D matmul data movement with K-loop rotating sender for in0.
-///        in0 K subblocks are distributed round-robin across columns.
-///        Each column takes turns multicasting its K subblock to all cores in the same row.
-///        in1 is read from DRAM (same as v1).
+/// @brief 1D matmul v2: in0 senders rotate round-robin across columns; in1 keeps the
+///        v1 row-0 fixed-sender DRAM-read path.
 bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device, const MatmulTestConfig& test_config) {
     IDevice* device = mesh_device->impl().get_device(0);
 
@@ -75,7 +73,6 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     CoreCoord matmul_physical_start_coord = device->worker_core_from_logical_core(test_config.start_logical_core);
     CoreCoord matmul_physical_end_coord = device->worker_core_from_logical_core(test_config.end_logical_core);
 
-    // Build per-column physical X coordinate array
     vector<uint32_t> col_phys_x(grid_cols);
     for (uint32_t c = 0; c < grid_cols; c++) {
         CoreCoord logical_col_core(test_config.start_logical_core.x + c, test_config.start_logical_core.y);
@@ -83,79 +80,56 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
         col_phys_x[c] = phys.x;
     }
 
-    // ---- Size calculations ----
     uint32_t K = test_config.num_subblocks_k_dim;
     uint32_t C = test_config.num_subblocks_c_dim;
     uint32_t R = test_config.num_subblocks_r_dim;
 
-    // Size of one K subblock for one row: subblock_r_dim * subblock_k_dim pages
     uint32_t k_subblock_size_bytes =
         test_config.subblock_r_dim * test_config.subblock_k_dim * test_config.page_size_bytes;
-
-    // Maximum K subblocks any column holds
     uint32_t max_k_per_col = (K + C - 1) / C;
     uint32_t max_source_data_bytes = max_k_per_col * k_subblock_size_bytes;
 
-    // in1 sizes (same as v1)
     uint32_t in1_pages = (test_config.num_subblocks_k_dim * test_config.subblock_k_dim) *
                          (test_config.num_subblocks_c_dim * test_config.subblock_c_dim);
     uint32_t in1_pages_bytes = in1_pages * test_config.page_size_bytes;
     uint32_t in1_per_core_read_size_bytes = in1_pages_bytes / test_config.num_subblocks_c_dim;
-
-    // in1 K subblock size: bytes the row-0 sender multicasts per K iteration down its column.
     uint32_t in1_k_subblock_size_bytes =
         test_config.subblock_k_dim * test_config.subblock_c_dim * test_config.page_size_bytes;
 
     uint32_t l1_base_address = unit_tests::dm::get_l1_address_and_size(mesh_device, matmul_cores_list[0]).base_address;
 
-    // ---- L1 Memory Layout ----
-    // l1_base_address:                              in0 source data (per-core K subblocks)
-    // l1_base_address + max_source_data + pad:      in0 multicast output (all K subblocks)
-    // aligned(output_end + pad):                    in1 source (row 0 only, full column from DRAM)
-    // in1_source_end + pad:                         in1 multicast output (all cores)
-    // after in1_mcast_out: barrier scratch
+    // L1 layout: in0 source -> in0 mcast out -> in1 source (64B-aligned) -> in1 mcast out -> barrier scratch.
     uint32_t in0_mcast_output_addr = l1_base_address + max_source_data_bytes + matmul::L1_DEBUG_PADDING_BYTES;
     uint32_t in0_output_total_bytes = K * k_subblock_size_bytes;
 
-    // in1_l1_source_addr: row-0 reads the full in1 column slice from DRAM here. Must be
-    // 64-byte aligned so the low bits match the DRAM source address.
     uint32_t in1_l1_source_addr_unaligned =
         in0_mcast_output_addr + in0_output_total_bytes + matmul::L1_DEBUG_PADDING_BYTES;
     uint32_t in1_l1_source_addr = (in1_l1_source_addr_unaligned + 63) & ~63U;
-
-    // in1_mcast_output_addr: where the column multicast deposits the full in1 column data
-    // for every core. This is what gets verified against the golden DRAM copy.
     uint32_t in1_mcast_output_addr = in1_l1_source_addr + in1_per_core_read_size_bytes + matmul::L1_DEBUG_PADDING_BYTES;
 
-    // ---- Generate in0 data ----
     uint32_t in0_pages = (R * test_config.subblock_r_dim) * (K * test_config.subblock_k_dim);
     uint32_t in0_pages_bytes = in0_pages * test_config.page_size_bytes;
     vector<uint32_t> in0_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, in0_pages_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
-    // Per-row data size in uint32_t elements
     uint32_t row_data_size_uint32 = in0_input.size() / R;
     uint32_t k_subblock_size_uint32 = k_subblock_size_bytes / sizeof(uint32_t);
 
-    // ---- Distribute in0 data round-robin across all cores ----
-    // Build golden data map: row_y -> full row data (for verification)
+    // Golden in0 row data, indexed by row's logical y.
     unordered_map<uint32_t, vector<uint32_t>> dim_r_to_in0_pages_map;
-
     for (uint32_t r = 0; r < R; r++) {
         vector<uint32_t> row_data(
             in0_input.begin() + r * row_data_size_uint32, in0_input.begin() + (r + 1) * row_data_size_uint32);
         dim_r_to_in0_pages_map[test_config.start_logical_core.y + r] = row_data;
     }
 
-    // Write per-core in0 source data: each core (c, r) gets K subblocks {c, c+C, c+2C, ...} for row r
+    // Each core (c, r) gets K subblocks {c, c+C, c+2C, ...} from row r.
     for (auto & core_idx : matmul_cores_list) {
         uint32_t col_idx = core_idx.x - test_config.start_logical_core.x;
         uint32_t row_idx = core_idx.y - test_config.start_logical_core.y;
 
         vector<uint32_t> core_in0_data;
         uint32_t row_base = row_idx * row_data_size_uint32;
-
-        // Round-robin distribute K subblocks for this row across columns
         for (uint32_t k = col_idx; k < K; k += C) {
             uint32_t k_offset = k * k_subblock_size_uint32;
             for (uint32_t e = 0; e < k_subblock_size_uint32; e++) {
@@ -168,7 +142,6 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
         }
     }
 
-    // ---- Generate and write in1 data (same as v1) ----
     vector<uint32_t> in1_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, in1_pages_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
@@ -183,18 +156,14 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
         in1_per_core_read_addr.push_back(input_dram_address + i * in1_per_core_read_size_bytes);
     }
 
-    // ---- Semaphores ----
-    // in0 multicast semaphores (same semantics as v1)
+    // in0 row-wise mcast (rotating sender) and in1 column-wise mcast (row 0 fixed sender).
     uint32_t sender_sem_id = CreateSemaphore(program, matmul_cores, 0);
     uint32_t sender_valid_sem_id = CreateSemaphore(program, matmul_cores, 1);
     uint32_t receiver_sem_id = CreateSemaphore(program, matmul_cores, 0);
-
-    // in1 multicast semaphores (column-wise on RISCV_1) — row 0 is the fixed sender.
     uint32_t risc1_sender_sem_id = CreateSemaphore(program, matmul_cores, 0);
     uint32_t risc1_sender_valid_sem_id = CreateSemaphore(program, matmul_cores, 1);
     uint32_t risc1_receiver_sem_id = CreateSemaphore(program, matmul_cores, 0);
 
-    // Barrier synchronization semaphores
     uint32_t risc0_barrier_sem_id = CreateSemaphore(program, matmul_cores, 0);
     uint32_t risc0_barrier_done_sem_id = CreateSemaphore(program, matmul_cores, 0);
     uint32_t risc1_barrier_sem_id = CreateSemaphore(program, matmul_cores, 0);
@@ -206,7 +175,6 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t risc0_local_barrier_addr = (in1_mcast_output_addr + in1_per_core_read_size_bytes + 15) & ~15U;
     uint32_t risc1_local_barrier_addr = risc0_local_barrier_addr + 16;
 
-    // ---- Compile-time args ----
     vector<uint32_t> risc0_compile_args = {
         test_config.test_id,                      // 0  Test ID
         (uint32_t)matmul_physical_start_coord.x,  // 1  Physical start x
@@ -232,7 +200,6 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
         risc1_receiver_sem_id,                    // 9  in1 receiver semaphore ID
     };
 
-    // ---- Kernels ----
     auto risc0_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/data_movement/matmul/kernels/in0_kernel_v2.cpp",
@@ -251,11 +218,9 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
             .noc = NOC::RISCV_1_default,
             .compile_args = risc1_compile_args});
 
-    // ---- Assign Runtime Args ----
     for (auto & i : matmul_cores_list) {
         uint32_t col_idx = i.x - test_config.start_logical_core.x;
 
-        // Count K subblocks this column sends
         uint32_t num_k_this_core = 0;
         for (uint32_t k = col_idx; k < K; k += C) {
             num_k_this_core++;
@@ -275,7 +240,6 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
             risc0_local_barrier_addr,              // 10 Local L1 scratch addr for barrier
             risc0_barrier_done_sem_id,             // 11 Barrier done semaphore ID
         };
-        // Append per-column physical X coordinates
         for (uint32_t c = 0; c < C; c++) {
             risc0_core_runtime_args.push_back(col_phys_x[c]);
         }
@@ -299,7 +263,6 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
         tt::tt_metal::SetRuntimeArgs(program, risc1_kernel, i, risc1_core_runtime_args);
     }
 
-    // ---- Launch ----
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, runtime_host_id);
     program.set_runtime_id(runtime_host_id++);
 
@@ -312,8 +275,7 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
-    // ---- Verify in0 multicast output ----
-    // After the K loop, each core should have all K subblocks for its row in order
+    // Each core should hold all K subblocks for its row, in order.
     for (auto & i : matmul_cores_list) {
         vector<uint32_t> in0_read_output;
         detail::ReadFromDeviceL1(
@@ -331,7 +293,6 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
         }
     }
 
-    // ---- Verify in1 DRAM read output (same as v1) ----
     vector<uint32_t> golden_in1_read_output;
     uint32_t total_in1_read_elements = in1_per_core_read_size_bytes / sizeof(uint32_t);
     for (auto & i : matmul_cores_list) {

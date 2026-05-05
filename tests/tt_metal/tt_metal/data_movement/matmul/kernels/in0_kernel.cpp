@@ -16,11 +16,10 @@ void kernel_main() {
     constexpr uint32_t sender_valid_sem_id = get_compile_time_arg_val(7);
     constexpr uint32_t receiver_sem_id = get_compile_time_arg_val(8);
 
-    uint32_t l1_base_address = get_arg_val<uint32_t>(0);        // sender: source of in0 data (all K subblocks)
-    uint32_t num_subblocks_k_dim = get_arg_val<uint32_t>(1);    // K iterations
-    uint32_t k_subblock_size_bytes = get_arg_val<uint32_t>(2);  // bytes per K subblock
-    uint32_t in0_mcast_output_addr = get_arg_val<uint32_t>(3);  // all cores: multicast dest base
-    // Barrier synchronization args
+    uint32_t l1_base_address = get_arg_val<uint32_t>(0);
+    uint32_t num_subblocks_k_dim = get_arg_val<uint32_t>(1);
+    uint32_t k_subblock_size_bytes = get_arg_val<uint32_t>(2);
+    uint32_t in0_mcast_output_addr = get_arg_val<uint32_t>(3);
     uint32_t barrier_sem_id = get_arg_val<uint32_t>(4);
     uint32_t barrier_coord_x = get_arg_val<uint32_t>(5);
     uint32_t barrier_coord_y = get_arg_val<uint32_t>(6);
@@ -35,14 +34,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sender_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_sem_addr);
     volatile tt_l1_ptr uint32_t* receiver_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_sem_addr);
 
-    // Column 0 is the fixed sender for every K iteration in v1.
     bool is_sender = (my_x[0] == physical_start_x);
 
-    // Multicast addresses for my row. The L1 destination is OR-ed in per-iteration so the
-    // same base can be reused across the K-loop with different output offsets.
     uint64_t row_mcast_base = get_noc_multicast_addr(physical_start_x, my_y[0], physical_end_x, my_y[0], 0);
-
-    // Address of the column-0 sender's sender_sem (used by receivers to signal readiness).
     uint64_t sender_sem_noc_addr = get_noc_addr(physical_start_x, my_y[0], sender_sem_addr);
 
     barrier_sync(
@@ -64,10 +58,8 @@ void kernel_main() {
             uint32_t output_addr = in0_mcast_output_addr + k * k_subblock_size_bytes;
 
             if (is_sender) {
-                // Source advances through the K subblocks held contiguously at l1_base_address.
                 uint32_t src_addr = l1_base_address + k * k_subblock_size_bytes;
 
-                // Wait for all C-1 receivers in the row to signal readiness for this iteration.
                 noc_semaphore_wait(sender_sem_ptr, num_cores_c_dim - 1);
                 noc_semaphore_set(sender_sem_ptr, 0);
 
@@ -80,18 +72,16 @@ void kernel_main() {
                     noc_semaphore_set_multicast_loopback_src(
                         sender_valid_sem_addr, dst_receiver_sem_mcast_addr, num_cores_c_dim, false);
                 } else {
-                    // Single column (C=1): unicast self-write (HW limitation with single-core multicast loopback).
+                    // C=1: unicast self-write (HW limit on single-core multicast loopback).
                     uint64_t local_dest_addr = get_noc_addr(my_x[0], my_y[0], output_addr);
                     noc_async_write(src_addr, local_dest_addr, k_subblock_size_bytes);
                     noc_async_write_barrier();
                     noc_semaphore_set(receiver_sem_ptr, 1);
                 }
             } else {
-                // RECEIVER: signal readiness to the column-0 sender.
                 noc_semaphore_inc(sender_sem_noc_addr, 1);
             }
 
-            // All cores wait for data arrival, then reset for next iteration.
             noc_semaphore_wait(receiver_sem_ptr, 1);
             noc_semaphore_set(receiver_sem_ptr, 0);
         }
@@ -100,9 +90,7 @@ void kernel_main() {
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("Number of transactions", num_subblocks_k_dim);
     DeviceTimestampedData("Transaction size in bytes", k_subblock_size_bytes);
-    // Per-core actual NOC bytes pushed by this core's RISCV_0 across the K-loop.
-    // Sender (col 0) multicasts k_subblock_size_bytes K times; receivers issue K
-    // semaphore incs (one atomic op flit each).
+    // TX-only: sender K * k_subblock_size_bytes; receiver K * 16 (one atomic flit each).
     constexpr uint32_t SEM_INC_BYTES = 16;
     uint32_t per_core_bytes =
         is_sender ? (num_subblocks_k_dim * k_subblock_size_bytes) : (num_subblocks_k_dim * SEM_INC_BYTES);

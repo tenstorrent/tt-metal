@@ -14,8 +14,7 @@ namespace tt::tt_metal::unit_tests::dm::matmul {
 
 constexpr uint32_t L1_DEBUG_PADDING_BYTES = 0x10;
 
-// Per-variant test_id offsets. Each matmul variant shares the same MatmulTestConfig list,
-// so we offset the test_id per variant to keep profiler results (CSVs/plots) separate.
+// Per-variant test_id offsets keep profiler results (CSVs/plots) separate across variants.
 constexpr uint32_t MATMUL_1D_TEST_ID_OFFSET = 0;
 constexpr uint32_t MATMUL_1D_V2_TEST_ID_OFFSET = 100;
 constexpr uint32_t MATMUL_2D_TEST_ID_OFFSET = 200;
@@ -43,7 +42,6 @@ struct MatmulTestConfig {
 };
 
 // Hardcoded test configurations shared by all matmul test variants.
-// Each config is an explicit, representative test point.
 inline std::vector<MatmulTestConfig> get_matmul_test_configs() {
     std::vector<MatmulTestConfig> configs = {
         // ---- Grid shape tests ----
@@ -194,12 +192,6 @@ inline std::vector<MatmulTestConfig> get_matmul_test_configs() {
          .subblock_r_dim_sweep = {1u, 2u, 4u, 8u, 16u},
          .subblock_c_dim_sweep = {1u, 2u, 4u, 8u, 16u}},
 
-        // ID 1031: 8-wide grid version of 1030. Same K=8 + (sub_r, sub_c) Cartesian sweep.
-        // R=7 (not 8) so this fits Wormhole B0 with typical Tensix harvesting (8 cols x
-        // 7 rows usable). 56 cores total. Per-core L1 footprint is independent of R/C in
-        // the 1D path since in0_per_core = K * sub_r * P and in1_per_core = K * sub_c * P,
-        // so the same {1,2,4,8,16} sweep range that fits 1030 also fits 1031. Worst
-        // corner stays at ~1 MiB per col-0 row-0 core.
         {.test_id = 1031,
          .num_subblocks_r_dim = 7,
          .num_subblocks_c_dim = 8,
@@ -212,7 +204,6 @@ inline std::vector<MatmulTestConfig> get_matmul_test_configs() {
     return configs;
 }
 
-// sweep in1 and keep in0 constant for new test
 struct MatmulTestNameGenerator {
     std::string operator()(const ::testing::TestParamInfo<MatmulTestConfig>& info) const {
         const auto& c = info.param;
