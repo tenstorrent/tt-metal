@@ -14,6 +14,7 @@ Run with:
     pytest models/tt_dit/tests/unit/test_fast_device_to_host.py -k "bh_4x32" --timeout=300
 """
 
+import math
 import time
 
 import pytest
@@ -216,3 +217,160 @@ class TestFastDeviceToHost:
             print(f"  Iterations:    {n_iters}")
             print(f"  Average time:  {avg_s * 1000:.1f} ms")
             print(f"  Throughput:    {throughput_gbs:.2f} GB/s")
+
+
+# ---------------------------------------------------------------------------
+# TestD2HLayoutPerformance
+# ---------------------------------------------------------------------------
+
+# Dimension-ordering configs: perm applied to (C=0, T=1, H=2, W=3) dims,
+# followed by the resulting positions of H and W in the permuted tensor.
+_DIM_ORDER_CONFIGS: dict[str, tuple[tuple[int, ...], int, int]] = {
+    #        perm from (C,T,H,W)   h_pos  w_pos
+    "CTHW": ((0, 1, 2, 3),         2,     3),
+    "THWC": ((1, 2, 3, 0),         1,     2),
+    "CHWT": ((0, 2, 3, 1),         1,     2),
+}
+
+# (label, C, H, W); T=81 frames is fixed
+_D2H_SHAPES = [
+    ("720p_3c", 3, 720, 1280),   # full RGB 720p
+    ("480p_3c", 3, 480,  832),   # full RGB 480p
+    ("720p_1c", 1, 720, 1280),   # Y channel 720p
+    ("480p_1c", 1, 480,  832),   # Y channel 480p
+    ("360p_1c", 1, 360,  640),   # UV pooled 720p (H//2, W//2)
+    ("240p_1c", 1, 240,  416),   # UV pooled 480p
+]
+
+_D2H_T       = 81   # frames
+_D2H_TP_SIZE = 4    # mesh axis-0 devices (height sharding)
+_D2H_SP_SIZE = 8    # mesh axis-1 devices (width sharding)
+_BF16_BYTES  = 2    # bytes per bfloat16 element
+
+
+def _d2h_shard_shape(
+    C: int, H: int, W: int,
+    perm: tuple[int, ...],
+    h_dim: int,
+    w_dim: int,
+) -> tuple[int, ...]:
+    """Per-device logical shard shape after permuting (C,T,H,W) and splitting H/W."""
+    base = [C, _D2H_T, H, W]
+    shape = [base[i] for i in perm]
+    shape[h_dim] //= _D2H_TP_SIZE
+    shape[w_dim] //= _D2H_SP_SIZE
+    return tuple(shape)
+
+
+def _d2h_alloc_bytes(shard_shape: tuple[int, ...], layout: ttnn.Layout) -> int:
+    """Estimated bytes allocated per device, including padding.
+
+    TILE: last two dims rounded up to multiples of 32 (one 32×32 bfloat16 tile = 2 048 B).
+    ROW_MAJOR: no tile padding; reports exact logical size.
+    """
+    s = list(shard_shape)
+    if layout == ttnn.TILE_LAYOUT:
+        s[-2] = math.ceil(s[-2] / 32) * 32
+        s[-1] = math.ceil(s[-1] / 32) * 32
+    return math.prod(s) * _BF16_BYTES
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [[(4, 8), line_params]],
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("dim_order_name", list(_DIM_ORDER_CONFIGS.keys()))
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    ids=["row_major", "tile"],
+)
+@pytest.mark.parametrize(
+    "shape_name, channels, height, width",
+    _D2H_SHAPES,
+    ids=[s[0] for s in _D2H_SHAPES],
+)
+class TestD2HLayoutPerformance:
+    """Sweep dim-ordering × layout × shape to measure raw device-to-host bandwidth.
+
+    Each parametrized case:
+      - Shards a (C, T, H, W) bfloat16 tensor onto a 4×8 mesh
+        (H split over axis-0, W split over axis-1).
+      - Warms up, then times 10 iterations of:
+            tt_tensor.cpu(blocking=False)
+            ttnn.synchronize_device(mesh_device)
+      - Prints per-device allocated size (with tile padding where applicable)
+        and average transfer time.
+
+    Run with:
+        pytest models/tt_dit/tests/unit/test_fast_device_to_host.py \\
+            -k "TestD2HLayoutPerformance" --timeout=600 -s
+    """
+
+    def test_transfer_speed(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        device_params,
+        dim_order_name: str,
+        layout: ttnn.Layout,
+        shape_name: str,
+        channels: int,
+        height: int,
+        width: int,
+    ):
+        perm, h_dim, w_dim = _DIM_ORDER_CONFIGS[dim_order_name]
+
+        # Build host tensor in the chosen dim order
+        gen = torch.Generator().manual_seed(42)
+        host = torch.randn(channels, _D2H_T, height, width, generator=gen, dtype=torch.bfloat16)
+        host = host.permute(perm).contiguous()
+
+        # Shard onto device
+        tt_tensor = typed_tensor_2dshard(
+            host,
+            mesh_device,
+            shard_mapping={TP_AXIS: h_dim, SP_AXIS: w_dim},
+            layout=layout,
+            dtype=ttnn.bfloat16,
+        )
+
+        # ---- size reporting ----
+        shard = _d2h_shard_shape(channels, height, width, perm, h_dim, w_dim)
+        logical_per_dev  = math.prod(shard) * _BF16_BYTES
+        alloc_per_dev    = _d2h_alloc_bytes(shard, layout)
+        total_alloc      = alloc_per_dev * _D2H_TP_SIZE * _D2H_SP_SIZE
+        logical_total    = channels * _D2H_T * height * width * _BF16_BYTES
+        padding_overhead = (alloc_per_dev / logical_per_dev - 1.0) * 100.0
+
+        # ---- warmup ----
+        tt_tensor.cpu(blocking=False)
+        ttnn.synchronize_device(mesh_device)
+
+        # ---- timed loop ----
+        n_iters = 10
+        start = time.perf_counter()
+        for _ in range(n_iters):
+            tt_tensor.cpu(blocking=False)
+            ttnn.synchronize_device(mesh_device)
+        elapsed_s = time.perf_counter() - start
+
+        avg_ms = elapsed_s / n_iters * 1_000
+        throughput_gbs = (logical_total / (elapsed_s / n_iters)) / 1e9
+
+        rank = int(ttnn.distributed_context_get_rank()) if ttnn.using_distributed_env() else 0
+        if rank == 0:
+            layout_str = "tile" if layout == ttnn.TILE_LAYOUT else "row_major"
+            pad_str = f" (+{padding_overhead:.0f}% tile padding)" if layout == ttnn.TILE_LAYOUT else ""
+            print(
+                f"\n--- D2H layout sweep: {dim_order_name} | {layout_str} | {shape_name} ---\n"
+                f"  Full tensor:       (C={channels}, T={_D2H_T}, H={height}, W={width})\n"
+                f"  Per-device shard:  {shard}\n"
+                f"  Per-device alloc:  {alloc_per_dev / 1e6:.2f} MB{pad_str}\n"
+                f"  Total on-device:   {total_alloc / 1e6:.2f} MB "
+                f"({_D2H_TP_SIZE * _D2H_SP_SIZE} devices)\n"
+                f"  Logical total:     {logical_total / 1e6:.2f} MB\n"
+                f"  Avg D2H time:      {avg_ms:.1f} ms\n"
+                f"  Throughput:        {throughput_gbs:.2f} GB/s (logical bytes)"
+            )
