@@ -12,6 +12,8 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -57,7 +59,20 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] inner dim must equal grouped's hidden_dim.");
     }
 
-    auto offsets_host = offsets.to_vector<uint32_t>();
+    // offsets is replicated across the mesh — concatenate across dim 0
+    // (one shard per chip) and take the first chip's slice so the host
+    // vector has size E_local+1, not num_devices*(E_local+1).
+    std::vector<uint32_t> offsets_host;
+    if (offsets.device() != nullptr) {
+        auto* mesh_device = offsets.device();
+        const std::size_t num_devices = mesh_device->num_devices();
+        auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, /*dim=*/0);
+        const auto [data, shape] = composer->compose<uint32_t>(offsets);
+        const std::size_t per_chip = data.size() / num_devices;
+        offsets_host.assign(data.begin(), data.begin() + per_chip);
+    } else {
+        offsets_host = offsets.to_vector<uint32_t>();
+    }
     if (offsets_host.size() != num_experts + 1U) {
         throw std::runtime_error("moe_ffn_swiglu_fw: offsets size must be num_experts + 1.");
     }

@@ -56,6 +56,11 @@ class DeepSeekConfig:
     rope_theta: float = 10000.0
     # Execution
     runner_type: RunnerType = RunnerType.Default
+    # MoE tensor parallelism. If set and the active mesh has an axis
+    # with this name (size > 1), MoE blocks use SparseMoETP — every
+    # chip in that axis holds all routed experts with each expert's
+    # intermediate dim sharded across the axis. Set to None to disable.
+    moe_tp_axis_name: str | None = None
 
 
 class DeepSeek(AbstractModuleBase):

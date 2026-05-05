@@ -56,7 +56,7 @@ from ttml.models.qwen3 import (
 )
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, summary
-from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
+from ttml.common.config import DeviceConfig, load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 from ttml.common.profiler_utils import profiler_marker
 
@@ -194,6 +194,9 @@ class ModelConfig:
     # Qwen3-specific fields
     head_dim: Optional[int] = None  # Explicit head_dim (can differ from embedding_dim / num_heads)
     attention_bias: bool = False
+    # MoE TP: name of the mesh axis to shard expert intermediate dim on.
+    # None / "" disables MoE TP (single-device SparseMoE).
+    moe_tp_axis_name: Optional[str] = None
 
 
 class LossAverageMeter:
@@ -362,19 +365,26 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
 
 
 def get_loss_value(loss: ttml.autograd.Tensor) -> float:
-    """Extract loss value from tensor without using NumPy.
+    """Extract a scalar loss value (first device's replica on a mesh).
 
-    Uses ttnn.Tensor.item() which directly extracts scalar via to_vector<T>() without NumPy conversion.
-
-    Args:
-        loss: Loss tensor from cross_entropy_loss (should already be reduced to scalar)
-
-    Returns:
-        Loss value as float
+    On a multi-device mesh the loss tensor is replicated across all
+    chips (model is fully replicated, no DDP gradient sync wired in
+    this script). All chips compute identical losses, so we just read
+    chip 0's value to avoid duplicate prints / mean over identical
+    copies.
     """
-    # Extract scalar value directly using ttnn.Tensor.item() - avoids NumPy conversion
-    # This uses to_vector<T>() internally which is more efficient than to_numpy()
-    return float(loss.get_value().item())
+    val = loss.get_value()
+    mesh = ttml.maybe_mesh()
+    if mesh is None or mesh.num_devices() == 1:
+        return float(val.item())
+    # Multi-device: gather to host as a stack of per-device tensors
+    # and take the first replica.
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(
+        ttml.autograd.AutoContext.get_instance().get_device(), 0
+    )
+    arr = loss.to_numpy(composer=composer)
+    flat = arr.reshape(mesh.num_devices(), -1)
+    return float(flat[0].mean())
 
 
 def train_step(
@@ -897,6 +907,7 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
             max_seq_len=model_config.max_sequence_length,
             rope_theta=model_config.theta,
             runner_type=model_config.runner_type,
+            moe_tp_axis_name=model_config.moe_tp_axis_name or None,
         )
         return DeepSeek(deepseek_config)
     elif model_config.model_type == "qwen3":
@@ -1213,7 +1224,6 @@ def main():
             "step thereafter. Columns: step,layer,expert,prob."
         ),
     )
-
     args = parser.parse_args()
 
     print("=" * 70)
@@ -1275,8 +1285,23 @@ def main():
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
 
-    # Initialize device early (needed for both training and inference)
-    ttml.autograd.AutoContext.get_instance().open_device()
+    # Initialize device / mesh from device_config in the YAML.
+    device_config = DeviceConfig(yaml_config)
+    shape = tuple(device_config.mesh_shape)
+    moe_tp_axis = device_config.moe_tp_axis
+    if moe_tp_axis != -1 and not (0 <= moe_tp_axis < len(shape)):
+        raise ValueError(
+            f"device_config.moe_tp_axis ({moe_tp_axis}) is out of range for " f"mesh_shape of length {len(shape)}"
+        )
+    if shape == (1, 1) and moe_tp_axis == -1:
+        # Single-device fast path — skip the mesh-with-named-axes ceremony.
+        ttml.autograd.AutoContext.get_instance().open_device()
+    else:
+        axis_names = [f"_{i}" for i in range(len(shape))]
+        if moe_tp_axis != -1:
+            axis_names[moe_tp_axis] = "moe_tp"
+            model_config.moe_tp_axis_name = "moe_tp"
+        ttml.open_device_mesh(ttml.Mesh(shape, tuple(axis_names)))
     ttml.autograd.AutoContext.get_instance().get_device()
 
     # Start memory tracking if enabled

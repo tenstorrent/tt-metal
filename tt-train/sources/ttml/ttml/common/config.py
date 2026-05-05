@@ -28,6 +28,11 @@ class DeviceConfig:
         self.device_ids = device_config.get("device_ids", None)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
+        # MoE tensor-parallel axis index in `mesh_shape`. -1 (default)
+        # disables MoE TP; 0/1/... selects which mesh axis to shard the
+        # MoE expert intermediate dim on. The axis is registered on the
+        # mesh under the name "moe_tp".
+        self.moe_tp_axis = int(device_config.get("moe_tp_axis", -1))
 
         # Based on current configs, DDP and TP cannot be both enabled
         assert not (self.enable_ddp and self.enable_tp), "DDP and TP cannot be both enabled."

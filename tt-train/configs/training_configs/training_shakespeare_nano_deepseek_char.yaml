@@ -2,7 +2,7 @@ training_config:
   project_name: "tt_train_nano_deepseek"
   seed: 5489
   model_save_interval: 500
-  batch_size: 32
+  batch_size: 1
   num_epochs: 1
   max_steps: 5000
   use_clip_grad_norm: true
@@ -11,7 +11,7 @@ training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/moe/nano_deepseek_char.yaml"
   optimizer:
     type: AdamWFullPrecision
-    lr: 0.0003
+    lr: 0.00003
     beta1: 0.9
     beta2: 0.999
     epsilon: 1.0e-8
@@ -19,8 +19,11 @@ training_config:
     amsgrad: false
 
 device_config:
-  enable_ddp: false
-  mesh_shape: [1,1]
+  enable_ddp: false       # leave off — DDP isn't actually wired in train_nanogpt
+  mesh_shape: [8, 4]
+  moe_tp_axis: 1          # axis 1 has size 4 → I/D = 256/4 = 64 ✓
+  # do NOT set moe_ep_axi
+
 
 eval_config:
   repetition_penalty: 1.0

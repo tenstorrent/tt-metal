@@ -2,7 +2,7 @@ training_config:
   project_name: "tt_train_tiny_deepseek"
   seed: 5489
   model_save_interval: 500
-  batch_size: 4
+  batch_size: 1
   num_epochs: 1
   max_steps: 5000
   use_clip_grad_norm: true
@@ -19,8 +19,12 @@ training_config:
     amsgrad: false
 
 device_config:
-  enable_ddp: false
-  mesh_shape: [1,1]
+  enable_ddp: true
+  mesh_shape: [8,4]
+  # Shard MoE expert intermediate dim across mesh axis 1 (the 32-chip axis).
+  # MoE blocks use SparseMoETP; w_gate / w_up are column-parallel and
+  # w_down is row-parallel, with a final all_reduce on the output.
+  moe_tp_axis: 1
 
 eval_config:
   repetition_penalty: 1.0
