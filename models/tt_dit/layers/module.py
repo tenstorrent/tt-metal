@@ -4,10 +4,12 @@
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
 
+from loguru import logger
 from typing_extensions import deprecated
 
 import ttnn
@@ -178,6 +180,11 @@ class Module(ABC):
     def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
         directory = Path(directory)
 
+        prefetch_threads = int(os.environ.get("TT_DIT_PREFETCH_THREADS", "0"))
+        if prefix == "" and prefetch_threads > 0:
+            self._load_prefetched(directory, num_threads=prefetch_threads)
+            return
+
         self.evict_coresident_exclusions()
 
         for name, child in self.named_children():
@@ -192,6 +199,74 @@ class Module(ABC):
                 raise LoadingError(msg) from err
 
         self._is_loaded = True
+
+    def _collect_all_load_items(self, directory: Path, prefix: str = "") -> list[tuple[Parameter, Path]]:
+        """Flatten module tree into a list of (Parameter, file_path) pairs."""
+        items: list[tuple[Parameter, Path]] = []
+        for name, child in self.named_children():
+            items.extend(child._collect_all_load_items(directory, prefix=f"{prefix}{name}."))
+        for name, parameter in self.named_parameters():
+            items.append((parameter, directory / f"{prefix}{name}.tensorbin"))
+        return items
+
+    def _evict_all_exclusions(self) -> None:
+        """Evict coresident exclusions for this module and all descendants."""
+        self.evict_coresident_exclusions()
+        for _, child in self.named_children():
+            child._evict_all_exclusions()
+
+    def _mark_all_loaded(self) -> None:
+        """Mark this module and all descendants as loaded."""
+        for _, child in self.named_children():
+            child._mark_all_loaded()
+        self._is_loaded = True
+
+    def _load_prefetched(self, directory: Path, num_threads: int) -> None:
+        """Load all parameters using threaded file I/O.
+
+        Phase 1: Read all .tensorbin files from disk in parallel threads (NFS I/O).
+        Phase 2: Place tensors on device sequentially (PCIe transfer).
+
+        Controlled by the TT_DIT_PREFETCH_THREADS environment variable.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        self._evict_all_exclusions()
+        items = self._collect_all_load_items(directory)
+
+        logger.info(f"Prefetch loading {len(items)} parameters with {num_threads} threads")
+
+        # Phase 1: Prefetch all files to host memory in parallel.
+        host_tensors: dict[int, ttnn.Tensor] = {}
+
+        def prefetch(idx: int, path: Path) -> tuple[int, ttnn.Tensor]:
+            return idx, ttnn.load_tensor(str(path), device=None)
+
+        with ThreadPoolExecutor(max_workers=num_threads) as pool:
+            futures = {pool.submit(prefetch, i, path): (i, path) for i, (_, path) in enumerate(items)}
+            for future in as_completed(futures):
+                idx, path = futures[future]
+                try:
+                    _, host_tensor = future.result()
+                    host_tensors[idx] = host_tensor
+                except Exception as err:
+                    raise LoadingError(f"prefetch failed for '{path}'") from err
+
+        logger.info("Prefetch complete, transferring to device")
+
+        # Phase 2: Transfer to device sequentially (preserves device command ordering).
+        for i, (parameter, path) in enumerate(items):
+            host_tensor = host_tensors[i]
+            try:
+                if parameter.on_host:
+                    parameter.data = host_tensor
+                else:
+                    device_tensor = ttnn.to_device(host_tensor, parameter.device, memory_config=parameter.memory_config)
+                    parameter.data = device_tensor
+            except Exception as err:
+                raise LoadingError(f"device transfer failed for '{path}'") from err
+
+        self._mark_all_loaded()
 
     def deallocate_weights(self) -> None:
         """Deallocate all parameter weights from device memory recursively."""
