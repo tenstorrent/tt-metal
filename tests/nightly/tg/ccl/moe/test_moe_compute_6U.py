@@ -2699,8 +2699,8 @@ def test_moe_compute_mistral_large_3(
 
 # Test for Gemma 4 26B configuration
 @pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-    reason=f"Gemma 4 26B test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+    reason=f"Gemma 4 26B test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -2714,7 +2714,7 @@ def test_moe_compute_mistral_large_3(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
@@ -2770,8 +2770,8 @@ def test_moe_compute_gemma_4_26b(
 
 # Test for DS-OCR configuration
 @pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-    reason=f"DS-OCR test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+    reason=f"DS-OCR test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -2785,7 +2785,7 @@ def test_moe_compute_gemma_4_26b(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize("test_mode", ["correctness"])
 @pytest.mark.parametrize("has_bias", [False])
