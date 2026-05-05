@@ -1,6 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Pixtral transformer PCC vs HF. Requires HF_MODEL (e.g. mistralai/Mistral-Small-3.1-24B-Instruct-2503
+or mistralai/Mistral-Small-4-119B-2603), TT_CACHE_PATH, and a device mesh (optional: MESH_DEVICE=P150x8 on LoudBox).
+
+For Mistral3 FP8 hubs, ModelArgs falls back to a vision+MMP safetensors slice if full from_pretrained conversion fails.
+"""
+
 import os
 
 import pytest
@@ -21,7 +28,7 @@ from models.tt_transformers.tt.multimodal.mistral_24b.vision_pixtral_transformer
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],

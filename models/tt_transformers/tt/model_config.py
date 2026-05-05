@@ -38,6 +38,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_meta_to_hf_no_qkv_permute,
     convert_vision_hf_to_meta,
     convert_vision_hf_to_meta_no_qkv_permute,
+    load_hf_state_dict_filtered,
     reverse_permute,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
@@ -583,6 +584,10 @@ class ModelArgs:
 
         # Load model params
         if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
+            self.trust_remote_code_hf = True
+        # Mistral3 / Small-4 checkpoints often ship with custom HF modeling code
+        ck = self.CKPT_DIR.lower()
+        if "mistral-small-4" in ck or "119b-2603" in ck or "mistral3" in ck:
             self.trust_remote_code_hf = True
 
         self._set_hf_params(self.CKPT_DIR)
@@ -2842,7 +2847,8 @@ class ModelArgs:
             merged_text_config = merge_text_config(config)
             self._set_params_from_dict(merged_text_config)
 
-            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            # Raw vision_config (avoid merge_vision_config swallowing nested Pixtral keys)
+            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name or config.get("model_type") == "mistral3":
                 self._set_vision_params(config["vision_config"])
             else:
                 if "vision_config" in config:
@@ -2852,6 +2858,10 @@ class ModelArgs:
             self.is_multimodal = "vision_config" in config or self.is_vision()
         else:
             self._set_params_from_dict(config)
+
+        self._is_mistral3_style_pixtral = getattr(self.hf_config, "model_type", None) == "mistral3" or (
+            "Mistral-Small-3.1-24B" in self.model_name
+        )
 
         # compatibility with _set_params
         if "llama" in self.model_name.lower():
@@ -2913,8 +2923,14 @@ class ModelArgs:
             and (
                 (self.CKPT_DIR is not None and "vision" in self.CKPT_DIR.lower())
                 or "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name
+                or getattr(self, "_is_mistral3_style_pixtral", False)
             )
         )
+
+    @property
+    def is_mistral3_style_pixtral(self):
+        """HF Mistral3 / Pixtral vision tower (e.g. Mistral-Small-3.1-24B, Mistral-Small-4-119B)."""
+        return getattr(self, "_is_mistral3_style_pixtral", False)
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         # Llama vision models use "text_model." prefix for text keys
@@ -2964,16 +2980,79 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+        # AutoModelForVision2Seq exists only in newer transformers; Mistral3 maps via ImageTextToText.
+        try:
+            from transformers import AutoModelForVision2Seq
+        except ImportError:
+            AutoModelForVision2Seq = None  # type: ignore[misc, assignment]
+
+        candidates = []
+        if AutoModelForVision2Seq is not None:
+            candidates.append(AutoModelForVision2Seq)
+        candidates.append(AutoModelForImageTextToText)
+
+        for model_cls in candidates:
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
 
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+
+    def _load_mistral3_vision_only_raw_hf_state_dict(self) -> dict:
+        """Raw safetensors slice for Pixtral + MMP (hub may use model.* or top-level vision_tower.* / multi_modal_projector.*)."""
+        if getattr(self, "_mistral3_vision_raw_hf_sd", None) is not None:
+            return self._mistral3_vision_raw_hf_sd
+
+        prefixes = (
+            "model.vision_tower.",
+            "model.multi_modal_projector.",
+            "vision_tower.",
+            "multi_modal_projector.",
+        )
+        raw = load_hf_state_dict_filtered(
+            self.CKPT_DIR,
+            prefixes,
+            local_files_only=os.getenv("CI") == "true",
+        )
+        if not raw:
+            raise RuntimeError(
+                "Vision-only safetensors load found no tensors; check checkpoint layout and HF cache "
+                f"(tried prefixes: {prefixes})."
+            )
+        self._mistral3_vision_raw_hf_sd = raw
+        return raw
+
+    def _mistral3_outer_state_dict_keys_for_hf(self, raw_hf: dict) -> dict:
+        """Mistral3ForConditionalGeneration parameters live under ``model.*``; shard keys may omit ``model.``."""
+        out = {}
+        for k, v in raw_hf.items():
+            if k.startswith("model."):
+                out[k] = v
+            else:
+                out["model." + k] = v
+        return out
+
+    def _mistral3_hf_shell_with_vision_weights(self, model_cls):
+        """HF module tree from config + real vision/MMP weights (same key names as from_pretrained)."""
+        from transformers.initialization import no_init_weights
+
+        raw_hf = self._load_mistral3_vision_only_raw_hf_state_dict()
+        to_load = self._mistral3_outer_state_dict_keys_for_hf(raw_hf)
+        # Full Mistral4 MoE init_weights() fills every expert via normal_() — minutes+ and pytest-timeout.
+        # Vision PCC only needs vision_tower + multi_modal_projector; LM stays empty until load_state_dict.
+        with no_init_weights():
+            try:
+                model = model_cls.from_config(self.hf_config, trust_remote_code=self.trust_remote_code_hf)
+            except TypeError:
+                model = model_cls.from_config(self.hf_config)
+        model.load_state_dict(to_load, strict=False)
+        if hasattr(model, "tie_weights"):
+            model.tie_weights(recompute_mapping=False)
+        return model
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
@@ -3022,19 +3101,47 @@ class ModelArgs:
         else:
             # Always HuggingFace since we only support HF_MODEL now
             model_cls = self.get_hf_model_cls()
-            model = model_cls.from_pretrained(
-                self.CKPT_DIR,
-                torch_dtype="auto",
-                trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
-            )
+            mistral3_vision_fallback = False
+            try:
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true"
+                    # Note that the default setting is torch.dtype.float32, but model weights are
+                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                    # unnecessary cast.
+                )
+            except RuntimeError as e:
+                err = str(e)
+                if (
+                    self.is_multimodal
+                    and getattr(self, "_is_mistral3_style_pixtral", False)
+                    and (
+                        "automatic conversion" in err
+                        or "CONVERSION" in err
+                        or "Fp8Dequantize" in err
+                        or "finegrained_fp8" in err.lower()
+                        or "Error(s) in loading state_dict" in err
+                    )
+                ):
+                    logger.warning(
+                        "from_pretrained failed (quant conversion / state_dict); "
+                        "loading Pixtral + multi_modal_projector via safetensors only (first 500 chars): {}",
+                        err[:500],
+                    )
+                    model = self._mistral3_hf_shell_with_vision_weights(model_cls)
+                    mistral3_vision_fallback = True
+                else:
+                    raise
             if self.cache_hf_flag:
                 self.cached_hf_model = model
-            state_dict = model.state_dict()
-            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
+            if mistral3_vision_fallback:
+                state_dict = self._load_mistral3_vision_only_raw_hf_state_dict()
+                self.is_mixture_of_experts = False
+            else:
+                state_dict = model.state_dict()
+                self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
@@ -3509,6 +3616,8 @@ class ModelArgs:
                     fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
                 elif "mistral" in model_name_lower and "7b" in model_name_lower:
                     fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
+                elif "mistral" in model_name_lower and "small" in model_name_lower and "119b" in model_name_lower:
+                    fallback_tokenizer_path = "mistralai/Mistral-Small-4-119B-2603"
                 elif "mistral" in model_name_lower and "small" in model_name_lower and "24b" in model_name_lower:
                     fallback_tokenizer_path = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
                 elif "phi-3-mini" in model_name_lower and "128k" in model_name_lower and "instruct" in model_name_lower:
@@ -3664,16 +3773,21 @@ class ModelArgs:
         else:
             return model
 
+    def _get_multi_modal_projector(self, model):
+        if hasattr(model, "multi_modal_projector"):
+            return model.multi_modal_projector
+        return model.model.multi_modal_projector
+
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector
+        layer = self._get_multi_modal_projector(model)
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_rms_norm(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector.mm_soft_emb_norm
+        layer = self._get_multi_modal_projector(model).mm_soft_emb_norm
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3721,9 +3835,30 @@ class ModelArgs:
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             if self.cached_hf_model is None:
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
-                )
+                try:
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
+                    )
+                except RuntimeError as e:
+                    err = str(e)
+                    if (
+                        self.is_multimodal
+                        and getattr(self, "_is_mistral3_style_pixtral", False)
+                        and (
+                            "automatic conversion" in err
+                            or "CONVERSION" in err
+                            or "Fp8Dequantize" in err
+                            or "finegrained_fp8" in err.lower()
+                            or "Error(s) in loading state_dict" in err
+                        )
+                    ):
+                        logger.warning(
+                            "reference_vision_transformer: from_pretrained failed; using vision-only shell: {}",
+                            err[:400],
+                        )
+                        model = self._mistral3_hf_shell_with_vision_weights(model_cls)
+                    else:
+                        raise
                 self.cached_hf_model = model
             else:
                 model = self.cached_hf_model
@@ -3747,11 +3882,11 @@ class ModelArgs:
 
     def reference_vision_model(self):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            # Mistral-Small-3.1-24B-Instruct-2503 has a different structure
-            layer = model.vision_tower
+        vision_tower = self._get_vision_tower(model)
+        if self.is_mistral3_style_pixtral:
+            layer = vision_tower
         else:
-            layer = model.vision_tower.vision_model
+            layer = vision_tower.vision_model
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3759,7 +3894,7 @@ class ModelArgs:
     def reference_vision_mlp(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if self.is_mistral3_style_pixtral:
             layer = vision_tower.transformer.layers[layer_idx].feed_forward
         else:
             layer = vision_tower.vision_model.encoder.layers[0].mlp
@@ -3803,7 +3938,7 @@ class ModelArgs:
     def reference_vision_attention(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if self.is_mistral3_style_pixtral:
             layer = vision_tower.transformer.layers[layer_idx].attention
         else:
             layer = vision_tower.vision_model.encoder.layers[0].self_attn
@@ -3828,7 +3963,7 @@ class ModelArgs:
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if self.is_mistral3_style_pixtral:
             layer = vision_tower.transformer
         else:
             layer = vision_tower.vision_model.encoder
@@ -3863,7 +3998,7 @@ class ModelArgs:
     def reference_vision_rot_emb(self):
         model = self.reference_vision_transformer(wrap=False)
         vision_tower = self._get_vision_tower(model)
-        if "Mistral-Small-3.1-24B" in self.model_name:
+        if self.is_mistral3_style_pixtral:
             layer = vision_tower.patch_positional_embedding
         else:
             raise NotImplementedError(f"reference_vision_rot_emb not implemented for {self.model_name}")

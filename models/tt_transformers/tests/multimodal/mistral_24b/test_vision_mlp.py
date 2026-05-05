@@ -17,7 +17,7 @@ from models.tt_transformers.tt.multimodal.mistral_24b.vision_mlp import MistralT
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
