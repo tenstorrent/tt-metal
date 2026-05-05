@@ -396,33 +396,106 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
     DumpData dump_data;
 
-    // Dump worker cores
+    // Collect all cores to read.
+    std::vector<CoreReadRequest> core_requests;
     CoreCoord grid_size = env.get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             core_requests.push_back({{x, y}, HalProgrammableCoreType::TENSIX});
         }
     }
-
-    // Dump eth cores
     for (const CoreCoord& eth_core : env.get_control_plane().get_active_ethernet_cores(device_id)) {
-        Core::Create(eth_core, HalProgrammableCoreType::ACTIVE_ETH, *this, dump_data).Dump();
+        core_requests.push_back({eth_core, HalProgrammableCoreType::ACTIVE_ETH});
     }
     for (const CoreCoord& eth_core : env.get_control_plane().get_inactive_ethernet_cores(device_id)) {
-        Core::Create(eth_core, HalProgrammableCoreType::IDLE_ETH, *this, dump_data).Dump();
+        core_requests.push_back({eth_core, HalProgrammableCoreType::IDLE_ETH});
     }
-
-    // Dump DRAM cores (Blackhole only)
     {
-        const auto& hal = env.get_hal();
-        bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
-        if (has_dram_fw) {
+        const auto& hal_local = env.get_hal();
+        if (hal_local.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
             for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
-                Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
-                    .Dump();
+                core_requests.push_back({CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM});
             }
         }
+    }
+
+    // Phase 1: Batch all reads upfront. This minimizes interleaving of device reads with local
+    // processing, reducing contention on the NON_MMIO_MUTEX for remote chips.
+    // Each core read that times out is logged and skipped rather than aborting the entire dump.
+    std::vector<std::optional<Core>> cores;
+    cores.reserve(core_requests.size());
+    std::vector<std::string> failed_cores;
+    for (const auto& req : core_requests) {
+        try {
+            cores.emplace_back(Core::Create(req.logical_coord, req.programmable_core_type, *this, dump_data));
+        } catch (std::runtime_error& e) {
+            cores.emplace_back(std::nullopt);
+            const auto& hal_local = env.get_hal();
+            CoreType core_type =
+                hal_local.get_core_type(hal_local.get_programmable_core_type_index(req.programmable_core_type));
+            auto virtual_coord = env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                device_id, req.logical_coord, core_type);
+            std::string core_desc = fmt::format(
+                "Device {} logical({},{}) virtual({},{})",
+                device_id,
+                req.logical_coord.x,
+                req.logical_coord.y,
+                virtual_coord.x,
+                virtual_coord.y);
+            failed_cores.push_back(core_desc);
+            log_warning(tt::LogMetal, "Watcher failed to read core {}: {}", core_desc, e.what());
+            fprintf(
+                f,
+                "Device %d core(%zu,%zu): READ FAILED - %s\n",
+                device_id,
+                static_cast<size_t>(req.logical_coord.x),
+                static_cast<size_t>(req.logical_coord.y),
+                e.what());
+        }
+    }
+
+    // Phase 2: Process all successfully read cores. Dump() can also throw (e.g. DumpL1Status
+    // and DumpSyncRegs do additional read_core calls that can timeout on remote chips, and
+    // various Dump sub-methods throw on data corruption). Catch per-core so one failure doesn't
+    // prevent dumping the remaining cores. We store the first exception to re-throw after all
+    // cores are processed, so device errors (assert tripped, corruption) still propagate to
+    // poll_watcher_data for proper server-kill in test_mode.
+    std::optional<std::runtime_error> first_exception;
+    for (size_t i = 0; i < cores.size(); i++) {
+        if (!cores[i].has_value()) {
+            continue;
+        }
+        try {
+            cores[i]->Dump();
+        } catch (std::runtime_error& e) {
+            const auto& req = core_requests[i];
+            std::string core_desc =
+                fmt::format("Device {} logical({},{})", device_id, req.logical_coord.x, req.logical_coord.y);
+            failed_cores.push_back(core_desc);
+            log_warning(tt::LogMetal, "Watcher failed to dump core {}: {}", core_desc, e.what());
+            fprintf(f, "%s: DUMP FAILED - %s\n", core_desc.c_str(), e.what());
+            if (!first_exception.has_value()) {
+                first_exception.emplace(e);
+            }
+        }
+    }
+
+    // Log summary of failed cores for this device.
+    if (!failed_cores.empty()) {
+        log_warning(
+            tt::LogMetal,
+            "Watcher had {}/{} core failures on device {}: [{}]",
+            failed_cores.size(),
+            core_requests.size(),
+            device_id,
+            fmt::join(failed_cores, ", "));
+        fprintf(
+            f,
+            "WARNING: %zu/%zu cores had failures on device %d\n",
+            failed_cores.size(),
+            core_requests.size(),
+            device_id);
     }
 
     for (auto k_id : dump_data.used_kernel_names) {
@@ -505,12 +578,22 @@ void WatcherDeviceReader::Dump(FILE* file) {
                     hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
                     dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
 
-            // Clear only the one flag that we saved, in case another one was raised on device
-            env.get_cluster().read_core(
-                pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
-            pause_data.view().flags()[processor_index] = 0;
-            env.get_cluster().write_core(
-                pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
+                // Clear only the one flag that we saved, in case another one was raised on device
+                env.get_cluster().read_core(
+                    pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
+                pause_data.view().flags()[processor_index] = 0;
+                env.get_cluster().write_core(
+                    pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
+            } catch (std::runtime_error& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "Watcher failed to clear pause flag on device {} core {}: {}",
+                    device_id,
+                    virtual_core.str(),
+                    e.what());
+                fprintf(
+                    f, "WARNING: Failed to clear pause flag on core %s: %s\n", virtual_core.str().c_str(), e.what());
+            }
         }
     }
     fflush(f);
