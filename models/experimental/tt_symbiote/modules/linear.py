@@ -257,6 +257,62 @@ class TTNNLinearGemma4IColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
 
 
+class TTNNLinearGemma4IColShardedWAllReduced(TTNNLinearIColShardedWAllReduced):
+    """BFP8_B weight variant of TTNNLinearIColShardedWAllReduced, trace-enabled.
+
+    Forces matmul output dtype to bfloat16 regardless of bf8_b weight dtype.
+    Required because nlp_create_qkv_heads_decode rejects bf8_b activations.
+    No @trace_disabled or @deallocate_weights_after: used inside @trace_enabled
+    decoder modules.
+    """
+
+    def move_weights_to_device_impl(self):
+        if isinstance(self.tt_weight_host, torch.Tensor):
+            self.tt_weight_host = preprocess_linear_weight(
+                self.tt_weight_host,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+            )
+        if isinstance(self.tt_bias_host, torch.Tensor):
+            self.tt_bias_host = preprocess_linear_bias(
+                self.tt_bias_host,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim),
+            )
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+        self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        linear_kwargs = dict(memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        if self.compute_kernel_config is not None:
+            linear_kwargs["compute_kernel_config"] = self.compute_kernel_config
+        tt_output = ttnn.linear(input_tensor, self.tt_weight, **linear_kwargs)
+        tt_output = ttnn.reduce_scatter(
+            tt_output,
+            dim=-1,
+            num_links=1,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+        )
+        tt_output = ttnn.all_gather(
+            tt_output,
+            dim=-1,
+            num_links=1,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+        )
+        if self.tt_bias is not None:
+            tt_output += self.tt_bias
+        return tt_output
+
+
 class TTNNLinearInputReplicatedWeightSharded(TTNNLinear):
     """TTNN-accelerated linear layer."""
 

@@ -31,7 +31,7 @@ from models.experimental.tt_symbiote.modules.attention import (
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNLinearIReplicatedWColSharded,
-    TTNNLinearIColShardedWAllReduced,
+    TTNNLinearGemma4IColShardedWAllReduced,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNLocalRMSNorm
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
@@ -136,7 +136,7 @@ class TTNNGemma4Attention(TTNNModule):
         fused_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
         fused_linear = torch.nn.Linear(new_attn.hidden_size, fused_weight.shape[0], bias=False)
         fused_linear.weight.data = fused_weight
-        new_attn.qkv_proj = TTNNLinearIColShardedWAllReduced.from_torch(fused_linear)
+        new_attn.qkv_proj = TTNNLinearGemma4IColShardedWAllReduced.from_torch(fused_linear)
         new_attn._q_size = q_size
         new_attn._kv_size = kv_size
 
