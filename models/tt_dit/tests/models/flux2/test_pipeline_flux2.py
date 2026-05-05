@@ -94,8 +94,8 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 @pytest.mark.parametrize(
     "traced",
     [
-        pytest.param(True, id="traced"),
-        pytest.param(False, id="not_traced"),
+        pytest.param(True, id="trace_on"),
+        pytest.param(False, id="trace_off"),
     ],
 )
 def test_pipeline(
