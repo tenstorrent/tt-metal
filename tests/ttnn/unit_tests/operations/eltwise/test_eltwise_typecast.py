@@ -125,11 +125,11 @@ class TestTypecast:
         torch_output = ttnn.to_torch(tt_output)
 
         torch_golden = eltwise_typecast(torch_input, tt_input_dtype=tt_input_dtype, tt_output_dtype=tt_output_dtype)
-        pcc = 0.98 if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b else 0.99
 
         if tt_output_dtype == ttnn.float32 or tt_output_dtype == ttnn.bfloat16:
             assert_equal(torch_golden, torch_output)
         else:
+            pcc = 0.98 if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b else 0.99
             assert_with_pcc(torch_golden, torch_output, pcc=pcc)
 
 
