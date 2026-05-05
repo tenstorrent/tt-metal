@@ -5,6 +5,7 @@
 """Qwen3-Omni-MoE generation fixes: patch talker prepare_inputs (next_sequence_length vs past_key_values), code_predictor device/dtype, and align code_predictor do_sample with talker_do_sample during generate."""
 
 import functools
+import os
 
 import torch
 
@@ -62,7 +63,7 @@ def apply_qwen3_omni_talker_prepare_inputs_fix() -> None:
 
             if not is_first_iteration and kwargs.get("use_cache", True):
                 input_ids = input_ids[:, -1:]
-                generation_step = kwargs.get("generation_step")
+                generation_step = kwargs.get("generation_step", 0)
                 trailing_text_hidden = kwargs.get("trailing_text_hidden")
                 tts_pad_embed = kwargs.get("tts_pad_embed")
                 last_id_hidden = self.get_input_embeddings()(input_ids)
@@ -71,7 +72,32 @@ def apply_qwen3_omni_talker_prepare_inputs_fix() -> None:
                 if cp_do_sample is None:
                     cp_do_sample = True
 
-                past_hidden = hidden_states[0][-1][:, -1:].to(device=last_id_hidden.device, dtype=last_id_hidden.dtype)
+                allow_lossy_fallback = os.environ.get(
+                    "TT_SYMBIOTE_QWEN_OMNI_TALKER_ALLOW_LOSSY_FALLBACK", "0"
+                ).lower() in ("1", "true", "yes")
+
+                # Strict by default: missing decode kwargs can produce degraded audio.
+                # Opt-in lossy fallback only when explicitly enabled.
+                if hidden_states is None and not allow_lossy_fallback:
+                    raise RuntimeError(
+                        "Qwen3-Omni talker decode requires `hidden_states` during cached generation. "
+                        "Your transformers/model_kwargs path did not propagate it. "
+                        "To force a best-effort (potentially degraded) fallback, set "
+                        "TT_SYMBIOTE_QWEN_OMNI_TALKER_ALLOW_LOSSY_FALLBACK=1."
+                    )
+
+                past_hidden = None
+                if hidden_states is not None:
+                    try:
+                        past_hidden = hidden_states[0][-1][:, -1:]
+                    except (TypeError, IndexError, KeyError):
+                        past_hidden = None
+                if past_hidden is None:
+                    if inputs_embeds is not None:
+                        past_hidden = inputs_embeds[:, -1:]
+                    else:
+                        past_hidden = last_id_hidden
+                past_hidden = past_hidden.to(device=last_id_hidden.device, dtype=last_id_hidden.dtype)
                 _cp_kw = dict(
                     inputs_embeds=torch.cat((past_hidden, last_id_hidden), dim=1),
                     max_new_tokens=self.config.num_code_groups - 1,
@@ -80,8 +106,10 @@ def apply_qwen3_omni_talker_prepare_inputs_fix() -> None:
                     return_dict_in_generate=True,
                 )
                 if cp_do_sample:
-                    _cp_kw["top_k"] = 50
-                    _cp_kw["top_p"] = 0.8
+                    # Conservative defaults to improve pronunciation stability on named entities.
+                    _cp_kw["top_k"] = 20
+                    _cp_kw["top_p"] = 0.6
+                    _cp_kw["temperature"] = 0.7
                 predictor_result = self.code_predictor.generate(**_cp_kw)
                 residual_codes = torch.cat((input_ids, predictor_result.sequences.to(input_ids.device)), dim=-1)
 
@@ -95,11 +123,24 @@ def apply_qwen3_omni_talker_prepare_inputs_fix() -> None:
                 )
                 inputs_embeds = codec_hiddens.sum(1, keepdim=True)
 
-                if generation_step < trailing_text_hidden.shape[1]:
+                if isinstance(generation_step, torch.Tensor):
+                    generation_step = int(generation_step.item())
+                else:
+                    generation_step = int(generation_step)
+
+                if (trailing_text_hidden is None or tts_pad_embed is None) and not allow_lossy_fallback:
+                    raise RuntimeError(
+                        "Qwen3-Omni talker decode requires both `trailing_text_hidden` and `tts_pad_embed`. "
+                        "Missing kwargs can lead to degraded audio. "
+                        "To force a best-effort (potentially degraded) fallback, set "
+                        "TT_SYMBIOTE_QWEN_OMNI_TALKER_ALLOW_LOSSY_FALLBACK=1."
+                    )
+
+                if trailing_text_hidden is not None and generation_step < trailing_text_hidden.shape[1]:
                     inputs_embeds = inputs_embeds + trailing_text_hidden[:, generation_step].unsqueeze(1).to(
                         inputs_embeds.device
                     )
-                else:
+                elif tts_pad_embed is not None:
                     inputs_embeds = inputs_embeds + tts_pad_embed.to(inputs_embeds.device)
                 inputs["inputs_embeds"] = inputs_embeds
                 inputs["residual_codes"] = residual_codes
