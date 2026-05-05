@@ -8,6 +8,7 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "api/compute/transpose_wh.h"  // for transpose_wh_init_short used in welford_init
 #ifdef TRISC_MATH
 #include "llk_math_welfords_sfpu_entry.h"
 #endif
