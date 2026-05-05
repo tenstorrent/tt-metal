@@ -86,38 +86,6 @@ def test_per_layer_passes_each_shape_to_cache_filename(dp_model):
     assert sum("(4, 1, 32, 64)" in f for f in cache_filenames) == 2
 
 
-def test_check_per_group_kwargs_strips_single_group_silently():
-    """A single-element list carries no extra info beyond the legacy
-    page_table arg; the wrapper drops it without complaint."""
-    from models.tt_transformers.tt.generator_vllm import _check_per_group_kwargs
-
-    kwargs = {"page_tables_per_group": ["t0"], "tokens": "tok"}
-    _check_per_group_kwargs(kwargs, "FakeModel")
-
-    assert "page_tables_per_group" not in kwargs
-    assert kwargs == {"tokens": "tok"}
-
-
-def test_check_per_group_kwargs_passes_when_kwarg_absent():
-    """Legacy callers that don't set page_tables_per_group are unaffected."""
-    from models.tt_transformers.tt.generator_vllm import _check_per_group_kwargs
-
-    kwargs = {"tokens": "tok"}
-    _check_per_group_kwargs(kwargs, "FakeModel")
-
-    assert kwargs == {"tokens": "tok"}
-
-
-def test_check_per_group_kwargs_raises_for_multi_group():
-    """Hybrid input with multiple groups must error loudly: silently using
-    only group 0 would corrupt KV state for the other groups."""
-    from models.tt_transformers.tt.generator_vllm import _check_per_group_kwargs
-
-    kwargs = {"page_tables_per_group": ["t0", "t1"], "tokens": "tok"}
-    with pytest.raises(NotImplementedError, match="FakeModel"):
-        _check_per_group_kwargs(kwargs, "FakeModel")
-
-
 def test_legacy_uniform_shape_delegates_to_per_layer(dp_model):
     """The legacy ``allocate_vllm_kv_cache`` must produce identical output to
     calling ``allocate_vllm_kv_cache_per_layer`` with a uniform-spec list,

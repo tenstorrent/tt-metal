@@ -101,32 +101,6 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
     )
 
 
-def _check_per_group_kwargs(kwargs, model_name):
-    """Pop ``page_tables_per_group`` from kwargs and validate.
-
-    vLLM always passes ``page_tables_per_group`` (a list of per-kv-cache-group
-    block tables) on the prefill/decode forward call so hybrid attention
-    models can route per layer. Legacy uniform-attention models don't know
-    how to use the per-group form; until a model opts in to hybrid support
-    (overrides ``prefill_forward`` / ``decode_forward`` to consume the
-    list), the wrappers strip the kwarg before delegating to the underlying
-    text forward — but raise loudly if multiple groups are present, since
-    silently using only group 0 would corrupt KV state for the other groups.
-
-    Single-group inputs (``len == 1``) carry no information beyond the legacy
-    ``page_table`` arg and are safely dropped.
-    """
-    page_tables = kwargs.pop("page_tables_per_group", None)
-    if page_tables is not None and len(page_tables) > 1:
-        raise NotImplementedError(
-            f"{model_name} does not yet support per-group block tables for "
-            "hybrid attention models. Override prefill_forward / "
-            "decode_forward to consume `page_tables_per_group` (one block "
-            "table per kv_cache_group), or migrate the model to inherit "
-            "from HybridAttentionForCausalLM."
-        )
-
-
 class HybridAttentionForCausalLM(Generator):
     """vLLM wrapper base for hybrid attention models.
 
@@ -151,8 +125,9 @@ class HybridAttentionForCausalLM(Generator):
 
     Until a subclass overrides them, ``prefill_forward`` and
     ``decode_forward`` raise :class:`NotImplementedError` to make the
-    contract explicit; vLLM's runtime check (``_check_per_group_kwargs``)
-    only fires for legacy models that haven't migrated to this base.
+    contract explicit. Legacy (non-hybrid) models never see the
+    ``page_tables_per_group`` kwarg — vLLM's plugin opts in via the
+    presence of ``get_kv_cache_spec`` on the model class.
     """
 
     @classmethod
@@ -361,7 +336,6 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         self.tokenizer = self.model_args[0].tokenizer
         pad_token_id = self.tokenizer.pad_token_id
 
@@ -391,14 +365,10 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         )
 
     def decode_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-    def allocate_kv_cache_per_layer(self, per_layer_specs):
-        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 # Mllama is currently not supported in vLLM V1.
@@ -494,7 +464,6 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         )
 
     def decode_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         logits = super().decode_forward_llama_vision(*args, **kwargs)
         if isinstance(logits, tuple):
             return logits[0]
@@ -503,9 +472,6 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-    def allocate_kv_cache_per_layer(self, per_layer_specs):
-        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class LlamaForCausalLM(Generator):
@@ -561,18 +527,13 @@ class LlamaForCausalLM(Generator):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-    def allocate_kv_cache_per_layer(self, per_layer_specs):
-        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class QwenForCausalLM(Generator):
@@ -615,18 +576,13 @@ class QwenForCausalLM(Generator):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-    def allocate_kv_cache_per_layer(self, per_layer_specs):
-        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class MistralForCausalLM(Generator):
@@ -669,18 +625,13 @@ class MistralForCausalLM(Generator):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-    def allocate_kv_cache_per_layer(self, per_layer_specs):
-        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 @MULTIMODAL_REGISTRY.register_processor(
@@ -740,7 +691,6 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().prefill_forward_text(**kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
@@ -750,7 +700,6 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
     def decode_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().decode_forward(*args, **kwargs)
 
 
@@ -818,11 +767,9 @@ class GptOssForCausalLM(Generator):
         return self.model_args[0].weight_cache_path(ttnn.bfloat8_b)
 
     def prefill_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):
-        _check_per_group_kwargs(kwargs, type(self).__name__)
         return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
