@@ -416,7 +416,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad demo test (512 prompts, 1 batch)
-        if: ${{ matrix.setup == 'quad' && (inputs.demo || github.event_name == 'schedule') }}
+        if: ${{ matrix.setup == 'qwe' && (inputs.demo || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
