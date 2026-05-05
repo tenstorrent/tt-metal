@@ -11,7 +11,7 @@
 namespace ckernel {
 namespace sfpu {
 
-inline void calculate_silu(const int iterations) { _calculate_silu_(iterations); }
+inline void calculate_silu(const int iterations = SFPU_ITERATIONS) { _calculate_silu_(iterations); }
 
 }  // namespace sfpu
 }  // namespace ckernel
