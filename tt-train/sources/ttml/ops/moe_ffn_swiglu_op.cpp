@@ -60,10 +60,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     if (offsets_host.size() != num_experts + 1U) {
         throw std::runtime_error("moe_ffn_swiglu_fw: offsets size must be num_experts + 1.");
     }
-    if (offsets_host.back() != token_capacity) {
-        throw std::runtime_error("moe_ffn_swiglu_fw: offsets[-1] must equal token_capacity.");
-    }
-
     // Per-expert forward: slice grouped once per expert, run gate+up matmuls
     // directly against the per-expert weight tensors (no slicing of weights),
     // silu·multiply on the chunk, then down matmul. One concat at the end.
