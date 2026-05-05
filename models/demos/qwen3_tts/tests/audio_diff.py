@@ -19,12 +19,25 @@ so we can debug regressions without listen-tests:
   * Optional: speaker similarity (cosine) via the same ECAPA-TDNN
     speaker_encoder the model uses for voice conditioning. Drop in a
     third path with --ref to score both against a known-target speaker.
+  * Per-AR-frame analysis: at 12.5 fps each codec frame produces ~80 ms /
+    1920 samples. Aligning to that grid gives a frame-by-frame view of:
+      - per-frame RMS, spectral centroid, zero-crossing rate
+      - per-frame transient/click detection (peak sample-derivative)
+      - top-K "anomaly frames" where A and B differ most in audio energy
+      - if codec tokens are provided (--codes-a / --codes-b), per-frame
+        token diff showing exactly which AR step diverged and what the
+        audio looks like at that step
   * Spectral fingerprint: per-band energy ratio over short windows; surfaces
     "different timbre / different speaker" issues that text+RMS miss.
 
 Usage:
     python models/demos/qwen3_tts/tests/audio_diff.py \\
         /tmp/audio_hf_ashley.wav /tmp/audio_ttnn_ashley_v3.wav
+
+    # With per-AR-frame view + codec-token diff:
+    python models/demos/qwen3_tts/tests/audio_diff.py \\
+        /tmp/audio_hf_ashley.wav /tmp/audio_ttnn_ashley_v3.wav \\
+        --codes-a /tmp/hf_ashley_codes.pt --codes-b /tmp/last_generated_codes.pt
 
     # With speaker-similarity scoring against the input reference speaker:
     python models/demos/qwen3_tts/tests/audio_diff.py \\
@@ -242,6 +255,169 @@ def speaker_similarity_via_reference(*paths: str) -> Optional[list[float]]:
 
 
 # ---------------------------------------------------------------------------
+# Section: per-AR-frame analysis (frame_idx ↔ audio window ↔ codec token)
+# ---------------------------------------------------------------------------
+# At 12.5 fps the codec emits one frame every 1920 samples (24kHz). The
+# generated audio (after the HF-style ref-cut) starts exactly at gen frame 0
+# of the model's output, so frame i covers samples [i*1920, (i+1)*1920).
+SAMPLES_PER_FRAME = 1920
+
+
+def per_frame_metrics(a: np.ndarray, sr: int) -> dict:
+    """For each codec frame's worth of samples, compute RMS, peak |Δ|
+    (transient detector), zero-crossing rate, and a coarse spectral centroid.
+    Returns arrays of shape [n_frames]."""
+    spf = SAMPLES_PER_FRAME
+    n_frames = len(a) // spf
+    rms_arr = np.zeros(n_frames, dtype=np.float64)
+    peak_diff = np.zeros(n_frames, dtype=np.float64)
+    zcr = np.zeros(n_frames, dtype=np.float64)
+    centroid = np.zeros(n_frames, dtype=np.float64)
+    for i in range(n_frames):
+        chunk = a[i * spf : (i + 1) * spf].astype(np.float64)
+        rms_arr[i] = np.sqrt((chunk**2).mean())
+        if len(chunk) > 1:
+            peak_diff[i] = float(np.abs(np.diff(chunk)).max())  # transient detector
+            zcr[i] = float(((chunk[:-1] * chunk[1:]) < 0).mean())
+        # Coarse spectral centroid via FFT
+        spec = np.abs(np.fft.rfft(chunk))
+        freqs = np.fft.rfftfreq(len(chunk), d=1.0 / sr)
+        if spec.sum() > 1e-9:
+            centroid[i] = float((freqs * spec).sum() / spec.sum())
+    return {
+        "n_frames": n_frames,
+        "rms": rms_arr,
+        "peak_diff": peak_diff,
+        "zcr": zcr,
+        "centroid": centroid,
+    }
+
+
+def detect_click_frames(metrics: dict, peak_diff_z: float = 4.0) -> list[int]:
+    """Return frame indices flagged as containing a transient/click.
+
+    A frame is flagged when its peak |Δ| (max sample-to-sample jump) is more
+    than `peak_diff_z` standard deviations above the rolling median of its
+    neighbours — a classic click-detector heuristic.
+    """
+    pd = metrics["peak_diff"]
+    if len(pd) < 5:
+        return []
+    flagged = []
+    for i in range(len(pd)):
+        lo = max(0, i - 5)
+        hi = min(len(pd), i + 6)
+        nbrs = np.concatenate([pd[lo:i], pd[i + 1 : hi]])
+        if len(nbrs) < 3:
+            continue
+        med = float(np.median(nbrs))
+        mad = float(np.median(np.abs(nbrs - med))) + 1e-9
+        # robust z-score; flag if current frame is way above neighbours
+        if (pd[i] - med) / (1.4826 * mad) > peak_diff_z:
+            flagged.append(i)
+    return flagged
+
+
+def print_per_frame_section(label_a: str, ma: dict, label_b: str, mb: dict, n_show_top: int = 12) -> None:
+    """Show per-frame anomalies: clicks, biggest A-vs-B disagreements."""
+    print("\n— Per-AR-frame analysis (12.5 fps, 1 frame = 80 ms / 1920 samples) —")
+    print(f"  {label_a}: {ma['n_frames']} frames    {label_b}: {mb['n_frames']} frames")
+
+    clicks_a = detect_click_frames(ma)
+    clicks_b = detect_click_frames(mb)
+    print(f"\n  Click-frame candidates ({label_a}): {clicks_a if clicks_a else 'none'}")
+    print(f"  Click-frame candidates ({label_b}): {clicks_b if clicks_b else 'none'}")
+
+    if clicks_a:
+        print(f"\n  {label_a} flagged frames detail:")
+        _print_frame_rows(label_a, ma, clicks_a)
+    if clicks_b:
+        print(f"\n  {label_b} flagged frames detail:")
+        _print_frame_rows(label_b, mb, clicks_b)
+
+    # Top-K frames where A and B differ most (only over their overlap)
+    n_overlap = min(ma["n_frames"], mb["n_frames"])
+    rms_diff = np.abs(ma["rms"][:n_overlap] - mb["rms"][:n_overlap])
+    centroid_diff = np.abs(ma["centroid"][:n_overlap] - mb["centroid"][:n_overlap])
+    top_rms = np.argsort(-rms_diff)[:n_show_top]
+    print(f"\n  Top-{n_show_top} frames by |RMS_A - RMS_B|:")
+    print(
+        f"  {'frame':>6s} {'t (s)':>8s} {f'rms_{label_a}':>10s} {f'rms_{label_b}':>10s} {'|Δ|rms':>10s} "
+        f"{'|Δ|centroid Hz':>16s}"
+    )
+    for fi in top_rms:
+        t = fi * SAMPLES_PER_FRAME / 24000
+        print(
+            f"  {fi:>6d} {t:>8.2f} {ma['rms'][fi]:>10.4f} {mb['rms'][fi]:>10.4f} "
+            f"{rms_diff[fi]:>10.4f} {centroid_diff[fi]:>16.0f}"
+        )
+
+
+def _print_frame_rows(label: str, m: dict, frames: list[int]) -> None:
+    print(f"  {'frame':>6s} {'t (s)':>8s} {'rms':>9s} {'peak|Δ|':>9s} {'zcr':>8s} {'centroidHz':>12s}")
+    for fi in frames:
+        t = fi * SAMPLES_PER_FRAME / 24000
+        print(
+            f"  {fi:>6d} {t:>8.2f} {m['rms'][fi]:>9.4f} {m['peak_diff'][fi]:>9.4f} "
+            f"{m['zcr'][fi]:>8.4f} {m['centroid'][fi]:>12.0f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Section: per-frame codec-token diff (when codes are provided)
+# ---------------------------------------------------------------------------
+def per_frame_codes_diff(
+    label_a: str, codes_a: torch.Tensor, label_b: str, codes_b: torch.Tensor, ma: dict, mb: dict, max_show: int = 30
+) -> None:
+    """Walk the codec-token sequence and show where A and B diverge,
+    correlated with per-frame audio metrics so we can see the audio
+    signature of the divergent tokens.
+
+    `codes_a`/`codes_b`: shape [seq, num_codebooks]; we report code 0 (the
+    talker's primary token) since it drives sampling.
+    """
+    n = min(codes_a.shape[0], codes_b.shape[0])
+    a0 = codes_a[:n, 0].long().tolist()
+    b0 = codes_b[:n, 0].long().tolist()
+
+    # First divergence
+    first_diff = None
+    for i in range(n):
+        if a0[i] != b0[i]:
+            first_diff = i
+            break
+
+    if first_diff is None:
+        print(f"\n— Per-frame codec-token diff —\n  {label_a} and {label_b} match for first {n} frames.")
+        return
+
+    print(f"\n— Per-frame codec-token diff (code-0) —")
+    print(f"  First divergence at frame {first_diff} " f"(t={first_diff * SAMPLES_PER_FRAME / 24000:.2f}s)")
+    print(f"  {label_a}[{first_diff}] = {a0[first_diff]}    {label_b}[{first_diff}] = {b0[first_diff]}")
+
+    # Show window around first divergence + per-frame audio metrics
+    lo = max(0, first_diff - 3)
+    hi = min(n, first_diff + max_show + 3)
+    print(f"\n  Frames {lo}..{hi-1} (✗ = divergent):")
+    print(
+        f"  {'frame':>6s}  {f'{label_a}_tok':>10s}  {f'{label_b}_tok':>10s}  "
+        f"{f'rms_{label_a}':>10s}  {f'rms_{label_b}':>10s}  {'|Δrms|':>8s}  flag"
+    )
+    for i in range(lo, hi):
+        match = a0[i] == b0[i]
+        ra_v = ma["rms"][i] if i < ma["n_frames"] else 0.0
+        rb_v = mb["rms"][i] if i < mb["n_frames"] else 0.0
+        flag = "✓" if match else "✗"
+        print(
+            f"  {i:>6d}  {a0[i]:>10d}  {b0[i]:>10d}  " f"{ra_v:>10.4f}  {rb_v:>10.4f}  {abs(ra_v - rb_v):>8.4f}  {flag}"
+        )
+
+    # Summary divergence stats
+    matches = sum(1 for i in range(n) if a0[i] == b0[i])
+    print(f"\n  Total token-level match (code-0): {matches}/{n} ({100*matches/n:.1f}%)")
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 def main():
@@ -251,6 +427,11 @@ def main():
     ap.add_argument("--ref", help="Optional reference speaker audio for speaker-sim scoring", default=None)
     ap.add_argument("--whisper-model", default="base", help="Whisper model size (tiny/base/small/medium)")
     ap.add_argument("--no-whisper", action="store_true", help="Skip whisper transcription")
+    ap.add_argument("--codes-a", default=None, help="Optional .pt file with codec tokens [seq, 16] for A")
+    ap.add_argument("--codes-b", default=None, help="Optional .pt file with codec tokens [seq, 16] for B")
+    ap.add_argument(
+        "--no-per-frame", action="store_true", help="Skip per-AR-frame analysis (faster for quick basic-stats runs)"
+    )
     args = ap.parse_args()
 
     a, sr_a = load_audio(args.a, 24000)
@@ -281,6 +462,15 @@ def main():
         print("  ✓ no boundary anomalies detected")
 
     print_energy_curve("A", a, "B", b, sr_a)
+
+    if not args.no_per_frame:
+        ma = per_frame_metrics(a, sr_a)
+        mb = per_frame_metrics(b, sr_b)
+        print_per_frame_section("A", ma, "B", mb)
+        if args.codes_a and args.codes_b:
+            ca = torch.load(args.codes_a)
+            cb = torch.load(args.codes_b)
+            per_frame_codes_diff("A", ca, "B", cb, ma, mb)
 
     if not args.no_whisper:
         print("\n— Whisper transcripts —")
