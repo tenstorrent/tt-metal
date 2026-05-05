@@ -86,8 +86,6 @@ class Flux2Pipeline:
         dynamic_load: bool = False,
         trace_warmup: bool = False,
     ) -> None:
-        self.timing_collector = None
-
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
         self._height = height
@@ -320,8 +318,9 @@ class Flux2Pipeline:
         prompt_upsample_temperature: float | None = None,  # prompt upsampling is currently very slow
         seed: int | None = None,
         traced: bool = False,
+        profiler=None,
+        profiler_iteration: int = 0,
     ) -> list[Image.Image]:
-        timer = self.timing_collector.reset() if self.timing_collector else None
         prompt_count = len(prompts)
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
@@ -334,50 +333,50 @@ class Flux2Pipeline:
         transformer_batch_size = prompt_count * num_images_per_prompt
         spatial_sequence_length = (latents_height // self._patch_size) * (latents_width // self._patch_size)
 
-        with timer.time_section("total") if timer else nullcontext():
-            logger.info("encoding prompts...")
+        logger.info("encoding prompts...")
+
+        with profiler("encoder", profiler_iteration) if profiler else nullcontext():
             self._prepare_prompt_encoder()
 
             if prompt_upsample_temperature is not None:
-                with timer.time_section("prompt_upsampling") if timer else nullcontext():
-                    prompts = self._prompt_encoder.upsample(
-                        prompts,
-                        max_length=224,  # TODO: this should be higher
-                        temperature=prompt_upsample_temperature,
-                    )
-
-            with timer.time_section("total_encoding") if timer else nullcontext():
-                prompt_embeds, _mask = self._prompt_encoder.encode(
-                    prompts, num_images_per_prompt=num_images_per_prompt, sequence_length=512
+                prompts = self._prompt_encoder.upsample(
+                    prompts,
+                    max_length=224,  # TODO: this should be higher
+                    temperature=prompt_upsample_temperature,
                 )
+
+            prompt_embeds, _mask = self._prompt_encoder.encode(
+                prompts, num_images_per_prompt=num_images_per_prompt, sequence_length=512
+            )
             _, prompt_sequence_length, _ = prompt_embeds.shape
 
-            logger.info("preparing timesteps...")
-            timesteps, sigmas = _schedule(
-                self._scheduler,
-                step_count=num_inference_steps,
-                spatial_sequence_length=spatial_sequence_length,
-            )
+        logger.info("preparing timesteps...")
+        timesteps, sigmas = _schedule(
+            self._scheduler,
+            step_count=num_inference_steps,
+            spatial_sequence_length=spatial_sequence_length,
+        )
 
-            guidance = torch.full([transformer_batch_size], fill_value=guidance_scale)
+        guidance = torch.full([transformer_batch_size], fill_value=guidance_scale)
 
-            logger.info("preparing latents...")
+        logger.info("preparing latents...")
 
-            if seed is not None:
-                torch.manual_seed(seed)
+        if seed is not None:
+            torch.manual_seed(seed)
 
-            shape = [transformer_batch_size, self._num_channels_latents, latents_height, latents_width]
-            latents = self._patchify(torch.randn(shape).permute(0, 2, 3, 1))
+        shape = [transformer_batch_size, self._num_channels_latents, latents_height, latents_width]
+        latents = self._patchify(torch.randn(shape).permute(0, 2, 3, 1))
 
-            self.ts._tt_prompt_embeds.update(prompt_embeds, traced, device=self._mesh_device)
-            self.ts._tt_latents_step.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
-            self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
+        self.ts._tt_prompt_embeds.update(prompt_embeds, traced, device=self._mesh_device)
+        self.ts._tt_latents_step.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
+        self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
 
-            logger.info("denoising...")
-            self._prepare_transformer()
+        logger.info("denoising...")
+        self._prepare_transformer()
 
+        with profiler("denoising", profiler_iteration) if profiler else nullcontext():
             for i, t in enumerate(tqdm.tqdm(timesteps)):
-                with timer.time_step("denoising_step") if timer else nullcontext():
+                with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
                     sigma_difference = (sigmas[i + 1] - sigmas[i]).item()
 
                     self.ts._tt_timestep.update(
@@ -395,29 +394,32 @@ class Flux2Pipeline:
                         traced=traced,
                     )
 
-            logger.info("decoding image...")
+        logger.info("decoding image...")
 
-            with timer.time_section("vae_decoding") if timer else nullcontext():
-                self._prepare_vae()
-                tt_latents = self._ccl_manager.all_gather_persistent_buffer(
-                    self.ts.tt_latents_step,
-                    dim=1,
-                    mesh_axis=sp_axis,
-                    use_hyperparams=True,
-                )
+        with profiler("vae", profiler_iteration) if profiler else nullcontext():
+            self._prepare_vae()
+            tt_latents = self._ccl_manager.all_gather_persistent_buffer(
+                self.ts.tt_latents_step,
+                dim=1,
+                mesh_axis=sp_axis,
+                use_hyperparams=True,
+            )
 
-                tt_latents = self._vae_decoder.preprocess_and_unpatchify(
-                    tt_latents,
-                    height=self._height // self._vae_scale_factor,
-                    width=self._width // self._vae_scale_factor,
-                )
-                tt_decoded_output = self._vae_decoder.forward(tt_latents)
-                decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
+            torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
 
-                image = self._image_processor.postprocess(decoded_output, output_type="pt")
-                assert isinstance(image, torch.Tensor)
+            tt_latents = tensor.from_torch(torch_latents, device=self._mesh_device)
+            tt_latents = self._vae_decoder.preprocess_and_unpatchify(
+                tt_latents,
+                height=self._height // self._vae_scale_factor,
+                width=self._width // self._vae_scale_factor,
+            )
+            tt_decoded_output = self._vae_decoder.forward(tt_latents)
+            decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
 
-                output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
+            image = self._image_processor.postprocess(decoded_output, output_type="pt")
+            assert isinstance(image, torch.Tensor)
+
+            output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
 
         return output
 
