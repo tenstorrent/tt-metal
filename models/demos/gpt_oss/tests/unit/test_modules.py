@@ -574,12 +574,14 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         (1, 1),  # decode
         (128, 1),  # decode
         (1, 128),  # prefill
+        (1, 1024),  # prefill 1k
         (1, 4096),  # prefill 4k
     ],
     ids=[
         "decode_low_latency",
         "decode_high_throughput",
         "prefill_128",
+        "prefill_1024",
         "prefill_4096",
     ],
 )

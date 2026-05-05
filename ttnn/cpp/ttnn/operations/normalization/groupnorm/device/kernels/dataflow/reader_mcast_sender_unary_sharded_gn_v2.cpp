@@ -10,6 +10,7 @@
 #include "experimental/noc_semaphore.h"
 #include "experimental/endpoints.h"
 #include "experimental/core_local_mem.h"
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -23,6 +24,16 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
     const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
     constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(7);
+    // Per-core slots in cb_ex_external are hardcoded to a cb_ex_external_slot_pitch_bytes
+    // pitch (see the `l1_write_addr_external += cb_ex_external_slot_pitch_bytes`
+    // increments below). Each NOC read writes datum_size_bytes into its slot, so
+    // datum_size_bytes > cb_ex_external_slot_pitch_bytes would overflow into the
+    // next core's slot and silently corrupt the reduction. The slot pitch itself
+    // would need to grow to support larger datums.
+    static_assert(
+        datum_size_bytes <= cb_ex_external_slot_pitch_bytes,
+        "cb_ex_external slot pitch is hardcoded; "
+        "datum_size_bytes must be <= cb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
     constexpr uint32_t tile_height = get_compile_time_arg_val(9);
 
@@ -151,6 +162,28 @@ void kernel_main() {
                 uint32_t l1_read_addr_ex_par = cb_ex_partial.get_read_ptr();
                 cb_ex_external.reserve_back(1);
                 uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
+
+                // Self read uses single_tile_size_bytes (not num_bytes_read) on
+                // purpose: it doubles as a free zero-init of every byte in the
+                // reserved tile other than this core's own slot.
+                // The producer of cb_ex_partial (compute/groupnorm_sharded_v2.cpp)
+                // pushes a tile produced by `reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR>`,
+                // and the LLK packer for REDUCE_SCALAR is documented to write the
+                // scalar result at face-0 [0, 0] and explicitly clear every other
+                // datum in the tile via its edge masks.
+                //
+                // Therefore, after this read, cb_ex_external's reserved tile contains:
+                //   - bytes [0, datum_size_bytes): local core's scalar (slot 0).
+                //   - bytes [datum_size_bytes, single_tile_size_bytes): exact zero.
+                // The remote-core reads below then overwrite slot bytes
+                // [cb_ex_external_slot_pitch_bytes*i,
+                //  cb_ex_external_slot_pitch_bytes*i + datum_size_bytes) for
+                // i = 1 .. num_mcast_cores-1.
+                // All gap bytes, per-slot bytes
+                // [datum_size_bytes, cb_ex_external_slot_pitch_bytes) and any
+                // trailing-tile bytes past slot num_mcast_cores-1, stay zero, so
+                // the downstream reduce_tile sum on cb_ex_external is not
+                // polluted.
                 experimental::UnicastEndpoint remote_ep;
                 noc.async_read(
                     remote_ep,
@@ -158,7 +191,7 @@ void kernel_main() {
                     single_tile_size_bytes,
                     {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par},
                     {});
-                l1_write_addr_external += 16;
+                l1_write_addr_external += cb_ex_external_slot_pitch_bytes;
                 noc.async_read_barrier();
 
                 reduce_receiver_sem.wait(num_mcast_cores - 1);
@@ -171,7 +204,7 @@ void kernel_main() {
                         num_bytes_read,
                         {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par},
                         {});
-                    l1_write_addr_external += 16;
+                    l1_write_addr_external += cb_ex_external_slot_pitch_bytes;
                     noc.async_read_barrier();
                 }
                 cb_ex_external.push_back(1);

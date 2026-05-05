@@ -34,9 +34,6 @@ class DeviceConfig:
         # mesh under the name "moe_tp".
         self.moe_tp_axis = int(device_config.get("moe_tp_axis", -1))
 
-        # Based on current configs, DDP and TP cannot be both enabled
-        assert not (self.enable_ddp and self.enable_tp), "DDP and TP cannot be both enabled."
-
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
 
@@ -68,7 +65,7 @@ class TrainingConfig:
         self.steps = int(tc.get("max_steps", 1000))
         self.epochs = int(tc.get("num_epochs", 1))
         self.eval_every = int(tc.get("eval_every", 200))
-        self.save_every = int(tc.get("model_save_interval", 500))
+        self.save_every = int(tc.get("model_save_interval", 0))
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
         self.model_config = tc.get("model_config", None)
         tokenizer_type = tc.get("tokenizer_type", "bpe")

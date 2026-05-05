@@ -714,15 +714,17 @@ def test_prepare_lm_head_weights_4x2(bh_2d_mesh_device):
 
 
 def _mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX, seed: int = 44) -> dict[str, torch.Tensor]:
-    """Build a synthetic state dict with only the lightweight MTP projection/norm tensors."""
+    """Build a synthetic state dict with MTP projection/norm tensors and lm_head."""
     g = torch.Generator().manual_seed(seed + 1000)
     dtype = torch.bfloat16
     H = LogicalModelDimensions.HIDDEN_SIZE
+    V = LogicalModelDimensions.VOCAB_SIZE
     return {
         f"model.layers.{mtp_layer_idx}.hnorm.weight": torch.randn(H, generator=g, dtype=dtype),
         f"model.layers.{mtp_layer_idx}.enorm.weight": torch.randn(H, generator=g, dtype=dtype),
         f"model.layers.{mtp_layer_idx}.eh_proj.weight": torch.randn(H, 2 * H, generator=g, dtype=dtype),
         f"model.layers.{mtp_layer_idx}.shared_head.norm.weight": torch.randn(H, generator=g, dtype=dtype),
+        "lm_head.weight": torch.randn(V, H, generator=g, dtype=dtype),
     }
 
 
@@ -761,6 +763,7 @@ def test_prepare_spec_weights_4x2(bh_2d_mesh_device):
     H = LogicalModelDimensions.HIDDEN_SIZE
     assert isinstance(weights, DeepSeekV3SpecWeights)
     assert weights.shared_head_norm.shape == (1, H)
+    assert weights.lm_head is not None
 
 
 @pytest.mark.parametrize(
@@ -1158,19 +1161,23 @@ def test_prepare_spec_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     weights = prepare_spec_weights(state, submesh, cache_config=cache_config)
     assert isinstance(weights, DeepSeekV3SpecWeights)
     assert weights.shared_head_norm.shape == (1, H)
+    assert weights.lm_head is not None
 
-    expected_shape = weights.shared_head_norm.shape
+    expected_norm_shape = weights.shared_head_norm.shape
+    expected_lm_shape = weights.lm_head.shape
 
     ttnn.deallocate(weights.shared_head_norm, force=True)
+    ttnn.deallocate(weights.lm_head, force=True)
 
     weights_hit = prepare_spec_weights(state, submesh, cache_config=cache_config)
-    assert weights_hit.shared_head_norm.shape == expected_shape
+    assert weights_hit.shared_head_norm.shape == expected_norm_shape
+    assert weights_hit.lm_head.shape == expected_lm_shape
 
     objects_dir = cache_config.cache.local_root / "objects"
     artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
     assert (
-        len(artifact_dirs) >= 1
-    ), f"Expected at least 1 cached artifact (shared_head_norm), found {len(artifact_dirs)}"
+        len(artifact_dirs) >= 2
+    ), f"Expected at least 2 cached artifacts (shared_head_norm + lm_head), found {len(artifact_dirs)}"
 
 
 # =============================================================================
