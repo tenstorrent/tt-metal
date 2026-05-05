@@ -316,3 +316,103 @@ def test_paged_sdpa_decode_olmo_tg_batch_identity(mesh_device):
         out_dev0 = out_dev0[..., :n_q, :]
 
     _check_batch_identity(out_dev0, label="TG col-0 dev-0 SDPA output, B_local=8")
+
+
+@pytest.mark.parametrize(
+    "mesh_device", [pytest.param((8, 4), id="galaxy_8x4")], indirect=True
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 0}], indirect=True)
+def test_paged_sdpa_decode_olmo_tg_batch_identity_rect_grid(mesh_device):
+    """
+    Same as test_paged_sdpa_decode_olmo_tg_batch_identity, but uses a CONTIGUOUS
+    rectangular sub_core_grids for the OUTPUT mem cfg (cols 1-6, rows 0-9 = 60 cores;
+    avoids col 0 reserved + col 7 dispatch + does NOT skip col 4). Q input uses
+    matching rectangular sharding.
+
+    If this test PASSES, the bug is specifically the irregular OLMo 50-core grid.
+    If it FAILS, the bug is in the multi-device decode kernel itself, independent
+    of grid shape.
+    """
+    cluster_shape = (8, 4)
+    batch_global = B_LOCAL * cluster_shape[1]
+    n_kv = N_KV
+    n_q = N_Q
+    d = D
+    block_size = BLOCK_SIZE
+    max_seq = MAX_SEQ
+
+    torch.manual_seed(42)
+
+    K_paged, V_paged, page_table = _build_paged_cache_and_pt_identical(
+        batch_global, n_kv, max_seq, block_size, d
+    )
+
+    tt_pt = ttnn.from_torch(
+        page_table, device=mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -2), mesh_shape=cluster_shape),
+    )
+    tt_K = ttnn.from_torch(
+        K_paged, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_V = ttnn.from_torch(
+        V_paged, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    Q_one = fa_rand(1, 1, n_q, d)
+    Q = Q_one.repeat(1, batch_global, 1, 1)
+    tt_Q = ttnn.from_torch(
+        Q, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 1), mesh_shape=cluster_shape),
+    )
+    cur_pos = torch.full((batch_global,), CUR_POS, dtype=torch.int32)
+    tt_cp = ttnn.from_torch(
+        cur_pos, device=mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=cluster_shape),
+    )
+
+    # CONTIGUOUS rectangular sub_core_grids (cols 1-6 × rows 0-9 = 60 cores).
+    # No col-4 skip. Avoids col 0 (reserved) and col 7 (dispatch).
+    rect_sub_core_grids = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9))]
+    )
+    rect_start_core = ttnn.CoreCoord(1, 0)
+    padded_num_heads = nearest_pow_2(nearest_n(n_q, n=32))
+    out_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        rect_start_core, B_LOCAL, rect_sub_core_grids, row_wise=True
+    )
+    out_spec = ttnn.ShardSpec(out_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
+    out_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_spec)
+
+    in_spec = ttnn.ShardSpec(out_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
+    in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in_spec)
+    tt_Q_sharded = ttnn.to_memory_config(tt_Q, in_cfg)
+    ttnn.deallocate(tt_Q)
+    tt_Q = tt_Q_sharded
+
+    program_cfg = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+        exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0,
+    )
+    compute_kernel_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False,
+        fp32_dest_acc_en=False, packer_l1_acc=False,
+    )
+
+    tt_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        tt_Q, tt_K, tt_V, tt_pt,
+        cur_pos_tensor=tt_cp,
+        scale=d**-0.5,
+        program_config=program_cfg,
+        compute_kernel_config=compute_kernel_cfg,
+        memory_config=out_cfg,
+    )
+
+    out_per_dev = ttnn.get_device_tensors(tt_out)
+    out_dev0 = ttnn.to_torch(out_per_dev[0]).float()
+    logger.info(f"col0 dev0 (rect-grid) SDPA output shape: {tuple(out_dev0.shape)}")
+    if out_dev0.shape[-2] >= n_q:
+        out_dev0 = out_dev0[..., :n_q, :]
+
+    _check_batch_identity(out_dev0, label="TG col-0 dev-0 SDPA output (RECT GRID), B_local=8")
