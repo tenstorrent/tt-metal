@@ -284,7 +284,7 @@ class SpeakerEncoder(LightweightModule):
         y_tt = self._conv1d_same_padding(x, w_tt, b_tt, dilation)
         return ttnn.relu(y_tt)
 
-    def _res2net_block(self, x: ttnn.Tensor, prefix: str, scale: int = 8) -> ttnn.Tensor:
+    def _res2net_block(self, x: ttnn.Tensor, prefix: str, scale: int = 8, dilation: int = 1) -> ttnn.Tensor:
         """Res2Net block with multi-scale feature extraction in TTNN (NLC)."""
         mc = ttnn.L1_MEMORY_CONFIG
         x_nlc = (
@@ -308,7 +308,7 @@ class SpeakerEncoder(LightweightModule):
                 conv_weight = self.pytorch_weights.get(f"{prefix}blocks.{i-1}.conv.weight")
                 conv_bias = self.pytorch_weights.get(f"{prefix}blocks.{i-1}.conv.bias")
                 if conv_weight is not None:
-                    output_part = self._time_delay_net_block(hidden_part, conv_weight, conv_bias)
+                    output_part = self._time_delay_net_block(hidden_part, conv_weight, conv_bias, dilation=dilation)
                 else:
                     output_part = hidden_part
             else:
@@ -316,7 +316,10 @@ class SpeakerEncoder(LightweightModule):
                 conv_bias = self.pytorch_weights.get(f"{prefix}blocks.{i-1}.conv.bias")
                 if conv_weight is not None:
                     output_part = self._time_delay_net_block(
-                        ttnn.add(hidden_part, output_part, memory_config=mc), conv_weight, conv_bias
+                        ttnn.add(hidden_part, output_part, memory_config=mc),
+                        conv_weight,
+                        conv_bias,
+                        dilation=dilation,
                     )
                 else:
                     output_part = ttnn.add(hidden_part, output_part, memory_config=mc)
@@ -368,7 +371,9 @@ class SpeakerEncoder(LightweightModule):
             x = self._time_delay_net_block(x, tdnn1_weight, tdnn1_bias, dilation=1)
 
         # Res2Net
-        x = self._res2net_block(x, f"{prefix}res2net_block.", scale)
+        # Pass dilation per HF: blocks[1]=2, blocks[2]=3, blocks[3]=4 (matches
+        # config.enc_dilations[i] in HF Qwen3TTSSpeakerEncoder). Was always 1.
+        x = self._res2net_block(x, f"{prefix}res2net_block.", scale, dilation=block_idx + 1)
 
         # TDNN2
         tdnn2_weight = self.pytorch_weights.get(f"{prefix}tdnn2.conv.weight")
@@ -414,7 +419,12 @@ class SpeakerEncoder(LightweightModule):
 
         tw_tt, tb_tt = self._conv1d_params_to_ttnn(tdnn_weight, tdnn_bias)
         cw_tt, cb_tt = self._conv1d_params_to_ttnn(conv_weight, conv_bias)
+        # HF AttentiveStatisticsPooling does conv → ReLU → tanh → conv (the
+        # self.tdnn is TimeDelayNetBlock = conv + ReLU). We had been doing
+        # conv → tanh → conv which drifted the speaker embedding. Verified
+        # against QwenLM/Qwen3-TTS reference: PCC 0.96 → 0.9999 after fix.
         a_tt = self._conv1d_same_padding(attention_input, tw_tt, tb_tt)
+        a_tt = ttnn.relu(a_tt)
         a_tt = ttnn.tanh(a_tt)
         a_tt = self._conv1d_same_padding(a_tt, cw_tt, cb_tt)
         attention = ttnn.softmax(a_tt, dim=1, memory_config=mc)
