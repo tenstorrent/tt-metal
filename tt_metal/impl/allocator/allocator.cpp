@@ -21,6 +21,10 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/allocator/allocator.hpp"
 
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/asan_hooks.hpp"
+#endif
+
 namespace tt::tt_metal {
 
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
@@ -111,7 +115,7 @@ void AllocatorImpl::verify_safe_allocation() const {
 }
 
 DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     DeviceAddr address = 0;
     auto size = buffer->aligned_size();
     auto page_size = buffer->aligned_page_size();
@@ -145,7 +149,16 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
         buffer->set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
-        return buffer->per_core_addresses_.at(cores[0]);
+        DeviceAddr return_addr = buffer->per_core_addresses_.at(cores[0]);
+#ifdef TT_METAL_USE_EMULE
+        // HYBRID per-core: enumerate_buffer_ranges reads per_core_addresses_
+        // directly; base_address argument is unused for this path. Release
+        // the mutex first — the hook calls back into get_logical_core_from_bank_id
+        // and friends, which try to re-lock the same mutex.
+        lock.unlock();
+        emulation::on_buffer_allocated(buffer, /*base_address=*/0);
+#endif
+        return return_addr;
     }
 
     switch (buffer_type) {
@@ -189,11 +202,30 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
+#ifdef TT_METAL_USE_EMULE
+    // Release the mutex before invoking the ASan hook. The hook calls back
+    // into the same allocator's get_logical_core_from_bank_id / get_bank_offset
+    // (both of which acquire mutex_), which would deadlock against this lock.
+    // Pass `address` explicitly: Buffer::address_ is not yet stored back at
+    // this point in allocate_buffer's call sequence (Buffer::allocate_impl
+    // assigns it AFTER this function returns), so buffer->address() would
+    // throw inside the hook's enumerator.
+    lock.unlock();
+    emulation::on_buffer_allocated(buffer, address);
+#endif
 
     return address;
 }
 
 void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
+#ifdef TT_METAL_USE_EMULE
+    // Call the hook BEFORE acquiring mutex_ to avoid deadlock — the hook
+    // queries get_bank_offset / get_logical_core_from_bank_id, which lock
+    // mutex_ themselves. Buffer::address() is finalized at this point
+    // (deallocate is called from ~Buffer or explicit DeallocateBuffer, both
+    // of which run after Buffer::allocate_impl finished writing address_).
+    emulation::on_buffer_deallocated(buffer);
+#endif
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
@@ -224,6 +256,15 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
 
 void AllocatorImpl::deallocate_buffers() {
     std::lock_guard<std::mutex> lock(mutex_);
+    // ASan note: we intentionally do NOT iterate allocated_buffers_ here to call
+    // emulation::on_buffer_deallocated. By the time this runs (typically from
+    // ~SubDeviceManager during MeshDevice::close), the Buffer objects have
+    // already been destroyed by their owning shared_ptrs — the entries in
+    // allocated_buffers_ are dangling pointers, and dereferencing them via
+    // Buffer::device() is a heap-use-after-free. The poison left behind from
+    // the per-buffer hooks is harmless: chip teardown will unmap the L1/DRAM
+    // mmaps shortly after, or the next on_buffer_allocated will overwrite the
+    // shadow when the bank manager hands the same range back out.
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();

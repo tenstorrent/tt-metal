@@ -58,6 +58,10 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
+
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/asan_hooks.hpp"
+#endif
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -459,6 +463,10 @@ bool Device::initialize(
         max_alignment);
     default_allocator_ =
         initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
+
+#ifdef TT_METAL_USE_EMULE
+    emulation::on_allocator_configured(this);
+#endif
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal) {

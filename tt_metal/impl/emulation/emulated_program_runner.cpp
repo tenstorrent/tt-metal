@@ -164,11 +164,26 @@ static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
 
 // C-linkage bridge functions for JIT kernels.
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
-    return __emule_bridge_dram ? __emule_bridge_dram + offset : nullptr;
+    if (__emule_bridge_dram == nullptr) {
+        return nullptr;
+    }
+    // Bounds source-of-truth: the SOC descriptor's dram_bank_size, captured at
+    // SWEmuleChip construction. Avoids per-thread plumbing.
+    size_t cap = tt::umd::SWEmuleChip::active_dram_bank_size();
+    if (cap > 0 && offset >= cap) {
+        __emule_bounds_fail("__emule_dram_ptr", "DRAM offset past bank size", offset, /*size=*/0, cap);
+    }
+    return __emule_bridge_dram + offset;
 }
 
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
-    return __emule_bridge_l1 ? __emule_bridge_l1 + offset : nullptr;
+    if (__emule_bridge_l1 == nullptr) {
+        return nullptr;
+    }
+    if (__core != nullptr && offset >= __core->l1_size()) {
+        __emule_bounds_fail("__emule_local_l1_ptr", "L1 offset past core size", offset, /*size=*/0, __core->l1_size());
+    }
+    return __emule_bridge_l1 + offset;
 }
 
 extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
@@ -176,7 +191,12 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
         uint64_t key = (uint64_t(x) << 32) | y;
         auto it = __emule_core_map->find(key);
         if (it != __emule_core_map->end()) {
-            return it->second->l1_ptr(static_cast<uint32_t>(addr));
+            tt_emule::Core* tgt = it->second;
+            if (addr >= tgt->l1_size()) {
+                __emule_bounds_fail(
+                    "__emule_noc_resolve", "NOC offset past target core L1 size", addr, /*size=*/0, tgt->l1_size());
+            }
+            return tgt->l1_ptr(static_cast<uint32_t>(addr));
         }
     }
     return nullptr;
@@ -193,10 +213,50 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_core_map->find(key);
         if (it != __emule_core_map->end()) {
-            return it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
+            tt_emule::Core* tgt = it->second;
+            if (l1_offset >= tgt->l1_size()) {
+                __emule_bounds_fail(
+                    "__emule_resolve_noc_addr",
+                    "NOC offset past target core L1 size",
+                    l1_offset,
+                    /*size=*/0,
+                    tgt->l1_size());
+            }
+            return tgt->l1_ptr(static_cast<uint32_t>(l1_offset));
         }
     }
     return nullptr;
+}
+
+// Sized variant: validates that [offset, offset+size) fits inside the target's
+// L1 region before returning a pointer. Use this from NOC read/write call
+// sites that know the access size; catches "logical" NOC offset bugs that
+// would otherwise land inside valid host memory but past the buffer end.
+extern "C" uint8_t* __emule_resolve_noc_addr_sized(uint64_t noc_addr, uint32_t size, const char* caller) {
+    uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
+    uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
+    uint64_t l1_offset = noc_addr & NOC_LOCAL_MASK;
+
+    if (__emule_core_map == nullptr) {
+        return nullptr;
+    }
+    uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
+    auto it = __emule_core_map->find(key);
+    if (it == __emule_core_map->end()) {
+        return nullptr;
+    }
+
+    tt_emule::Core* tgt = it->second;
+    size_t cap = tgt->l1_size();
+    if (l1_offset > cap || size > cap || l1_offset + size > cap) {
+        __emule_bounds_fail(
+            caller ? caller : "__emule_resolve_noc_addr_sized",
+            "NOC range past target core L1 size",
+            l1_offset,
+            size,
+            cap);
+    }
+    return tgt->l1_ptr(static_cast<uint32_t>(l1_offset));
 }
 
 // Resolve multicast: iterate over rectangle of cores and memcpy to each.
@@ -226,7 +286,17 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
             uint64_t key = (uint64_t(x) << 32) | y;
             auto it = __emule_core_map->find(key);
             if (it != __emule_core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
-                uint8_t* dst = it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
+                tt_emule::Core* tgt = it->second;
+                size_t cap = tgt->l1_size();
+                if (l1_offset > cap || size > cap || l1_offset + size > cap) {
+                    __emule_bounds_fail(
+                        "__emule_multicast_write",
+                        "multicast destination range past target L1 size",
+                        l1_offset,
+                        size,
+                        cap);
+                }
+                uint8_t* dst = tgt->l1_ptr(static_cast<uint32_t>(l1_offset));
                 if (size == sizeof(uint32_t)) {
                     TT_FATAL(
                         reinterpret_cast<uintptr_t>(dst) % alignof(std::atomic<uint32_t>) == 0,
@@ -581,7 +651,28 @@ static std::function<void()> jit_compile_kernel(
     // 7. Compile — output to disk cache path if provided, else temp dir
     std::string so_path = disk_cache_so_path_arg.empty() ? (dir + "/kernel.so") : disk_cache_so_path_arg;
     std::ostringstream cmd;
-    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared -O2 -Wno-c++11-narrowing"
+    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD
+        << " -fPIC -shared -O2 -Wno-c++11-narrowing"
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+        // -Wl,-rpath embeds the clang-rt runtime path (resolved at configure
+        // time via TT_EMULE_ASAN_RT_DIR) so the JIT'd .so can find
+        // libclang_rt.asan-x86_64.so at dlopen-time without LD_LIBRARY_PATH.
+        << " -fsanitize=address -shared-libasan -fno-omit-frame-pointer -g"
+#ifdef TT_EMULE_ASAN_RT_DIR
+        << " -Wl,-rpath," TT_EMULE_ASAN_RT_DIR
+#endif
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) && (!defined(__has_feature) || !__has_feature(address_sanitizer))
+        // -Wl,-rpath embeds the clang-rt runtime path (resolved at configure
+        // time via TT_EMULE_ASAN_RT_DIR) so the JIT'd .so can find
+        // libclang_rt.asan-x86_64.so at dlopen-time without LD_LIBRARY_PATH.
+        << " -fsanitize=address -shared-libasan -fno-omit-frame-pointer -g"
+#ifdef TT_EMULE_ASAN_RT_DIR
+        << " -Wl,-rpath," TT_EMULE_ASAN_RT_DIR
+#endif
+#endif
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
         << " -I\"" << kernel_dir << "\"";
