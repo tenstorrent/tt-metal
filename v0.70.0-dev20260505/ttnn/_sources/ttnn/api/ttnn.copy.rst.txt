@@ -1,0 +1,8 @@
+﻿ttnn.copy
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.copy:
+
+.. autooperation:: ttnn.copy
