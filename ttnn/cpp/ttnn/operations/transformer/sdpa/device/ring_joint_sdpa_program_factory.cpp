@@ -1266,8 +1266,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         if (top_max_q == 0) {
             k_mcast_fallback_reason = "top half has no work";
         } else {
-            const uint32_t top_inj_phys_x = core_work[top_injector_idx].physical_core.x;
-            auto [bot_injector_idx, bot_max_q] = pick_injector(bottom_cores, top_inj_phys_x);
+            const uint32_t top_injector_phys_x = core_work[top_injector_idx].physical_core.x;
+            auto [bot_injector_idx, bot_max_q] = pick_injector(bottom_cores, top_injector_phys_x);
             if (bot_max_q == 0) {
                 k_mcast_fallback_reason = "bottom half has no work in a column != top injector's column";
             } else {
@@ -1286,7 +1286,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                         kc.mcast_start = phys_start;
                         kc.mcast_end = phys_end;
                         kc.injector_physical = injector_physical;
-                        kc.batch = 0;
+                        kc.batch = 0;  // reset: unicast K pass may have set this to a real batch id
                         kc.is_injector = (ci == injector_idx);
                         kc.is_sink = !kc.is_injector;
                         if (kc.is_injector) {
@@ -1308,28 +1308,28 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 configure_chain(top_cores, top_injector_idx, top_max_q, top_phys_start, top_phys_end);
                 configure_chain(bottom_cores, bot_injector_idx, bot_max_q, bot_phys_start, bot_phys_end);
 
-                log_debug(
-                    tt::LogOp,
-                    "K mcast (2 chains): top {} cores, injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{}); "
-                    "bottom {} cores, injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
-                    top_cores.size(),
-                    top_injector_idx,
-                    core_work[top_injector_idx].physical_core.x,
-                    core_work[top_injector_idx].physical_core.y,
-                    top_max_q,
-                    top_phys_start.x,
-                    top_phys_start.y,
-                    top_phys_end.x,
-                    top_phys_end.y,
-                    bottom_cores.size(),
-                    bot_injector_idx,
-                    core_work[bot_injector_idx].physical_core.x,
-                    core_work[bot_injector_idx].physical_core.y,
-                    bot_max_q,
-                    bot_phys_start.x,
-                    bot_phys_start.y,
-                    bot_phys_end.x,
-                    bot_phys_end.y);
+                auto log_chain = [&](const char* label,
+                                     const std::vector<uint32_t>& chain_cores,
+                                     uint32_t injector_idx,
+                                     uint32_t chain_max_q,
+                                     CoreCoord phys_start,
+                                     CoreCoord phys_end) {
+                    log_debug(
+                        tt::LogOp,
+                        "K mcast {} chain: {} cores, injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
+                        label,
+                        chain_cores.size(),
+                        injector_idx,
+                        core_work[injector_idx].physical_core.x,
+                        core_work[injector_idx].physical_core.y,
+                        chain_max_q,
+                        phys_start.x,
+                        phys_start.y,
+                        phys_end.x,
+                        phys_end.y);
+                };
+                log_chain("top", top_cores, top_injector_idx, top_max_q, top_phys_start, top_phys_end);
+                log_chain("bottom", bottom_cores, bot_injector_idx, bot_max_q, bot_phys_start, bot_phys_end);
             }
         }
     }
@@ -1431,7 +1431,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         // Batch chain (K chain in MLA mode): 18 args + 1 for loop padding (only when NHK == 1)
         if (k_uses_batch_chain) {
             batch_chain.append_to_args(reader_args);
-            // Per-core loop padding: each core uses its own chain's max_q (0 when not in mcast)
             reader_args.push_back(k_chain_max_q[i]);
         }
 
