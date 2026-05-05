@@ -1,0 +1,8 @@
+torch>=2.0.0
+torchvision>=0.15.0
+Pillow>=9.0.0
+transformers>=4.30.0
+pycocotools>=2.0.6
+tqdm>=4.64.0
+scipy>=1.10.0
+PyYAML>=6.0
