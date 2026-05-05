@@ -102,19 +102,30 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t in1_pages_bytes = in1_pages * test_config.page_size_bytes;
     uint32_t in1_per_core_read_size_bytes = in1_pages_bytes / test_config.num_subblocks_c_dim;
 
+    // in1 K subblock size: bytes the row-0 sender multicasts per K iteration down its column.
+    uint32_t in1_k_subblock_size_bytes =
+        test_config.subblock_k_dim * test_config.subblock_c_dim * test_config.page_size_bytes;
+
     uint32_t l1_base_address = unit_tests::dm::get_l1_address_and_size(mesh_device, matmul_cores_list[0]).base_address;
 
     // ---- L1 Memory Layout ----
     // l1_base_address:                              in0 source data (per-core K subblocks)
     // l1_base_address + max_source_data + pad:      in0 multicast output (all K subblocks)
-    // aligned(output_end + pad):                    in1 DRAM read output
-    // after in1: barrier scratch
+    // aligned(output_end + pad):                    in1 source (row 0 only, full column from DRAM)
+    // in1_source_end + pad:                         in1 multicast output (all cores)
+    // after in1_mcast_out: barrier scratch
     uint32_t in0_mcast_output_addr = l1_base_address + max_source_data_bytes + matmul::L1_DEBUG_PADDING_BYTES;
     uint32_t in0_output_total_bytes = K * k_subblock_size_bytes;
 
-    uint32_t in1_output_addr_unaligned =
+    // in1_l1_source_addr: row-0 reads the full in1 column slice from DRAM here. Must be
+    // 64-byte aligned so the low bits match the DRAM source address.
+    uint32_t in1_l1_source_addr_unaligned =
         in0_mcast_output_addr + in0_output_total_bytes + matmul::L1_DEBUG_PADDING_BYTES;
-    uint32_t in1_output_addr = (in1_output_addr_unaligned + 63) & ~63U;
+    uint32_t in1_l1_source_addr = (in1_l1_source_addr_unaligned + 63) & ~63U;
+
+    // in1_mcast_output_addr: where the column multicast deposits the full in1 column data
+    // for every core. This is what gets verified against the golden DRAM copy.
+    uint32_t in1_mcast_output_addr = in1_l1_source_addr + in1_per_core_read_size_bytes + matmul::L1_DEBUG_PADDING_BYTES;
 
     // ---- Generate in0 data ----
     uint32_t in0_pages = (R * test_config.subblock_r_dim) * (K * test_config.subblock_k_dim);
@@ -178,6 +189,11 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t sender_valid_sem_id = CreateSemaphore(program, matmul_cores, 1);
     uint32_t receiver_sem_id = CreateSemaphore(program, matmul_cores, 0);
 
+    // in1 multicast semaphores (column-wise on RISCV_1) — row 0 is the fixed sender.
+    uint32_t risc1_sender_sem_id = CreateSemaphore(program, matmul_cores, 0);
+    uint32_t risc1_sender_valid_sem_id = CreateSemaphore(program, matmul_cores, 1);
+    uint32_t risc1_receiver_sem_id = CreateSemaphore(program, matmul_cores, 0);
+
     // Barrier synchronization semaphores
     uint32_t risc0_barrier_sem_id = CreateSemaphore(program, matmul_cores, 0);
     uint32_t risc0_barrier_done_sem_id = CreateSemaphore(program, matmul_cores, 0);
@@ -187,7 +203,7 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     CoreCoord barrier_coordinator_phys = device->worker_core_from_logical_core(matmul_cores_list[0]);
     uint32_t num_cores = matmul_cores_list.size();
 
-    uint32_t risc0_local_barrier_addr = (in1_output_addr + in1_per_core_read_size_bytes + 15) & ~15U;
+    uint32_t risc0_local_barrier_addr = (in1_mcast_output_addr + in1_per_core_read_size_bytes + 15) & ~15U;
     uint32_t risc1_local_barrier_addr = risc0_local_barrier_addr + 16;
 
     // ---- Compile-time args ----
@@ -205,11 +221,15 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
 
     vector<uint32_t> risc1_compile_args = {
         test_config.test_id,                      // 0  Test ID
-        test_config.dram_bank_id,                 // 1  DRAM bank
-        (uint32_t)matmul_physical_start_coord.x,  // 2  Physical start x
-        (uint32_t)matmul_physical_start_coord.y,  // 3  Physical start y
+        test_config.dram_bank_id,                 // 1  DRAM bank row-0 cores read from
+        (uint32_t)matmul_physical_start_coord.x,  // 2  Physical start x (for barrier)
+        (uint32_t)matmul_physical_start_coord.y,  // 3  Physical start y (== sender row y)
         (uint32_t)matmul_physical_end_coord.x,    // 4  Physical end x
         (uint32_t)matmul_physical_end_coord.y,    // 5  Physical end y
+        R,                                        // 6  Number of cores per column (R dim)
+        risc1_sender_sem_id,                      // 7  in1 sender semaphore ID
+        risc1_sender_valid_sem_id,                // 8  in1 sender-valid semaphore ID (init 1)
+        risc1_receiver_sem_id,                    // 9  in1 receiver semaphore ID
     };
 
     // ---- Kernels ----
@@ -261,17 +281,18 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
         }
 
         vector<uint32_t> risc1_core_runtime_args = {
-            in1_per_core_read_addr[col_idx],       // 0  DRAM read address based on column
-            in1_per_core_read_size_bytes,          // 1  DRAM read size
-            in1_output_addr,                       // 2  L1 output address for in1
-            risc1_barrier_sem_id,                  // 3  Barrier arrival semaphore ID
-            (uint32_t)barrier_coordinator_phys.x,  // 4  Barrier coordinator physical X
-            (uint32_t)barrier_coordinator_phys.y,  // 5  Barrier coordinator physical Y
-            num_cores,                             // 6  Total number of cores in barrier
-            risc1_local_barrier_addr,              // 7  Local L1 scratch addr for barrier
-            risc1_barrier_done_sem_id,             // 8  Barrier done semaphore ID
-            1,                                     // 9  Profiling: number of transactions
-            in1_per_core_read_size_bytes,          // 10 Profiling: per-K-subblock transaction size
+            in1_per_core_read_addr[col_idx],       // 0  Per-column DRAM offset (row 0 only reads it)
+            in1_per_core_read_size_bytes,          // 1  Total bytes to read from DRAM (row 0 only)
+            K,                                     // 2  K iterations
+            in1_k_subblock_size_bytes,             // 3  Bytes per K subblock multicast
+            in1_l1_source_addr,                    // 4  Row-0 DRAM read destination in L1
+            in1_mcast_output_addr,                 // 5  All cores: column multicast dest base
+            risc1_barrier_sem_id,                  // 6  Barrier arrival semaphore ID
+            (uint32_t)barrier_coordinator_phys.x,  // 7  Barrier coordinator physical X
+            (uint32_t)barrier_coordinator_phys.y,  // 8  Barrier coordinator physical Y
+            num_cores,                             // 9  Total number of cores in barrier
+            risc1_local_barrier_addr,              // 10 Local L1 scratch addr for barrier
+            risc1_barrier_done_sem_id,             // 11 Barrier done semaphore ID
         };
 
         tt::tt_metal::SetRuntimeArgs(program, risc0_kernel, i, risc0_core_runtime_args);
@@ -315,8 +336,7 @@ bool run_dm_1d_matmul_v2(const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t total_in1_read_elements = in1_per_core_read_size_bytes / sizeof(uint32_t);
     for (auto & i : matmul_cores_list) {
         vector<uint32_t> in1_read_output;
-        detail::ReadFromDeviceL1(
-            device, i, in1_output_addr, in1_per_core_read_size_bytes, in1_read_output);
+        detail::ReadFromDeviceL1(device, i, in1_mcast_output_addr, in1_per_core_read_size_bytes, in1_read_output);
         uint32_t cur_c_dim = i.x - test_config.start_logical_core.x;
         for (uint32_t j = 0; j < total_in1_read_elements; j++) {
             golden_in1_read_output.push_back(in1_input[cur_c_dim * total_in1_read_elements + j]);

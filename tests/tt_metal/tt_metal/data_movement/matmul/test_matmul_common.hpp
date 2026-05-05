@@ -192,7 +192,21 @@ inline std::vector<MatmulTestConfig> get_matmul_test_configs() {
          .num_subblocks_k_dim = 8,
          .subblock_k_dim = 1,
          .subblock_r_dim_sweep = {1u, 2u, 4u, 8u, 16u},
-         .subblock_c_dim_sweep = {1u, 2u, 4u, 8u, 16u, 32u}},
+         .subblock_c_dim_sweep = {1u, 2u, 4u, 8u, 16u}},
+
+        // ID 1031: 8-wide grid version of 1030. Same K=8 + (sub_r, sub_c) Cartesian sweep.
+        // R=7 (not 8) so this fits Wormhole B0 with typical Tensix harvesting (8 cols x
+        // 7 rows usable). 56 cores total. Per-core L1 footprint is independent of R/C in
+        // the 1D path since in0_per_core = K * sub_r * P and in1_per_core = K * sub_c * P,
+        // so the same {1,2,4,8,16} sweep range that fits 1030 also fits 1031. Worst
+        // corner stays at ~1 MiB per col-0 row-0 core.
+        {.test_id = 1031,
+         .num_subblocks_r_dim = 7,
+         .num_subblocks_c_dim = 8,
+         .num_subblocks_k_dim = 8,
+         .subblock_k_dim = 1,
+         .subblock_r_dim_sweep = {1u, 2u, 4u, 8u, 16u},
+         .subblock_c_dim_sweep = {1u, 2u, 4u, 8u, 16u}},
     };
 
     return configs;

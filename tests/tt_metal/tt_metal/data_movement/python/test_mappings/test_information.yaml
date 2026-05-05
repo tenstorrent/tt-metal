@@ -896,6 +896,10 @@ tests:
     name: "1D Matmul Test 1030 - 4x4 K=1 NOC1 Saturation (in1 512KiB per core, page=8192)"
     bandwidth_mode: "combined"
 
+  1031:
+    name: "1D Matmul Test 1031 - 8x7 K=8 (sub_r, sub_c) 2D Sweep"
+    bandwidth_mode: "combined"
+
   1112:
     name: "1D V2 Matmul Test 1112 - 2x2 K=2 Subblock K Sweep"
     bandwidth_mode: "combined"
@@ -936,6 +940,10 @@ tests:
     name: "1D V2 Matmul Test 1130 - 4x4 K=1 NOC1 Saturation (in1 512KiB per core, page=8192)"
     bandwidth_mode: "combined"
 
+  1131:
+    name: "1D V2 Matmul Test 1131 - 8x7 K=8 (sub_r, sub_c) 2D Sweep"
+    bandwidth_mode: "combined"
+
   1212:
     name: "2D Matmul Test 1212 - 2x2 K=2 Subblock K Sweep"
     bandwidth_mode: "combined"
@@ -974,4 +982,8 @@ tests:
 
   1230:
     name: "2D Matmul Test 1230 - 4x4 K=1 NOC1 Saturation (in1 512KiB per core, page=8192)"
+    bandwidth_mode: "combined"
+
+  1231:
+    name: "2D Matmul Test 1231 - 8x7 K=8 (sub_r, sub_c) 2D Sweep"
     bandwidth_mode: "combined"
