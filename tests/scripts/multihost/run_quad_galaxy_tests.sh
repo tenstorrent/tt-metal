@@ -54,6 +54,167 @@ extract_hosts_from_hostfile() {
     awk '!/^#/ && NF {print $1}' "$hostfile" | head -n "$host_count" | paste -sd,
 }
 
+validate_dual_hosts_csv() {
+    local hosts_csv="$1"
+    local host0 host1 extra
+
+    IFS=',' read -r host0 host1 extra <<<"${hosts_csv}"
+    host0="${host0//[[:space:]]/}"
+    host1="${host1//[[:space:]]/}"
+    extra="${extra//[[:space:]]/}"
+    if [[ -z "${host0}" || -z "${host1}" || -n "${extra}" ]]; then
+        echo "Error: DUAL_GALAXY_HOSTS must be exactly two hosts in 'host0,host1' format." >&2
+        return 1
+    fi
+
+    echo "${host0},${host1}"
+}
+
+resolve_dual_hosts() {
+    local normalized_hosts
+
+    if [[ -n "${DUAL_GALAXY_HOSTS:-}" ]]; then
+        normalized_hosts="$(validate_dual_hosts_csv "${DUAL_GALAXY_HOSTS}")" || return 1
+        echo "${normalized_hosts}"
+        return 0
+    fi
+
+    local hostfile="${DUAL_GALAXY_HOSTFILE:-/etc/mpirun/hostfile}"
+    if [[ ! -f "${hostfile}" ]]; then
+        echo "Error: hostfile '${hostfile}' does not exist. Set DUAL_GALAXY_HOSTS=host0,host1 to choose dual hosts explicitly." >&2
+        return 1
+    fi
+
+    local inferred_hosts
+    inferred_hosts="$(extract_hosts_from_hostfile 2 "${hostfile}")" || return 1
+    normalized_hosts="$(validate_dual_hosts_csv "${inferred_hosts}")" || {
+        echo "Error: unable to infer two hosts from '${hostfile}'. Set DUAL_GALAXY_HOSTS=host0,host1 to choose dual hosts explicitly." >&2
+        return 1
+    }
+
+    echo "${normalized_hosts}"
+}
+
+rankfile_host_for_rank() {
+    local rankfile="$1"
+    local rank="$2"
+
+    awk -v target_rank="${rank}" '
+        $1 == "rank" {
+            split($2, a, "=")
+            if (a[1] == target_rank) {
+                print a[2]
+                exit
+            }
+        }
+    ' "${rankfile}"
+}
+
+rankfile_slot_for_host() {
+    local rankfile="$1"
+    local host="$2"
+
+    awk -v target_host="${host}" '
+        $1 == "rank" {
+            split($2, a, "=")
+            if (a[2] == target_host) {
+                for (i = 3; i <= NF; i++) {
+                    if ($i ~ /^slot=/) {
+                        print substr($i, 6)
+                        exit
+                    }
+                }
+                print "0:*"
+                exit
+            }
+        }
+    ' "${rankfile}"
+}
+
+generate_dual_rankfile_for_hosts() {
+    local hosts_csv="$1"
+    local source_rankfile="${2:-}"
+    local host0 host1 extra
+    local slot0="0:*"
+    local slot1="0:*"
+    local tt_metal_root
+    local rankfile_dir
+
+    IFS=',' read -r host0 host1 extra <<<"${hosts_csv}"
+    host0="${host0//[[:space:]]/}"
+    host1="${host1//[[:space:]]/}"
+
+    if [[ -n "${source_rankfile}" && -f "${source_rankfile}" ]]; then
+        local source_slot0 source_slot1
+        source_slot0="$(rankfile_slot_for_host "${source_rankfile}" "${host0}")"
+        source_slot1="$(rankfile_slot_for_host "${source_rankfile}" "${host1}")"
+
+        if [[ -n "${source_slot0}" ]]; then
+            slot0="${source_slot0}"
+        else
+            echo "Warning: host '${host0}' not found in '${source_rankfile}'; using default slot '${slot0}'." >&2
+        fi
+        if [[ -n "${source_slot1}" ]]; then
+            slot1="${source_slot1}"
+        else
+            echo "Warning: host '${host1}' not found in '${source_rankfile}'; using default slot '${slot1}'." >&2
+        fi
+    fi
+
+    tt_metal_root="${TT_METAL_HOME:-$(pwd -P)}"
+    rankfile_dir="${tt_metal_root}/generated/artifacts"
+    mkdir -p "${rankfile_dir}" || {
+        echo "Error: unable to create rankfile output directory '${rankfile_dir}'." >&2
+        return 1
+    }
+
+    local generated_rankfile="${rankfile_dir}/dual_galaxy_rankfile.generated"
+    if ! cat >"${generated_rankfile}" <<EOF
+# Auto-generated rankfile to match selected dual hosts.
+rank 0=${host0} slot=${slot0}
+rank 1=${host1} slot=${slot1}
+EOF
+    then
+        echo "Error: unable to write generated rankfile '${generated_rankfile}'." >&2
+        return 1
+    fi
+
+    echo "${generated_rankfile}"
+}
+
+resolve_dual_rankfile() {
+    local hosts_csv="$1"
+    local rankfile="${DUAL_GALAXY_RANKFILE:-/etc/mpirun/rankfile}"
+    local host0 host1 extra
+    local rank0_host rank1_host
+    local generated_rankfile
+
+    if [[ ! -f "${rankfile}" ]]; then
+        if [[ -n "${DUAL_GALAXY_RANKFILE:-}" ]]; then
+            echo "Error: rankfile '${rankfile}' does not exist." >&2
+            return 1
+        fi
+        generated_rankfile="$(generate_dual_rankfile_for_hosts "${hosts_csv}")" || return 1
+        echo "Info: source rankfile '${rankfile}' is missing. Using generated rankfile '${generated_rankfile}' for selected dual hosts '${hosts_csv}'." >&2
+        echo "${generated_rankfile}"
+        return 0
+    fi
+
+    IFS=',' read -r host0 host1 extra <<<"${hosts_csv}"
+    rank0_host="$(rankfile_host_for_rank "${rankfile}" 0)"
+    rank1_host="$(rankfile_host_for_rank "${rankfile}" 1)"
+
+    if [[ "${rank0_host}" == "${host0}" && "${rank1_host}" == "${host1}" ]]; then
+        echo "${rankfile}"
+        return 0
+    fi
+
+    generated_rankfile="$(generate_dual_rankfile_for_hosts "${hosts_csv}" "${rankfile}")" || return 1
+    echo "Info: source rankfile '${rankfile}' does not match selected dual hosts '${hosts_csv}'. Using generated rankfile '${generated_rankfile}'." >&2
+    echo "${generated_rankfile}"
+    return 0
+}
+
 ###############################################################################
 # Run summary: every pytest case (via junitxml) + native steps; test_summary.txt
 ###############################################################################
@@ -218,11 +379,11 @@ run_quad_galaxy_unit_tests() {
   fail=0
 
   export_tcp_interface_for_multihost
-  local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
+  local mpi_args_base="--map-by ppr:1:node"
   local tcp_interface="${TCP_INTERFACE}"
   local hosts="$(extract_hosts_from_hostfile 4)"
   local rank_binding_yaml="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
-  local tt_mpi_args="--host $hosts --map-by rankfile:file=/etc/mpirun/rankfile --bind-to none --output-filename logs/mpi_job"
+  local tt_mpi_args="--host $hosts --map-by ppr:1:node --bind-to none --output-filename logs/mpi_job"
   local mpi_host="--host $hosts"
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ${tcp_interface} --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
@@ -316,18 +477,23 @@ resolve_deepseekv3_model() {
 
 setup_dual_galaxy_env() {
     _ensure_local_tt_metal_cache
+
+    local resolved_hosts resolved_rankfile
+    resolved_hosts="$(resolve_dual_hosts)" || exit 1
+    resolved_rankfile="$(resolve_dual_rankfile "${resolved_hosts}")" || exit 1
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
-    export HOSTS="$(extract_hosts_from_hostfile 2)"
-    export RANKFILE=/etc/mpirun/rankfile
-    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
+    export HOSTS="${resolved_hosts}"
+    export RANKFILE="${resolved_rankfile}"
+    export MPI_ARGS="--host $HOSTS --map-by ppr:1:node --bind-to none --output-filename logs/mpi_job"
     export_tcp_interface_for_multihost
     mkdir -p logs
     mkdir -p generated/artifacts
 
     echo "Using dual Galaxy hosts: ${HOSTS}"
     echo "Using MPI TCP interface (tt-run / Open MPI): ${TCP_INTERFACE}"
-    echo "Using dual Galaxy rankfile: ${RANKFILE}"
+    echo "Using MPI mapping policy: ppr:1:node (one rank per host)"
+    echo "Resolved dual Galaxy rankfile (diagnostic only): ${RANKFILE}"
 
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
@@ -355,7 +521,7 @@ setup_quad_galaxy_env() {
     export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
     export HOSTS="$(extract_hosts_from_hostfile 4)"
     export RANKFILE=/etc/mpirun/rankfile
-    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
+    export MPI_ARGS="--host $HOSTS --map-by ppr:1:node --bind-to none --output-filename logs/mpi_job"
     export_tcp_interface_for_multihost
     mkdir -p logs
     mkdir -p generated/artifacts
@@ -375,7 +541,8 @@ setup_quad_galaxy_env() {
 
     echo "Using quad Galaxy hosts: ${HOSTS}"
     echo "Using MPI TCP interface (tt-run / Open MPI): ${TCP_INTERFACE}"
-    echo "Using quad Galaxy rankfile: ${RANKFILE}"
+    echo "Using MPI mapping policy: ppr:1:node (one rank per host)"
+    echo "Using quad Galaxy rankfile (diagnostic only): ${RANKFILE}"
 
     resolve_deepseekv3_model
     _resolve_deepseekv3_cache
