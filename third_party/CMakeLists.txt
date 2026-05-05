@@ -429,7 +429,7 @@ find_program(
     REQUIRED
 )
 
-set(KISSAT_EXT_BUILD_DIR "${kissat_SOURCE_DIR}/build_tt_metal")
+set(KISSAT_EXT_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/kissat_build")
 include(ExternalProject)
 ExternalProject_Add(
     kissat_external
@@ -442,7 +442,7 @@ ExternalProject_Add(
     CONFIGURE_COMMAND
         "${CMAKE_COMMAND}" -E chdir "${KISSAT_EXT_BUILD_DIR}" sh "${kissat_SOURCE_DIR}/configure" -fPIC
     BUILD_COMMAND
-        "${CMAKE_COMMAND}" -E chdir "${KISSAT_EXT_BUILD_DIR}" ${KISSAT_GNU_MAKE} libkissat.a
+        "${CMAKE_COMMAND}" -E chdir "${KISSAT_EXT_BUILD_DIR}" ${KISSAT_GNU_MAKE} -j4 libkissat.a
     INSTALL_COMMAND
         ""
     BUILD_BYPRODUCTS
@@ -451,7 +451,7 @@ ExternalProject_Add(
 )
 
 add_library(kissat STATIC IMPORTED GLOBAL)
-add_library(TT::ThirdParty::kissat ALIAS kissat)
+add_library(kissat::kissat ALIAS kissat)
 set_target_properties(
     kissat
     PROPERTIES
