@@ -48,6 +48,7 @@ jobs:
           {name: model},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
