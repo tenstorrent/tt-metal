@@ -23,11 +23,61 @@ option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
 option(TT_METAL_USE_EMULE "Build with tt-emule software emulation (no hardware required)" OFF)
 set(TT_EMULE_PATH "" CACHE PATH "Local path to tt-emule source (overrides CPM fetch from GitHub)")
+option(TT_EMULE_ASAN "Build emulator with AddressSanitizer (requires TT_METAL_USE_EMULE=ON)" OFF)
 
 if(TT_METAL_USE_EMULE)
     set(TT_UMD_BUILD_EMULE ON)
     if(TT_EMULE_PATH)
         set(CPM_tt_emule_SOURCE "${TT_EMULE_PATH}")
+    endif()
+endif()
+
+if(TT_EMULE_ASAN)
+    if(NOT TT_METAL_USE_EMULE)
+        message(FATAL_ERROR "TT_EMULE_ASAN requires TT_METAL_USE_EMULE=ON")
+    endif()
+
+    # SWEmuleChip's ASan poison hooks call __emule_buffer_alloc/free, defined
+    # in tt-emule. The main tt-metal libraries link tt-emule and resolve them,
+    # but UMD's standalone tools (harvesting, system_health, etc.) link only
+    # libtt-umd.so + spdlog and have no path to those symbols — link fails.
+    # Force TT_UMD_BUILD_TOOLS=OFF for ASan builds; the diagnostic tools target
+    # real silicon and aren't exercised by the emulation regression anyway.
+    set(TT_UMD_BUILD_TOOLS OFF CACHE BOOL "Disabled for ASan builds (tools don't link tt-emule)" FORCE)
+    # -shared-libasan is required because the JIT'd kernel .so uses the
+    # dynamic libclang_rt.asan; the host must match or the loader rejects
+    # the kernel with "incompatible ASan runtimes".
+    add_compile_options(
+        -fsanitize=address
+        -shared-libasan
+        -fno-omit-frame-pointer
+        -g
+    )
+    add_link_options(
+        -fsanitize=address
+        -shared-libasan
+    )
+
+    # Resolve the clang-rt directory so the JIT command can rpath the
+    # dynamic libasan into each kernel .so. Without this, dlopen of the
+    # kernel .so fails with "libclang_rt.asan-x86_64.so: cannot open
+    # shared object file" unless LD_LIBRARY_PATH is set externally.
+    execute_process(
+        COMMAND
+            ${CMAKE_CXX_COMPILER} -print-file-name=libclang_rt.asan-x86_64.so
+        OUTPUT_VARIABLE _ASAN_RT_LIB
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(_ASAN_RT_LIB AND IS_ABSOLUTE "${_ASAN_RT_LIB}")
+        get_filename_component(_ASAN_RT_DIR "${_ASAN_RT_LIB}" DIRECTORY)
+        set(TT_EMULE_ASAN_RT_DIR "${_ASAN_RT_DIR}" CACHE INTERNAL "clang-rt asan dir")
+        message(STATUS "TT_EMULE_ASAN: using clang-rt at ${TT_EMULE_ASAN_RT_DIR}")
+    else()
+        message(
+            WARNING
+            "TT_EMULE_ASAN: could not resolve libclang_rt.asan-x86_64.so via "
+            "${CMAKE_CXX_COMPILER}. JIT kernels may fail to dlopen."
+        )
     endif()
 endif()
 
