@@ -262,6 +262,8 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
             CoreCoord virtual_core{dram_core.x, dram_core.y};
+            cluster_.l1_barrier(device_id);
+            cluster_.dram_barrier(device_id);
             cluster_.write_core(
                 dram_zero_vec.data(),
                 dram_l1_size,
@@ -644,13 +646,25 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
             end_core.value(),
             l1_offset_addr);
     } else {
+        if (core_type == HalProgrammableCoreType::DRAM) {
+            cluster_.l1_barrier(device_id);
+            cluster_.dram_barrier(device_id);
+        }
         cluster_.write_core(
             dram_noc_data, dram_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), mem_bank_to_noc_addr);
 
         uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
+        if (core_type == HalProgrammableCoreType::DRAM) {
+            cluster_.l1_barrier(device_id);
+            cluster_.dram_barrier(device_id);
+        }
         cluster_.write_core(l1_noc_data, l1_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), l1_noc_addr);
 
         uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
+        if (core_type == HalProgrammableCoreType::DRAM) {
+            cluster_.l1_barrier(device_id);
+            cluster_.dram_barrier(device_id);
+        }
         cluster_.write_core(
             dram_bank_offset_map_[device_id].data(),
             dram_offset_sz_in_bytes,
@@ -658,6 +672,10 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
             dram_offset_addr);
 
         uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
+        if (core_type == HalProgrammableCoreType::DRAM) {
+            cluster_.l1_barrier(device_id);
+            cluster_.dram_barrier(device_id);
+        }
         cluster_.write_core(
             l1_bank_offset_map_[device_id].data(),
             l1_offset_sz_in_bytes,
@@ -1095,6 +1113,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                         auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+                        cluster_.l1_barrier(device_id);
+                        cluster_.dram_barrier(device_id);
                         llrt::test_load_write_read_risc_binary(
                             binary_mem, device_id, virtual_core, core_type_idx, processor_class, drisc_id);
                     }
@@ -1105,6 +1125,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                 launch_msg.kernel_config().mode() = dev_msgs::DISPATCH_MODE_HOST;
                 prepare_initial_launch_msg();
                 uint64_t launch_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH);
+                cluster_.l1_barrier(device_id);
+                cluster_.dram_barrier(device_id);
                 cluster_.write_core(
                     init_launch_msg_data.data(),
                     init_launch_msg_data.size(),
@@ -1113,6 +1135,8 @@ void RiscFirmwareInitializer::initialize_firmware(
             }
             if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteGoMsg)) {
                 uint64_t go_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG);
+                cluster_.l1_barrier(device_id);
+                cluster_.dram_barrier(device_id);
                 cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
             }
             if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteMailboxPtrs)) {
@@ -1121,14 +1145,20 @@ void RiscFirmwareInitializer::initialize_firmware(
                 uint64_t go_message_index_addr =
                     hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX);
                 uint32_t zero = 0;
+                cluster_.l1_barrier(device_id);
+                cluster_.dram_barrier(device_id);
                 cluster_.write_core(
                     &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
+                cluster_.l1_barrier(device_id);
+                cluster_.dram_barrier(device_id);
                 cluster_.write_core(
                     &zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
             }
 
             // Write reset PC (register address, no L1 NOC offset needed)
             if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteResetPc)) {
+                cluster_.l1_barrier(device_id);
+                cluster_.dram_barrier(device_id);
                 cluster_.write_core(
                     &jit_build_config.fw_launch_addr_value,
                     sizeof(uint32_t),
@@ -1258,6 +1288,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepWriteCoreInfo)) {
                 uint64_t core_info_addr =
                     hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
+                cluster_.l1_barrier(device_id);
+                cluster_.dram_barrier(device_id);
                 cluster_.write_core(
                     dram_core_info.data(),
                     dram_core_info.size(),
