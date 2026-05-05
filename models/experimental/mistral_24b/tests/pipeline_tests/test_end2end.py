@@ -262,6 +262,7 @@ def run_generation_exactly_like_test_end2end(
         page_table=page_table,
         kv_cache=tt_kv_cache,
         prompt_lens=decoding_pos,
+        enable_trace=False,
         vision_model=vision_model,
         processed_inputs=processed_inputs,
     )
