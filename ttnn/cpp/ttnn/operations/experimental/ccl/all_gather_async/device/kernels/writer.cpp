@@ -13,6 +13,9 @@
 #include <array>
 #include <type_traits>
 
+// #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
+
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
 
@@ -24,12 +27,13 @@ constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 constexpr uint32_t cb_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t out_page_size = get_compile_time_arg_val(2);
 constexpr uint32_t packet_size = get_compile_time_arg_val(3);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
-constexpr uint32_t start_distance_in_hops_forward = get_compile_time_arg_val(6);
-constexpr uint32_t range_hops_forward = get_compile_time_arg_val(7);
-constexpr uint32_t start_distance_in_hops_backward = get_compile_time_arg_val(8);
-constexpr uint32_t range_hops_backward = get_compile_time_arg_val(9);
+// constexpr uint32_t num_targets_forward_direction = 4; //get_compile_time_arg_val(4);
+// constexpr uint32_t num_targets_backward_direction = 3; //get_compile_time_arg_val(5);
+// constexpr uint32_t start_distance_in_hops_forward = 1; //get_compile_time_arg_val(6);
+constexpr uint32_t range_hops_forward = 4;  // get_compile_time_arg_val(7);
+// constexpr uint32_t start_distance_in_hops_backward = 1; //get_compile_time_arg_val(8);
+constexpr uint32_t range_hops_backward = 3;            // get_compile_time_arg_val(9);
+constexpr bool load_balance_across_two_routes = true;  // TODO hardcoded, = true for ring with even devices
 
 inline constexpr uint32_t sharded_args_start_idx = 10;
 
@@ -87,7 +91,9 @@ public:
         std::array<uint8_t, 2> ranges,
         uint32_t num_connections) :
         fabric_connection{manager},
-        scatter_route_id{PacketHeaderPool::allocate_header_n(num_connections)},
+        route_id_1{PacketHeaderPool::allocate_header_n(num_connections)},
+        route_id_2{load_balance_across_two_routes ? PacketHeaderPool::allocate_header_n(num_connections) : route_id_1},
+        use_route_1{true},
         scatter_header({}, {}) {
         scatter_header.chunk_count = 0;
         const auto default_scatter_header = [] {
@@ -107,7 +113,23 @@ public:
 
         fabric_multicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            fabric_connection, scatter_route_id, starts.data(), ranges.data(), default_scatter_header, packet_size);
+            fabric_connection, route_id_1, starts.data(), ranges.data(), default_scatter_header, packet_size);
+
+        // Ring topology: alternate between two routes for load balancing.
+        // Example for 8 device ring:
+        //    route_1 = 4 devices forward and 3 devices backward
+        //    route_2 = 3 devices forward and 4 devices backward
+        if constexpr (load_balance_across_two_routes) {
+            std::array<uint8_t, 2> swapped_ranges = {ranges[1], ranges[0]};
+            fabric_multicast_noc_scatter_write_set_state<
+                UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+                fabric_connection,
+                route_id_2,
+                starts.data(),
+                swapped_ranges.data(),
+                default_scatter_header,
+                packet_size);
+        }
     }
 
     void send(uint32_t cb_out_page_start, uint64_t tensor_page_addr) {
@@ -122,18 +144,23 @@ public:
             noc_async_writes_flushed();
             fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                 fabric_connection,
-                scatter_route_id,
+                use_route_1 ? route_id_1 : route_id_2,
                 packet_data_read_ptr,
                 scatter_header,
                 out_page_size * num_out_pages_per_packet);
 
             scatter_header.chunk_count = 0;
+            if constexpr (load_balance_across_two_routes) {
+                use_route_1 = !use_route_1;  // alternate between routes for load balancing
+            }
         }
     }
 
 private:
     tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection;
-    uint8_t scatter_route_id;
+    uint8_t route_id_1;
+    uint8_t route_id_2;
+    bool use_route_1;
     uint32_t packet_data_read_ptr;
     NocUnicastScatterCommandHeader scatter_header;
 };
@@ -164,14 +191,21 @@ void kernel_main() {
     constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
     auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 
+    // DPRINT << "out_page_size=" << out_page_size << " pages_per_packet=" << num_out_pages_per_packet << "
+    // pages_per_cb=" << outputs_per_cb_page << ENDL();
+    DEVICE_PRINT(
+        "out_page_size={} pages_per_packet={} pages_per_cb={} scatter={}\n",
+        out_page_size,
+        num_out_pages_per_packet,
+        outputs_per_cb_page,
+        scatter);
+
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_for_fab);
 
-    std::array starts = {
-        static_cast<uint8_t>(start_distance_in_hops_forward), static_cast<uint8_t>(start_distance_in_hops_backward)};
+    std::array starts = {static_cast<uint8_t>(1), static_cast<uint8_t>(1)};
     std::array ranges = {static_cast<uint8_t>(range_hops_forward), static_cast<uint8_t>(range_hops_backward)};
     if (ranges[0] == 0) {
-        starts[0] = starts[1];
         ranges[0] = ranges[1];
     }
 
@@ -191,7 +225,7 @@ void kernel_main() {
         sem_route_id,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
-    uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
+    uint32_t num_total_targets = range_hops_forward + range_hops_backward;
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
 
@@ -204,18 +238,15 @@ void kernel_main() {
         cb_wait_front(cb0_id, 1);
         auto l1_read_addr = get_read_ptr(cb0_id);
 
-        for (uint32_t output = 0u; output < outputs_per_cb_page; output++) {
-            if (page_id + output >= output_page_id_end) [[unlikely]] {
-                break;
-            };
-            auto out_page_start = l1_read_addr + output * out_page_size;
-            auto local_tensor_page_addr = tensor0_addrgen.get_noc_addr(page_id + output, 0);
+        const auto page_id_end = page_id + outputs_per_cb_page;
+        for (; page_id < page_id_end && page_id < output_page_id_end; ++page_id) {
             auto fabric_tensor_page_addr =
-                tt::tt_fabric::linear::addrgen_detail::get_noc_address(tensor0_addrgen, page_id + output, 0);
-            writer.send(out_page_start, fabric_tensor_page_addr);
-            noc_async_write(out_page_start, local_tensor_page_addr, out_page_size);
+                tt::tt_fabric::linear::addrgen_detail::get_noc_address(tensor0_addrgen, page_id, 0);
+            writer.send(l1_read_addr, fabric_tensor_page_addr);
+            auto local_tensor_page_addr = tensor0_addrgen.get_noc_addr(page_id, 0);
+            noc_async_write(l1_read_addr, local_tensor_page_addr, out_page_size);
+            l1_read_addr += out_page_size;
         }
-        page_id += outputs_per_cb_page;
 
         noc_async_writes_flushed();
         cb_pop_front(cb0_id, 1);
