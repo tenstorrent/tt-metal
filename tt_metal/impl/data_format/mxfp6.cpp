@@ -22,7 +22,7 @@
 namespace {
 
 // MXFP6R = S1E3M2: 6 bits stored in the high bits of an 8-bit byte (bits 7-2),
-// bits 1-0 are zero. Max finite = 1.75 * 2^4 = 28.
+// bits 1-0 are zero.
 constexpr tt::tt_metal::mx::FormatParams kMxFp6RParams = {
     .block_size = 32,
     .scale_bias = 0x7F,
@@ -43,7 +43,7 @@ constexpr tt::tt_metal::mx::FormatParams kMxFp6RParams = {
 };
 
 // MXFP6P = S1E2M3: 6 bits stored in the high bits of an 8-bit byte (bits 7-2),
-// bits 1-0 are zero. Max finite = 1.875 * 2^2 = 7.5.
+// bits 1-0 are zero.
 constexpr tt::tt_metal::mx::FormatParams kMxFp6PParams = {
     .block_size = 32,
     .scale_bias = 0x7F,
