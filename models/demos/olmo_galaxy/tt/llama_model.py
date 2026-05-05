@@ -1,0 +1,832 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import torch
+from tqdm import tqdm
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.common.sampling.generator import SamplingGenerator
+from models.demos.olmo_galaxy.tt.distributed_norm import DistributedNorm
+from models.demos.olmo_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.olmo_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
+from models.demos.olmo_galaxy.tt.llama_decoder import TtTransformerBlock
+from models.demos.olmo_galaxy.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.olmo_galaxy.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.olmo_galaxy.tt.lm_head import LMHead
+from models.demos.olmo_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.tt_transformers.tt.rope import get_rot_mats
+
+
+class TtTransformer(LightweightModule):
+    def __init__(
+        self,
+        args,
+        dtype,
+        mesh_device,
+        state_dict,
+        weight_cache_path,
+        paged_attention_config=None,
+        use_paged_kv_cache=False,
+        enable_prefetcher_performance_mode=False,
+        mode="decode",
+        allocate_prefill_buffers=True,
+        decode_mode_only=False,
+    ):
+        super().__init__()
+        self.args = args
+        self.vocab_size = args.vocab_size
+        assert self.vocab_size > 0
+        self.n_layers = args.n_layers
+        self.mesh_device = mesh_device
+        self.dtype = dtype
+        self.model_config = args.get_model_config()
+        self.grid_size = self.args.max_grid_size
+        self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
+        state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.allocate_prefill_buffers = allocate_prefill_buffers
+        self.paged_attention_config = paged_attention_config
+        self.decode_mode_only = decode_mode_only
+
+        self.embd = TtLlamaEmbedding(
+            mesh_device=mesh_device,
+            args=args,
+            weight_cache_path=args.weight_cache_path(dtype),
+            state_dict=state_dict,
+            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+        )
+
+        self.rope_setup = TtLlamaRotarySetup(
+            mesh_device,
+            args.max_batch_size,
+            args.head_dim,
+            args.max_seq_len,
+            args.rope_theta,
+            args.use_scaled_rope,
+            args.rope_scaling_factor,
+            use_yarn=getattr(args, "is_olmo", False),
+            original_max_position_embeddings=getattr(args, "orig_context_len", 8192),
+            beta_fast=getattr(args, "yarn_beta_fast", 32.0),
+            beta_slow=getattr(args, "yarn_beta_slow", 1.0),
+            sub_core_grids=getattr(args, "rope_sub_core_grids", None),
+            start_core=getattr(args, "rope_start_core", None),
+        )
+        self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
+
+        self.is_prefill_setup = False
+        self.is_decode_setup = False
+        self.prefetcher_setup = None
+        self.mesh_sub_device_manager_id_decode = None
+        self.mesh_sub_device_manager_id_prefill = None
+
+        # First initialization of decode CCLs and prefetcher
+        self.setup_decode()
+        self.is_decode_setup = True
+
+        self.layers = [
+            TtTransformerBlock(
+                args=args,
+                mesh_device=mesh_device,
+                dtype=dtype,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=i,
+                n_layers=self.n_layers,
+                transformation_mats=self.trans_mats_dict,
+                paged_attention_config=paged_attention_config,
+                use_paged_kv_cache=use_paged_kv_cache,
+                prefetcher_setup=self.prefetcher_setup,
+                tt_ccl=self.tt_ccl,
+            )
+            for i in tqdm(range(self.n_layers))
+        ]
+        self.norm = DistributedNorm(
+            RMSNorm(
+                device=mesh_device,
+                dim=args.dim,
+                state_dict=state_dict,
+                state_dict_prefix=args.get_state_dict_prefix("", None),
+                weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="norm",
+                is_distributed=self.args.is_distributed_norm,
+                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+            ),
+            args,
+            tt_ccl=self.tt_ccl,
+            ccl_topology=self.model_config["CCL_TOPOLOGY"],
+        )
+
+        state_dict_prefix = args.get_state_dict_prefix("", None)
+
+        self.lm_head = LMHead(
+            args=args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            state_dict_prefix=state_dict_prefix,
+            weight_cache_path=weight_cache_path,
+            tt_ccl=self.tt_ccl,
+            prefetcher_setup=self.prefetcher_setup,
+        )
+        if not self.decode_mode_only:  # demo_decode.py uses decode mode only. In this case avoid initializing prefill
+            # First initialization of prefill CCLs and prefetcher. It needs to be after initialization of layers, norm and lm_head since those switch modes as well
+            # This initialization is required to avoid race condition due to all buffers and semaphores not being allocated at initialization
+            self.switch_mode("prefill")
+
+        if mode == "decode" and self.prefetcher_setup is not None and self.is_decode_setup:
+            self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+        self.tt_rot_mats_prefill = None
+
+    def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
+        self.prefetcher_setup = TtLlamaPrefetcherSetup(
+            self.mesh_device,
+            n_tensors=0,
+            n_layers=self.n_layers,
+            mode="prefill",
+            mesh_sub_device_manager_id_prefill=mesh_sub_device_manager_id_prefill,
+            save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
+        )
+        self.mesh_sub_device_manager_id_prefill = self.prefetcher_setup.mesh_sub_device_manager_id_prefill
+        self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
+        if mesh_sub_device_manager_id_prefill is None:
+            self.tt_ccl = TT_CCL(
+                self.mesh_device,
+                self.args,
+                self.prefetcher_setup.worker_sub_device_id,
+                mode="prefill",
+                allocate_prefill_buffers=self.allocate_prefill_buffers,
+                is_qwen=True if self.args.is_qwen else False,
+                is_olmo=getattr(self.args, "is_olmo", False),
+            )
+        else:
+            self.tt_ccl = self.tt_ccl_prefill
+            # Reset physical semaphores on both prefill and decode CCL objects to
+            # clear any stale state left by the previous request's decode phase.
+            if getattr(self.args, "is_olmo", False):
+                self.tt_ccl.reset_gather_semaphores()
+            else:
+                self.tt_ccl.reset_gather_and_buffer_idx()
+            if hasattr(self, "tt_ccl_decode"):
+                if getattr(self.args, "is_olmo", False):
+                    self.tt_ccl_decode.reset_gather_semaphores()
+                else:
+                    self.tt_ccl_decode.reset_gather_and_buffer_idx()
+
+    def setup_decode(self, mesh_sub_device_manager_id_decode=None):
+        use_prefetcher = getattr(self.args, "use_prefetcher", True)
+        if not use_prefetcher:
+            self.prefetcher_setup = None
+            worker_sub_device_id = ttnn.SubDeviceId(0)
+            if mesh_sub_device_manager_id_decode is None:
+                # First decode setup: create and load a new sub-device manager.
+                all_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
+                all_sub_device = ttnn.SubDevice([all_core_range_set])
+                sub_device_manager = self.mesh_device.create_sub_device_manager([all_sub_device], 0)
+                self.mesh_device.load_sub_device_manager(sub_device_manager)
+                self.mesh_sub_device_manager_id_decode = sub_device_manager
+                self.tt_ccl = TT_CCL(
+                    self.mesh_device,
+                    self.args,
+                    worker_sub_device_id=worker_sub_device_id,
+                    is_olmo=getattr(self.args, "is_olmo", False),
+                )
+                self.sampling = SamplingGenerator(
+                    args=self.args,
+                    mesh_device=self.mesh_device,
+                    tt_ccl=self.tt_ccl,
+                )
+            else:
+                # Subsequent decode setups: reload the existing sub-device manager so that
+                # any captured traces (which reference the original manager ID) remain valid.
+                self.mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_decode)
+                self.tt_ccl = self.tt_ccl_decode
+                if getattr(self.args, "is_olmo", False):
+                    self.tt_ccl.reset_gather_semaphores()
+                else:
+                    self.tt_ccl.reset_gather_and_buffer_idx()
+            self.mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+            self._worker_sub_device_id = worker_sub_device_id
+            return
+
+        self.prefetcher_setup = TtLlamaPrefetcherSetup(
+            self.mesh_device,
+            n_tensors=5,
+            n_layers=self.n_layers,
+            mesh_sub_device_manager_id_decode=mesh_sub_device_manager_id_decode,
+            save_tensor_addresses=True,
+            is_qwen=self.args.is_qwen,
+        )
+        self.mesh_sub_device_manager_id_decode = self.prefetcher_setup.mesh_sub_device_manager_id_decode
+        self.mesh_device.set_sub_device_stall_group(
+            [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
+        )
+        if mesh_sub_device_manager_id_decode is None:
+            self.tt_ccl = TT_CCL(
+                self.mesh_device,
+                self.args,
+                self.prefetcher_setup.worker_sub_device_id,
+                is_qwen=True if self.args.is_qwen else False,
+                is_olmo=getattr(self.args, "is_olmo", False),
+            )
+            self.sampling = SamplingGenerator(
+                args=self.args,
+                mesh_device=self.mesh_device,
+                tt_ccl=self.tt_ccl,
+            )
+        else:
+            self.tt_ccl = self.tt_ccl_decode
+            if getattr(self.args, "is_olmo", False):
+                self.tt_ccl.reset_gather_semaphores()
+            else:
+                self.tt_ccl.reset_gather_and_buffer_idx()
+
+    def prepare_prefill_inputs_host(
+        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1
+    ):
+        """
+        Inputs are torch tensors or python types. This function returns ttnn
+        tensors on device.
+        """
+
+        tokens = tokens.reshape(1, 1, 1, -1)
+        S = tokens.shape[-1]
+        tokens = ttnn.from_torch(
+            tokens,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # Slice the rot mats to the prefill seqlen
+        if tt_rot_mats_prefill is None and self.tt_rot_mats_prefill is None:
+            if self.args.is_qwen:
+                tt_rot_mats_prefill = get_rot_mats(
+                    head_dim=self.args.head_dim,
+                    device=self.mesh_device,
+                    seq_len=self.args.max_seq_len,
+                    theta=self.args.rope_theta,
+                    rope_scaling=self.args.rope_scaling_factor,
+                )
+            else:
+                tt_rot_mats_prefill = get_prefill_rot_mat(
+                    self.args.head_dim,
+                    self.args.max_seq_len,
+                    self.mesh_device,
+                    seq_len=self.args.max_seq_len,
+                    scale_factor=self.args.rope_scaling_factor,
+                    use_yarn=getattr(self.args, "is_olmo", False),
+                    rope_theta=self.args.rope_theta,
+                    original_max_position_embeddings=getattr(self.args, "orig_context_len", 8192),
+                    beta_fast=getattr(self.args, "yarn_beta_fast", 32.0),
+                    beta_slow=getattr(self.args, "yarn_beta_slow", 1.0),
+                )
+            self.tt_rot_mats_prefill = tt_rot_mats_prefill
+        else:
+            tt_rot_mats_prefill = self.tt_rot_mats_prefill
+
+        if page_table is not None:
+            # Replicate page_table to all 32 devices (matches tt_transformers).
+            # The KV cache itself is replicated across the mesh (init_kv_cache uses
+            # ReplicateTensorToMesh), so every device must see the same page_table
+            # and write its local head's slice independently. Per-user fan-out for
+            # batched prefill happens in attention.forward_prefill.
+            tt_page_table = ttnn.from_torch(
+                page_table,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        else:
+            tt_page_table = None
+
+        if chunk_page_table is not None:
+            tt_chunk_page_table = ttnn.from_torch(
+                chunk_page_table,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_page_table = None
+
+        user_id = ttnn.from_torch(
+            torch.tensor([user_id], dtype=torch.int32),
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        return tokens, user_id, tt_page_table, tt_chunk_page_table
+
+    def transform_prefill_inputs_device(
+        self,
+        tokens,
+        user_id,
+        page_table=None,
+        chunk_page_table=None,
+    ):
+        tt_tokens = self.embd(tokens)
+        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        return tt_tokens, user_id, page_table, chunk_page_table
+
+    def prepare_inputs_prefill(
+        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1
+    ):
+        """
+        Inputs are torch tensors or python types. This function returns ttnn
+        tensors on device.
+        Its implementation can take advantage of a few other functions which the
+        model must implement.
+        """
+        host_inputs = self.prepare_prefill_inputs_host(
+            tokens, user_id, page_table, chunk_page_table, tt_rot_mats_prefill, batch_size
+        )
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
+        transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
+        return transformed_device_inputs
+
+    def prepare_inputs_decode(self, tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded):
+        """
+        Inputs are torch tensors or python types. This function returns ttnn
+        tensors on device.
+        Its implementation can take advantage of a few other functions which the
+        model must implement.
+        """
+        host_tensors = self.prepare_decode_inputs_host(
+            tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
+        )
+        shard_specs = self.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
+        device_inputs = copy_host_to_device(
+            host_tensors, mesh_device=self.mesh_device, shard_specs=shard_specs
+        )  # Helper function
+        return device_inputs
+
+    def prepare_decode_shard_configs(self, is_cur_pos_sharded=False, is_page_table_sharded=False):
+        """
+        Prepares the sharding configuration for cur_pos and page_table tensors
+        """
+        cur_pos_memory_config = None
+        page_table_memory_config = None
+        if is_cur_pos_sharded:
+            cur_pos_shard_spec = ttnn.ShardSpec(
+                self.args.sub_core_grids,
+                (1, self.args.max_batch_size // self.mesh_device.shape[1]),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            cur_pos_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+            )
+        if is_page_table_sharded:
+            page_table_shard_spec = ttnn.ShardSpec(
+                self.args.sub_core_grids,
+                (
+                    self.args.batch_size_per_device_group,
+                    self.paged_attention_config.max_num_blocks // self.args.max_batch_size,
+                ),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            page_table_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
+            )
+        return [None, cur_pos_memory_config, None, page_table_memory_config]
+
+    def prepare_decode_inputs_host(
+        self, tokens, current_pos, page_table=None, is_cur_pos_sharded=False, is_page_table_sharded=False
+    ):
+        """
+        Inputs are torch tensors or python types. Outputs are ttnn tensors on host.
+        NOTE: Tokens and current_pos are padded to batch
+        NOTE: if is_cur_pos_sharded is True, current_pos_tt is returned as a device tensor
+        NOTE: if is_page_table_sharded is True, page_table is returned as a device tensor
+        """
+        B = tokens.shape[0]
+        # assert current_pos.shape[0] == B, "Batch size mismatch"
+        assert (
+            B == self.args.max_batch_size
+        ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
+
+        # Necessary padding to be full tile sized when on device
+        tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
+        tokens = ttnn.from_torch(
+            tokens,
+            device=None,
+            dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        tokens = ttnn.unsqueeze_to_4D(tokens)
+        rot_current_pos = torch.maximum(
+            current_pos, torch.tensor(0, dtype=torch.int64)
+        )  # Ensure position indices are non-negative
+        rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
+        cur_pos_shard_dim = 0
+        if is_cur_pos_sharded:
+            cur_pos_shard_dim = 1
+            current_pos = current_pos.repeat(self.args.sub_core_grids.num_cores(), 1)
+        current_pos_tt = ttnn.from_torch(
+            current_pos,
+            device=None,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(None, cur_pos_shard_dim) if (B > 1) else (None, None),
+                mesh_shape=self.args.cluster_shape,
+            ),
+        )
+        if page_table is not None:
+            if is_page_table_sharded:
+                page_table_chunks = page_table.split(B // self.args.cluster_shape[1], dim=0)
+                repeated_page_table_chunks = [
+                    chunk.repeat(self.args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
+                ]
+                page_table = torch.cat(repeated_page_table_chunks, dim=0)
+
+            page_table = ttnn.from_torch(
+                page_table,
+                device=None,
+                dtype=ttnn.uint16 if is_page_table_sharded else ttnn.int32,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(None, -2) if (B > 1) else (None, None),
+                    mesh_shape=self.args.cluster_shape,
+                ),
+            )
+        return tokens, current_pos_tt, rope_idxs, page_table
+
+    def transform_decode_inputs_device(self, tokens, current_pos, rope_idxs, page_table=None):
+        """
+        Inputs are ttnn tensors on device. This function applies any on-device
+        transformations which should happen before forward decode.
+        For example: tilize, reshape, shard.
+        Return transformed device tensors
+
+        Get rope sin/cos
+        Embed tokens
+        """
+        tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
+        tt_tokens = self.embd(tokens)
+        return tt_tokens, current_pos, tt_rot_mats, page_table
+
+    def process_output_prefill_logits(self, tt_out, last_token_idx):
+        """
+        Process prefill output to get logits tensor for on-device sampling.
+        Returns logits in the same format as decode (before all-gather), suitable for sampling module.
+        For non-batched prefill, returns single user logits. For batched prefill, returns list of logits.
+        """
+        x, _ = self.norm(tt_out, res=None, mode="prefill")
+        if isinstance(last_token_idx, list):
+            # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
+            batch_size = len(last_token_idx)
+            x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
+        else:
+            x_split = [x]
+
+        logits_list = []
+        for i, x in enumerate(x_split):
+            if isinstance(last_token_idx, list):
+                last_token_idx_i = last_token_idx[i]
+            else:
+                last_token_idx_i = last_token_idx
+            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            # lm_head returns logits in sharded format (same as decode before all-gather)
+            tt_logits = self.lm_head(x, None, mode="prefill")
+            tt_logits = tt_logits[0]
+            tt_logits = ttnn.reshape(
+                tt_logits,
+                ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
+                ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
+            )
+            logits_list.append(tt_logits)
+
+        return logits_list
+
+    def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
+        """
+        Input is ttnn device tensor of logits. Output is torch logits or tokens tensor.
+        NOTE: In this model, prefill always uses get_last_token
+        """
+        x, _ = self.norm(tt_out, res=None, mode="prefill")
+        if isinstance(last_token_idx, list):
+            # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
+            batch_size = len(last_token_idx)
+            x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
+        else:
+            x_split = [x]
+
+        toks_list = []
+        for i, x in enumerate(x_split):
+            if isinstance(last_token_idx, list):
+                last_token_idx_i = last_token_idx[i]
+            else:
+                last_token_idx_i = last_token_idx
+            x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            tt_logits = self.lm_head(x, None, mode="prefill")
+            # Gather the output across all devices and untilize the tensor (for argmax)
+            tt_logits = self.tt_ccl.line_all_gather(
+                tt_logits[0],
+                dim=3,
+                num_links=self.args.model_config.get("GALAXY_NUM_LINKS", 1),
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SAMPLING",
+            )
+
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+
+            tt_logits = ttnn.reshape(
+                tt_logits,
+                ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
+                ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
+            )
+
+            if tt_out_logits_saved is not None:
+                # Save per-slot logits. Buffer is [num_slots, vocab] — for batched
+                # prefill num_slots == len(x_split); for non-batched it is 1.
+                logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()[0, 0, 0, :]
+                tt_out_logits_saved[i].copy_(logits_saved)
+
+            tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
+            if isinstance(tt_out, list):
+                tt_out = tt_out[0]
+
+            toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
+            toks_list.append(toks)
+
+        return toks_list if isinstance(last_token_idx, list) else toks
+
+    def process_output_decode(self, tt_out):
+        """
+        Input is ttnn device tensor of tokens. Output is the corresponding torch tensor.
+        """
+        if isinstance(tt_out, list):
+            tt_out = tt_out[0]
+
+        if isinstance(tt_out, tuple):
+            tt_log_probs = tt_out[1]
+            tt_out = tt_out[0]
+            tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
+
+            if tt_log_probs is not None:
+                tt_log_probs_cpu = tt_log_probs.cpu(blocking=False, cq_id=0)
+            else:
+                tt_log_probs_cpu = None
+        else:
+            tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
+            tt_log_probs_cpu = None
+        return tt_out_cpu, tt_log_probs_cpu, ttnn.record_event(self.mesh_device, 0)
+
+    def ttnn_prefill_forward(
+        self,
+        x,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        get_last_token=-1,
+        kv_cache=None,
+        rot_mats=None,
+        batch_size=1,
+    ):
+        """
+        This method will take device tensors and any other args to run forward.
+        It returns ttnn device tensors.
+        """
+        tt_logits = self.forward(
+            x,
+            current_pos=None,
+            rot_mats=rot_mats if rot_mats is not None else self.tt_rot_mats_prefill,
+            user_id=user_id,
+            mode="prefill",
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            get_last_token=get_last_token,  # ignored with mode=="prefill"
+            kv_cache=kv_cache,
+            batch_size=batch_size,
+        )
+        return tt_logits
+
+    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs, is_cur_pos_sharded=False):
+        ttnn.plus_one(
+            current_pos,
+            sub_core_grids=self.args.sub_core_grids
+            if is_cur_pos_sharded
+            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            skip_negative_entries=True,
+        )
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
+
+    def ttnn_decode_forward(
+        self,
+        x,
+        current_pos,
+        rot_mat_idxs,
+        page_table=None,
+        kv_cache=None,
+        tt_out_logits_saved=None,
+        is_cur_pos_sharded=False,
+        return_logits=False,
+        capture_sampling_trace=False,  # If true, return logits so sampling can be traced elsewhere
+    ):
+        """
+        This method will take device tensors and any other args to run forward.
+        It returns ttnn device tensors.
+        """
+        rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        x_embd = self.embd(x)
+        tt_logits = self.forward(
+            x_embd,
+            current_pos,
+            rot_mats=rot_mats,
+            mode="decode",
+            page_table=page_table,
+            kv_cache=kv_cache,
+        )
+        self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
+
+        if return_logits:
+            tt_logits = self.tt_ccl.line_all_gather(
+                tt_logits[0],
+                dim=3,
+                num_links=self.args.model_config.get("GALAXY_NUM_LINKS", 1),
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SAMPLING",
+            )
+
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=self.args.sub_core_grids)
+
+            return tt_logits, None
+
+        # Save output logits to global python object
+        if tt_out_logits_saved is not None:
+            tt_out_logits = ttnn.to_torch(
+                tt_logits[0],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            tt_out_logits = tt_out_logits[0, 0, 0, : self.args.vocab_size]
+
+            tt_out_logits_saved.copy_(tt_out_logits)
+
+        if capture_sampling_trace:
+            return tt_logits
+
+        tt_toks, tt_log_probs = self.sampling.sample(
+            tt_logits[0],
+            tt_out_tok=x,
+            enable_trace=False,
+        )
+        return tt_toks, tt_log_probs
+
+    def switch_mode(self, mode):
+        if mode == "decode":
+            if self.is_prefill_setup:
+                self.tt_ccl.close()
+                self.tt_ccl_prefill = self.tt_ccl
+                self.is_prefill_setup = False
+
+            if self.is_decode_setup is False:
+                self.setup_decode(self.mesh_sub_device_manager_id_decode)
+                self.is_decode_setup = True
+                for layer in self.layers:
+                    layer.prefetch(self.prefetcher_setup, self.tt_ccl)
+                self.norm.tt_ccl = self.tt_ccl
+                self.lm_head.tt_ccl = self.tt_ccl
+                if self.prefetcher_setup is not None:
+                    self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+                    self.prefetcher_setup.create_global_cb()
+
+        else:
+            if self.is_decode_setup:
+                self.tt_ccl.close()
+                self.tt_ccl_decode = self.tt_ccl
+                self.is_decode_setup = False
+
+            if self.is_prefill_setup is False:
+                self.setup_prefill(self.mesh_sub_device_manager_id_prefill)
+                self.is_prefill_setup = True
+                for layer in self.layers:
+                    layer.prefetch(self.prefetcher_setup, self.tt_ccl)
+                self.norm.tt_ccl = self.tt_ccl
+                self.lm_head.tt_ccl = self.tt_ccl
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        current_pos,
+        rot_mats=None,
+        user_id=0,
+        mode="decode",
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        get_last_token=-1,
+        kv_cache=None,
+        batch_size=1,
+    ):
+        if mode == "decode" and self.prefetcher_setup is not None:
+            self.prefetcher_setup.create_global_cb()
+            garbage_tensor = ttnn.dram_prefetcher(
+                self.tt_tensors,
+                num_layers=self.n_layers,
+                global_cb=self.prefetcher_setup.global_circular_buffer,
+                enable_performance_mode=self.enable_prefetcher_performance_mode,
+            )
+            self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
+
+        import os as _os
+        import sys as _sys
+
+        _debug_prefill = _os.environ.get("DEBUG_PREFILL_LAYERS", "0") == "1"
+        h = None
+        for i, layer in enumerate(self.layers):
+            if _debug_prefill and mode == "prefill":
+                ttnn.synchronize_device(self.mesh_device)
+                print(f"[DEBUG] Prefill layer {i} start", flush=True, file=_sys.stdout)
+            x, h = layer(
+                x,
+                h,
+                current_pos,
+                rot_mats,
+                user_id,
+                mode,
+                page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                kv_cache=kv_cache[i] if kv_cache is not None else None,
+                batch_size=batch_size,
+            )
+        # ttnn.deallocate(h)
+        if mode == "decode" and self.prefetcher_setup is not None:
+            ttnn.deallocate(garbage_tensor)
+
+        if mode == "decode" and self.prefetcher_setup is not None:
+            self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
+                self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
+            )
+
+        if mode == "prefill":
+            return x
+        x, res = self.norm(x, res=None, mode=mode)
+
+        if get_last_token != -1:
+            x = x[:, :, get_last_token:, :]
+
+        worker_sub_device_id = None
+        if mode != "prefill" and self.prefetcher_setup is not None:
+            worker_sub_device_id = self.prefetcher_setup.worker_sub_device_id
+        elif mode != "prefill" and hasattr(self, "_worker_sub_device_id"):
+            worker_sub_device_id = self._worker_sub_device_id
+        lm_head_output = self.lm_head(x, worker_sub_device_id, mode=mode)
+        # if mode is decode and Qwen model
+        if mode == "decode" and self.args.is_qwen:
+            ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)
+        return lm_head_output
+
+    def set_enable_trace(self, enable: bool):
+        """Enable or disable trace mode on all layers.
+
+        When enabled, layers skip deallocating input tensors during prefill,
+        which is required for trace capture to work correctly.
+        """
+        for layer in self.layers:
+            layer.enable_trace = enable
+
+    def __del__(self):
+        # Cleanup all CCL objects to prevent TLB leaks
+        # Use cleanup() instead of close() for proper buffer deallocation
+        ccl_objects = set()
+        for attr in ["tt_ccl", "tt_ccl_prefill", "tt_ccl_decode"]:
+            if hasattr(self, attr):
+                ccl = getattr(self, attr)
+                if ccl is not None and ccl not in ccl_objects:
+                    ccl_objects.add(ccl)
+                    try:
+                        ccl.cleanup()
+                    except Exception:
+                        pass
+
+        # Deallocate rotation matrices
+        if hasattr(self, "tt_rot_mats_prefill") and self.tt_rot_mats_prefill is not None:
+            try:
+                ttnn.deallocate(self.tt_rot_mats_prefill)
+            except Exception:
+                pass
+
+        # clear global saved addresses
+        global global_tt_tensor_address
+        global_tt_tensor_address = None
