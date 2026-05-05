@@ -1683,6 +1683,7 @@ def normalize_rankfile_mpi_args(
     cwd_resolved = (cwd if cwd is not None else ORIGINAL_CWD).resolve()
     normalized_args = []
     detected_rankfile_path: Optional[str] = None
+    rewrote_rankfile_args = False
     i = 0
 
     while i < len(mpi_args):
@@ -1769,7 +1770,7 @@ def normalize_rankfile_mpi_args(
         normalized_args.append(arg)
         i += 1
 
-    if detected_rankfile_path:
+    if rewrote_rankfile_args and detected_rankfile_path:
         logger.debug(
             f"{TT_RUN_PREFIX} Normalized MPI rankfile args ({rankfile_syntax.value}) for {detected_rankfile_path}"
         )
