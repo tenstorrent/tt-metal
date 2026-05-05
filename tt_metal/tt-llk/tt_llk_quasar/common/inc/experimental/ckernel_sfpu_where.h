@@ -35,6 +35,17 @@ inline void _init_where_()
 // per-tile sub-region of DEST; the dest counter (advanced by ADDR_MOD_6 in
 // the SFPSTORE) supplies the per-iteration row stride, so the offsets are
 // constants captured verbatim by REPLAY.
+//
+// TODO: SFPLOADMACRO-based fast path. BH has a special case for the
+// in-place form (out == in0) that schedules through SFPLOADMACRO templates
+// programmed in `_init_where_` via TTI_SFPCONFIG, replaying 3 instructions
+// per row pair instead of 6. The instruction exists on Quasar but no SFPU
+// kernel programs these templates yet — landing it here would require
+// verifying the BH SFPCONFIG bit encodings (simple_bits / store_bits / misc
+// 0x770) against Quasar's SFPU template/macro register layout. Defer until
+// either another Quasar SFPU kernel establishes a reference for this
+// pattern, or codegen confirms it as the long-term direction for ternary
+// SFPU kernels on Quasar.
 inline void _calculate_where_(const int iterations, const int in0_offset_idx, const int in1_offset_idx, const int in2_offset_idx, const int out_offset_idx)
 {
     // Record the 6-instruction body once into replay slots 0..5; the loop
