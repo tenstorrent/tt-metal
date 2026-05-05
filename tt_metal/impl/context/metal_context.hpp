@@ -44,6 +44,7 @@ class DPrintServer;
 class WatcherServer;
 class DispatchMemMap;
 class NOCDebugState;
+class SafeDeviceGuard;
 
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
@@ -234,6 +235,11 @@ private:
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
+    // Cooperative cross-process device guard. Constructed in initialize_device_manager when
+    // TT_METAL_SAFE_DEVICE_OPEN=1 is set; otherwise null. See safe_device_open.hpp.
+    // Declared before device_manager_ so it is destroyed AFTER (members destroy in reverse
+    // declaration order): the lock is released only after all devices are closed.
+    std::unique_ptr<SafeDeviceGuard> safe_device_guard_;
     std::unique_ptr<DeviceManager> device_manager_;
     std::unique_ptr<NOCDebugState> noc_debug_state_;
     // The context descriptor used for runtime components.

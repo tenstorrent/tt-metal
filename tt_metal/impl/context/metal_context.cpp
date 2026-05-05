@@ -43,6 +43,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device.hpp>
 #include "device/device_manager.hpp"
+#include "device/safe_device_open.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
 #include <system_mesh.hpp>
@@ -142,6 +143,25 @@ void MetalContext::initialize_device_manager(
     size_t worker_l1_size,
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
+    // TT_METAL_SAFE_DEVICE_OPEN=1 enables cross-process device cooperation: per-device mutex,
+    // dirty-bit tracking, and auto-reset via tt-smi -r. Skip on mock/emulated clusters.
+    if (!safe_device_guard_) {
+        const char* env = std::getenv("TT_METAL_SAFE_DEVICE_OPEN");
+        const bool enabled = env != nullptr && std::string_view(env) == "1";
+        if (enabled && !get_cluster().is_mock_or_emulated()) {
+            // Without an operation timeout, a hang holds the lock indefinitely. Default to 30s
+            // when the user hasn't set TT_METAL_OPERATION_TIMEOUT_SECONDS explicitly.
+            using namespace std::chrono_literals;
+            if (rtoptions().get_timeout_duration_for_operations() == std::chrono::duration<float>(0.0f)) {
+                rtoptions().set_timeout_duration_for_operations(std::chrono::duration<float>(30.0f));
+                log_info(
+                    tt::LogMetal,
+                    "TT_METAL_SAFE_DEVICE_OPEN=1: defaulting TT_METAL_OPERATION_TIMEOUT_SECONDS to 30");
+            }
+            safe_device_guard_ = std::make_unique<SafeDeviceGuard>(device_ids);
+        }
+    }
+
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
     init_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size);
     device_manager_->initialize(device_ids, init_profiler, initialize_fabric_and_dispatch_fw, context_descriptor_);
@@ -752,6 +772,12 @@ void MetalContext::on_dispatch_timeout_detected() {
                 log_warning(
                     tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
             }
+        }
+
+        // Under TT_METAL_SAFE_DEVICE_OPEN, the guard owns the recovery: run tt-smi -r so the
+        // device is clean by the time this process exits and the next runner picks it up.
+        if (safe_device_guard_) {
+            safe_device_guard_->on_hang();
         }
     }
 }
