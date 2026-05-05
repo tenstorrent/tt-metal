@@ -1,0 +1,16 @@
+# 4-host BH Galaxy split-mesh layout for cross-mesh fabric send/recv tests.
+# Each rank lands on its own host and gets its own logical mesh_id, so
+# MeshSocket (which requires sender_mesh_id != receiver_mesh_id) can route
+# tensor traffic across hosts via the fabric connections declared in
+# bh_galaxy_split_4x2_multi_mesh.textproto (ring: 0-1, 1-2, 2-3, 0-3).
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+  - rank: 1
+    mesh_id: 1
+  - rank: 2
+    mesh_id: 2
+  - rank: 3
+    mesh_id: 3
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/quad_bh_galaxy_4mesh_ring_8ch.textproto"
