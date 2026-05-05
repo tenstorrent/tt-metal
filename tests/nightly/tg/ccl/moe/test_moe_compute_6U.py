@@ -2737,7 +2737,7 @@ def test_moe_compute_gemma_4_26b(
     output_height_shard_dim = 4
     output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
     dtype = ttnn.bfloat16
-    activation_type = MoEActivationFunction.GELU  # Gemma uses GELU not SILU
+    activation_type = MoEActivationFunction.SILU  # TODO: Gemma uses GELU but MoE currently only supports SILU/SWIGLU
 
     if test_mode == "perf":
         selected_experts_k = 1
