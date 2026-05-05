@@ -13,13 +13,10 @@
 #endif
 
 void kernel_main() {
-    uint32_t NHtWt = get_compile_time_arg_val(0);
-
 #ifdef ARCH_QUASAR
-    constexpr uint32_t dfb_in_id = get_compile_time_arg_val(1);
-    constexpr uint32_t dfb_out_id = get_compile_time_arg_val(2);
-    DataflowBuffer dfb_in(dfb_in_id);
-    DataflowBuffer dfb_out(dfb_out_id);
+    constexpr uint32_t NHtWt = get_arg(args::NHtWt);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
 
 #ifndef SHORT_INIT
     transpose_wh_init(dfb_in.get_id(), dfb_out.get_id());
@@ -28,6 +25,7 @@ void kernel_main() {
     transpose_wh_init_short(dfb_in.get_id());
 #endif
 #else
+    uint32_t NHtWt = get_compile_time_arg_val(0);
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 

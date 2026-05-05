@@ -15,18 +15,26 @@
 // #include "api/debug/dprint.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
     // skip args 1,2,3 for compat with reader_unary, reader_unary_8bank
+#ifdef ARCH_QUASAR
+    uint32_t src_addr = get_vararg(0);
+    uint32_t N = get_vararg(4);  // args match the order of reader_unary
+    uint32_t Ht = get_vararg(5);
+    uint32_t Wt = get_vararg(6);
+    uint32_t HtWt = get_vararg(7);
+#else
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t N = get_arg_val<uint32_t>(4);  // args match the order of reader_unary
     uint32_t Ht = get_arg_val<uint32_t>(5);
     uint32_t Wt = get_arg_val<uint32_t>(6);
     uint32_t HtWt = get_arg_val<uint32_t>(7);
+#endif
 
+#ifdef ARCH_QUASAR
+    DataflowBuffer dfb_in(dfb::out);
+#else
     constexpr uint32_t in_id = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
-#ifdef ARCH_QUASAR
-    DataflowBuffer dfb_in(in_id);
-#else
     CircularBuffer cb(in_id);
 #endif
 
@@ -43,7 +51,11 @@ void kernel_main() {
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
+#ifdef ARCH_QUASAR
+    const auto s = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), src_addr, tile_bytes);
+#else
     const auto s = TensorAccessor(src_args, src_addr);
+#endif
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < N; n++) {

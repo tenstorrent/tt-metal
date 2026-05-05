@@ -15,21 +15,30 @@
 #endif
 
 void kernel_main() {
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
+#ifdef ARCH_QUASAR
+    uint32_t dst_addr = get_vararg(0);
+    uint32_t num_tiles = get_vararg(2);  // Index 2 to match with regular writer_unary
+#else
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(2); // Index 2 to match with regular writer_unary
+#endif
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t out_id = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
 #ifdef ARCH_QUASAR
-    DataflowBuffer dfb_out(out_id);
+    DataflowBuffer dfb_out(dfb::in);
     uint32_t tile_bytes = dfb_out.get_entry_size();
 #else
+    constexpr uint32_t out_id = get_compile_time_arg_val(0);
+    constexpr auto dst_args = TensorAccessorArgs<1>();
     constexpr uint32_t cb_id_out0 = out_id;
     CircularBuffer cb(cb_id_out0);
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
 #endif
+#ifdef ARCH_QUASAR
+    const auto s = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dst_addr, tile_bytes);
+#else
     const auto s = TensorAccessor(dst_args, dst_addr);
+#endif
 
     Noc noc;
 
