@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,8 +28,6 @@ using tt::tt_metal::ComputeConfigDescriptor;
 using tt::tt_metal::DataMovementConfigDescriptor;
 using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::ProgramDescriptor;
-using tt::tt_metal::ReaderConfigDescriptor;
-using tt::tt_metal::WriterConfigDescriptor;
 
 namespace ttnn::prim {
 namespace reuse_dram_sharded_optimized_helpers {
