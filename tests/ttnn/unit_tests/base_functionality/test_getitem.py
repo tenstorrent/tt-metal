@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 pytestmark = pytest.mark.use_module_device
 
@@ -45,7 +45,7 @@ def test_getitem(device, batch_sizes, height, width, input_layout, on_device):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
@@ -74,7 +74,7 @@ def test_getitem_2d(device, height, width, input_layout, on_device):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
@@ -106,5 +106,5 @@ def test_getitem_non_tile_boundary(device, batch_sizes, height, width, input_lay
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor, output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor)
