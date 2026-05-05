@@ -56,6 +56,40 @@ def _embedding_max_batch_size(batch_per_dp: int) -> int:
     return max(batch_per_dp, padded)
 
 
+def slice_embedding_batch_to_local_dp(
+    input_ids: torch.Tensor,
+    prompt_lens,
+    batch_per_dp: int,
+    global_data_parallel: int,
+    local_model_count: int,
+):
+    local_capacity = batch_per_dp * local_model_count
+    offset = int(os.getenv("TT_EMBEDDING_GLOBAL_BATCH_OFFSET", "0"))
+    n = int(input_ids.shape[0])
+    if n == local_capacity and offset == 0:
+        return input_ids, prompt_lens
+    if n < local_capacity:
+        raise ValueError(
+            f"Input batch {n} < local DP capacity {local_capacity} "
+            f"(batch_per_dp={batch_per_dp}, local_models={local_model_count})"
+        )
+    if offset + local_capacity > n:
+        raise ValueError(f"TT_EMBEDDING_GLOBAL_BATCH_OFFSET={offset} with span {local_capacity} exceeds input rows {n}")
+    end = offset + local_capacity
+    out_ids = input_ids[offset:end]
+    if isinstance(prompt_lens, torch.Tensor):
+        out_lens = prompt_lens[offset:end].tolist()
+    else:
+        out_lens = prompt_lens[offset:end]
+    if offset == 0 and n > local_capacity:
+        logger.warning(
+            f"Slicing embedding inputs {n} -> {local_capacity} rows "
+            f"(local_models={local_model_count}, requested data_parallel={global_data_parallel}). "
+            "Use TT_EMBEDDING_GLOBAL_BATCH_OFFSET for multi-host shards."
+        )
+    return out_ids, out_lens
+
+
 def _hf_hub_cache_dir() -> str:
     """Directory where huggingface_hub stores snapshots (align with HF_HUB_CACHE / HF_HOME)."""
     if os.environ.get("HF_HUB_CACHE"):
@@ -628,8 +662,18 @@ def test_embedding_perf(
         input_ids, prompt_lens = tokenize_and_pad(tokenizer, texts, max_seq_len)
     profiler.end("loading_inputs")
 
+    input_ids, prompt_lens = slice_embedding_batch_to_local_dp(
+        input_ids,
+        prompt_lens,
+        batch_per_dp,
+        data_parallel,
+        generator.data_parallel,
+    )
+    effective_batch = int(input_ids.shape[0])
     total_input_tokens = sum(prompt_lens)
-    logger.info(f"Prepared {batch_size} inputs, ISL={isl}, total tokens = {total_input_tokens}")
+    logger.info(
+        f"Prepared {effective_batch} inputs (global batch param={batch_size}), ISL={isl}, total tokens = {total_input_tokens}"
+    )
 
     # ---- Warmup / compile ----
     logger.info("Compiling (first prefill)...")
@@ -685,8 +729,8 @@ def test_embedding_perf(
     avg_prefill_time = sum(iteration_times) / len(iteration_times)
     best_prefill_time = min(iteration_times)
 
-    embeddings_per_sec_avg = batch_size / avg_prefill_time
-    embeddings_per_sec_best = batch_size / best_prefill_time
+    embeddings_per_sec_avg = effective_batch / avg_prefill_time
+    embeddings_per_sec_best = effective_batch / best_prefill_time
     tokens_per_sec_avg = total_input_tokens / avg_prefill_time
     tokens_per_sec_best = total_input_tokens / best_prefill_time
 
@@ -704,7 +748,7 @@ def test_embedding_perf(
         "decode_t/s": 0.0,
         "decode_t/s/u": 0.0,
         "build_model_time": profiler.get_duration("build_model"),
-        "batch_size": batch_size,
+        "batch_size": effective_batch,
         "data_parallel": data_parallel,
         "input_seq_len": isl,
         "max_seq_len": max_seq_len,
@@ -717,7 +761,7 @@ def test_embedding_perf(
     logger.info(f"  {MODEL_NAME} Performance  ({tt_device_name})")
     logger.info("=" * 60)
     logger.info(f"  Data parallel:        {data_parallel}")
-    logger.info(f"  Global batch size:    {batch_size}")
+    logger.info(f"  Global batch size:    {effective_batch}")
     logger.info(f"  Batch per DP group:   {batch_per_dp}")
     logger.info(f"  Input seq length:     {isl}")
     logger.info(f"  Max seq length:       {max_seq_len}")
@@ -741,7 +785,7 @@ def test_embedding_perf(
         "device": tt_device_name,
         "num_devices": num_devices,
         "model_name": getattr(model_args, "base_model_name", None) or getattr(model_args, "model_name", MODEL_NAME),
-        "batch_size": batch_size,
+        "batch_size": effective_batch,
         "batch_per_dp": batch_per_dp,
         "data_parallel": data_parallel,
         "input_seq_len": isl,
@@ -765,16 +809,16 @@ def test_embedding_perf(
         logger.warning(f"Could not append embedding perf CSV: {e}")
 
     # ---- Cosine similarity sanity check (only for real text inputs) ----
-    if data_parallel <= 1 and embeddings is not None and batch_size >= 2:
+    if data_parallel <= 1 and embeddings is not None and effective_batch >= 2:
         emb_np = embeddings.float().numpy() if isinstance(embeddings, torch.Tensor) else embeddings
         if emb_np.ndim == 1:
             emb_np = emb_np.reshape(1, -1)
         elif emb_np.ndim > 2:
-            emb_np = emb_np.reshape(batch_size, -1)
+            emb_np = emb_np.reshape(effective_batch, -1)
 
         sim = cosine_similarity(emb_np)
         logger.info(f"  Cosine similarity [0,1] = {sim[0, 1]:.4f} (should be high, both AI-related)")
-        if batch_size >= 4:
+        if effective_batch >= 4:
             logger.info(f"  Cosine similarity [0,3] = {sim[0, 3]:.4f} (should be low, AI vs weather)")
 
     # ---- CI benchmark data ----
@@ -789,7 +833,7 @@ def test_embedding_perf(
             ml_model_name=model_name,
             ml_model_type="embedding",
             num_layers=model_args.n_layers,
-            batch_size=batch_size,
+            batch_size=effective_batch,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=isl,
             output_sequence_length=0,
@@ -838,6 +882,13 @@ if __name__ == "__main__":
         )
 
         input_ids, prompt_lens = tokenize_and_pad(tokenizer, texts, args.max_seq_len)
+        input_ids, prompt_lens = slice_embedding_batch_to_local_dp(
+            input_ids,
+            prompt_lens,
+            batch_per_dp=args.batch_size,
+            global_data_parallel=1,
+            local_model_count=generator.data_parallel,
+        )
         total_tokens = sum(prompt_lens)
 
         logger.info("Compile run...")
@@ -856,13 +907,10 @@ if __name__ == "__main__":
 
         avg_t = sum(times) / len(times)
         best_t = min(times)
+        eff_bs = int(input_ids.shape[0])
         logger.info("")
-        logger.info(
-            f"Avg: {avg_t * 1000:.1f}ms | {args.batch_size / avg_t:.1f} emb/s | {total_tokens / avg_t:.0f} tok/s"
-        )
-        logger.info(
-            f"Best: {best_t * 1000:.1f}ms | {args.batch_size / best_t:.1f} emb/s | {total_tokens / best_t:.0f} tok/s"
-        )
+        logger.info(f"Avg: {avg_t * 1000:.1f}ms | {eff_bs / avg_t:.1f} emb/s | {total_tokens / avg_t:.0f} tok/s")
+        logger.info(f"Best: {best_t * 1000:.1f}ms | {eff_bs / best_t:.1f} emb/s | {total_tokens / best_t:.0f} tok/s")
 
         profiler.end("run")
 
