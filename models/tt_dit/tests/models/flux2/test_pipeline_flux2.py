@@ -19,14 +19,13 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 37000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 12)])
 @pytest.mark.parametrize(
     (
         "mesh_device",
-        "cfg",
         "sp",
         "tp",
         "encoder_tp",
@@ -34,15 +33,12 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
         "topology",
         "num_links",
         "mesh_test_id",
-        "encoder_on_device",
-        "vae_on_device",
         "is_fsdp",
         "dynamic_load",
     ),
     [
         pytest.param(
             (1, 8),  # mesh_device
-            (1, 0),  # cfg
             (1, 0),  # sp
             (8, 1),  # tp
             (8, 1),  # encoder_tp
@@ -50,40 +46,32 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
             ttnn.Topology.Linear,
             1,  # num_links
             "1x8tp1",
-            True,  # encoder_on_device
-            True,  # vae_on_device
             False,  # is_fsdp
             True,  # dynamic_load
             id="1x8tp1",
         ),
         pytest.param(
             (4, 8),  # mesh_device
-            (2, 0),  # cfg
-            (2, 0),  # sp
+            (4, 0),  # sp
             (8, 1),  # tp
             (8, 1),  # encoder_tp
             (8, 1),  # vae_tp
             ttnn.Topology.Linear,
             4,  # num_links
             "wh_4x8",
-            True,  # encoder_on_device
-            True,  # vae_on_device
             True,  # is_fsdp
             False,  # dynamic_load
             id="wh_4x8",
         ),
         pytest.param(
             (4, 8),  # mesh_device
-            (2, 0),  # cfg
-            (2, 0),  # sp
+            (4, 0),  # sp
             (8, 1),  # tp
             (8, 1),  # encoder_tp
             (8, 1),  # vae_tp
             ttnn.Topology.Linear,
             2,  # num_links
             "bh_4x8",
-            True,  # encoder_on_device
-            True,  # vae_on_device
             False,  # is_fsdp
             False,  # dynamic_load
             id="bh_4x8",
@@ -104,7 +92,6 @@ def test_pipeline(
     width: int,
     height: int,
     num_inference_steps: int,
-    cfg: tuple[int, int],
     sp: tuple[int, int],
     tp: tuple[int, int],
     encoder_tp: tuple[int, int],
@@ -112,8 +99,6 @@ def test_pipeline(
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
-    encoder_on_device: bool,
-    vae_on_device: bool,
     traced: bool,
     mesh_test_id: str,
     is_fsdp: bool,
@@ -121,19 +106,17 @@ def test_pipeline(
 ) -> None:
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
-        dit_cfg=cfg,
         dit_sp=sp,
         dit_tp=tp,
         encoder_tp=encoder_tp,
         vae_tp=vae_tp,
-        encoder_on_device=encoder_on_device,
-        vae_on_device=vae_on_device,
         num_links=num_links,
         topology=topology,
         width=width,
         height=height,
         is_fsdp=is_fsdp,
         dynamic_load=dynamic_load,
+        trace_warmup=traced,
     )
 
     prompts = [
@@ -149,10 +132,6 @@ def test_pipeline(
     ]
 
     filename_prefix = f"flux2_{width}_{height}_{mesh_test_id}"
-    if not encoder_on_device:
-        filename_prefix += "_encodercpu"
-    if not vae_on_device:
-        filename_prefix += "_vaecpu"
     if not traced:
         filename_prefix += "_untraced"
 
