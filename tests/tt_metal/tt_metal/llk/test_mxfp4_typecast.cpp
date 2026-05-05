@@ -189,11 +189,7 @@ static vector<uint32_t> run_mxfp4_typecast(
     };
     experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range(mesh_device->shape());
-    workload.add_program(device_range, std::move(program));
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+    detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
     vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_buffer, result_vec);
