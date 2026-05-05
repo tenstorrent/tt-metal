@@ -16,6 +16,17 @@ on:
         required: false
         type: boolean
         default: false
+      slack-channel-id:
+        description: 'Slack channel ID for notifications. Leave empty to use repo secret SLACK_METAL_INFRA_CHANNEL_ID.'
+        required: false
+      failures-to-elevate:
+        description: 'TEST MODE. When set to N>0, discards real regressions and replaces them with N currently-stayed-failing JOBS (not pipelines). Produces exactly N top-level Slack messages, suppresses the "X other pipelines are failing" footer. Empty/0 = normal production behavior.'
+        required: false
+        default: ''
+      max-auto-triage-dispatches:
+        description: 'Hard cap on total auto-triage dispatches per run. Empty = unlimited. Pair with failures-to-elevate for safe dispatch-driven testing.'
+        required: false
+        default: ''
 
 jobs:
   fetch-data:
@@ -142,20 +153,19 @@ jobs:
           path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
           retention-days: 1
 
-      - name: Debug cache file
-        run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"
-
   analyze-data:
     needs: fetch-data
+    if: always()
     runs-on: ubuntu-latest
     outputs:
-      has_failed_workflows: ${{ steps.analyze.outputs.has_failed_workflows }}
-      has_regressions: ${{ steps.analyze.outputs.has_regressions }}
+      has_failed_workflows: ${{ steps.set-outputs.outputs.has_failed_workflows }}
+      has_regressions: ${{ steps.set-outputs.outputs.has_regressions }}
     steps:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
+
       - name: Discover previous successful run id
         id: prev
         uses: actions/github-script@v7
@@ -192,20 +202,6 @@ jobs:
       - name: Echo selected previous run id
         run: |
           echo "Selected previous run id: ${{ steps.prev.outputs.run_id }}"
-      - name: List artifacts for selected previous run (debug)
-        if: ${{ steps.prev.outputs.run_id != '' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const run_id = Number('${{ steps.prev.outputs.run_id }}');
-            const arts = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id, per_page: 100 });
-            core.info(`Artifacts for run ${run_id}:`);
-            for (const a of arts.data.artifacts) {
-              core.info(`- name=${a.name} id=${a.id} expired=${a.expired} size=${a.size_in_bytes}`);
-            }
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Download workflow data
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -250,6 +246,7 @@ jobs:
           other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
           alert-all: 'false'
+          failures_to_elevate: ${{ github.event.inputs.failures-to-elevate || '' }}
       - name: Upload status changes artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -266,13 +263,26 @@ jobs:
             ${{ steps.analyze.outputs.alert_all_message_path }}
           retention-days: 1
 
+      - name: Set job outputs
+        id: set-outputs
+        if: always()
+        shell: bash
+        env:
+          ANALYZE_HAS_FAILED: ${{ steps.analyze.outputs.has_failed_workflows }}
+          ANALYZE_HAS_REGRESSIONS: ${{ steps.analyze.outputs.has_regressions }}
+        run: |
+          echo "has_failed_workflows=${ANALYZE_HAS_FAILED}" >> "$GITHUB_OUTPUT"
+          echo "has_regressions=${ANALYZE_HAS_REGRESSIONS}" >> "$GITHUB_OUTPUT"
 
   handle-failures:
     needs: analyze-data
-    if: ${{ needs.analyze-data.outputs.has_failed_workflows == 'true' }}
+    # always() is required: without it, GHA transitively skips this job when
+    # fetch-data is skipped (e.g. the workflow is triggered with no data).
+    if: ${{ always() && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_failed_workflows == 'true' }}
     runs-on: ubuntu-latest
     outputs:
       slack_ts: ${{ steps.slack-report.outputs.slack_ts }}
+      slack_ts_map: ${{ steps.slack-report.outputs.slack_ts_map }}
       slack_notification_status: ${{ steps.slack-status.outputs.status }}
     steps:
       - uses: actions/checkout@v4
@@ -294,7 +304,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
           alert_all_message_path: ${{ github.workspace }}/regression-notification-inputs/alert-all-message.txt
         env:
@@ -337,6 +347,8 @@ jobs:
           regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
-          slack_channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          slack_ts_map: ${{ needs.handle-failures.outputs.slack_ts_map }}
+          slack_channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           send-slack-message: true
+          max_dispatches: ${{ github.event.inputs.max-auto-triage-dispatches || '' }}

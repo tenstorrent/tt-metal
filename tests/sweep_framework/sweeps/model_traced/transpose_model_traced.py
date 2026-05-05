@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
@@ -90,13 +91,8 @@ def run(
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
-    # Pass output memory_config to ttnn.transpose — without it, transpose inherits
-    # the input's sharded memory_config which may become non-tile-aligned after
-    # transposing dimensions.
-    if output_memory_config is not None and "memory_config" not in op_kwargs:
-        parsed_mc = parse_dict_value("memory_config", output_memory_config)
-        if parsed_mc is not None:
-            op_kwargs["memory_config"] = parsed_mc
+    # Do NOT inject memory_config from output_memory_config — the master trace only
+    # records it when the model explicitly passed it.  Injecting causes extra_key diffs.
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -144,17 +140,21 @@ def run(
 
     if output_tensor is None:
         fallback_kwargs = {k: v for k, v in op_kwargs.items() if k != "memory_config"}
-        if not is_host:
-            input_tensor_a = ttnn.from_torch(
-                torch_input_tensor_a,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        output_tensor = _run_transpose(input_tensor_a, fallback_kwargs)
+        # NOTE: do NOT rebuild input_tensor_a — when the original was created via
+        # create_tensor_on_mesh with sharded topology, plain from_torch here would
+        # produce a second trace entry with [Replicate]-only placement, which the
+        # validator joins to instead of the correct first-call entry. Reuse the
+        # original input; if it still fails the trace was already captured.
+        try:
+            output_tensor = _run_transpose(input_tensor_a, fallback_kwargs)
+        except Exception:
+            output_tensor = None
 
     e2e_perf = stop_measuring_time(start_time)
 
+    if output_tensor is None:
+        return [(False, "transpose execution failed (trace captured)"), e2e_perf]
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

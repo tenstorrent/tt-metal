@@ -18,6 +18,7 @@ namespace sfpu {
 namespace sdpa_reduce_row {
 constexpr std::uint8_t ZERO_ADDR_MOD = ADDR_MOD_7;
 constexpr std::uint8_t TILE_OFFSET_ADDR_MOD = ADDR_MOD_5;
+constexpr uint32_t replay_start = 16;
 }  // namespace sdpa_reduce_row
 inline void sfpu_sdpa_reduce_row_subblock_8x32_configure_addrmod() {
     addr_mod_t{
@@ -67,8 +68,7 @@ inline void _init_sdpa_reduce_max_row_8x32_replay_buffers_() {
     // ***********************************************************
     // Record replay buffer
     // LREG0 will contain the first 4 rows, LREG2 will contain the second 4 rows
-    // Max will be the first 16 instructions, SUM will be the last 16 instructions
-    load_replay_buf<NoExec>(0, 16, [] {
+    load_replay_buf<NoExec>(sdpa_reduce_row::replay_start, 16, [] {
         // Max instructions
         reduce_row_8x32_instrs<PoolType::MAX>();
     });
@@ -78,21 +78,7 @@ inline void _init_sdpa_reduce_sum_row_8x32_replay_buffers_() {
     // ***********************************************************
     // Record replay buffer
     // LREG0 will contain the first 4 rows, LREG2 will contain the second 4 rows
-    // Max will be the first 16 instructions, SUM will be the last 16 instructions
-    load_replay_buf<NoExec>(0, 16, [] {
-        // Sum instructions
-        reduce_row_8x32_instrs<PoolType::SUM>();
-    });
-}
-
-inline void _init_sdpa_reduce_row_8x32_replay_buffers_() {
-    // ***********************************************************
-    // Record replay buffer
-    // LREG0 will contain the first 4 rows, LREG2 will contain the second 4 rows
-    // Max will be the first 16 instructions, SUM will be the last 16 instructions
-    load_replay_buf<NoExec>(0, 32, [] {
-        // Max instructions
-        reduce_row_8x32_instrs<PoolType::MAX>();
+    load_replay_buf<NoExec>(sdpa_reduce_row::replay_start, 16, [] {
         // Sum instructions
         reduce_row_8x32_instrs<PoolType::SUM>();
     });
@@ -104,8 +90,6 @@ inline void _init_sdpa_reduce_row_8x32_() {
 
     _init_sfpu_config_reg();
     sfpu_sdpa_reduce_row_subblock_8x32_configure_addrmod();
-
-    _init_sdpa_reduce_row_8x32_replay_buffers_();
 }
 
 template <DataFormat format, PoolType pool_type>
@@ -158,7 +142,6 @@ inline void _calculate_sdpa_reduce_row_8x32_(uint src_index) {
     static_assert(format == DataFormat::Float16_b, "SFPU reduce max col only supports Float16_b format");
 
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, src_index + get_dest_buffer_base());
-    constexpr uint32_t replay_start = pool_type == PoolType::MAX ? 0 : 16;
 
     // TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     // TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);
@@ -171,7 +154,7 @@ inline void _calculate_sdpa_reduce_row_8x32_(uint src_index) {
 
     TTI_SFPLOAD(p_sfpu::LREG0, 0, sdpa_reduce_row::ZERO_ADDR_MOD, 0);
     TTI_SFPLOAD(p_sfpu::LREG2, 0, sdpa_reduce_row::ZERO_ADDR_MOD, 4);
-    lltt::replay(replay_start + 4, 12);
+    lltt::replay(sdpa_reduce_row::replay_start + 4, 12);
 
     if constexpr (block_width > 1) {
         for (uint32_t i = 0; i < block_width - 1; i++) {
@@ -179,7 +162,7 @@ inline void _calculate_sdpa_reduce_row_8x32_(uint src_index) {
                 t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU);
                 t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU);
             }
-            lltt::replay(replay_start, 16);
+            lltt::replay(sdpa_reduce_row::replay_start, 16);
         }
     }
     _sdpa_reduce_row_8x32_epilogue_<format, pool_type>();

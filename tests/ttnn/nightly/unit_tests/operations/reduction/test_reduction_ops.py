@@ -203,9 +203,6 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     if op not in ("var", "std") and correction:
         pytest.skip("PyTorch supports the correction argument only for var and std")
 
-    if op == "min" and tensor_shape == (3, 6, 40, 63, 20) and dim in ((-2, -1), (0, 2, 4), (0, 2)):
-        pytest.xfail("Issue #40854: ttnn.min produces incorrect results for certain tensor shapes and dimensions")
-
     torch.manual_seed(0)
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     pad_value = 1.0 if op == "prod" else None
@@ -561,12 +558,6 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape):
 
     if op not in ("var", "std") and correction:
         pytest.skip("PyTorch supports the correction argument only for var and std")
-
-    if op in ("min", "max") and (scalar in (-2.0, -2.43, 2.43) or (scalar == 2.0 and dim in ((-2, -1), None))):
-        pytest.xfail("Issue #40498: ttnn.max/min ignore sign and mantissa of the scalar parameter")
-
-    if op == "min" and shape == (3, 4, 8, 56, 33) and dim in ((-2, -1), (0, -2, -1), -2):
-        pytest.xfail("Issue #40854: ttnn.min produces incorrect results for certain tensor shapes and dimensions")
 
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)

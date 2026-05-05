@@ -41,6 +41,11 @@ uint32_t compute_num_virtual_cols(uint32_t grid_x, int num_groups, uint32_t num_
 // where Ht = ceil(input_nhw / TILE_SIZE).
 // The num_batches constraint ensures that multicast groups have uniform size,
 // which is required for correct semaphore synchronization in the kernels.
+// Among valid grids, fully-utilized grids (grid_x % num_virtual_cols == 0, i.e. no
+// wasted columns) are preferred: if any exists, the one with the largest grid_x
+// (ties broken by largest grid_y) is returned. Otherwise the search falls back to
+// the largest valid grid with partial column utilization (grid_x % num_virtual_cols
+// != 0), again ordered by largest grid_x then largest grid_y.
 // Returns std::nullopt if no valid grid exists.
 std::optional<ttnn::CoreGrid> find_expected_dram_grid(
     uint32_t max_x,

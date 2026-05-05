@@ -19,6 +19,13 @@ void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0); // global base address
     uint32_t src_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    // DRAM page stride: the allocator may round page_size up (e.g. to
+    // NOC_DRAM_READ_ALIGNMENT_BYTES = 64 on Quasar), so tiles are spaced
+    // further apart in DRAM than their native size. Callers pass
+    // Buffer::aligned_page_size() here; the kernel advances the DRAM
+    // pointer by this stride while the DFB/CB still streams native-size
+    // tiles into L1.
+    uint32_t dram_page_stride = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t ublock_size_tiles = 1;
 
@@ -34,7 +41,12 @@ void kernel_main() {
     if constexpr (use_dfbs) {
         experimental::DataflowBuffer dfb(cb_id);
         uint32_t ublock_size_bytes = dfb.get_entry_size();
-        uint32_t tlocal_src_addr = src_addr + (producer_idx * ublock_size_bytes);
+        // stride_factor = stride_in_entries: how many entry-sized slots one
+        // producer skips per tile. For a DFB with N producers interleaved
+        // round-robin, stride_factor = N, and each producer walks DRAM tiles
+        // [producer_idx, producer_idx+N, producer_idx+2N, ...].
+        uint32_t stride_factor = dfb.get_stride_size() / ublock_size_bytes;
+        uint32_t tlocal_src_addr = src_addr + (producer_idx * dram_page_stride);
 
         for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
@@ -45,7 +57,7 @@ void kernel_main() {
             noc.async_read_barrier();
             dfb.push_back(ublock_size_tiles);
 #endif
-            tlocal_src_addr += dfb.get_stride_size();
+            tlocal_src_addr += dram_page_stride * stride_factor;
         }
         dfb.finish();
     }
@@ -59,7 +71,7 @@ void kernel_main() {
             noc.async_read(src_dram, cb, ublock_size_bytes, {.bank_id = src_bank_id, .addr = src_addr}, {});
             noc.async_read_barrier();
             cb.push_back(ublock_size_tiles);
-            src_addr += ublock_size_bytes;
+            src_addr += dram_page_stride;
         }
     }
 #endif

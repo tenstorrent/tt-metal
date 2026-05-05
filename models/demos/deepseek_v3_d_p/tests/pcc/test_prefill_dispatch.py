@@ -86,10 +86,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 # LogicalCoord is coordinate in withing a2a dispatch group
 
 
+# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
+# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
+# Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
-        pytest.param(32, 7168, 16, 4, 2, True, id="pcc"),
+        pytest.param(32, 7168, 16, 4, 4, True, id="pcc"),
         pytest.param(3200, 7168, 64, 2, 2, False, id="perf_no_pcc"),
     ],
 )
@@ -111,7 +114,7 @@ def test_ttnn_dispatch(
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     num_links,
     topology,
     use_predictable_data,
@@ -135,13 +138,25 @@ def test_ttnn_dispatch(
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
-        f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} {capacity_factor=} {use_predictable_data=} {num_links=} {topology=}"
+        f"Dispatch {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} {num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {num_links=} {topology=}"
     )
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
-    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(
+        f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
+    )
 
     # Initialize inputs using helper function
     # For 2D mesh, generate different weights per EP rank
@@ -210,6 +225,7 @@ def test_ttnn_dispatch(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         num_dispatch_groups=num_dispatch_groups,
@@ -223,7 +239,7 @@ def test_ttnn_dispatch(
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
-        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         cluster_axis=sp_axis,
@@ -232,7 +248,7 @@ def test_ttnn_dispatch(
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -278,6 +294,7 @@ def test_ttnn_dispatch(
     buffer_result = validate_dispatch_buffer(
         torch_dispatched,
         tt_out_dispatched,
+        expert_region_offsets,
         expert_token_counts,
         expert_dispatch_table,
         num_dispatch_groups,
@@ -289,6 +306,7 @@ def test_ttnn_dispatch(
     metadata_result = validate_dispatch_metadata(
         torch_metadata,
         tt_out_metadata,
+        expert_region_offsets,
         expert_token_counts,
         expert_dispatch_table,
         num_dispatch_groups,

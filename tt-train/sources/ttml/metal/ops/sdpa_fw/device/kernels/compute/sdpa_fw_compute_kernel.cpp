@@ -32,12 +32,13 @@
 // For standard mode: num_rows_per_core = rows to process
 // For balanced mode: num_rows_per_core = num_pairs (each pair = 2 rows)
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
-constexpr uint32_t block_size = get_compile_time_arg_val(1);       // size of block
-constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim in query(d/TILE_W)
-constexpr uint32_t Ht = get_compile_time_arg_val(3);               // num_seq_len / TILE_H
-constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);      // sqrt(Et) - sdpa scaler factor
-constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);   // used to transform mask from 1/0 to 0/-1
-constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to transform mask from 0/-1 to 0/-1e9F
+constexpr uint32_t block_size = get_compile_time_arg_val(1);       // size of block (derived from vWt)
+constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim in query/key (d_qk/TILE_W)
+constexpr uint32_t vWt = get_compile_time_arg_val(3);              // num tile in inner dim in value (d_v/TILE_W)
+constexpr uint32_t Ht = get_compile_time_arg_val(4);               // num_seq_len / TILE_H
+constexpr uint32_t scaler_bits = get_compile_time_arg_val(5);      // sqrt(Et) - sdpa scaler factor
+constexpr uint32_t minus_one_bits = get_compile_time_arg_val(6);   // used to transform mask from 1/0 to 0/-1
+constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to transform mask from 0/-1 to 0/-1e9F
 constexpr uint32_t pairs_per_seq = Ht / 2;
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -150,9 +151,9 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
         apply_exp_inplace_and_find_exp_sum(cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp, scaler_bits);
 
-        matmul_qk_by_v(qWt, block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
+        matmul_qk_by_v(vWt, block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
         cb_pop_front(cb_attention_weights, onetile);
-        cb_pop_front(cb_value, qWt);
+        cb_pop_front(cb_value, vWt);
 
         /* if we process not first row of K and V:
          * we need to update exp_max_diff = exp(cur_max_value - prev_max_value)
@@ -166,10 +167,10 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             update_cur_exp_sum_inplace(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp, cb_exp_max_diff);
             cb_pop_front(alias_cb_prev_sum_exp, onetile);
 
-            update_cur_mm_out(qWt, block_size, alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
+            update_cur_mm_out(vWt, block_size, alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
 
             cb_pop_front(cb_exp_max_diff, onetile);
-            cb_pop_front(alias_cb_prev_mm_out, qWt);
+            cb_pop_front(alias_cb_prev_mm_out, vWt);
         }
 
         std::swap(alias_cb_prev_max, alias_cb_cur_max);
@@ -178,7 +179,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     }
 
     // Finalize output
-    cb_wait_front(alias_cb_prev_mm_out, qWt);
+    cb_wait_front(alias_cb_prev_mm_out, vWt);
 
     row_reduce_tile_inplace<cb_reduction_scaler, cb_matmul_reduce>(alias_cb_prev_sum_exp);
     cb_wait_front(alias_cb_prev_sum_exp, onetile);
@@ -193,9 +194,9 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     recip_tile_inplace(alias_cb_prev_sum_exp);
     cb_wait_front(alias_cb_prev_sum_exp, onetile);
 
-    cb_reserve_back(cb_output, qWt);
+    cb_reserve_back(cb_output, vWt);
     pack_reconfig_data_format(cb_output);
-    for (uint32_t tile_idx = 0; tile_idx < qWt; tile_idx += block_size) {
+    for (uint32_t tile_idx = 0; tile_idx < vWt; tile_idx += block_size) {
         tile_regs_acquire();
 
         // Load mm_out tiles via UnpackToDestFp32 (full FP32 in DST)
@@ -222,11 +223,11 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         }
         tile_regs_release();
     }
-    cb_push_back(cb_output, qWt);
+    cb_push_back(cb_output, vWt);
 
     cb_pop_front(alias_cb_prev_max, onetile);
     cb_pop_front(alias_cb_prev_sum_exp, onetile);
-    cb_pop_front(alias_cb_prev_mm_out, qWt);
+    cb_pop_front(alias_cb_prev_mm_out, vWt);
     cb_pop_front(cb_query, qWt);
 }
 

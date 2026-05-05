@@ -113,12 +113,21 @@ Tensor reduce(
     auto tilized_input = ttnn::tilize_with_val_padding(
         input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
 
+    // GMPOOL applies exp2(floor(log2(|s|))) of the scalar (only the exponent), so for
+    // MAX/MIN with non-unity scalar we instead reduce with scaler=1.0 and apply the user
+    // scalar after reduction via post-multiplication. See issue #40498. The flag also
+    // covers reduce_min (math_op=MAX with negate=true) since high-level dispatch lowers
+    // min through reduce_min before reaching here.
+    const bool use_post_mul = (reduce_math == tt::tt_metal::ReduceOpMath::MAX) && (scaler != 1.0f);
+    const float reduce_scaler = use_post_mul ? 1.0f : scaler;
+    const float post_mul = use_post_mul ? scaler : 1.0f;
+
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
     // scaler twice internally (once per dimension).  The host compensates with
     // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
-    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && scaler < 0)) {
+    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result
         const Tensor output_tensor = ttnn::prim::reduce(
             tilized_input,
@@ -129,29 +138,32 @@ Tensor reduce(
             output_dtype.value_or(input_tensor.dtype()),
             config,
             sub_core_grids,
-            negate);
+            negate,
+            /*post_mul_scaler=*/1.0f);
 
         return ttnn::prim::reduce(
             output_tensor,
             reduce_math,
             tt::tt_metal::ReduceOpDim::H,
-            scaler,
+            reduce_scaler,
             output_mem_config,
             output_dtype.value_or(input_tensor.dtype()),
             config,
             sub_core_grids,
-            negate);
+            negate,
+            /*post_mul_scaler=*/post_mul);
     }
     return ttnn::prim::reduce(
         tilized_input,
         reduce_math,
         reduce_dim,
-        scaler,
+        reduce_scaler,
         output_mem_config,
         output_dtype.value_or(input_tensor.dtype()),
         config,
         sub_core_grids,
-        negate);
+        negate,
+        /*post_mul_scaler=*/post_mul);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail
