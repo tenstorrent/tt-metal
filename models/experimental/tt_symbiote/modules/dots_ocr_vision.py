@@ -22,9 +22,22 @@ from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_w
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
 from ttnn.operations.transformer import SDPAProgramConfig
 
-# Tracy (perf): vision Matmul/SDPA ops report HiFi4; lower fidelity here for ViT matmuls + SDPA only.
-# Norms (RMS/LayerNorm) stay HiFi4 — not part of this path.
+# Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
+# Norms (RMS/LayerNorm) keep HiFi4 for stability.
 VISION_MATMUL_MATH_FIDELITY = ttnn.MathFidelity.HiFi2
+VISION_SDPA_MATH_FIDELITY = ttnn.MathFidelity.LoFi
+VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.HiFi4
+
+
+def _vision_device_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
+    """Single place for matmul/SDPA-style compute settings on the active device arch."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -299,12 +312,7 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
     def move_weights_to_device_impl(self):
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.compute_kernel_config = _vision_device_compute_config(self.device, math_fidelity=VISION_NORM_MATH_FIDELITY)
 
         if self._use_layer_norm:
             self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -419,11 +427,8 @@ class TTNNDotsVisionMLP(TTNNModule):
                 return None
             return ttnn.to_device(t, self.device, memory_config=mem)
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+        self.compute_kernel_config = _vision_device_compute_config(
+            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
         self.tt_fc1_weight = _to_dev(self.tt_fc1_weight)
@@ -491,7 +496,8 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         self.tt_proj_weight = None
         self.tt_proj_bias = None
         self.tt_norm_weight = None
-        self.compute_kernel_config = None
+        self.vision_matmul_compute_kernel_config = None
+        self.vision_norm_compute_kernel_config = None
         self._bypass_tensor_wrapping = True
 
     @classmethod
@@ -562,12 +568,11 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         if self.tt_norm_weight is not None:
             self.tt_norm_weight = ttnn.to_device(self.tt_norm_weight, self.device, memory_config=mem)
 
-        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+        self.vision_matmul_compute_kernel_config = _vision_device_compute_config(
+            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
+        )
+        self.vision_norm_compute_kernel_config = _vision_device_compute_config(
+            self.device, math_fidelity=VISION_NORM_MATH_FIDELITY
         )
 
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
@@ -593,7 +598,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                 bias=self.tt_proj_bias,
                 transpose_b=True,
                 memory_config=mem,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.vision_matmul_compute_kernel_config,
             )
 
             if self.tt_norm_weight is not None:
@@ -601,7 +606,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                     out,
                     weight=self.tt_norm_weight,
                     epsilon=1e-5,
-                    compute_kernel_config=self.compute_kernel_config,
+                    compute_kernel_config=self.vision_norm_compute_kernel_config,
                 )
 
             return out
@@ -644,7 +649,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             bias=self.tt_proj_bias,
             transpose_b=True,
             memory_config=mem,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.vision_matmul_compute_kernel_config,
         )
 
         if self.tt_norm_weight is not None:
@@ -652,7 +657,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                 out,
                 weight=self.tt_norm_weight,
                 epsilon=1e-5,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.vision_norm_compute_kernel_config,
             )
 
         return out
@@ -767,11 +772,8 @@ class TTNNDotsVisionAttention(TTNNModule):
                 return None
             return ttnn.to_device(t, self.device, memory_config=mem)
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+        self.compute_kernel_config = _vision_device_compute_config(
+            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
         self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
@@ -779,12 +781,8 @@ class TTNNDotsVisionAttention(TTNNModule):
         self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
         self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
 
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+        self.sdpa_compute_kernel_config = _vision_device_compute_config(
+            self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
         )
 
         # Build transformation matrix for rotary_embedding_llama (must be 32x32, kernel operates per-tile)
@@ -1180,11 +1178,8 @@ class TTNNDotsPatchMerger(TTNNModule):
             self.tt_w2 = _to_dev(self.tt_w2)
             self.tt_w2_bias = _to_dev(self.tt_w2_bias)
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=VISION_MATMUL_MATH_FIDELITY,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+        self.compute_kernel_config = _vision_device_compute_config(
+            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
