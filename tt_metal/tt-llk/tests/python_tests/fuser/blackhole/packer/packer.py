@@ -45,7 +45,7 @@ class Packer(BasePacker):
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
             f"    _llk_pack_init_<false, false, {bh_tilize}>(\n"
-            f"        {config.sentinel.pack_dst_format}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1\n"
+            f"        {config.sentinel.pack_src_format}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1\n"
             f"    );\n"
             f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
         )
