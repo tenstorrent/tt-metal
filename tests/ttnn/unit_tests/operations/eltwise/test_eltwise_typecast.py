@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import eltwise_typecast
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 mem_configs = [
     ttnn.DRAM_MEMORY_CONFIG,
@@ -128,7 +128,7 @@ class TestTypecast:
         pcc = 0.98 if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b else 0.99
 
         if tt_output_dtype == ttnn.float32 or tt_output_dtype == ttnn.bfloat16:
-            assert_with_ulp(torch_golden, torch_output, ulp_threshold=1)
+            assert_equal(torch_golden, torch_output)
         else:
             assert_with_pcc(torch_golden, torch_output, pcc=pcc)
 
