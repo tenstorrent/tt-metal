@@ -69,7 +69,7 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
     B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
     input_tensor = torch.rand((B, C, H, W), dtype=torch.bfloat16)
 
-    reference_output = get_image_features(reference_model, reference_mmp, input_tensor.float(), image_sizes=[(H, W)])
+    reference_output = get_image_features(reference_model, reference_mmp, input_tensor, image_sizes=[(H, W)])
 
     # ##### TT Model: TtMistralVisionTransformer #####
     tt_ccl = TT_CCL(mesh_device=mesh_device)

@@ -50,7 +50,7 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)
-    reference_output = reference_model(input_tensor.float(), image_sizes=[(H, W)])
+    reference_output = reference_model(input_tensor, image_sizes=[(H, W)])
 
     reference_output = reference_output.last_hidden_state
     tt_ccl = TT_CCL(mesh_device)
