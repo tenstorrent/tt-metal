@@ -6,7 +6,6 @@
 #include "accumulation_device_operation.hpp"
 
 #include "tt-metalium/base_types.hpp"
-#include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
@@ -15,8 +14,12 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <bit>
+#include <map>
+#include <string>
 
 namespace ttnn::prim {
+
+using AccumulationProgramFactory = AccumulationDeviceOperation::AccumulationProgramFactory;
 
 // calculate the offset between consecutive tiles between accumulation axis and last dimension
 uint32_t AccumulationProgramFactory::calc_input_tile_offset(
@@ -35,7 +38,7 @@ uint32_t AccumulationProgramFactory::calc_input_tile_offset(
     return input_tile_offset;
 }
 
-AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
+tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     const AccumulationParams& operation_attributes,
     const AccumulationInputs& tensor_args,
     Tensor& tensor_return_value) {
@@ -46,7 +49,7 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     auto& output_tensor{tensor_return_value};
     const auto& input_shape{input_tensor.padded_shape()};
 
-    Program program{};
+    ProgramDescriptor desc;
 
     IDevice* device{input_tensor.device()};
 
@@ -91,15 +94,33 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    create_cb(program, input_dataformat, AccumulationCB::SRC, all_cores, in_tiles);
-    create_cb(program, acc_dataformat, AccumulationCB::ACC, all_cores, acc_tiles);
-    create_cb(program, output_dataformat, AccumulationCB::DST, all_cores, out_tiles);
+    auto push_cb = [&](const tt::DataFormat& data_format,
+                       AccumulationProgramFactory::AccumulationCB accumulation_cb,
+                       uint32_t num_tiles) {
+        const uint32_t cb_id{static_cast<uint32_t>(accumulation_cb)};
+        const uint32_t single_tile_size{tt::tile_size(data_format)};
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_tiles * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_id),
+                .data_format = data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    };
+
+    push_cb(input_dataformat, AccumulationProgramFactory::AccumulationCB::SRC, in_tiles);
+    push_cb(acc_dataformat, AccumulationProgramFactory::AccumulationCB::ACC, acc_tiles);
+    push_cb(output_dataformat, AccumulationProgramFactory::AccumulationCB::DST, out_tiles);
 
     std::vector<UnpackToDestMode> unpack_to_dst(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dst[static_cast<unsigned>(AccumulationCB::ACC)] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dst[static_cast<unsigned>(AccumulationProgramFactory::AccumulationCB::ACC)] =
+        UnpackToDestMode::UnpackToDestFp32;
 
     if (input_dataformat != DataFormat::Float16_b) {
-        unpack_to_dst[static_cast<unsigned>(AccumulationCB::SRC)] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dst[static_cast<unsigned>(AccumulationProgramFactory::AccumulationCB::SRC)] =
+            UnpackToDestMode::UnpackToDestFp32;
     }
 
     std::map<std::string, std::string> defines_kernel_args = {};
@@ -124,6 +145,8 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     if (operation_attributes.op == AccumulationOp::CUMPROD) {
         default_acc_value = 1.f;
         if (is_integer_format(dst_cb_data_format)) {
+            // Kernel reinterprets the 4-byte CT arg as int32 in the integer path; pack the bit
+            // pattern 0x00000001 so it lands as integer 1, not float 1.0f's bit pattern.
             default_acc_value = std::bit_cast<float>(1U);
         }
     }
@@ -136,32 +159,62 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-    const ReaderDataMovementConfig reader_config{reader_compile_time_args};
-    const ComputeConfig compute_config{
-        .math_fidelity = default_math_fidelity,
-        .fp32_dest_acc_en = true,
-        .unpack_to_dest_mode = unpack_to_dst,
-        .math_approx_mode = false,
-        .compile_args = {std::bit_cast<uint32_t>(default_acc_value)},
-        .defines = defines_kernel_args};
 
     std::vector<uint32_t> writer_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
-    const WriterDataMovementConfig writer_config{writer_compile_time_args};
 
-    auto accumulation_reader_kernel_id{create_kernel(program, KERNEL_PATHS[0], all_cores, reader_config)};
-    auto accumulation_compute_kernel_id{create_kernel(program, KERNEL_PATHS[1], core_group_1, compute_config)};
-    std::optional<KernelHandle> compute_kernel_2_id{std::nullopt};
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[0];
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[2];
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
+
+    KernelDescriptor::Defines compute_defines(defines_kernel_args.begin(), defines_kernel_args.end());
+
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[1];
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = {std::bit_cast<uint32_t>(default_acc_value)};
+    compute_desc_1.defines = compute_defines;
+    compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = default_math_fidelity,
+        .fp32_dest_acc_en = true,
+        .dst_full_sync_en = false,
+        .unpack_to_dest_mode = unpack_to_dst,
+        .math_approx_mode = false,
+    };
+
+    std::optional<KernelDescriptor> compute_desc_2;
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
-        compute_kernel_2_id = create_kernel(program, KERNEL_PATHS[1], core_group_2, compute_config);
+        KernelDescriptor cd2;
+        cd2.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[1];
+        cd2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        cd2.core_ranges = core_group_2;
+        cd2.compile_time_args = {std::bit_cast<uint32_t>(default_acc_value)};
+        cd2.defines = compute_defines;
+        cd2.config = ComputeConfigDescriptor{
+            .math_fidelity = default_math_fidelity,
+            .fp32_dest_acc_en = true,
+            .dst_full_sync_en = false,
+            .unpack_to_dest_mode = unpack_to_dst,
+            .math_approx_mode = false,
+        };
+        compute_desc_2 = std::move(cd2);
     }
-    auto accumulation_writer_kernel_id{create_kernel(program, KERNEL_PATHS[2], all_cores, writer_config)};
 
     for (uint32_t i{0}, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core{i / num_cores_y, i % num_cores_y};
 
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -170,11 +223,9 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
             TT_THROW("Core not in any predefined core range.");
         }
 
-        SetRuntimeArgs(
-            program,
-            accumulation_reader_kernel_id,
+        reader_desc.emplace_runtime_args(
             core,
-            {src_buffer->address(),
+            {src_buffer,
              num_tiles_per_core,
              tiles_per_row,
              input_tile_offset,
@@ -183,11 +234,9 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
              tile_offset % input_tile_offset,
              static_cast<uint32_t>(operation_attributes.flip)});
 
-        SetRuntimeArgs(
-            program,
-            accumulation_writer_kernel_id,
+        writer_desc.emplace_runtime_args(
             core,
-            {dst_buffer->address(),
+            {dst_buffer,
              num_tiles_per_core,
              tiles_per_row,
              input_tile_offset,
@@ -197,10 +246,10 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
              static_cast<uint32_t>(operation_attributes.flip)});
 
         if (core_group_1.contains(core)) {
-            SetRuntimeArgs(program, accumulation_compute_kernel_id, core, {num_tiles_per_core, tiles_per_row});
+            compute_desc_1.emplace_runtime_args(core, {num_tiles_per_core, tiles_per_row});
         } else if (core_group_2.contains(core)) {
-            TT_ASSERT(compute_kernel_2_id.has_value());
-            SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_tiles_per_core, tiles_per_row});
+            TT_ASSERT(compute_desc_2.has_value());
+            compute_desc_2->emplace_runtime_args(core, {num_tiles_per_core, tiles_per_row});
         } else {
             TT_THROW("Core not in any predefined core range.");
         }
@@ -208,61 +257,14 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
         tile_offset += num_tiles_per_core;
     }
 
-    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
-    return {
-        std::move(program),
-        {.accumulation_reader_kernel_id = accumulation_reader_kernel_id,
-         .accumulation_compute_kernel_id = accumulation_compute_kernel_id,
-         .accumulation_compute_kernel_id_2 = compute_kernel_2_id,
-         .accumulation_writer_kernel_id = accumulation_writer_kernel_id,
-         .cores = cores}};
-}
-
-void AccumulationProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const AccumulationParams& /*operation_attributes*/,
-    const AccumulationInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    const auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.accumulation_reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.accumulation_writer_kernel_id;
-    const auto& cores = cached_program.shared_variables.cores;
-
-    auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
-    auto output_buffer_address = tensor_return_value.buffer()->address();
-    for (const auto& core : cores) {
-        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-        reader_runtime_args[0] = input_buffer_address;
-        writer_runtime_args[0] = output_buffer_address;
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (compute_desc_2.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_2));
     }
-}
 
-CBHandle AccumulationProgramFactory::create_cb(
-    Program& program,
-    const tt::DataFormat& data_format,
-    const AccumulationCB& accumulation_cb,
-    const CoreRangeSet& core_range_set,
-    const uint32_t& num_tiles) {
-    const uint32_t cb_id{static_cast<uint32_t>(accumulation_cb)};
-
-    const uint32_t single_tile_size{tt::tile_size(data_format)};
-    const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, data_format}}}.set_page_size(
-        cb_id, single_tile_size)};
-    return CreateCircularBuffer(program, core_range_set, cb_config);
-}
-
-KernelHandle AccumulationProgramFactory::create_kernel(
-    Program& program,
-    const char* kernel_path,
-    const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig>& config,
-    const std::vector<uint32_t>& runtime_args) {
-    auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
-
-    SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
-
-    return kernel_id;
+    return desc;
 }
 
 }  // namespace ttnn::prim
