@@ -101,21 +101,13 @@ ProgramDescriptor FullInterleavedProgramFactory::create_descriptor(
         if (has_reader) {
             uint32_t reader_page_start = page_offset;
             uint32_t num_pages_per_reader = num_pages_per_core / 2;
-            reader_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    output.buffer()->address(), u.u32, num_pages_per_reader, reader_page_start});
+            reader_desc.emplace_runtime_args(core, {output.buffer(), u.u32, num_pages_per_reader, reader_page_start});
 
             uint32_t writer_page_start = reader_page_start + num_pages_per_reader;
             uint32_t num_pages_per_writer = num_pages_per_core - num_pages_per_reader;
-            writer_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    output.buffer()->address(), u.u32, num_pages_per_writer, writer_page_start});
+            writer_desc.emplace_runtime_args(core, {output.buffer(), u.u32, num_pages_per_writer, writer_page_start});
         } else {
-            writer_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), u.u32, num_pages_per_core, page_offset});
+            writer_desc.emplace_runtime_args(core, {output.buffer(), u.u32, num_pages_per_core, page_offset});
         }
         page_offset += num_pages_per_core;
     }

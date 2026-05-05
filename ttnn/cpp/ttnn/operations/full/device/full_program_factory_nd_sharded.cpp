@@ -66,8 +66,7 @@ ProgramDescriptor FullNDShardedProgramFactory::create_descriptor(
 
     uint32_t start_shard_id = 0;
     for (auto core : ordered_cores_with_data) {
-        writer_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), u.u32, start_shard_id});
+        writer_desc.emplace_runtime_args(core, {output.buffer(), u.u32, start_shard_id});
         start_shard_id++;
     }
 

@@ -86,10 +86,8 @@ ProgramDescriptor FullShardedProgramFactory::create_descriptor(
         uint32_t valid_pages_height = (shard_row_idx == num_shards_across_height - 1)
                                           ? (tensor_height_in_pages - (shard_row_idx * shard_height_in_pages))
                                           : shard_height_in_pages;
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output.buffer()->address(), u.u32, first_page_id, valid_pages_width, valid_pages_height});
+        writer_desc.emplace_runtime_args(
+            core, {output.buffer(), u.u32, first_page_id, valid_pages_width, valid_pages_height});
     }
 
     desc.kernels.push_back(std::move(writer_desc));
