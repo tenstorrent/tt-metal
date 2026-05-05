@@ -342,7 +342,8 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
     // IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores)
-    const uint32_t a2a_cb_pages = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
+    const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
+    const uint32_t a2a_cb_pages = (a2a_cb_pages_raw + 1) & ~1u;
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();

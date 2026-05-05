@@ -82,7 +82,8 @@ void kernel_main() {
     const uint32_t num_w2_tiles_w = moe_ring::w2_shard_tiles(Ht, ring_core_id, Nt, num_cores);
 
     // Derived ring constants
-    constexpr uint32_t in2_tiles_per_step = (Nt + num_cores - 1) / num_cores;
+    constexpr uint32_t in2_tiles_per_step_raw = (Nt + num_cores - 1) / num_cores;
+    constexpr uint32_t in2_tiles_per_step = (in2_tiles_per_step_raw + 1) & ~1u;
     constexpr uint32_t max_w2_tiles_per_core = (Ht + num_cores - 1) / num_cores;
     constexpr uint32_t num_a2a_iters =
         (max_w2_tiles_per_core + moe_ring::W2_TILES_PER_A2A_ITER_W - 1) / moe_ring::W2_TILES_PER_A2A_ITER_W;
