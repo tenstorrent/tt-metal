@@ -278,6 +278,11 @@ MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN = l1_align(MXFP8_SLICE_32B_SCALE_BYTES) + l
 # MX (Microscaling) Format Value Maps
 # ============================================================================
 
+# Map of MX formats to their block sizes (all use 32-element blocks per OCP spec)
+# This is a size of a basic block with one scale factor in MX formats.
+# Bare in mind that MX formats can have multiple contiguous scales with corresponding values after.
+MX_FORMAT_BLOCK_SIZE = 32
+
 # Map of MX formats to their maximum normal values
 # Per OCP MX Specification:
 # - E5M2 (MxFp8R): Max normal = ± 2^15 × 1.75 = ± 57,344
@@ -337,8 +342,12 @@ MX_FORMAT_MIN_SUBNORMAL = {
     ),
 }
 
-# Map of MX formats to their block sizes (all use 32-element blocks per OCP spec)
-MX_FORMAT_BLOCK_SIZE = 32
+# Map of MX formats to safe minimum magnitudes for stimulus generation.
+MX_FORMAT_MIN_MAGNITUDE = {
+    DataFormat.MxFp8R: 2.44e-4,
+    DataFormat.MxFp8P: 0.0625,
+    DataFormat.MxFp4: 1.0,
+}
 
 # ============================================================================
 # MX SrcS Slice L1 Layout
