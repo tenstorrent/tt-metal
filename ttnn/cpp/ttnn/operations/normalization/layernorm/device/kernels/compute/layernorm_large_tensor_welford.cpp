@@ -52,7 +52,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     uint32_t sample_idx = 0;
 
     tile_regs_acquire();
-    welford_init(cb_in);
+    welford_init();
     welford_save_state(mean_dst);
     tile_regs_commit();
 

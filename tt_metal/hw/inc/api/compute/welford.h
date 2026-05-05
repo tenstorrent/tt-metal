@@ -22,14 +22,10 @@ namespace ckernel {
  * Programs the address mod and replay buffers for the Welford's algorithm.
  * Clears the previous mean and m2 values stored in the registers.
  * This call is blocking and is only available on the compute engine.
- * llk_math_eltwise_unary_datacopy_init for cbid is used to set state needed
- * for Welford's. Need to check other inits that may overlap (transpose_wh_init)
- * to identify what cbid should be.
  */
-ALWI void welford_init(uint32_t cbid) {
+ALWI void welford_init() {
     MATH((llk_math_welfords_sfpu_init()));
     MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 }
 
 /**

@@ -144,7 +144,7 @@ void kernel_main() {
         cb_ex_partial.reserve_back(2);
         transpose_wh_init(cb_in0_id, cb_ex_partial_id);
         tile_regs_acquire();
-        welford_init(cb_in0_id);
+        welford_init();
 
         uint32_t block_xy_coord = 0;
 
