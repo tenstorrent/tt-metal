@@ -70,7 +70,6 @@ def _from_torch_host_with_placement(torch_tensor, dtype, tensor_placement, mesh_
     """
     if not (is_mesh_device and tensor_placement):
         return ttnn.from_torch(torch_tensor, dtype)
-    placement_str = str(tensor_placement.get("placement", ""))
     mesh_shape = tensor_placement.get("mesh_device_shape") or tensor_placement.get("distribution_shape")
     if isinstance(mesh_shape, str):
         mesh_shape_nums = re.findall(r"\d+", mesh_shape)
