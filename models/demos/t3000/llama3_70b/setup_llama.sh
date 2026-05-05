@@ -233,7 +233,7 @@ deploy_server() {
     print_step "Deploying Llama server"
     source python_env/bin/activate
     export VLLM_TARGET_DEVICE="tt"
-    python vllm/examples/server_example_tt.py
+    python vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py
     echo "✅ Deployment complete! Interact via http://localhost:8000."
 }
 

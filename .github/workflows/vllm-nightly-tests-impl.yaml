@@ -433,7 +433,7 @@ jobs:
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
 
-          python3 vllm/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
+          python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
           echo $! > ${FILE_SERVER_PID}

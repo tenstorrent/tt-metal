@@ -128,7 +128,7 @@ Ensure you follow these guidelines to successfully run the Llama3-70B demo.
 
     ```bash
     export VLLM_TARGET_DEVICE="tt"
-    python vllm/examples/server_example_tt.py
+    python vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py
     ```
 
 4. **Interact with server**

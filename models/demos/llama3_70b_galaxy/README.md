@@ -170,7 +170,7 @@ Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/de
 #### Running the vLLM server
 To run a vLLM server on a Galaxy system with Llama-3.3-70B you can execute the following command:
 ```
-VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --plugin-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}}'
+VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --plugin-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}}'
 ```
 
 After the server is up and running you can interact with it by sending prompt files.

@@ -50,7 +50,7 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
 Once the model meets all of the requirements specified in [Implementation Requirements for Model Integration](#implementation-requirements-for-model-integration), it can be tested in vLLM by following the instructions in the [vLLM README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) and doing the following:
 1. The model needs to be registered using `ModelRegistry.register_model` and added to the list of supported models in [vllm/platforms/tt.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/platforms/tt.py).
 2. Testing offline inference, continuous batching, and performance (see [Running the Offline Inference Example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-offline-inference-example)).
-3. Testing various sequence lengths of increasing size using the `--test_increasing_seq_lens` option of [examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
+3. Testing various sequence lengths of increasing size using the `--test_increasing_seq_lens` option of [plugins/vllm-tt-plugin/examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/examples/offline_inference_tt.py).
 4. Testing model serving of asynchronous requests with the server example (see [Running the Server Example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-server-example)).
 
 ## vLLM Modifications
