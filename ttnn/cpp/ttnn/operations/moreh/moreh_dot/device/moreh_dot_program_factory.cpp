@@ -115,7 +115,7 @@ ProgramDescriptor MorehDotOperation::create_descriptor(
     });
 
     // Reader kernel
-    KernelDescriptor::CompileTimeArgs reader_ct_args = {std::bit_cast<uint32_t>(scaler)};
+    KernelDescriptor::CompileTimeArgs reader_ct_args = {};
     TensorAccessorArgs(src0_buffer).append_to(reader_ct_args);
     TensorAccessorArgs(src1_buffer).append_to(reader_ct_args);
 
