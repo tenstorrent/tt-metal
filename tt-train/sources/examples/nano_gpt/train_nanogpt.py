@@ -1643,11 +1643,14 @@ def main():
         gradient_accumulator = GradientAccumulator(training_config.gradient_accumulation_steps)
         global_step = start_step
 
-        # Compute peak device TFLOPS for MFU calculation
+        # Compute peak mesh TFLOPS for MFU calculation. tps and flops_per_token
+        # are both global (whole-mesh) quantities, so peak must be scaled by the
+        # total device count to keep MFU = achieved/peak meaningful under DP/TP.
         peak_tflops = 0.0
         if flops_per_token > 0:
-            peak_tflops = get_device_peak_tflops_bf16()
-            print(f"  - Device peak: {peak_tflops:.1f} TFLOPS (bf16)")
+            num_devices = ttml.mesh().num_devices()
+            peak_tflops = get_device_peak_tflops_bf16() * num_devices
+            print(f"  - Mesh peak: {peak_tflops:.1f} TFLOPS (bf16, {num_devices} devices)")
 
         # Training loop
         start_time = time.time()
