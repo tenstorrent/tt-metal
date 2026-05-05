@@ -388,7 +388,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
     if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
-    needs: [resolve-docker-pull-ref, tests-to-run]
+    needs: [resolve-docker-pull-refs, tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
