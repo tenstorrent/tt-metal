@@ -40,7 +40,7 @@ class HostTensorImpl;
  *
  * Invariants of HostTensor:
  * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
- *   move construction will be UB. This exists to allow for default constructed HostTensor. This is mirrors MeshTensor.
+ *   move construction will be UB. This exists to allow for default constructed HostTensor. This mirrors MeshTensor.
  * - Initialized: The HostTensor holds some tensor configurations and associated HostBuffer.
  */
 class HostTensor {
@@ -202,7 +202,7 @@ public:
     /**
      * Access to the implementation.
      *
-     * pre-condition: The HostTensor must be engaged.
+     * pre-condition: The HostTensor must be initialized.
      */
     HostTensorImpl& impl();
     const HostTensorImpl& impl() const;
