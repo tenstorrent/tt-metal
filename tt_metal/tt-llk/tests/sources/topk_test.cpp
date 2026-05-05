@@ -476,7 +476,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             TILE_C_DIM,
                             4 /* num_faces */,
                             false /* partial_face */,
-                            false /* narrow_tile */,
                             1 /* num_tiles */);
 #else
                         _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
