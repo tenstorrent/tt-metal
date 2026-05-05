@@ -32,6 +32,10 @@
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+#ifdef ISCLOSE_OP
+    const uint32_t rtol_bits = get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
+    const uint32_t atol_bits = get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX);
+#endif
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 

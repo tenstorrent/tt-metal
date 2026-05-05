@@ -25,7 +25,11 @@
 
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
 FORCE_INLINE void process_sfpu_scalar_tiles(
-    uint32_t n, uint32_t cb_pre_lhs, uint32_t cb_post_lhs, uint32_t cb_post_rhs, uint32_t cb_out) {
+    uint32_t n,
+    uint32_t cb_pre_lhs,
+    uint32_t cb_post_lhs,
+    uint32_t cb_post_rhs,
+    uint32_t cb_out ISCLOSE_RT_ARG_PARAMS) {
     PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
     cb_wait_front(cb_post_lhs, n);
 
@@ -63,6 +67,10 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+#ifdef ISCLOSE_OP
+    const uint32_t rtol_bits = get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
+    const uint32_t atol_bits = get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX);
+#endif
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
@@ -88,13 +96,13 @@ void kernel_main() {
     // Process full chunks
     uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
-        process_sfpu_scalar_tiles(num_tiles_per_cycle, cb_pre_lhs, cb_post_lhs, cb_post_rhs, cb_out);
+        process_sfpu_scalar_tiles(num_tiles_per_cycle, cb_pre_lhs, cb_post_lhs, cb_post_rhs, cb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_scalar_tiles(remainder, cb_pre_lhs, cb_post_lhs, cb_post_rhs, cb_out);
+        process_sfpu_scalar_tiles(remainder, cb_pre_lhs, cb_post_lhs, cb_post_rhs, cb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Pop the scalar tile from RHS CB

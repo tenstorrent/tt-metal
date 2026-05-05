@@ -435,19 +435,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // For isclose: rtol and atol are passed as runtime args (IEEE-754 bit-patterns) so that
     // a single cached kernel binary handles all tolerance values.  Only equal_nan is a
     // compile-time template parameter because it controls distinct code paths.
-    // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits;
+    // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits.
+    // `rtol_bits` and `atol_bits` forward them through the inlined process_tile
+    // helpers via ISCLOSE_RT_ARG_PARAMS and ISCLOSE_RT_ARG_FWD.
     if (operation_attributes.binary_op_type == BinaryOpType::ISCLOSE) {
+        compute_kernel_defines["ISCLOSE_OP"] = "1";
         compute_kernel_defines["ISCLOSE_EQUAL_NAN"] = operation_attributes.equal_nan ? "1" : "0";
         compute_kernel_defines["ISCLOSE_RTOL_RT_ARG_IDX"] = "3";
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
-        // Replace the object-like BINARY_SFPU_OP with a function-like macro that appends
-        // the runtime-arg reads for rtol and atol to the three DST-index arguments.
         compute_kernel_defines.erase("BINARY_SFPU_OP");
         compute_kernel_defines["BINARY_SFPU_OP(a,b,c)"] =
-            "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"
-            "(a, b, c, "
-            "get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX), "
-            "get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX))";
+            "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>(a, b, c, rtol_bits, atol_bits)";
     }
 
     {
