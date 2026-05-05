@@ -39,9 +39,26 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace);
 // Returns the actual per-bank L1 allocation size for the output buffer. Throws for DRAM buffers.
 uint32_t extract_l1_output_buffer_allocation_size_per_core(const ttnn::Tensor& output_tensor);
 
+[[deprecated(
+    "interleaved_storage_cores is no longer used; call "
+    "extract_l1_output_buffer_allocation_size_per_core(output_tensor) "
+    "instead. Removal by 2026-06-07.")]]
+inline uint32_t extract_l1_output_buffer_allocation_size_per_core(
+    const ttnn::Tensor& output_tensor, size_t /*interleaved_storage_cores*/) {
+    return extract_l1_output_buffer_allocation_size_per_core(output_tensor);
+}
+
 // Returns the worst-case memory allocation per core for the peak L1 usage. Ignores DRAM buffers.
 [[deprecated("Use extract_resource_usage_per_core instead")]]
 uint32_t extract_l1_buffer_allocation_peak_size_per_core(const nlohmann::json& trace);
+
+[[deprecated(
+    "interleaved_storage_cores is no longer used; use extract_resource_usage_per_core(trace) instead. "
+    "Removal by 2026-06-07.")]]
+inline uint32_t extract_l1_buffer_allocation_peak_size_per_core(
+    const nlohmann::json& trace, size_t /*interleaved_storage_cores*/) {
+    return extract_l1_buffer_allocation_peak_size_per_core(trace);
+}
 
 // Returns peak size of circular buffer allocations for a given trace
 [[deprecated("Use extract_resource_usage_per_core instead")]]
@@ -51,7 +68,22 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
 [[deprecated("Use extract_resource_usage_per_core instead")]]
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace);
 
+[[deprecated(
+    "interleaved_storage_cores is no longer used; use extract_resource_usage_per_core(trace) instead. "
+    "Removal by 2026-06-07.")]]
+inline uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t /*interleaved_storage_cores*/) {
+    return extract_peak_memory_usage(trace);
+}
+
 PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace);
+
+[[deprecated(
+    "interleaved_storage_cores is no longer used; call extract_resource_usage_per_core(trace) instead. "
+    "Removal by 2026-06-07.")]]
+inline PeakMemoryUsagePerCore extract_resource_usage_per_core(
+    const nlohmann::json& trace, size_t /*interleaved_storage_cores*/) {
+    return extract_resource_usage_per_core(trace);
+}
 
 DRAMUsage extract_dram_usage(const nlohmann::json& trace);
 
