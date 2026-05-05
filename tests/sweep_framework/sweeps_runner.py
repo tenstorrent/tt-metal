@@ -36,6 +36,8 @@ if _REQUESTED_MP_START_METHOD:
 import enlighten
 import framework.tt_smi_util as tt_smi_util
 
+Process = _mp.Process
+
 try:
     from faster_fifo import Queue  # faster IPC; not available on aarch64 Linux
 except ImportError:
