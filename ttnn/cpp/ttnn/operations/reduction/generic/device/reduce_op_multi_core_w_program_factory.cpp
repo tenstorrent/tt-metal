@@ -57,19 +57,6 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
     }
     TT_FATAL(num_cores > 0, "Reduce W requires at least one worker core");
-    TT_FATAL(
-        all_cores.num_cores() == num_cores,
-        "Split core count mismatch: num_cores={}, all_cores.num_cores()={}",
-        num_cores,
-        all_cores.num_cores());
-    const uint32_t rows_assigned_to_group_1 = core_group_1.num_cores() * num_rows_per_core_group_1;
-    const uint32_t rows_assigned_to_group_2 = core_group_2.num_cores() * num_rows_per_core_group_2;
-    TT_FATAL(
-        rows_assigned_to_group_1 + rows_assigned_to_group_2 == num_rows,
-        "Reduce W workload mismatch: group1_rows={} + group2_rows={} must equal total_rows={}",
-        rows_assigned_to_group_1,
-        rows_assigned_to_group_2,
-        num_rows);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

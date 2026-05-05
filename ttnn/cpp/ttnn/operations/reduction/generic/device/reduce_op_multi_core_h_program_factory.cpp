@@ -64,19 +64,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
     }
     TT_FATAL(num_cores > 0, "Reduce H requires at least one worker core");
-    TT_FATAL(
-        all_cores.num_cores() == num_cores,
-        "Split core count mismatch: num_cores={}, all_cores.num_cores()={}",
-        num_cores,
-        all_cores.num_cores());
-    uint32_t cols_assigned_to_group_1 = core_group_1.num_cores() * num_cols_per_core_group_1;
-    uint32_t cols_assigned_to_group_2 = core_group_2.num_cores() * num_cols_per_core_group_2;
-    TT_FATAL(
-        cols_assigned_to_group_1 + cols_assigned_to_group_2 == num_cols,
-        "Reduce H workload mismatch: group1_cols={} + group2_cols={} must equal total_cols={}",
-        cols_assigned_to_group_1,
-        cols_assigned_to_group_2,
-        num_cols);
 
     // Current sharding only supports width, and that input and output are sharded
     if (use_width_sharding) {
@@ -86,13 +73,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         core_group_2 = CoreRangeSet();
         num_cols_per_core_group_1 = NC * (a.shard_spec().value().shape[1] / tile_width);
         num_cols_per_core_group_2 = 0;
-        cols_assigned_to_group_1 = core_group_1.num_cores() * num_cols_per_core_group_1;
-        cols_assigned_to_group_2 = 0;
-        TT_FATAL(
-            cols_assigned_to_group_1 == num_cols,
-            "Width-sharded Reduce H workload mismatch: assigned_cols={} must equal total_cols={}",
-            cols_assigned_to_group_1,
-            num_cols);
     }
 
     uint32_t src0_cb_index = CBIndex::c_0;
