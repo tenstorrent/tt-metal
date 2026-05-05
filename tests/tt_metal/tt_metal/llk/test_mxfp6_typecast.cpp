@@ -125,12 +125,16 @@ static vector<uint32_t> run_mxfp6_typecast(
 
 // --- Random data generators ---
 
-static vector<uint32_t> create_random_vector_of_mxfp6r(
-    uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
-    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp6R);
+static vector<uint32_t> create_random_vector_of_mxfp6(
+    tt::DataFormat fmt, uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
+    TT_FATAL(
+        fmt == tt::DataFormat::MxFp6R || fmt == tt::DataFormat::MxFp6P,
+        "Unsupported MXFP6 DataFormat: {}",
+        static_cast<int>(fmt));
+    uint32_t single_tile_size = tt::tile_size(fmt);
     TT_FATAL(
         num_bytes % single_tile_size == 0,
-        "num_bytes {} must be divisible by MXFP6R tile_size {}",
+        "num_bytes {} must be divisible by MXFP6 tile_size {}",
         num_bytes,
         single_tile_size);
     uint32_t num_tiles = num_bytes / single_tile_size;
@@ -144,38 +148,12 @@ static vector<uint32_t> create_random_vector_of_mxfp6r(
         v = dist(rng) + offset;
     }
 
-    vector<uint32_t> packed = pack_as_mxfp6r_tiles(tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
+    auto span = tt::stl::make_const_span(fp32_vec);
+    vector<uint32_t> packed = (fmt == tt::DataFormat::MxFp6R) ? pack_as_mxfp6r_tiles(span, /*row_major_input=*/true)
+                                                              : pack_as_mxfp6p_tiles(span, /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
-        "MXFP6R packed size {} bytes does not match expected {} bytes",
-        packed.size() * sizeof(uint32_t),
-        num_tiles * single_tile_size);
-    return packed;
-}
-
-static vector<uint32_t> create_random_vector_of_mxfp6p(
-    uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
-    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::MxFp6P);
-    TT_FATAL(
-        num_bytes % single_tile_size == 0,
-        "num_bytes {} must be divisible by MXFP6P tile_size {}",
-        num_bytes,
-        single_tile_size);
-    uint32_t num_tiles = num_bytes / single_tile_size;
-
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> dist(0.0f, static_cast<float>(rand_max_float));
-
-    constexpr uint32_t kNumFloatsPerTile = 1024;
-    vector<float> fp32_vec(num_tiles * kNumFloatsPerTile);
-    for (float& v : fp32_vec) {
-        v = dist(rng) + offset;
-    }
-
-    vector<uint32_t> packed = pack_as_mxfp6p_tiles(tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
-    TT_FATAL(
-        packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
-        "MXFP6P packed size {} bytes does not match expected {} bytes",
+        "MXFP6 packed size {} bytes does not match expected {} bytes",
         packed.size() * sizeof(uint32_t),
         num_tiles * single_tile_size);
     return packed;
@@ -183,12 +161,15 @@ static vector<uint32_t> create_random_vector_of_mxfp6p(
 
 // --- Format-to-float unpackers ---
 
-static vector<float> mxfp6r_to_floats(const vector<uint32_t>& packed) {
-    return unpack_mxfp6r_tiles_into_float_vec(tt::stl::make_const_span(packed), /*row_major_output=*/false);
-}
-
-static vector<float> mxfp6p_to_floats(const vector<uint32_t>& packed) {
-    return unpack_mxfp6p_tiles_into_float_vec(tt::stl::make_const_span(packed), /*row_major_output=*/false);
+static vector<float> mxfp6_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
+    auto span = tt::stl::make_const_span(packed);
+    if (fmt == tt::DataFormat::MxFp6R) {
+        return unpack_mxfp6r_tiles_into_float_vec(span, /*row_major_output=*/false);
+    }
+    if (fmt == tt::DataFormat::MxFp6P) {
+        return unpack_mxfp6p_tiles_into_float_vec(span, /*row_major_output=*/false);
+    }
+    TT_THROW("Unsupported MXFP6 DataFormat: {}", static_cast<int>(fmt));
 }
 
 static vector<float> bf16_to_floats(const vector<uint32_t>& packed) {
@@ -263,8 +244,8 @@ constexpr float kOffset = -10.0f;  // U(0, kRandMaxFloat) + kOffset = U(-10, 10)
 static vector<uint32_t> generate_random_src(tt::DataFormat fmt, uint32_t num_tiles) {
     uint32_t bytes = tt::tile_size(fmt) * num_tiles;
     switch (fmt) {
-        case tt::DataFormat::MxFp6R: return create_random_vector_of_mxfp6r(bytes, kRandMaxFloat, kSeed, kOffset);
-        case tt::DataFormat::MxFp6P: return create_random_vector_of_mxfp6p(bytes, kRandMaxFloat, kSeed, kOffset);
+        case tt::DataFormat::MxFp6R:
+        case tt::DataFormat::MxFp6P: return create_random_vector_of_mxfp6(fmt, bytes, kRandMaxFloat, kSeed, kOffset);
         case tt::DataFormat::Float16_b: return create_random_vector_of_bfloat16(bytes, kRandMaxFloat, kSeed, kOffset);
         default: TT_THROW("Unsupported source DataFormat for mxfp6 typecast test: {}", static_cast<int>(fmt));
     }
@@ -272,8 +253,8 @@ static vector<uint32_t> generate_random_src(tt::DataFormat fmt, uint32_t num_til
 
 static vector<float> unpack_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
     switch (fmt) {
-        case tt::DataFormat::MxFp6R: return mxfp6r_to_floats(packed);
-        case tt::DataFormat::MxFp6P: return mxfp6p_to_floats(packed);
+        case tt::DataFormat::MxFp6R:
+        case tt::DataFormat::MxFp6P: return mxfp6_to_floats(fmt, packed);
         case tt::DataFormat::Float16_b: return bf16_to_floats(packed);
         default: TT_THROW("Unsupported DataFormat for mxfp6 unpack: {}", static_cast<int>(fmt));
     }
@@ -428,18 +409,17 @@ static uint8_t mxfp6_scale_byte_at(const vector<uint32_t>& packed, uint32_t bloc
 
 // Apply the OCP MX block-level rule: a block with scale = 0xFF reads as NaN
 // for every element. Otherwise the element class stands.
-static MxFp6Class effective_mxfp6r_class(uint8_t scale_byte, uint8_t elem_byte) {
+static MxFp6Class effective_mxfp6_class(tt::DataFormat fmt, uint8_t scale_byte, uint8_t elem_byte) {
     if (scale_byte == 0xFF) {
         return MxFp6Class::NaN;
     }
-    return classify_mxfp6r(elem_byte);
-}
-
-static MxFp6Class effective_mxfp6p_class(uint8_t scale_byte, uint8_t elem_byte) {
-    if (scale_byte == 0xFF) {
-        return MxFp6Class::NaN;
+    if (fmt == tt::DataFormat::MxFp6R) {
+        return classify_mxfp6r(elem_byte);
     }
-    return classify_mxfp6p(elem_byte);
+    if (fmt == tt::DataFormat::MxFp6P) {
+        return classify_mxfp6p(elem_byte);
+    }
+    TT_THROW("Unsupported MXFP6 DataFormat: {}", static_cast<int>(fmt));
 }
 
 // Build a 1024-element BF16 tile (1 tile = 32 blocks × 32 elements) where
@@ -455,7 +435,7 @@ static vector<uint32_t> build_bf16_tile_with_block_values(std::initializer_list<
     auto* bf16_bits = reinterpret_cast<uint16_t*>(packed.data());
 
     uint16_t default_val = block_values.size() > 0 ? *(block_values.end() - 1) : 0;
-    auto it = block_values.begin();
+    const auto* it = block_values.begin();
     for (uint32_t b = 0; b < kNumBlocksPerTile; ++b) {
         uint16_t val = (it != block_values.end()) ? *it++ : default_val;
         for (uint32_t i = 0; i < kElementsPerBlock; ++i) {
@@ -806,14 +786,18 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RSpecialCases) {
     // Block 0: NaN BF16 in → NaN out (NaN-scale).
     uint8_t scale0 = mxfp6_tc::mxfp6_scale_byte_at(result, 0);
     for (uint32_t i = 0; i < 32; ++i) {
-        EXPECT_EQ(mxfp6_tc::effective_mxfp6r_class(scale0, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i)), Cls::NaN)
+        EXPECT_EQ(
+            mxfp6_tc::effective_mxfp6_class(
+                tt::DataFormat::MxFp6R, scale0, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i)),
+            Cls::NaN)
             << "block 0 (BF16 NaN in) elem " << i;
     }
 
     // Block 1: +Inf BF16 in → NaN or +max-normal.
     uint8_t scale1 = mxfp6_tc::mxfp6_scale_byte_at(result, 1);
     for (uint32_t i = 32; i < 64; ++i) {
-        auto cls = mxfp6_tc::effective_mxfp6r_class(scale1, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i));
+        auto cls = mxfp6_tc::effective_mxfp6_class(
+            tt::DataFormat::MxFp6R, scale1, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i));
         EXPECT_TRUE(cls == Cls::NaN || cls == Cls::MaxNormalPos)
             << "block 1 (BF16 +Inf in) elem " << i << " cls=" << static_cast<int>(cls);
     }
@@ -821,14 +805,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RSpecialCases) {
     // Block 2: -Inf BF16 in → NaN or -max-normal.
     uint8_t scale2 = mxfp6_tc::mxfp6_scale_byte_at(result, 2);
     for (uint32_t i = 64; i < 96; ++i) {
-        auto cls = mxfp6_tc::effective_mxfp6r_class(scale2, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i));
+        auto cls = mxfp6_tc::effective_mxfp6_class(
+            tt::DataFormat::MxFp6R, scale2, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i));
         EXPECT_TRUE(cls == Cls::NaN || cls == Cls::MaxNormalNeg)
             << "block 2 (BF16 -Inf in) elem " << i << " cls=" << static_cast<int>(cls);
     }
 
     // Block 3: +1.0 sanity — verify each element round-trips exactly via the
     // float unpack (1.0 is exactly representable in MXFP6R with scale=2^0).
-    auto floats = mxfp6_tc::mxfp6r_to_floats(result);
+    auto floats = mxfp6_tc::mxfp6_to_floats(tt::DataFormat::MxFp6R, result);
     for (uint32_t i = 96; i < 128; ++i) {
         EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
     }
@@ -862,25 +847,30 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PSpecialCases) {
 
     uint8_t scale0 = mxfp6_tc::mxfp6_scale_byte_at(result, 0);
     for (uint32_t i = 0; i < 32; ++i) {
-        EXPECT_EQ(mxfp6_tc::effective_mxfp6p_class(scale0, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i)), Cls::NaN)
+        EXPECT_EQ(
+            mxfp6_tc::effective_mxfp6_class(
+                tt::DataFormat::MxFp6P, scale0, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i)),
+            Cls::NaN)
             << "block 0 (BF16 NaN in) elem " << i;
     }
 
     uint8_t scale1 = mxfp6_tc::mxfp6_scale_byte_at(result, 1);
     for (uint32_t i = 32; i < 64; ++i) {
-        auto cls = mxfp6_tc::effective_mxfp6p_class(scale1, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i));
+        auto cls = mxfp6_tc::effective_mxfp6_class(
+            tt::DataFormat::MxFp6P, scale1, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i));
         EXPECT_TRUE(cls == Cls::NaN || cls == Cls::MaxNormalPos)
             << "block 1 (BF16 +Inf in) elem " << i << " cls=" << static_cast<int>(cls);
     }
 
     uint8_t scale2 = mxfp6_tc::mxfp6_scale_byte_at(result, 2);
     for (uint32_t i = 64; i < 96; ++i) {
-        auto cls = mxfp6_tc::effective_mxfp6p_class(scale2, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i));
+        auto cls = mxfp6_tc::effective_mxfp6_class(
+            tt::DataFormat::MxFp6P, scale2, mxfp6_tc::mxfp6_elem_byte_at(result, layout, i));
         EXPECT_TRUE(cls == Cls::NaN || cls == Cls::MaxNormalNeg)
             << "block 2 (BF16 -Inf in) elem " << i << " cls=" << static_cast<int>(cls);
     }
 
-    auto floats = mxfp6_tc::mxfp6p_to_floats(result);
+    auto floats = mxfp6_tc::mxfp6_to_floats(tt::DataFormat::MxFp6P, result);
     for (uint32_t i = 96; i < 128; ++i) {
         EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
     }
