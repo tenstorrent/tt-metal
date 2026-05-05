@@ -155,13 +155,11 @@ void RunOneTest(
             hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, type_idx);
         add_expected_msg(hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false));
     }
-    if (!is_quasar) {
-        const auto& inactive_eth_cores = device->get_inactive_ethernet_cores();
-        if (!inactive_eth_cores.empty() && fixture->IsSlowDispatch()) {
-            // TODO: replace string literal "ierisc" with hal.get_processor_class_name() after
-            // unifying all tests + watcher_device_reader::get_riscv_name() with same method
-            add_expected_msg("ierisc");
-        }
+    const auto& inactive_eth_cores = device->get_inactive_ethernet_cores();
+    if (!inactive_eth_cores.empty() && fixture->IsSlowDispatch()) {
+        // TODO: replace string literal "ierisc" with hal.get_processor_class_name() after
+        // unifying all tests + watcher_device_reader::get_riscv_name() with same method
+        add_expected_msg("ierisc");
     }
 
     fixture->RunProgram(mesh_device, workload, true);
