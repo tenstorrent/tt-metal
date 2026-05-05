@@ -138,9 +138,10 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
         offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
 
     // Build weights once and reuse across iterations.
-    auto w_gate = build_expert_weight_list(c.E, c.H, c.I, device, rng);
-    auto w_up = build_expert_weight_list(c.E, c.H, c.I, device, rng);
-    auto w_down = build_expert_weight_list(c.E, c.I, c.H, device, rng);
+    // [out, in] layout (LinearLayer convention).
+    auto w_gate = build_expert_weight_list(c.E, c.I, c.H, device, rng);
+    auto w_up = build_expert_weight_list(c.E, c.I, c.H, device, rng);
+    auto w_down = build_expert_weight_list(c.E, c.H, c.I, device, rng);
 
     auto build_grouped = [&]() { return build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng); };
 

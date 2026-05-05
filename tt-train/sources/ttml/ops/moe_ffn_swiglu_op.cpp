@@ -40,7 +40,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     const std::vector<autograd::TensorPtr>& w_down) {
     const auto& grouped_value = grouped->get_value();
     const auto grouped_shape = grouped_value.logical_shape();
-    const uint32_t token_capacity = grouped_shape[-2];
     const uint32_t hidden_dim = grouped_shape[-1];
     const uint32_t num_experts = static_cast<uint32_t>(w_gate.size());
 
@@ -52,7 +51,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     }
 
     const auto wg0_shape = w_gate[0]->get_value().logical_shape();
-    if (wg0_shape[-2] != hidden_dim) {
+    if (wg0_shape[-1] != hidden_dim) {
         throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] inner dim must equal grouped's hidden_dim.");
     }
 
@@ -98,8 +97,8 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         const auto& w_up_e = w_up[e]->get_value();
         const auto& w_down_e = w_down[e]->get_value();
 
-        auto gate_proj_e = ttnn_fixed::matmul(X_e, w_gate_e, false, false);  // [1,1,len,intermediate_dim]
-        auto up_proj_e = ttnn_fixed::matmul(X_e, w_up_e, false, false);      // [1,1,len,intermediate_dim]
+        auto gate_proj_e = ttnn_fixed::matmul(X_e, w_gate_e, false, true);  // [1,1,len,intermediate_dim]
+        auto up_proj_e = ttnn_fixed::matmul(X_e, w_up_e, false, true);      // [1,1,len,intermediate_dim]
         auto activated_e = ttnn::multiply(
             gate_proj_e,
             up_proj_e,
@@ -108,7 +107,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             /*output_tensor=*/std::nullopt,
             /*post_op_activations=*/no_acts,
             /*input_a_activations=*/silu_lhs);  // silu(gate_proj_e) * up_proj_e in one op
-        auto down_proj_e = ttnn_fixed::matmul(activated_e, w_down_e, false, false);  // [1,1,len,hidden_dim]
+        auto down_proj_e = ttnn_fixed::matmul(activated_e, w_down_e, false, true);  // [1,1,len,hidden_dim]
         activated_e.deallocate();
 
         gate_proj_parts.push_back(std::move(gate_proj_e));
@@ -175,9 +174,10 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
                 /*post_op_activations=*/no_acts,
                 /*input_a_activations=*/silu_lhs);
 
-            // Down branch:  d_activated_e = dY_e @ w_down_e^T,  dW_down_e = activated_e^T @ dY_e
-            auto d_activated_e = ttnn_fixed::matmul(dY_e, w_down_e, /*transpose_a=*/false, /*transpose_b=*/true);
-            auto dW_down_e = ttnn_fixed::matmul(activated_e, dY_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            // Down branch (w_down_e is [hidden, intermediate]):
+            //   d_activated_e = dY_e @ w_down_e,  dW_down_e = dY_e^T @ activated_e
+            auto d_activated_e = ttnn_fixed::matmul(dY_e, w_down_e, /*transpose_a=*/false, /*transpose_b=*/false);
+            auto dW_down_e = ttnn_fixed::matmul(dY_e, activated_e, /*transpose_a=*/true, /*transpose_b=*/false);
             w_down[e]->add_grad(dW_down_e);
             activated_e.deallocate();
             dY_e.deallocate();
@@ -187,17 +187,18 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             up_proj_e.deallocate();
             d_activated_e.deallocate();
 
-            // dW_gate_e = X_e^T @ d_gate_proj_e,  dW_up_e = X_e^T @ d_up_proj_e — added directly to per-expert grads.
-            auto dW_gate_e = ttnn_fixed::matmul(X_e, d_gate_proj_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            // w_gate_e, w_up_e are [intermediate, hidden]:
+            //   dW_gate_e = d_gate_proj_e^T @ X_e,  dW_up_e = d_up_proj_e^T @ X_e
+            auto dW_gate_e = ttnn_fixed::matmul(d_gate_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
             w_gate[e]->add_grad(dW_gate_e);
-            auto dW_up_e = ttnn_fixed::matmul(X_e, d_up_proj_e, /*transpose_a=*/true, /*transpose_b=*/false);
+            auto dW_up_e = ttnn_fixed::matmul(d_up_proj_e, X_e, /*transpose_a=*/true, /*transpose_b=*/false);
             w_up[e]->add_grad(dW_up_e);
             X_e.deallocate();
 
-            // dX_e = d_gate_proj_e @ w_gate_e^T  +  d_up_proj_e @ w_up_e^T
+            // dX_e = d_gate_proj_e @ w_gate_e  +  d_up_proj_e @ w_up_e
             auto dX_via_gate_e =
-                ttnn_fixed::matmul(d_gate_proj_e, w_gate_e, /*transpose_a=*/false, /*transpose_b=*/true);
-            auto dX_via_up_e = ttnn_fixed::matmul(d_up_proj_e, w_up_e, /*transpose_a=*/false, /*transpose_b=*/true);
+                ttnn_fixed::matmul(d_gate_proj_e, w_gate_e, /*transpose_a=*/false, /*transpose_b=*/false);
+            auto dX_via_up_e = ttnn_fixed::matmul(d_up_proj_e, w_up_e, /*transpose_a=*/false, /*transpose_b=*/false);
             d_gate_proj_e.deallocate();
             d_up_proj_e.deallocate();
 

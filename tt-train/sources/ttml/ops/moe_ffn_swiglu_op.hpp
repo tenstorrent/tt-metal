@@ -24,8 +24,9 @@ namespace ttml::ops {
 // Shapes:
 //   grouped       : [1, 1, T_cap, hidden_dim]            bf16 TILE DRAM
 //   offsets       : [E_local + 1]                        uint32
-//   w_gate / w_up : E_local entries, each [1, 1, hidden_dim, intermediate_dim]
-//   w_down        : E_local entries, each [1, 1, intermediate_dim, hidden_dim]
+//   w_gate / w_up : E_local entries, each [1, 1, intermediate_dim, hidden_dim]
+//   w_down        : E_local entries, each [1, 1, hidden_dim, intermediate_dim]
+// (LinearLayer convention: weights stored as [out, in], matmul'd with transpose_b.)
 // Returns:
 //   Y             : [1, 1, T_cap, hidden_dim]            bf16 TILE DRAM
 autograd::TensorPtr moe_ffn_swiglu_fw(

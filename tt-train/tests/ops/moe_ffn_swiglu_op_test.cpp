@@ -29,15 +29,16 @@ protected:
 };
 
 // CPU reference: for each expert slice X_e, compute
-// (silu(X_e @ W_gate_e) * (X_e @ W_up_e)) @ W_down_e and splat into
+// (silu(X_e @ W_gate_e^T) * (X_e @ W_up_e^T)) @ W_down_e^T and splat into
 // rows [offsets[e], offsets[e]+counts[e]) of a zero-initialized output.
+// Weights are in [out, in] layout (LinearLayer convention).
 xt::xarray<float> moe_ffn_swiglu_reference(
     const xt::xarray<float>& grouped,  // [T_cap, H]
     const std::vector<uint32_t>& offsets,
     const std::vector<uint32_t>& counts,  // active rows per expert
-    const xt::xarray<float>& w_gate,      // [E, H, I]
-    const xt::xarray<float>& w_up,        // [E, H, I]
-    const xt::xarray<float>& w_down) {    // [E, I, H]
+    const xt::xarray<float>& w_gate,      // [E, I, H]
+    const xt::xarray<float>& w_up,        // [E, I, H]
+    const xt::xarray<float>& w_down) {    // [E, H, I]
     const std::size_t T_cap = grouped.shape()[0];
     const std::size_t H = grouped.shape()[1];
     xt::xarray<float> out = xt::zeros<float>(std::vector<std::size_t>{T_cap, H});
@@ -56,11 +57,11 @@ xt::xarray<float> moe_ffn_swiglu_reference(
         xt::xarray<float> Wu = xt::view(w_up, e, xt::all(), xt::all());
         xt::xarray<float> Wd = xt::view(w_down, e, xt::all(), xt::all());
 
-        xt::xarray<float> G = xt::linalg::tensordot(X, Wg, {1}, {0});  // [n, I]
-        xt::xarray<float> U = xt::linalg::tensordot(X, Wu, {1}, {0});  // [n, I]
+        xt::xarray<float> G = xt::linalg::tensordot(X, Wg, {1}, {1});  // [n, I]  X @ Wg^T
+        xt::xarray<float> U = xt::linalg::tensordot(X, Wu, {1}, {1});  // [n, I]  X @ Wu^T
         xt::xarray<float> sigmoid_G = 1.0f / (1.0f + xt::exp(-G));
         xt::xarray<float> A = (G * sigmoid_G) * U;                     // [n, I]
-        xt::xarray<float> Y = xt::linalg::tensordot(A, Wd, {1}, {0});  // [n, H]
+        xt::xarray<float> Y = xt::linalg::tensordot(A, Wd, {1}, {1});  // [n, H]  A @ Wd^T
 
         xt::view(out, xt::range(row_lo, row_hi), xt::all()) = Y;
     }
@@ -129,10 +130,11 @@ void RunCase(const FfnCase& c) {
         xt::view(grouped, xt::range(offsets[e], offsets[e] + c.counts[e]), xt::all()) = slice;
     }
 
+    // [out, in] layout: w_gate/w_up are [E, I, H], w_down is [E, H, I].
     std::vector<std::size_t> w_gate_up_shape{
-        static_cast<std::size_t>(c.E), static_cast<std::size_t>(c.H), static_cast<std::size_t>(c.I)};
-    std::vector<std::size_t> w_down_shape{
         static_cast<std::size_t>(c.E), static_cast<std::size_t>(c.I), static_cast<std::size_t>(c.H)};
+    std::vector<std::size_t> w_down_shape{
+        static_cast<std::size_t>(c.E), static_cast<std::size_t>(c.H), static_cast<std::size_t>(c.I)};
     xt::xarray<float> w_gate = xt::empty<float>(w_gate_up_shape);
     xt::xarray<float> w_up = xt::empty<float>(w_gate_up_shape);
     xt::xarray<float> w_down = xt::empty<float>(w_down_shape);
@@ -251,9 +253,10 @@ TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
         xt::view(grouped_4d, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all()) = xt::view(slice, 0, 0);
     }
 
-    xt::xarray<float> w_gate = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), H, I});
-    xt::xarray<float> w_up = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), H, I});
-    xt::xarray<float> w_down = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), I, H});
+    // [out, in] layout: w_gate/w_up are [E, I, H], w_down is [E, H, I].
+    xt::xarray<float> w_gate = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), I, H});
+    xt::xarray<float> w_up = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), I, H});
+    xt::xarray<float> w_down = xt::empty<float>(std::vector<std::size_t>{static_cast<std::size_t>(E), H, I});
     core::parallel_generate<float>(w_gate, gen, rng());
     core::parallel_generate<float>(w_up, gen, rng());
     core::parallel_generate<float>(w_down, gen, rng());
@@ -285,9 +288,9 @@ TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
             EXPECT_TRUE(xt::all(xt::isfinite(g))) << "non-finite " << name << "[" << e << "]";
         }
     };
-    check_per_expert_grads(t_wg, {1U, 1U, H, I}, "dW_gate");
-    check_per_expert_grads(t_wu, {1U, 1U, H, I}, "dW_up");
-    check_per_expert_grads(t_wd, {1U, 1U, I, H}, "dW_down");
+    check_per_expert_grads(t_wg, {1U, 1U, I, H}, "dW_gate");
+    check_per_expert_grads(t_wu, {1U, 1U, I, H}, "dW_up");
+    check_per_expert_grads(t_wd, {1U, 1U, H, I}, "dW_down");
 
     // Loss = sum(Y); inputs are positive, weights are positive — every active row
     // contributes a non-zero gradient. Active-row dgrouped should be non-trivial.
