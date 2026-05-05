@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -10,7 +11,7 @@ void kernel_main() {
     uint32_t NC = get_compile_time_arg_val(2);
     constexpr uint32_t origin_H = get_compile_time_arg_val(3);
 
-    auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_scaler = tt::CBIndex::c_2;
     constexpr auto cb_mask_h = tt::CBIndex::c_3;
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
@@ -36,34 +37,16 @@ void kernel_main() {
             // tiles are expected to be coming in in NCWH order (H-contiguous)
             // reducing in W means out[0][w] = sum(h=0..H-1, in[h][w])
             // in this case we just sequentially add to accumulator all the H-tiles in a column
-            cb_input = tt::CBIndex::c_0;
             bool is_h_single_tile = (Ht == 1);
+
+            // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
             if (!is_h_single_tile) {
-                tile_regs_acquire();
-                for (uint32_t ht = 0; ht < Ht - 1; ++ht) {
-                    cb_wait_front(cb_input, onetile);
-
-#if defined FP32_DEST_ACC_EN
-                    reconfig_data_format(cb_input, cb_scaler);
-#endif
-                    reduce_init(cb_input, cb_scaler, cb_accum_dst);
-                    reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-                    reduce_uninit();
-
-                    cb_pop_front(cb_input, onetile);
-                }
-                tile_regs_commit();
-                cb_reserve_back(cb_accum_dst, onetile);
-                tile_regs_wait();
-#if defined FP32_DEST_ACC_EN
-                pack_reconfig_data_format(cb_accum_dst);
-#endif
-                pack_tile(reduce_dst_idx, cb_accum_dst);
-                tile_regs_release();
-                cb_push_back(cb_accum_dst, onetile);
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_input, cb_scaler, cb_accum_dst, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
             }
 
-            if (do_mask_h) {
+            // Optional masking of last H tile
+            if constexpr (do_mask_h) {
                 tile_regs_acquire();
                 cb_wait_front(cb_input, onetile);
 #if defined FP32_DEST_ACC_EN
@@ -86,40 +69,26 @@ void kernel_main() {
                 cb_push_back(cb_masked_input, onetile);
 
                 cb_pop_front(cb_input, onetile);
-                cb_input = cb_masked_input;
-            }
 
-            tile_regs_acquire();
-            cb_wait_front(cb_input, onetile);
-            if (!is_h_single_tile) {
-#if defined FP32_DEST_ACC_EN
-                reconfig_data_format_srca(cb_accum_dst);
-#endif
-                cb_wait_front(cb_accum_dst, onetile);
-                copy_tile_to_dst_init_short(cb_accum_dst);
-                copy_tile(cb_accum_dst, 0, reduce_dst_idx);
-            }
-
-#if defined FP32_DEST_ACC_EN
-            reconfig_data_format(cb_input, cb_scaler);
-#endif
-            reduce_init(cb_input, cb_scaler, cb_out);
-            reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-            reduce_uninit();
-            tile_regs_commit();
-
-            cb_reserve_back(cb_out, onetile);
-            tile_regs_wait();
-#if defined FP32_DEST_ACC_EN
-            pack_reconfig_data_format(cb_out);
-#endif
-            pack_tile(reduce_dst_idx, cb_out);
-            tile_regs_release();
-            cb_push_back(cb_out, onetile);
-
-            cb_pop_front(cb_input, onetile);
-            if (!is_h_single_tile) {
-                cb_pop_front(cb_accum_dst, onetile);
+                // Phase 2 with masked input: Reduce final masked tile with accumulation
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_masked_input,
+                    cb_scaler,
+                    cb_out,
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+            } else {
+                // Phase 2 without masking: Reduce final tile with accumulation
+                // - If Ht == 1 (single tile): iteration=0, no accumulator reload
+                // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from cb_accum_dst
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+                    cb_input,
+                    cb_scaler,
+                    cb_out,
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
             }
         }
     }

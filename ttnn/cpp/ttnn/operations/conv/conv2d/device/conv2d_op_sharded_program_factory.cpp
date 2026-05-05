@@ -636,6 +636,11 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         .enable_weights_double_buffer = enable_weights_double_buffer,
         .enable_activation_reuse = enable_activation_reuse,
         .force_split_reader = force_split_reader};
+    // Pass the actual DRAM/L1-small config buffer page size into get_cb_info so the predicted
+    // READER_INDICES CB footprint matches the CB this factory creates. Without this, the in-DRAM
+    // path was sized to the worst case (1 uint16 per output row), holding spare L1 that is never
+    // populated by the reader kernel.
+    const uint32_t reader_indices_actual_page_size = conv_reader_indices_storage.get_buffer()->page_size();
     std::vector<CBInfo> cb_info = get_cb_info(
         compute_kernel_config,
         block_config,
@@ -652,21 +657,9 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         has_bias,
         is_conv_1d_depthwise_conv,
         skip_activation_mcast,
-        input_channels_padded);
+        input_channels_padded,
+        reader_indices_actual_page_size);
 
-    if (config_tensors_in_dram) {
-        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the
-        // maximum possible size.
-        TT_FATAL(
-            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
-                conv_reader_indices_storage.get_buffer()->page_size(),
-            "CB page size {} should be greater than the config tensor page size {}",
-            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size,
-            conv_reader_indices_storage.get_buffer()->page_size());
-    } else {
-        access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
-            conv_reader_indices_storage.get_buffer()->page_size();
-    }
     // call function to allocate circular buffers
     allocate_cbs(cb_info, program, all_cores, a, output, conv_reader_indices_tensor);
 
@@ -1366,7 +1359,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         std::vector<CoreCoord> core_range_vec = grid_to_cores(core_range.start_coord, core_range.end_coord, true);
         mcast_sender_cores_vec.insert(mcast_sender_cores_vec.end(), core_range_vec.begin(), core_range_vec.end());
     }
-    post_conv2d_op_memory_checks(program, operation_attributes, tensor_args, output_tensor);
+    post_conv2d_op_memory_checks(
+        program, operation_attributes, tensor_args, output_tensor, reader_indices_actual_page_size);
     // Capture conv_reader_indices_storage to cache this with the program
     return cached_program_t{
         std::move(program),

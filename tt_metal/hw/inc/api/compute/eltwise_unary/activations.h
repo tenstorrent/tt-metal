@@ -75,7 +75,7 @@ ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_celu_init<APPROX>())); }
+ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_celu_init())); }
 
 // clang-format off
  /**
@@ -98,7 +98,7 @@ ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_celu_init<APPROX>
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_init<APPROX>())); }
+ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_init())); }
 
 // clang-format off
 /**
@@ -124,6 +124,6 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardshrink_init<APPROX>())); }
+ALWI void hardshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardshrink_init())); }
 
 }  // namespace ckernel

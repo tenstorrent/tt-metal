@@ -78,6 +78,9 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.shard_spec().has_value()) {
+            TT_FATAL(
+                operation_attributes.output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::ND_SHARDED,
+                "Output memory config layout must not be ND_SHARDED when input has a legacy 2d shard_spec");
             if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
                 TT_FATAL(
                     input_tensor_a.shard_spec().value().grid.ranges().size() == 1,
@@ -98,6 +101,16 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                         "Output memory config layout must be HEIGHT_SHARDED when output is sharded but got {}",
                         operation_attributes.output_mem_config.memory_layout());
+                } else {
+                    TT_FATAL(
+                        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                        "Output memory config layout must be INTERLEAVED but got {}",
+                        operation_attributes.output_mem_config.memory_layout());
+                    TT_FATAL(
+                        input_tensor_a.physical_volume() /
+                                (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
+                            1,
+                        "Can only write unbatched output interleaved");
                 }
                 // What else?
             } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -225,7 +238,10 @@ TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
             shard_shape = {fused_height, shard_spec.shape[1]};
         }
         shard_spec.shape = shard_shape;
-        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            input_tensor_a.memory_config().memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec);
 
         return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config));
     }

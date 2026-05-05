@@ -465,8 +465,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("reduce_output_core_noc_x"),
         get_named_compile_time_arg_val("reduce_output_core_noc_y"),
         get_named_compile_time_arg_val("reduce_num_workers"),
-        get_named_compile_time_arg_val("reduce_slot_size_bytes"),
-        get_named_compile_time_arg_val("is_reduce_fabric_core")>;
+        get_named_compile_time_arg_val("is_reduce_fabric_core"),
+        0>;
 
     // Writer runtime args for worker cores
     constexpr size_t reduce_brisc_arg_start = 0;  // Fabric args start at 0

@@ -16,8 +16,10 @@ Requirements:
 
 from __future__ import annotations
 
+import math
 import os
 import sys
+import time
 import argparse
 from dataclasses import dataclass
 from typing import Tuple
@@ -32,6 +34,9 @@ from sklearn.metrics import mean_squared_error, r2_score
 # ---------------------------------------------------------------------------
 import ttnn  # noqa: E402
 import ttml  # noqa: E402
+
+# Memory tracking utilities
+MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
 
 # ---------------------------------------------------------------------------
@@ -88,27 +93,54 @@ def train_ttml_linear_regression(
     n_features: int,
     cfg: TTMLConfig,
     verbose: bool = True,
+    track_memory: bool = False,
 ):
     """
     Trains TTML linear regression (2D -> 1D generalizes via n_features).
     Shapes TTML expects: [B, 1, 1, n_features] for inputs, [B, 1, 1, 1] for targets.
     """
+    # Start memory tracking if enabled
+    memory_guard = None
+    if track_memory:
+        print("\nMemory tracking enabled")
+        memory_guard = MemoryUsageTracker.begin_capture()
+
     model = ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
+
+    total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+    print(f"   - Total parameters: {total_params:,}")
+
+    # Memory snapshot after model creation
+    if track_memory:
+        MemoryUsageTracker.snapshot("MODEL_CREATION")
     loss_fn = ttml.ops.loss.mse_loss
-    opt_cfg = ttml.optimizers.SGDConfig.make(
-        cfg.lr, cfg.momentum, cfg.weight_decay, cfg.dampening, cfg.nesterov
-    )
+    opt_cfg = ttml.optimizers.SGDConfig.make(cfg.lr, cfg.momentum, cfg.weight_decay, cfg.dampening, cfg.nesterov)
     opt = ttml.optimizers.SGD(model.parameters(), opt_cfg)
+    # Memory snapshot after optimizer creation
+    if track_memory:
+        MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
     model.train()
 
     num_samples = x_train.shape[0]
     indices = np.arange(num_samples)
 
+    # Flag to track if first iteration is complete (for memory tracking)
+    is_everything_compiled = False
+
+    # Helper for memory snapshots (only takes snapshots during first iteration)
+    def memory_snapshot(name: str):
+        nonlocal is_everything_compiled
+        if track_memory and not is_everything_compiled:
+            MemoryUsageTracker.snapshot(name)
+
+    global_step = 0
     for epoch in range(cfg.epochs):
         # Shuffle each epoch
         np.random.shuffle(indices)
         pos = 0
         while pos < num_samples:
+            global_step += 1
+            start_time = time.time()
             end_pos = min(num_samples, pos + cfg.batch_size)
             batch_idx = indices[pos:end_pos]
             bsz = end_pos - pos
@@ -121,12 +153,30 @@ def train_ttml_linear_regression(
             opt.zero_grad()
             tt_pred = model(tt_x)
             tt_loss = loss_fn(tt_pred, tt_y, ttml.ops.ReduceType.MEAN)
+            # Memory snapshot after forward pass
+            memory_snapshot("FORWARD_PASS")
+
             tt_loss.backward(False)
+            # Memory snapshot after backward pass
+            memory_snapshot("BACKWARD_PASS")
+
             opt.step()
 
             if verbose:
                 loss_val = float(tt_loss.to_numpy(ttnn.DataType.FLOAT32))
-                print(f"[epoch {epoch+1}/{cfg.epochs}] step_loss={loss_val:.6f}")
+                step_time = (time.time() - start_time) * 1000  # Convert to ms
+                print(
+                    f"[epoch {epoch+1}/{cfg.epochs}] Step: {global_step}, Loss: {loss_val:.6f}, Time: {step_time:.2f} ms"
+                )
+
+            # Print memory usage after first iteration
+            if track_memory and not is_everything_compiled:
+                is_everything_compiled = True
+                MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+                MemoryUsageTracker.print_memory_usage()
+                MemoryUsageTracker.clear()
+                if memory_guard:
+                    memory_guard.release()
 
             pos = end_pos
 
@@ -134,9 +184,7 @@ def train_ttml_linear_regression(
     return model
 
 
-def predict_ttml(
-    model, x: np.ndarray, n_features: int, batch_size: int = 256
-) -> np.ndarray:
+def predict_ttml(model, x: np.ndarray, n_features: int, batch_size: int = 256) -> np.ndarray:
     """
     Batched prediction to numpy 1D array.
     """
@@ -201,22 +249,19 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray) -> EvalResults:
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(
-        description="TTML vs scikit-learn Linear Regression"
-    )
-    parser.add_argument(
-        "--n-samples", type=int, default=512, help="Total samples for synthetic data"
-    )
+    parser = argparse.ArgumentParser(description="TTML vs scikit-learn Linear Regression")
+    parser.add_argument("--n-samples", type=int, default=512, help="Total samples for synthetic data")
     parser.add_argument("--n-features", type=int, default=2, help="Number of features")
-    parser.add_argument(
-        "--noise", type=float, default=1.0, help="Noise level for make_regression"
-    )
-    parser.add_argument(
-        "--batch-size", type=int, default=32, help="TTML train batch size"
-    )
+    parser.add_argument("--noise", type=float, default=1.0, help="Noise level for make_regression")
+    parser.add_argument("--batch-size", type=int, default=32, help="TTML train batch size")
     parser.add_argument("--epochs", type=int, default=8, help="TTML training epochs")
     parser.add_argument("--test-size", type=int, default=128, help="Hold-out test size")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument(
+        "--track_memory",
+        action="store_true",
+        help="Enable memory usage tracking (prints memory stats after first iteration)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Print per-step losses")
     args = parser.parse_args()
 
@@ -241,11 +286,10 @@ def main():
         n_features=args.n_features,
         cfg=cfg,
         verbose=args.verbose,
+        track_memory=args.track_memory,
     )
     # TTML predict & evaluate
-    y_pred_ttml = predict_ttml(
-        model, split.x_test, n_features=args.n_features, batch_size=32
-    )
+    y_pred_ttml = predict_ttml(model, split.x_test, n_features=args.n_features, batch_size=32)
     ttml_eval = evaluate(split.y_test, y_pred_ttml)
 
     # TTML params
@@ -253,9 +297,7 @@ def main():
     # Find weight and bias keys dynamically (works for both Python and C++ models)
     weight_key = [k for k in params.keys() if "weight" in k.lower()][0]
     bias_key = [k for k in params.keys() if "bias" in k.lower()][0]
-    ttml_w = (
-        params[weight_key].to_numpy(ttnn.DataType.FLOAT32).reshape(-1)
-    )  # shape: [n_features]
+    ttml_w = params[weight_key].to_numpy(ttnn.DataType.FLOAT32).reshape(-1)  # shape: [n_features]
     ttml_b = params[bias_key].to_numpy(ttnn.DataType.FLOAT32).item()
 
     # sklearn baseline

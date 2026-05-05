@@ -262,6 +262,26 @@ static ttnn::Tensor bound_matmul(
             optional_output_tensor);
     }
 
+    const auto& matmul_shape = utilities::compute_matmul_output_shape(
+        input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b);
+
+    ttnn::Shape result_shape = (bias.has_value()) ? utilities::compute_matmul_with_bias_output_shape(
+                                                        matmul_shape, bias.value().logical_shape())
+                                                  : matmul_shape;
+
+    if (optional_output_tensor.has_value()) {
+        const auto& desired_shape = optional_output_tensor->logical_shape();
+        uint64_t desired_vol = optional_output_tensor->logical_shape().volume();
+        uint64_t current_vol = std::accumulate(result_shape.begin(), result_shape.end(), 1ULL, std::multiplies<>());
+
+        TT_FATAL(desired_vol == current_vol, "Invalid optional output tensor");
+
+        output_tensor = ttnn::reshape(output_tensor, desired_shape);
+
+    } else if (bias.has_value()) {
+        output_tensor = ttnn::reshape(output_tensor, result_shape);
+    }
+
     if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
         const UnaryWithParam& activation = parameters.user_fused_activation.value();
 

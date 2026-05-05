@@ -17,6 +17,7 @@ struct NLPConcatHeadsDecodeSharedVariables {
     uint32_t sub_tile_line_bytes{};
     uint32_t num_cores{};
     tt::tt_metal::CBHandle cb_q_output{};
+    uint32_t head_size{};
 };
 
 struct NLPConcatHeadsDecodeProgramFactory {

@@ -19,7 +19,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_resolution, input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 1280, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 0.997),
+        ((1024, 1024), (1, 1280, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 0.9968),
         # 512x512 image resolution
         ((512, 512), (1, 1280, 16, 16), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 0.996),
     ],

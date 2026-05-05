@@ -89,7 +89,7 @@ def _from_device(tensor, mesh_device):
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("seq_len", [32], ids=["seq32"])
-def test_attention_prefill(layer_idx, seq_len, mesh_device):
+def test_attention_prefill(layer_idx, seq_len, mesh_device, reset_seeds):
     """Test prefill attention against HF reference with PCC >= 0.95."""
     hf_text_config, hf_attn, config, tt_attn, mesh_config = _setup_attention(mesh_device, layer_idx)
     _skip_if_l1_overflow(config, mesh_device)
@@ -118,7 +118,7 @@ def test_attention_prefill(layer_idx, seq_len, mesh_device):
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("position", [0, 32, 512, 1023, 1024, 1500, 2047], ids=lambda p: f"pos{p}")
-def test_rope_pcc(layer_idx, position, mesh_device):
+def test_rope_pcc(layer_idx, position, mesh_device, reset_seeds):
     """Test RoPE cos/sin values and apply_rope PCC at various decode positions up to 2k.
 
     Compares TT rotary embedding output against HF reference at each position.
@@ -203,7 +203,7 @@ def _build_sliding_window_mask(cache_len, sliding_window):
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged(layer_idx, cache_len, mesh_device):
+def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds):
     """Test decode attention with paged KV cache against HF reference.
 
     Tests at various cache lengths including positions beyond the sliding window (1024).

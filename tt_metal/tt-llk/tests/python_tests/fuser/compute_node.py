@@ -11,19 +11,24 @@ if TYPE_CHECKING:
     from .fuser_config import GlobalConfig
 
 from helpers.llk_params import (
+    AccToDest,
     BroadcastType,
+    ClearFP32DstAcc,
     DataCopyType,
     EltwiseBinaryReuseDestType,
+    EnforceFP32Accumulation,
     MathFidelity,
     PerfRunType,
     ReduceDimension,
     ReducePool,
     Transpose,
+    UnpackToDest,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 from .block_data import BlockData
 from .fused_fpu import Fpu
+from .fused_operand import Operand
 from .fused_sfpu import Sfpu
 from .fused_unpacker import Unpacker
 
@@ -34,6 +39,8 @@ class ComputeNode:
         unpacker: Unpacker = None,
         fpu: Fpu = None,
         sfpu: Sfpu = None,
+        src_a: Operand = None,
+        src_b: Operand = None,
         unpack_transpose_faces: Transpose = Transpose.No,
         unpack_transpose_within_face: Transpose = Transpose.No,
         broadcast_type: BroadcastType = BroadcastType.None_,
@@ -42,6 +49,10 @@ class ComputeNode:
         reduce_dim: ReduceDimension = None,
         reduce_pool: ReducePool = ReducePool.Max,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
+        enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No,
+        clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
+        acc_to_dest: AccToDest = AccToDest.No,
+        unpack_to_dest: UnpackToDest = UnpackToDest.No,
     ):
         if fpu is None and sfpu is None:
             raise ValueError("Compute unit needs an fpu or sfpu unit")
@@ -60,6 +71,12 @@ class ComputeNode:
         self.reduce_dim = reduce_dim
         self.reduce_pool = reduce_pool
         self.math_fidelity = math_fidelity
+        self.enforce_fp32_accumulation = enforce_fp32_accumulation
+        self.clear_fp32_dst_acc = clear_fp32_dst_acc
+        self.acc_to_dest = acc_to_dest
+        self.unpack_to_dest = unpack_to_dest
+        self.src_a = src_a
+        self.src_b = src_b
 
         if (
             self.broadcast_type != BroadcastType.None_
@@ -73,6 +90,9 @@ class ComputeNode:
             self.data_copy_type = DataCopyType.A2D
         else:
             self.data_copy_type = data_copy_type
+
+        if self.src_a is None and self.src_b is None:
+            return
 
     def unpack(
         self,
@@ -89,6 +109,7 @@ class ComputeNode:
             PerfRunType.MATH_ISOLATE,
         )
         if not skip_init:
+            code += config.sentinel.configure_unpack(config, operation, self)
             code += self.unpacker().init(operation, config, self, block)
 
         code += self.unpacker().loop.unpack_loop(operation, config, self, block)
@@ -113,6 +134,7 @@ class ComputeNode:
             PerfRunType.L1_CONGESTION,
         )
         if not skip_init:
+            code += config.sentinel.configure_math(config, operation, self)
             code += self.fpu.init(operation, config, self, block)
 
         code += self.fpu.loop.math_loop(operation, config, self, block)
@@ -259,8 +281,8 @@ class ComputeNode:
             ).reshape(operation.max_output_dimensions)
 
         return (
-            tensor_a.reshape(operation.src_a.dimensions),
-            tensor_b.reshape(operation.src_b.dimensions),
+            tensor_a,
+            tensor_b,
             tensor_dst.reshape(operation.max_output_dimensions),
         )
 

@@ -102,11 +102,14 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     # assert Path(weight_config["w2"]["input_tensor_b"]).exists()
     # assert Path(weight_config["w3"]["input_tensor_b"]).exists()
 
-    # Make the path absolute - this is required since load_weight expects an absolute path
-    weight_config["w1"]["input_tensor_b"].path = tmp_path / weight_config["w1"]["input_tensor_b"].path
-
     # Load and verify a weight
-    w1_ttnn = load_weight(weight_config["w1"]["input_tensor_b"], device=mesh_device)
+    w1_weight = weight_config["w1"]["input_tensor_b"]
+    if isinstance(w1_weight, ttnn.Tensor):
+        w1_ttnn = w1_weight
+    else:
+        # Legacy SavedWeight path retained for backward compatibility.
+        w1_weight.path = tmp_path / w1_weight.path
+        w1_ttnn = load_weight(w1_weight, device=mesh_device)
     w1_ttnn = ttnn.unsqueeze(w1_ttnn, 0)  # Unsqueeze to collect shards on a separate dim
     w1_torch = ttnn.to_torch(
         w1_ttnn,

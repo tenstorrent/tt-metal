@@ -116,8 +116,8 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
 
 @pytest.mark.parametrize(
     "k, n, fused_activation",
-    [(7168, 2048, None), (7168, 2048, "silu"), (2048, 7168, None)],
-    ids=["up_proj", "gate_proj", "down_proj"],
+    [(7168, 2048, None), (7168, 2048, "silu"), (2048, 7168, None), (14336, 7168, None)],
+    ids=["up_proj", "gate_proj", "down_proj", "eh"],
 )
 @pytest.mark.parametrize("m", [1, 4, 8], ids=["m1", "m4", "m8"])
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32_dest", "not_fp32"])

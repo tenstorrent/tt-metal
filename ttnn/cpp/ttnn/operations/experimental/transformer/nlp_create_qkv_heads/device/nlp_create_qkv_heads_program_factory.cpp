@@ -115,12 +115,17 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
     if (transpose_k_heads) {
+        // For FLOAT32 input, enable fp32 dest accumulation so the JIT data-format selection
+        // resolves the unpack-dst CB to Tf32 (10-bit mantissa) instead of Float16_b (7-bit
+        // mantissa). Mirrors the per-dtype promotion in eltwise unary/binary primitives.
+        const bool fp32_dest_acc_en = input_tensor.dtype() == tt_metal::DataType::FLOAT32;
+
         std::vector<uint32_t> compute_args_core_group_1 = {num_blocks_per_core_group_1 * kv_num_tiles};
         tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
             core_group_1,
-            tt_metal::ComputeConfig{.compile_args = compute_args_core_group_1});
+            tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args_core_group_1});
 
         if (core_group_2.num_cores() > 0) {
             std::vector<uint32_t> compute_args_core_group_2 = {num_blocks_per_core_group_2 * kv_num_tiles};
@@ -128,7 +133,8 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
                 program,
                 "ttnn/cpp/ttnn/kernel/compute/transpose_wh.cpp",
                 core_group_2,
-                tt_metal::ComputeConfig{.compile_args = compute_args_core_group_2});
+                tt_metal::ComputeConfig{
+                    .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args_core_group_2});
         }
 
         reader_defines["TRANSPOSE_K_HEADS"] = "1";

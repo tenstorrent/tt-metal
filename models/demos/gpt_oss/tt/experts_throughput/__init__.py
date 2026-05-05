@@ -49,7 +49,7 @@ from .config import (
 )
 from .decode import decode_forward
 from .fused_decode import fused_decode_forward
-from .prefill import prefill_forward_chunked
+from .prefill import DeepSeekPrefillConfig, forward_prefill_deepseek, _prepare_expert_weights_for_deepseek
 from .weights import (
     ThroughputExpertWeights,
     load_throughput_expert_weights,
@@ -61,6 +61,7 @@ __all__ = [
     "ThroughputExperts",
     "ThroughputExpertConfig",
     "ThroughputProgramConfig",
+    "DeepSeekPrefillConfig",
     "ThroughputExpertWeights",
     "AllToAllDispatchConfig",
     "AllToAllCombineConfig",
@@ -110,6 +111,7 @@ class ThroughputExperts:
         decode_memory_config: ttnn.MemoryConfig = None,
         prefill_memory_config: ttnn.MemoryConfig = None,
         fused_config: Optional[FusedMoeGptConfig] = None,
+        prefill_config: Optional["DeepSeekPrefillConfig"] = None,
     ):
         """
         Initialize throughput experts.
@@ -140,6 +142,7 @@ class ThroughputExperts:
         self.config = config
         self.program_config = program_config or ThroughputProgramConfig()
         self.fused_config = fused_config
+        self.prefill_config = prefill_config
 
         # Memory configurations
         decode_memory_config = decode_memory_config or ttnn.L1_MEMORY_CONFIG
@@ -301,21 +304,20 @@ class ThroughputExperts:
         Returns:
             Output [seq_per_device, 1, 1, hidden_size]
         """
-        return prefill_forward_chunked(
+        # DeepSeek-style chunked prefill is the only supported path; the legacy
+        # chunked fallback was removed when DeepSeek prefill was bundled into
+        # use_throughput_experts.
+        return forward_prefill_deepseek(
             hidden_states=hidden_states,
             topk_expert_indices=topk_expert_indices,
             topk_expert_weights=topk_expert_weights,
-            weights=self.weights,
             config=self.config,
-            expert_mapping_tensors=self.expert_mapping_tensors,
-            remap_topk_mask=self.remap_topk_mask,
-            dispatch_config=self.dispatch_config_prefill,
-            combine_config=self.combine_config_prefill,
-            program_config=self.program_config,
+            prefill_config=self.prefill_config,
             mesh_device=self.mesh_device,
             mesh_config=self.mesh_config,
             ccl_manager=self.ccl_manager,
-            chunk_size=chunk_size,
+            weights=self.weights,
+            program_config=self.program_config,
         )
 
     @classmethod

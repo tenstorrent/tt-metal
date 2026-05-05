@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 import math
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc, get_atol_rtol_pcc
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
@@ -838,6 +838,8 @@ def run_rms_fuse_impl_deepseek(
     residual_dtype=ttnn.bfloat16,
     layout=ttnn.TILE_LAYOUT,
     epsilon=1e-05,
+    atol_threshold=None,
+    rtol_threshold=None,
 ):
     ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))})
     worker_sub_device = ttnn.SubDevice(
@@ -1017,6 +1019,19 @@ def run_rms_fuse_impl_deepseek(
         if not passing:
             mesh_device.reset_sub_device_stall_group()
         assert passing
+
+        if atol_threshold is not None or rtol_threshold is not None:
+            ref_lnorm_matched = ref_lnorm.type(tt_out_torch.dtype)
+            cal_atol, cal_rtol, _, _ = get_atol_rtol_pcc(tt_out_torch.float(), ref_lnorm_matched.float())
+            logger.info(f"iter {i}: ATOL={cal_atol:.6f} RTOL={cal_rtol:.6f}")
+            if (atol_threshold is not None and cal_atol > atol_threshold) or (
+                rtol_threshold is not None and cal_rtol > rtol_threshold
+            ):
+                mesh_device.reset_sub_device_stall_group()
+            if atol_threshold is not None:
+                assert cal_atol <= atol_threshold, f"ATOL {cal_atol} exceeds threshold {atol_threshold}"
+            if rtol_threshold is not None:
+                assert cal_rtol <= rtol_threshold, f"RTOL {cal_rtol} exceeds threshold {rtol_threshold}"
     mesh_device.reset_sub_device_stall_group()
 
 

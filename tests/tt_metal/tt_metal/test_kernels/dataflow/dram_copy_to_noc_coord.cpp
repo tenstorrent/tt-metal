@@ -8,6 +8,7 @@
 #include "experimental/endpoints.h"
 #include "internal/firmware_common.h"
 #include "api/compile_time_args.h"
+#include "internal/hw_thread.h"
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 #include "internal/ethernet/tunneling.h"
 #endif
@@ -19,7 +20,7 @@
  * */
 void kernel_main() {
 #if defined(COMPILE_FOR_DM)
-    uint32_t cpu_index = get_my_thread_id();
+    uint32_t thread_idx = internal_::get_hw_thread_idx();
 
 #if defined(TEST_MULTI_DM_SANITIZE_RACE)
     // Having explicit sync barrier helps stress test CAS in sanitize.h since
@@ -35,7 +36,7 @@ void kernel_main() {
 #else
     // Single DM test: only specified dm_id executes, others exit early
     constexpr uint32_t dm_id = get_compile_time_arg_val(0);
-    if (cpu_index != dm_id) {
+    if (thread_idx != dm_id) {
         return;
     }
 #endif
@@ -53,8 +54,8 @@ void kernel_main() {
     std::uint32_t buffer_size = get_arg_val<uint32_t>(7);
 
 #if defined(COMPILE_FOR_DM) && defined(TEST_MULTI_DM_SANITIZE_RACE)
-    buffer_dst_addr = (multi_dm_base_addr | static_cast<uint32_t>(cpu_index));
-    buffer_size = (multi_dm_base_size | static_cast<uint32_t>(cpu_index));
+    buffer_dst_addr = (multi_dm_base_addr | static_cast<uint32_t>(thread_idx));
+    buffer_size = (multi_dm_base_size | static_cast<uint32_t>(thread_idx));
 #endif
 
     bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));

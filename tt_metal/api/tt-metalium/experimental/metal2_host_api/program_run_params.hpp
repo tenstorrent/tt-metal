@@ -29,22 +29,35 @@ struct ProgramRunParams {
         // Kernel identifier
         KernelSpecName kernel_spec_name;
 
-        // Defined runtime arguments (named & typed)
-        //   TODO
+        // Named Runtime Argument bindings
+        // Every argument in this kernel's RuntimeArgSchema::named_runtime_args must be set,
+        // for every node the kernel runs on.
+        // Missing arguments or superfluous arguments will trigger validation errors.
+        //
+        // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
+        // a common runtime argument would provide better dispatch efficiency.
+        struct NodeNamedRTAs {
+            NodeCoord node;
+            std::unordered_map<std::string, uint32_t> args;
+        };
+        std::vector<NodeNamedRTAs> named_runtime_args;
 
-        // Defined common runtime arguments (named & typed)
-        //   TODO
+        // Named Common Runtime Arguments bindings.
+        // Every name in this kernel's RuntimeArgSchema::named_common_runtime_args must be set.
+        std::unordered_map<std::string, uint32_t> named_common_runtime_args;
 
         // Unnamed runtime argument "varargs"
         // (these are specified per-node; length can vary per-node)
-        using NodeRuntimeArgs = std::vector<uint32_t>;
-        using RuntimeArgs = std::vector<std::pair<NodeCoord, NodeRuntimeArgs>>;
-        RuntimeArgs runtime_args;
+        struct NodeVarargs {
+            NodeCoord node;
+            std::vector<uint32_t> args;
+        };
+        std::vector<NodeVarargs> runtime_varargs;
 
         // Unnamed common runtime argument "varargs"
         // (common to all nodes on which the kernel runs)
-        using CommonRuntimeArgs = std::vector<uint32_t>;
-        CommonRuntimeArgs common_runtime_args;
+        using CommonVarargs = std::vector<uint32_t>;
+        CommonVarargs common_runtime_varargs;
     };
     // KernelRunParams must be specified for ALL kernels in the ProgramSpec.
     std::vector<KernelRunParams> kernel_run_params;
@@ -94,11 +107,11 @@ struct ProgramRunParams {
 //
 struct ProgramRunParamsView {
     struct KernelRunParamsView {
-        // Direct views into per-node runtime args
-        std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_args;
+        // Direct views into per-node vararg runtime args
+        std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_varargs;
 
-        // Direct view into common runtime args
-        std::span<uint32_t> common_runtime_args;
+        // Direct view into common vararg runtime args
+        std::span<uint32_t> common_runtime_varargs;
     };
     // TODO: Better to just expose the multi-dim dispatch vectors directly?
     //       Would eliminate the lookup indirection.

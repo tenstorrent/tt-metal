@@ -21,6 +21,15 @@ option(ENABLE_DISTRIBUTED "Enable multihost distributed compute support (OpenMPI
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
 option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
+option(TT_METAL_USE_EMULE "Build with tt-emule software emulation (no hardware required)" OFF)
+set(TT_EMULE_PATH "" CACHE PATH "Local path to tt-emule source (overrides CPM fetch from GitHub)")
+
+if(TT_METAL_USE_EMULE)
+    set(TT_UMD_BUILD_EMULE ON)
+    if(TT_EMULE_PATH)
+        set(CPM_tt_emule_SOURCE "${TT_EMULE_PATH}")
+    endif()
+endif()
 
 ###########################################################################################
 

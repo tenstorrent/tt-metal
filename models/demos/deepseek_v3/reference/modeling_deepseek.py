@@ -400,6 +400,8 @@ class MoEGate(nn.Module):
         import torch.nn.init as init
 
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.topk_method == "noaux_tc":
+            init.zeros_(self.e_score_correction_bias)
 
     def grouped_gate_golden(
         self, scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts

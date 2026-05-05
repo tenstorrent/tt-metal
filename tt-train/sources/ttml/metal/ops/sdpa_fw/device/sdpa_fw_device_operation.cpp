@@ -79,17 +79,18 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
         kHt);
 
     TT_FATAL(
-        qBt == kBt && qBt == vBt && qSt == kSt && qSt == vSt && qEt == kEt && qEt == vEt,
-        "Query, Key and Value must have the same batch size and sequence length, except for  number of heads. Got "
-        "shapes: Query={}, Key={}, "
-        "Value={}",
+        qBt == kBt && qBt == vBt && qSt == kSt && qSt == vSt && qEt == kEt,
+        "Query and Key must have the same batch size, sequence length, and inner dimension. "
+        "Value must have the same batch size and sequence length (inner dimension can differ). Got "
+        "shapes: Query={}, Key={}, Value={}",
         query_shape,
         key_shape,
         value_shape);
 
     TT_FATAL(
-        key_shape == value_shape,
-        "Key and Value must have the same shape. Got Key={}, Value={}",
+        kBt == vBt && kHt == vHt && kSt == vSt,
+        "Key and Value must have the same batch size, number of heads, and sequence length "
+        "(inner dimension can differ). Got Key={}, Value={}",
         key_shape,
         value_shape);
 
@@ -142,19 +143,21 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             tt::tt_metal::DataType::BFLOAT16);
 
         const auto output_shape = preallocated_output->padded_shape();
-        // Output shape (B, H, S, D) - heads NOT fused
+        // Output shape (B, H, S, vE) - heads NOT fused, inner dim matches V
         TT_FATAL(
             output_shape[0] == query_shape[0] &&      // B
                 output_shape[1] == qHt &&             // H (heads NOT fused)
                 output_shape[2] == query_shape[2] &&  // S
-                output_shape[3] == query_shape[3],    // D
-            "Invalid preallocated output shape. Expected (B, H, S, D) = ({}, {}, {}, {}), got {}. Query shape={}",
+                output_shape[3] == vEt,               // D (matches V inner dim)
+            "Invalid preallocated output shape. Expected (B, H, S, vE) = ({}, {}, {}, {}), got {}. "
+            "Query shape={}, Value shape={}",
             query_shape[0],
             qHt,
             query_shape[2],
-            query_shape[3],
+            vEt,
             output_shape,
-            query_shape);
+            query_shape,
+            value_shape);
     }
 
     // TODO(vmelnykov): #28205 - Implement dropout support in SDPA forward operation
@@ -195,11 +198,9 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
     if (tensor_args.preallocated_output.has_value()) {
         output_specs.push_back(tensor_args.preallocated_output->tensor_spec());
     } else {
-        auto shape = tensor_args.query.logical_shape();  // output shape is the same as query shape
-        // change shape to (B, qNH, S, qEmbd) to match our layout
-        // need to fuse heads into last dim in future to avoid extra reshapes and transposes
-        // shape[3] = shape[3] * shape[1];  // fused heads in last dim
-        // shape[1] = 1U;
+        // Output shape is (B, qNH, S, vE) - batch/heads/seq from query, inner dim from value
+        auto shape = tensor_args.query.logical_shape();
+        shape[-1] = tensor_args.value.logical_shape()[-1];
         output_specs.emplace_back(
             shape,
             tt::tt_metal::TensorLayout(
@@ -253,8 +254,10 @@ ttsl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
     const auto& query_logical_shape = query_tensor.logical_shape();
     const auto& key_tensor = tensor_args.key;
     const auto& key_logical_shape = key_tensor.logical_shape();
+    const auto& value_tensor = tensor_args.value;
+    const auto& value_logical_shape = value_tensor.logical_shape();
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SDPAForwardDeviceOperation>(
-        args, query_tensor.dtype(), query_logical_shape, key_logical_shape);
+        args, query_tensor.dtype(), query_logical_shape, key_logical_shape, value_logical_shape);
 
     return hash;
 }

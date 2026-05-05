@@ -157,11 +157,11 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-        if constexpr (type == A2D)
+        if constexpr (type == DataCopyType::A2D)
         {
             ckernel_template::run();
         }
-        else if constexpr (type == B2D)
+        else if constexpr (type == DataCopyType::B2D)
         {
             if constexpr (src_b_bcast_type == BroadcastType::COL)
             {
@@ -185,7 +185,7 @@ template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 {
     // Use srcA for data movement
-    if constexpr (type == A2D)
+    if constexpr (type == DataCopyType::A2D)
     {
         addr_mod_t {
             .srca = {.incr = 1},
@@ -268,7 +268,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
 {
     // always move 32x32 tile, packed as 16x16x4
 
-    if constexpr (type == A2D)
+    if constexpr (type == DataCopyType::A2D)
     {
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
         std::uint32_t outerloop = num_faces;
@@ -287,7 +287,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             tmp.program();
         }
     }
-    else if constexpr (type == B2D)
+    else if constexpr (type == DataCopyType::B2D)
     {
         std::uint32_t addr_mod  = (rows_per_inst == p_movb2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
         std::uint32_t innerloop = (rows_per_inst == p_movb2d::MOV_1_ROW) ? total_rows : (total_rows >> 2);
@@ -375,11 +375,11 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
-    if constexpr (type == A2D && src_b_bcast_type == BroadcastType::NONE)
+    if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
     {
         eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(p_mova2d::MOV_8_ROWS, 16, num_faces, dst_format);
     }
-    else if constexpr (type == B2D)
+    else if constexpr (type == DataCopyType::B2D)
     {
         eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
     }

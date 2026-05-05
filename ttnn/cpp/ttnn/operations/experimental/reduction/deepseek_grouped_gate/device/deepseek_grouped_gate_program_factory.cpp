@@ -335,7 +335,6 @@ DeepseekGroupedGateDeviceOperation::ProgramFactory::create(
         {"cb_biased_scores", cb_biased_scores},
         {"cb_reduce_ones_scalar", cb_reduce_ones_scalar},
         {"n_activated_experts", operation_attributes.n_activated_experts},
-        {"packed_one_scalar", static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(1.0f))) << 16},
         {"packed_epsilon",
          static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(operation_attributes.epsilon))) << 16},
         {"packed_route_scale",

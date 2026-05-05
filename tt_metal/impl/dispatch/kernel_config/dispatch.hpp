@@ -30,7 +30,6 @@ struct dispatch_static_config_t {
 
     std::optional<uint32_t> my_downstream_cb_sem_id;
 
-    std::optional<uint32_t> split_dispatch_page_preamble_size;  // 14
     std::optional<uint32_t> prefetch_h_max_credits;             // Used if split_prefetch is true
 
     std::optional<uint32_t> packed_write_max_unicast_sub_cmds;  // 19
@@ -69,6 +68,7 @@ struct dispatch_dependent_config_t {
     std::optional<uint32_t> upstream_dispatch_cb_sem_id;  // Dependent
 
     std::optional<uint32_t> upstream_sync_sem;  // Dependent
+    std::optional<uint32_t> dispatch_d_shutdown_sem_id;
 
     std::optional<uint32_t> downstream_cb_base;    // 10, dependent
     std::optional<uint32_t> downstream_cb_size;    // Dependent

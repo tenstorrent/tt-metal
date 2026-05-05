@@ -161,7 +161,8 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
+    const auto single_alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
+    auto alignment = single_alignment;
 
     // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
     uint32_t begins_bytes = output_tensor_start[-1] * input.element_size();
@@ -173,6 +174,10 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     const ttnn::Shape& output_shape = output.padded_shape();
     const uint32_t unpadded_row_size_bytes = output_shape[-1] * input.element_size();
     const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
+    // Kernel runtime args use the single-aligned stick stride (see get_slice_runtime_args_rm); CB sizing must
+    // compute num_read_per_barrier against the same stride, otherwise the CB pages vs the kernel's reserve_back(N)
+    // can diverge and the reader deadlocks on cb_reserve_back.
+    const uint32_t stick_stride_for_merge = tt::round_up(unpadded_row_size_bytes, single_alignment);
     const uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2
                                          ? num_sticks_per_core_group_1
                                          : num_sticks_per_core_group_2;
@@ -180,7 +185,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     if (num_input_pages != 0) {
         auto num_sticks_per_core_pad32 = num_input_pages + ((32 - num_input_pages % 32) % 32);
         num_sticks_per_core_read =
-            tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, MAX_READ_SIZE);
+            tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, stick_stride_for_merge, MAX_READ_SIZE);
         num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
     }
 

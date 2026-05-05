@@ -455,6 +455,10 @@
 #define NOC_XY_PCIE_ENCODING(x, y) \
     ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
 
+#define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                                                         \
+    ((((uint32_t)(x_start)) << (2 * NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(y_start)) << (3 * NOC_ADDR_NODE_ID_BITS)) | \
+     (((uint32_t)(x_end))) | (((uint32_t)(y_end)) << (NOC_ADDR_NODE_ID_BITS)))
+
 // Quasar firmware currently uses BH-style encoding (X,Y coords embedded at bits 36+).
 // NOC_LOCAL_ADDR extracts the local offset (bits 0-35) for memory bounds validation.
 //

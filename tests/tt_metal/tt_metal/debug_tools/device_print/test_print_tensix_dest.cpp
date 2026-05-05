@@ -229,10 +229,16 @@ using DramBuffer = std::shared_ptr<distributed::MeshBuffer>;
 
 // Generates the runtime arguments for the DRAM kernel
 static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer& dram_buffer, size_t num_tiles) {
+    // create_dram_mesh_buffer() configures page_size = byte_size (whole-buffer
+    // single page), so page_size/aligned_page_size would over-return the
+    // stride. Derive per-tile stride from total size / num_tiles instead.
+    const uint32_t per_tile_stride =
+        num_tiles == 0 ? 0 : static_cast<uint32_t>(dram_buffer->device_local_size() / num_tiles);
     return {
         static_cast<uint32_t>(dram_buffer->address()),
         static_cast<uint32_t>(0),
         static_cast<uint32_t>(num_tiles),
+        per_tile_stride,
     };
 }
 

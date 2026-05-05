@@ -1,4 +1,4 @@
-name: "[Tier 1] Models Sweep Tests"
+name: "(Tier 1) Models Sweep Tests"
 
 on:
   workflow_dispatch:

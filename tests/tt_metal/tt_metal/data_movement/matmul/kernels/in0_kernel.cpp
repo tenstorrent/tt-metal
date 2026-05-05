@@ -56,27 +56,33 @@ void kernel_main() {
         physical_end_x,
         physical_end_y);
 
-    if (is_sender) {
-        noc_semaphore_wait(sender_sem_ptr, num_cores_c_dim - 1);
-        noc_semaphore_set(sender_sem_ptr, 0);
+    {
+        DeviceZoneScopedN("RISCV0");
+        if (is_sender) {
+            noc_semaphore_wait(sender_sem_ptr, num_cores_c_dim - 1);
+            noc_semaphore_set(sender_sem_ptr, 0);
 
-        if constexpr (num_cores_c_dim > 1) {
-            noc_async_write_multicast_loopback_src(
-                l1_base_address, dst_data_mcast_addr, mcast_size_bytes, num_cores_c_dim, true);
+            if constexpr (num_cores_c_dim > 1) {
+                noc_async_write_multicast_loopback_src(
+                    l1_base_address, dst_data_mcast_addr, mcast_size_bytes, num_cores_c_dim, true);
 
-            noc_semaphore_set_multicast_loopback_src(
-                sender_valid_sem_addr, dst_receiver_sem_mcast_addr, num_cores_c_dim, false);
+                noc_semaphore_set_multicast_loopback_src(
+                    sender_valid_sem_addr, dst_receiver_sem_mcast_addr, num_cores_c_dim, false);
+            } else {
+                uint64_t local_dest_addr = get_noc_addr(my_x[0], my_y[0], in0_mcast_output_addr);
+                noc_async_write(l1_base_address, local_dest_addr, mcast_size_bytes);
+                noc_async_write_barrier();
+                noc_semaphore_set(receiver_sem_ptr, 1);
+            }
         } else {
-            uint64_t local_dest_addr = get_noc_addr(my_x[0], my_y[0], in0_mcast_output_addr);
-            noc_async_write(l1_base_address, local_dest_addr, mcast_size_bytes);
-            noc_async_write_barrier();
-            noc_semaphore_set(receiver_sem_ptr, 1);
+            noc_semaphore_inc(sender_sem_noc_addr, 1);
         }
-    } else {
-        noc_semaphore_inc(sender_sem_noc_addr, 1);
+
+        noc_semaphore_wait(receiver_sem_ptr, 1);
+        noc_semaphore_set(receiver_sem_ptr, 0);
     }
 
-    noc_semaphore_wait(receiver_sem_ptr, 1);
-    noc_semaphore_set(receiver_sem_ptr, 0);
     DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Number of transactions", 1);
+    DeviceTimestampedData("Transaction size in bytes", mcast_size_bytes);
 }

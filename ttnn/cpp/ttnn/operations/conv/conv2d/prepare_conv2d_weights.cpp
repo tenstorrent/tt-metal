@@ -1336,13 +1336,13 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             dram_slice_config_,
             conv_config.output_layout,
             device);
-        log_info(
+        log_debug(
             tt::LogOp,
             "Auto determined DRAM Slice Config in Prepare Conv2d Weights as {} for {}",
             dram_slice_config,
             conv2d_slice_attr->name());
         if (dram_slice_config.num_slices == 1) {
-            log_info(tt::LogOp, "DRAM Slicing is not needed as only one slice is required.");
+            log_debug(tt::LogOp, "DRAM Slicing is not needed as only one slice is required.");
             is_dram_conv = false;
         }
         uint32_t slice_rounding_value = 1;

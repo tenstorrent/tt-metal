@@ -189,19 +189,37 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
 
 void Data::rpc_get_mesh_workload_runtime_entries(
     rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results) {
-    std::lock_guard<std::mutex> lock(runtime_entries_mutex);
-    auto write_pos = runtime_entries_write_pos;
-    size_t count = std::min(write_pos, kRuntimeEntriesCapacity);
-    size_t start = write_pos - count;
+    std::lock_guard<std::mutex> ring_lock(runtime_entries_mutex);
+    std::lock_guard<std::mutex> trace_lock(trace_runtime_entries_mutex);
 
-    auto all_runtime_entries = results.initRuntimeEntries(count);
-    for (size_t i = 0; i < count; ++i) {
-        const auto& re = runtime_entries[(start + i) % kRuntimeEntriesCapacity];
-        auto entry = all_runtime_entries[i];
+    const size_t ring_count = std::min(runtime_entries_write_pos, kRuntimeEntriesCapacity);
+    const size_t ring_start = runtime_entries_write_pos - ring_count;
+
+    size_t trace_count = 0;
+    for (const auto& [_, bucket] : trace_runtime_entries) {
+        trace_count += bucket.size();
+    }
+
+    // Sentinel matches the default in rpc.capnp (UInt32 max == "not traced"). Capnp has no native null.
+    constexpr uint32_t kNoTraceId = 0xFFFFFFFFu;
+    auto all_runtime_entries = results.initRuntimeEntries(ring_count + trace_count);
+    size_t out_idx = 0;
+    auto fill = [&](const inspector::MeshWorkloadRuntimeEntry& re) {
+        auto entry = all_runtime_entries[out_idx++];
         entry.setWorkloadId(re.workload_id);
         entry.setRuntimeId(re.runtime_id);
         entry.setOperationName(std::string(re.operation_name));
         entry.setOperationParameters(stringify_tensor_specs(re.tensor_specs));
+        entry.setTraceId(re.trace_id.has_value() ? **re.trace_id : kNoTraceId);
+    };
+
+    for (size_t i = 0; i < ring_count; ++i) {
+        fill(runtime_entries[(ring_start + i) % kRuntimeEntriesCapacity]);
+    }
+    for (const auto& [_, bucket] : trace_runtime_entries) {
+        for (const auto& re : bucket) {
+            fill(re);
+        }
     }
 }
 

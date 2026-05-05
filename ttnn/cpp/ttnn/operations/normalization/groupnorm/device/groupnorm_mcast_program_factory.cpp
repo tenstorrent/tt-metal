@@ -4,6 +4,7 @@
 
 #include "groupnorm_mcast_program_factory.hpp"
 #include "groupnorm_program_utils.hpp"
+#include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
 #include <string>
@@ -149,6 +150,10 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         "num_groups_per_core ({}) must be <= 16 when use_welfords is true.",
         num_groups_per_core);
 
+    // -1 sentinel from GroupNormMultiCoreProgramConfig means "auto select":
+    // pick num_out_blocks from a simple input-size / grid-size heuristic, rounded
+    // up to the next power of two and capped at MAX_HEURISTIC_NUM_OUT_BLOCKS.
+    // Any other value is taken as an explicit user choice and validated below.
     if (num_out_blocks == static_cast<uint32_t>(-1)) {
         const uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
         const uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;
@@ -461,6 +466,8 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         {"groupnorm_mode", groupnorm_mode},
         {"TILE_WIDTH", tile_width},
         {"TILE_HW", tile_hw},
+        {"reduce_factor_w", num_rows_per_batch_per_core_group_1 * num_channels_per_group},
+        {"reduce_factor_c", num_cores_per_batch * num_cores_per_group},
     };
 
     if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
@@ -720,35 +727,33 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
     }
 
-    // cb_ex_external holds packed 16-byte partial-reduction scalars gathered from
-    // every core in the mcast group, for every out_block.  The reader kernel
-    // (reader_mcast_sender_unary_gn) and compute kernel (groupnorm) both
+    // cb_ex_external holds packed cb_ex_external_slot_pitch_bytes-sized partial-reduction
+    // scalars gathered from every core in the mcast group, for every out_block. The
+    // reader kernel (reader_mcast_sender_unary_gn) and compute kernel (groupnorm) both
     // reserve / wait-for cb_ex_external_tiles_required tiles at once, where
-    //   cb_ex_external_tiles_required = ceil(num_out_blocks_padded * num_mcast_cores * 16 / tile_size)
-    // so the CB must be at least that large.  Mirror the kernel's
+    //   cb_ex_external_tiles_required =
+    //       ceil(num_out_blocks_padded * num_mcast_cores * cb_ex_external_slot_pitch_bytes / tile_size)
+    // so the CB must be at least that large. Mirror the kernel's
     // num_out_blocks_padded calculation to get the exact count.
-    uint32_t ex_cb_external_index = tt::CBIndex::c_10;
-    uint32_t num_out_blocks_padded = num_out_blocks;
+    // Note that Welford does not use cb_ex_external.
     if (!use_welford) {
-        // Legacy mcast sender/compute path: mirror kernel's num_out_blocks_padded calculation.
+        uint32_t num_out_blocks_padded = num_out_blocks;
         uint32_t out_block_h_normal = block_ht_group_1 / num_out_blocks;
         if (block_ht_group_1 % num_out_blocks != 0) {
             uint32_t residual = block_ht_group_1 - (num_out_blocks * out_block_h_normal);
             num_out_blocks_padded += (residual / out_block_h_normal + 1);
         }
+        uint32_t cb_ex_external_tiles =
+            (num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes + single_tile_size -
+             1) /
+            single_tile_size;
+        uint32_t ex_cb_external_index = tt::CBIndex::c_10;
+        tt::tt_metal::CircularBufferConfig ex_cb_external_config =
+            tt::tt_metal::CircularBufferConfig(
+                cb_ex_external_tiles * single_tile_size, {{ex_cb_external_index, cb_data_format}})
+                .set_page_size(ex_cb_external_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
     }
-    uint32_t cb_ex_external_tiles = 1;
-    if (!use_welford) {
-        // Only the legacy kernels reference CBIndex::c_10; in Welford mode use a minimal size
-        // to preserve L1 headroom while keeping the CB index valid.
-        cb_ex_external_tiles =
-            (num_out_blocks_padded * num_cores_per_mcast_group * 16 + single_tile_size - 1) / single_tile_size;
-    }
-    tt::tt_metal::CircularBufferConfig ex_cb_external_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_ex_external_tiles * single_tile_size, {{ex_cb_external_index, cb_data_format}})
-            .set_page_size(ex_cb_external_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
 
     uint32_t ex_cb_index = tt::CBIndex::c_9;
     uint32_t ex_global_cb_index = tt::CBIndex::c_15;
@@ -791,13 +796,6 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
     std::vector<KernelHandle> writer_kernel_ids;
     std::vector<KernelHandle> reader_sender_kernel_ids;
     std::vector<KernelHandle> reader_receiver_kernel_ids;
-    float winv_group_1 = 1.0f / std::sqrt(num_rows_per_batch_per_core_group_1 * num_channels_per_group);
-    bfloat16 bfloat_winv_value_group_1 = bfloat16::truncate(winv_group_1);
-    uint32_t packed_winv_value_group_1 =
-        pack_two_bfloat16_into_uint32({bfloat_winv_value_group_1, bfloat_winv_value_group_1});
-    float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);
-    bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
-    uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
     for (size_t i = 0; i < mcast_groups.size(); ++i) {
@@ -928,8 +926,6 @@ GroupNormMcastProgramFactory::cached_program_t GroupNormMcastProgramFactory::cre
         }
 
         std::vector<uint32_t> writer_mcast_sender_args;
-        writer_mcast_sender_args.push_back(packed_cinv_value);
-        writer_mcast_sender_args.push_back(packed_winv_value_group_1);
         writer_mcast_sender_args.push_back(eps_u);
         writer_mcast_sender_args.push_back(out_dram_addr);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
@@ -982,15 +978,15 @@ void GroupNormMcastProgramFactory::override_runtime_arguments(
         auto writer_kernel_id = shared_vars.writer_kernel_ids.at(i);
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
-        writer_runtime_args[3] = dst_buffer;
+        writer_runtime_args[1] = dst_buffer;
         if (gamma.has_value()) {
-            writer_runtime_args[4] = gamma.value().buffer()->address();
+            writer_runtime_args[2] = gamma.value().buffer()->address();
         }
         if (beta.has_value()) {
-            writer_runtime_args[5] = beta.value().buffer()->address();
+            writer_runtime_args[3] = beta.value().buffer()->address();
         }
         if (mask.has_value()) {
-            writer_runtime_args[6] = mask.value().buffer()->address();
+            writer_runtime_args[4] = mask.value().buffer()->address();
         }
     }
 

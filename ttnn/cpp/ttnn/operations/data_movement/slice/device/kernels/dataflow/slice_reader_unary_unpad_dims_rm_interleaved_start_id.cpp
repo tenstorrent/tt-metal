@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -31,15 +32,18 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
 
+    // Create experimental CircularBuffer for Device 2.0 API
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
-        cb_reserve_back(cb_id_in0, num_read_per_barrier);
-        uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
+        cb_in0.reserve_back(num_read_per_barrier);
+        uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
+            uint64_t src_noc_addr = s0.get_noc_addr(src_stick_id);
             noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
             if (misalignment != 0) {
                 noc_async_read_barrier();
@@ -59,6 +63,6 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-        cb_push_back(cb_id_in0, num_read_per_barrier);
+        cb_in0.push_back(num_read_per_barrier);
     }
 }

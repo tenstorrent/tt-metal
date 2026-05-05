@@ -48,6 +48,9 @@ class LLKAssertException(Exception):
 
 KERNEL_COMPLETE = 0xFF
 
+# Must match BRISC_BOOT_READY_SENTINEL in tests/helpers/src/brisc.cpp.
+BRISC_BOOT_READY_SENTINEL = 0xB001CAFE
+
 
 class BootMode(Enum):
     BRISC = "brisc"
@@ -215,6 +218,32 @@ def commit_brisc_command(
             f"Reset counter: 0x{read_from_device(location, Mailboxes.BriscBread1.value, 0)} | "
             f"Reset register: 0x{get_register_store(location, 0).read_register('RISCV_DEBUG_REG_SOFT_RESET_0')}"
         )
+    )
+
+
+def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
+    """Block until BRISC firmware has signalled it is in the polling loop.
+
+    On silicon this returns in microseconds. On TTSim, each read advances the
+    simulator clock, so this loop is what actually drives BRISC through its
+    init sequence to the point where it is safe for the host to write the
+    first command.
+    """
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        if (
+            read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
+            == BRISC_BOOT_READY_SENTINEL
+        ):
+            return
+
+    last_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
+    soft_reset = get_register_store(location, 0).read_register(
+        "RISCV_DEBUG_REG_SOFT_RESET_0"
+    )
+    raise TimeoutError(
+        f"BRISC firmware did not signal boot-ready within {timeout}s | "
+        f"BriscCounter=0x{last_value:08x} | Reset register=0x{soft_reset:08x}"
     )
 
 

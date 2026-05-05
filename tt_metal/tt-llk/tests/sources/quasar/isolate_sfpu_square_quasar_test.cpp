@@ -4,7 +4,7 @@
 //
 // Isolated SFPU square: UNPACK2 (UNP_S) -> SrcS -> SFPU -> PACK1 -> L1.
 // All logic runs in LLK_TRISC_ISOLATE_SFPU; UNPACK, MATH, PACK are stubbed.
-// SrcS dvalid is controlled by UNPACR2/PACR1 TILE_INC (SetDatValid/ClrDatValid in llk_srcs_tdma.h).
+// SrcS dvalid is controlled by UNPACR2/PACR1 TILE_INC (SetDatValid/ClrDatValid in llk_srcs.h).
 
 #include <cstdint>
 
@@ -38,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu_common.h"
-#include "llk_srcs_tdma.h"
+#include "llk_srcs.h"
 #include "params.h"
 #include "sfpu/ckernel_sfpu_square.h"
 
@@ -57,13 +57,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Data format inference and dimensions
     // -------------------------------------------------------------------------
 
-    const bool PARAM_SRCS_32BIT_MODE =
-        static_cast<DataFormat>(formats.unpack_S_dst) == DataFormat::Float32 || static_cast<DataFormat>(formats.unpack_S_dst) == DataFormat::Int32;
-    constexpr std::uint32_t PARAM_SRCS_XDIM         = 16; // datums per row of SrcS slice
-    constexpr std::uint32_t PARAM_SRCS_ZDIM         = 1;
-    constexpr std::uint32_t PARAM_SRCS_YDIM_BASE    = 8; // rows per slice if SrcS were 16-bit columns
-    const std::uint32_t PARAM_SRCS_YDIM             = PARAM_SRCS_32BIT_MODE ? (PARAM_SRCS_YDIM_BASE / 2) : PARAM_SRCS_YDIM_BASE;
-    const std::uint32_t PARAM_SRCS_SLICE_COUNT      = (32 * 32) / (PARAM_SRCS_XDIM * PARAM_SRCS_YDIM * PARAM_SRCS_ZDIM);
+    const bool PARAM_SRCS_32BIT_MODE                = _is_srcs_32bit_mode_(static_cast<DataFormat>(formats.unpack_S_dst));
+    constexpr std::uint32_t PARAM_SRCS_XDIM         = srcs_dims::XDIM;
+    constexpr std::uint32_t PARAM_SRCS_ZDIM         = srcs_dims::ZDIM;
+    const std::uint32_t PARAM_SRCS_YDIM             = srcs_dims::ydim(PARAM_SRCS_32BIT_MODE);
+    const std::uint32_t PARAM_SRCS_SLICE_COUNT      = srcs_dims::slice_count(PARAM_SRCS_32BIT_MODE);
     constexpr std::uint32_t PARAM_SRCS_INSTRN_COUNT = 1;
 
     // -------------------------------------------------------------------------
@@ -104,23 +102,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Implied math format disable for SrcS and sfpmem mod selection
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
-    const std::uint32_t sfpmem_mod                     = IMPLIED_MATH_FORMAT ? p_sfpu::sfpmem::DEFAULT : _sfpu_sfpmem_type_(formats.unpack_S_dst);
 
     // -------------------------------------------------------------------------
     // SFPU configuration and execution
     // -------------------------------------------------------------------------
 
     // If SrcS is 32-bit, we need 16 slices (unpack/pack) per tile
-    if (PARAM_SRCS_32BIT_MODE)
-    {
-        _llk_unpack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 16>();
-        _llk_pack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 16>();
-    }
-    else
-    {
-        _llk_unpack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 8>();
-        _llk_pack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 8>();
-    }
+    _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
+    _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_unary_sfpu_init_();
 
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
@@ -135,21 +124,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
-            // Square is inlined instead of _calculate_square_ / _calculate_square_sfp_rows_: those
-            // helpers assume fixed operand addresses (and default sfpmem); this kernel needs explicit
-            // SrcS load/store bases and sfpmem_mod. Passing addresses into calculate_* will land in a
-            // follow-up PR handled in https://github.com/tenstorrent/tt-llk/issues/1353.
+            // Passing addresses into calculate_* will land in a follow-up PR handled in https://github.com/tenstorrent/tt-llk/issues/1353.
             const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;                       // First slice of SrcS
             const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM; // Third slice of SrcS
 
 #pragma GCC unroll 8
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, sfpmem_mod, ADDR_MOD_7, 0, load_base_addr + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
                 // Multiply LREG0 * LREG0, store result in LREG0
                 TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
                 // Store result back to destination
-                TT_SFPSTORE(p_sfpu::LREG0, sfpmem_mod, ADDR_MOD_7, 0, store_base_addr + (d << 1));
+                TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
             }
 
             _llk_math_eltwise_unary_sfpu_srcs_clear_vlds_<0x1, 0x1>(); // Clears dvalid for SFPU read and write

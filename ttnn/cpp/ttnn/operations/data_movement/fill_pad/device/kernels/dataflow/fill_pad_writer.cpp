@@ -72,7 +72,7 @@ void kernel_main() {
 
             for (uint32_t col = start_col; col < padded_width;) {
                 // so for each iteration of col, we will be writing at most 2 faces
-                uint64_t start_tile_noc_addr = get_noc_addr(curr_tile, s0);
+                uint64_t start_tile_noc_addr = s0.get_noc_addr(curr_tile);
                 uint32_t face = face_offset / (face_hw);
 
                 uint64_t dst_noc_addr = start_tile_noc_addr + face_offset * element_size_bytes;

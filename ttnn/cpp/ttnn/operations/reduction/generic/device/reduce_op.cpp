@@ -19,19 +19,19 @@ std::map<std::string, std::string> get_defines(
     tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim) {
     std::map<std::string, std::string> defines;
     // TODO(AP): need a sync with Reduce::Max from HLK headers
-    bool do_max = reduce_op == tt::tt_metal::ReduceOpMath::MAX;
     std::string reduce_dim_str;
     switch (reduce_dim) {
-        case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
-        case tt::tt_metal::ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
-        case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
+        case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ckernel::ReduceDim::REDUCE_ROW"; break;
+        case tt::tt_metal::ReduceOpDim::H: reduce_dim_str = "ckernel::ReduceDim::REDUCE_COL"; break;
+        case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ckernel::ReduceDim::REDUCE_SCALAR"; break;
         default: TT_THROW("Invalid reduce_dim!");
     }
-    defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
-    defines["REDUCE_DIM"] = reduce_dim_str;
-    if (reduce_dim == tt::tt_metal::ReduceOpDim::W && reduce_op == tt::tt_metal::ReduceOpMath::SUM) {
-        defines["REDUCE_ROW_SUM_VIA_MM"] = "1";
+    switch (reduce_op) {
+        case tt::tt_metal::ReduceOpMath::MAX: defines["REDUCE_OP"] = "ckernel::PoolType::MAX"; break;
+        case tt::tt_metal::ReduceOpMath::AVG: defines["REDUCE_OP"] = "ckernel::PoolType::AVG"; break;
+        default: defines["REDUCE_OP"] = "ckernel::PoolType::SUM"; break;
     }
+    defines["REDUCE_DIM"] = reduce_dim_str;
     return defines;
 }
 
@@ -113,45 +113,63 @@ Tensor reduce(
     auto tilized_input = ttnn::tilize_with_val_padding(
         input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
 
+    // GMPOOL applies exp2(floor(log2(|s|))) of the scalar (only the exponent), so for
+    // MAX/MIN with non-unity scalar we instead reduce with scaler=1.0 and apply the user
+    // scalar after reduction via post-multiplication. See issue #40498. The flag also
+    // covers reduce_min (math_op=MAX with negate=true) since high-level dispatch lowers
+    // min through reduce_min before reaching here.
+    const bool use_post_mul = (reduce_math == tt::tt_metal::ReduceOpMath::MAX) && (scaler != 1.0f);
+    const float reduce_scaler = use_post_mul ? 1.0f : scaler;
+    const float post_mul = use_post_mul ? scaler : 1.0f;
+
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
     // scaler twice internally (once per dimension).  The host compensates with
     // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
-    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && scaler < 0)) {
-        // Multi-core HW reduction: first reduce W, then reduce H on the result
+    if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
+        // Multi-core HW reduction: first reduce W, then reduce H on the result.
+        // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
+        const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
+        const bool keep_w_fp32 = output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+                                 tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32;
+        const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
+
         const Tensor output_tensor = ttnn::prim::reduce(
             tilized_input,
             reduce_math,
             tt::tt_metal::ReduceOpDim::W,
             1.0f,
             output_mem_config,
-            output_dtype.value_or(input_tensor.dtype()),
+            out_w_dtype,
             config,
             sub_core_grids,
-            negate);
+            negate,
+            /*post_mul_scaler=*/1.0f);
 
         return ttnn::prim::reduce(
             output_tensor,
             reduce_math,
             tt::tt_metal::ReduceOpDim::H,
-            scaler,
+            reduce_scaler,
             output_mem_config,
-            output_dtype.value_or(input_tensor.dtype()),
+            out_final_dtype,
             config,
             sub_core_grids,
-            negate);
+            negate,
+            /*post_mul_scaler=*/post_mul);
     }
     return ttnn::prim::reduce(
         tilized_input,
         reduce_math,
         reduce_dim,
-        scaler,
+        reduce_scaler,
         output_mem_config,
         output_dtype.value_or(input_tensor.dtype()),
         config,
         sub_core_grids,
-        negate);
+        negate,
+        /*post_mul_scaler=*/post_mul);
 }
 
 }  // namespace ttnn::operations::reduction::generic::detail

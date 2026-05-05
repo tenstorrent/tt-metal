@@ -108,8 +108,8 @@ class MistralTransformer(Transformer):
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            ttnn.to_layout(self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :], ttnn.TILE_LAYOUT),
+            ttnn.to_layout(self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :], ttnn.TILE_LAYOUT),
         ]
 
         if hasattr(self, "rope_local_setup"):

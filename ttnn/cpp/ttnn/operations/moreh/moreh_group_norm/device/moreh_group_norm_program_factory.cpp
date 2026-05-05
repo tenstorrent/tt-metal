@@ -206,7 +206,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::map<std::string, std::string> compute_defines{};
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
+    compute_defines["REDUCE_OP"] = "PoolType::AVG";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const auto* const compute_kernel_file =

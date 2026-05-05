@@ -6,6 +6,7 @@ import ast
 import json
 import os
 import pathlib
+import re
 from abc import ABC, abstractmethod
 
 from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix
@@ -271,7 +272,11 @@ class VectorExportSource(VectorSource):
         if not board_type or not device_series or not isinstance(card_count, int):
             return None
 
-        return (str(board_type).lower(), str(device_series).lower(), card_count)
+        return (
+            re.sub(r"[^a-z0-9]+", "_", str(board_type).lower()).strip("_"),
+            re.sub(r"[^a-z0-9]+", "_", str(device_series).lower()).strip("_"),
+            card_count,
+        )
 
     @staticmethod
     def _normalize_traced_machine_entries(vector_data: dict) -> list[dict]:
@@ -326,8 +331,8 @@ class VectorExportSource(VectorSource):
         if not board_type and not device_series and card_count is None:
             return None
 
-        normalized_board = str(board_type).lower() if board_type else None
-        normalized_series = str(device_series).lower() if device_series else None
+        normalized_board = re.sub(r"[^a-z0-9]+", "_", str(board_type).lower()).strip("_") if board_type else None
+        normalized_series = re.sub(r"[^a-z0-9]+", "_", str(device_series).lower()).strip("_") if device_series else None
         normalized_cards = card_count if isinstance(card_count, int) else None
         return (normalized_board, normalized_series, normalized_cards)
 

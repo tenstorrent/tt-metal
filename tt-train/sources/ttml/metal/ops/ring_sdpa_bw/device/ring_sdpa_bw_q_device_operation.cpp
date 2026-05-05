@@ -24,25 +24,39 @@ void RingSDPABwQDeviceOperation::validate_on_program_cache_miss(
 
 RingSDPABwQDeviceOperation::spec_return_value_t RingSDPABwQDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
-    // Handle grad_query spec
-    if (tensor_args.preallocated_grad_query.has_value()) {
-        return tensor_args.preallocated_grad_query->tensor_spec();
-    }
-    return ttnn::TensorSpec(
-        tensor_args.query.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
+    ttnn::TensorSpec grad_query_spec =
+        tensor_args.preallocated_grad_query.has_value()
+            ? tensor_args.preallocated_grad_query->tensor_spec()
+            : ttnn::TensorSpec(
+                  tensor_args.query.logical_shape(),
+                  tt::tt_metal::TensorLayout(
+                      tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
+
+    // u_scaler: one FP32 tile per query row, shape = (1, 1, B*NH*S, TILE_WIDTH)
+    const auto [B, NH, S, E] = tensor_args.query.padded_shape().to_array_4D();
+    auto u_scaler_shape = ttnn::Shape({1, 1, B * NH * S, tt::constants::TILE_WIDTH});
+    auto mem_config =
+        tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM);
+    ttnn::TensorSpec u_scaler_spec(
+        u_scaler_shape,
+        tt::tt_metal::TensorLayout(tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, mem_config));
+
+    return {grad_query_spec, u_scaler_spec};
 }
 
 RingSDPABwQDeviceOperation::tensor_return_value_t RingSDPABwQDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(attrs, tensor_args);
+    auto [grad_query_spec, u_scaler_spec] = compute_output_specs(attrs, tensor_args);
 
-    // Handle grad_query
-    if (tensor_args.preallocated_grad_query.has_value()) {
-        return tensor_args.preallocated_grad_query.value();
-    }
-    return create_device_tensor(output_spec, tensor_args.query.device());
+    ttnn::Tensor grad_query = tensor_args.preallocated_grad_query.has_value()
+                                  ? tensor_args.preallocated_grad_query.value()
+                                  : create_device_tensor(grad_query_spec, tensor_args.query.device());
+
+    // TODO: accept preallocated_u_scaler to avoid per-step allocation in the ring loop.
+    // The tensor is small (one FP32 tile per Q row), so the overhead is negligible for now.
+    ttnn::Tensor u_scaler = create_device_tensor(u_scaler_spec, tensor_args.query.device());
+
+    return {grad_query, u_scaler};
 }
 
 ttsl::hash::hash_t RingSDPABwQDeviceOperation::compute_program_hash(

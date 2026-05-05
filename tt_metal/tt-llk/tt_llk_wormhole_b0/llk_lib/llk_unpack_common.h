@@ -77,7 +77,7 @@ inline void _llk_unpack_configure_stoch_rnd_()
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
-template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
@@ -126,7 +126,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
-template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
@@ -167,6 +167,27 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
         cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
 
         TT_SETADCXX(p_setadc::UNP_B, (unpack_face_r_dim << 4) - 1, 0x0);
+    }
+}
+
+// Update ALU_ACC_CTRL_Zero_Flag_disabled_src after a data-format reconfig.
+//
+// The zero-src flag causes the hardware to substitute 0 for values whose bit
+// pattern matches -0.0f in bfloat16 (e.g. 0x8000).  configure_unpack_AB
+// disables the flag whenever either dest format is uint16, because 0x8000 is a
+// valid uint16 value (32768) that must not be zeroed.  The same adjustment is
+// needed every time formats are reconfigured.
+//
+// Only disable the flag (write 1) when transitioning TO uint16.  Do NOT
+// re-enable it (write 0) for non-uint16 transitions: other LLK operations
+// (e.g. reduce init with enforce_fp32_accumulation) may have disabled it for
+// unrelated hardware reasons (MOVB2D hi16/lo16), and overwriting that state
+// causes incorrect results in float32 accumulation.
+inline void _llk_unpack_reconfig_zero_src_flag_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+{
+    if ((srca_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (srcb_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)))
+    {
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
     }
 }
 

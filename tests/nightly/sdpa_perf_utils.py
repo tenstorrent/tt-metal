@@ -6,7 +6,7 @@
 Shared utilities for SDPA performance testing across architectures.
 
 Used by:
-- tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py
+- tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py
 - tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py
 - tests/nightly/t3000/ccl/test_ring_joint_attention.py
 """

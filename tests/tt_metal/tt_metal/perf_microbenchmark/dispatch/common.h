@@ -16,6 +16,7 @@
 
 #include "tt_metal.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/command_queue_common.hpp"
 
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -921,6 +922,19 @@ inline uint32_t clamp_to_max_fetch(
 }
 }  // namespace PackedWriteUtils
 
+// SD (slow dispatch) dispatch-buffer constants — consumed by execute_generated_commands.
+// Page size and block count reuse the canonical DispatchSettings values.
+// pages-per-block is derived inside cq_dispatch.cpp as DISPATCH_CB_PAGES / DISPATCH_CB_BLOCKS.
+static constexpr uint32_t SD_DISPATCH_BUFFER_PAGE_SIZE = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BYTES = 768 * 1024;
+static constexpr uint32_t SD_PREFETCHER_PAGE_BATCH_SIZE = 1;
+static_assert(SD_DISPATCH_BUFFER_SIZE_BYTES % SD_DISPATCH_BUFFER_PAGE_SIZE == 0);
+static_assert(
+    (SD_DISPATCH_BUFFER_SIZE_BYTES / SD_DISPATCH_BUFFER_PAGE_SIZE) % DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS ==
+    0);
+// spoof_prefetch loop uses (cmd_cb_pages-1)/page_batch_size with no remainder handling
+static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
+
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
 class BaseTestFixture : public tt_metal::GenericMeshDeviceFixture {
@@ -1161,4 +1175,114 @@ protected:
         }
     }
 };
+
+// Fixed core layout used by the SD spoof-prefetch execution path
+inline constexpr CoreCoord sd_spoof_prefetch_core = {0, 0};
+inline constexpr CoreCoord sd_dispatch_core = {4, 0};
+
+// Builds the compile-time defines required by cq_dispatch.cpp for the SD (spoof-prefetch) path.
+// SD drives only the core dispatch fields; all fabric-mux, multi-CQ, go-signal, and downstream
+// fields are zeroed since the spoof path never uses them.
+//
+// KEEP IN SYNC WITH: tt_metal/impl/dispatch/kernel_config/dispatch.cpp (the defines block starting
+// around "Add all the dispatch-specific defines"). If a new define is added or removed there,
+// update this map to match - the failure mode is a kernel compile error.
+inline std::map<std::string, std::string> make_sd_dispatch_defines(
+    tt_metal::IDevice* device_,
+    uint32_t dispatch_buffer_pages,
+    uint32_t dispatch_core_sem_id,
+    uint32_t prefetch_sync_sem,
+    const CoreCoord& phys_spoof,
+    const CoreCoord& phys_disp,
+    const tt_metal::DispatchMemMap& memmap) {
+    const uint32_t l1_buf_base = memmap.dispatch_buffer_base();
+    const uint32_t num_compute_cores =
+        device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
+    const auto my_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_disp);
+    const auto upstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_1, phys_spoof);
+    const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
+
+    return {
+        {"IS_CQ_DRAM_BACKED", "0"},
+        {"DISPATCH_CB_BASE", std::to_string(l1_buf_base)},
+        {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
+        {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_pages)},
+        {"MY_DISPATCH_CB_SEM_ID", std::to_string(dispatch_core_sem_id)},
+        {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dispatch_core_sem_id)},
+        {"DISPATCH_CB_BLOCKS", std::to_string(DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS)},
+        {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
+        {"DISPATCH_D_SHUTDOWN_SEM_ID", "0"},  // no dispatch_s in SD; disables dispatch_s_enabled path
+        {"COMMAND_QUEUE_BASE_ADDR", "0"},
+        {"COMPLETION_QUEUE_BASE_ADDR", "0"},
+        {"COMPLETION_QUEUE_SIZE", "0"},
+        {"DOWNSTREAM_CB_BASE", "0"},
+        {"DOWNSTREAM_CB_SIZE", "0"},
+        {"MY_DOWNSTREAM_CB_SEM_ID", "0"},
+        {"DOWNSTREAM_CB_SEM_ID", "0"},
+        {"SPLIT_PREFETCH", "0"},
+        {"PREFETCH_H_NOC_XY", "0"},
+        {"PREFETCH_H_LOCAL_DOWNSTREAM_SEM_ADDR", "0"},
+        {"PREFETCH_H_MAX_CREDITS", "0"},
+        {"PACKED_WRITE_MAX_UNICAST_SUB_CMDS", std::to_string(num_compute_cores)},
+        {"DISPATCH_S_SYNC_SEM_BASE_ADDR", "0"},
+        {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
+        {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES", std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
+        {"MCAST_GO_SIGNAL_ADDR", "0"},
+        {"UNICAST_GO_SIGNAL_ADDR", "0"},
+        {"DISTRIBUTED_DISPATCHER", "0"},
+        {"HOST_COMPLETION_Q_WR_PTR",
+         std::to_string(memmap.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR))},
+        {"DEV_COMPLETION_Q_WR_PTR",
+         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR))},
+        {"DEV_COMPLETION_Q_RD_PTR",
+         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD))},
+        {"DEV_DISPATCH_PROGRESS_PTR",
+         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS))},
+        {"FIRST_STREAM_USED", std::to_string(memmap.get_dispatch_stream_index(0))},
+        {"VIRTUALIZE_UNICAST_CORES", "0"},
+        {"NUM_VIRTUAL_UNICAST_CORES", "0"},
+        {"NUM_PHYSICAL_UNICAST_CORES", "0"},
+        {"FABRIC_HEADER_RB_BASE", "0"},
+        {"FABRIC_HEADER_RB_ENTRIES", "0"},
+        {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
+        {"FABRIC_MUX_X", "0"},
+        {"FABRIC_MUX_Y", "0"},
+        {"FABRIC_MUX_NUM_BUFFERS_PER_CHANNEL", "0"},
+        {"FABRIC_MUX_CHANNEL_BUFFER_SIZE_BYTES", "0"},
+        {"FABRIC_MUX_CHANNEL_BASE_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_INFO_ADDRESS", "0"},
+        {"FABRIC_MUX_CONNECTION_HANDSHAKE_ADDRESS", "0"},
+        {"FABRIC_MUX_FLOW_CONTROL_ADDRESS", "0"},
+        {"FABRIC_MUX_BUFFER_INDEX_ADDRESS", "0"},
+        {"FABRIC_MUX_STATUS_ADDRESS", "0"},
+        {"FABRIC_MUX_TERMINATION_SIGNAL_ADDRESS", "0"},
+        {"WORKER_CREDITS_STREAM_ID", "0"},
+        {"FABRIC_WORKER_FLOW_CONTROL_SEM", "0"},
+        {"FABRIC_WORKER_TEARDOWN_SEM", "0"},
+        {"FABRIC_WORKER_BUFFER_INDEX_SEM", "0"},
+        {"NUM_HOPS", "0"},
+        {"EW_DIM", "0"},
+        {"TO_MESH_ID", "0"},
+        {"FABRIC_2D", "0"},
+        {"WORKER_MCAST_GRID", "0"},
+        {"NUM_WORKER_CORES_TO_MCAST", "0"},
+        {"OFFSETOF_MY_DEV_ID", "0"},
+        {"OFFSETOF_TO_DEV_ID", "1"},
+        {"OFFSETOF_ROUTER_DIRECTION", "2"},
+        {"DISPATCH_KERNEL", "1"},
+        {"MY_NOC_X", std::to_string(my_virtual.x)},
+        {"MY_NOC_Y", std::to_string(my_virtual.y)},
+        {"UPSTREAM_NOC_INDEX", std::to_string(static_cast<uint32_t>(tt_metal::NOC::NOC_1))},
+        {"UPSTREAM_NOC_X", std::to_string(upstream_virtual.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"FD_CORE_TYPE", "0"},
+        {"IS_D_VARIANT", "1"},
+        {"IS_H_VARIANT", "1"},
+    };
+}
+
 }  // namespace tt::tt_metal::tt_dispatch_tests::Common

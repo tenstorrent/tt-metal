@@ -680,9 +680,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // COMPUTE KERNEL
+    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
+    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
+    // for broadcast multiply (issue 43196).
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32 ||
-                            (a_data_format == tt::DataFormat::Float32 && b_data_format == tt::DataFormat::Float32) ||
+                            c_data_format == tt::DataFormat::Float32 || a_data_format == tt::DataFormat::Float32 ||
+                            b_data_format == tt::DataFormat::Float32 ||
                             (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
                             (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
 

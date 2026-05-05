@@ -950,6 +950,7 @@ class TestSequentialParallelAPI:
         assert len(merged.input_tensors) == 3  # shared deduped
         assert len(merged.output_tensors) == 2
         assert len(merged.semaphores) == 2
+        assert len(merged.sem_specs) == 0  # specs set at _build_internal level, not merge
         assert _graph._merge_build_results([r_a]) is r_a
 
     def test_op_descriptor_name_field(self):

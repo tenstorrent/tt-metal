@@ -41,13 +41,17 @@ void kernel_main() {
 
     constexpr bool exp_approx_mode = false;
 
-    PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
-    PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, scale_fp32, true));
-    sdpa_custom_mm_block_init<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
+    constexpr uint32_t output_granularity = num_tiles_v;
+    static_assert(num_tiles_v % output_granularity == 0, "num_tiles_v must be divisible by output_granularity");
 
     // TODO: Init ahead of time
     MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
     PACK(ckernel::t6_semaphore_init(SFPU_FPU, 0, 1));
+
+    PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
+    PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, scale_fp32, true));
+    sdpa_custom_mm_block_init<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
+    pack_block_contiguous_init(cb_out);
 
     cb_wait_front(cb_q, num_tiles_k);
     cb_reserve_back(cb_out, num_tiles_v);
@@ -63,7 +67,8 @@ void kernel_main() {
             transpose_k,
             transpose_v,
             packed_tile_size,
-            exp_approx_mode>(
+            exp_approx_mode,
+            output_granularity>(
             cb_q,
             cb_k,
             0,  // cb_mask
@@ -78,16 +83,15 @@ void kernel_main() {
             false /* mask_last_chunk */);
     }
 
-    // Sem is incremented once per 2 tiles since sem can only go up to 15
-    for (uint32_t i = 0; i < num_tiles_v; i += 2) {
+    // Sem is incremented once per output_granularity tiles since sem can only go up to 15
+    for (uint32_t i = 0; i < num_tiles_v; i += output_granularity) {
         PACK(t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU));
-        pack_tile(mm2_dst_tile_offset + i, cb_out);
-        pack_tile(mm2_dst_tile_offset + i + 1, cb_out);
+        pack_block_contiguous(mm2_dst_tile_offset + i, cb_out, output_granularity);
         PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
     }
     // Stall for Red Sum to finish
     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-    pack_tile(max_dst_tile_offset, cb_stats);
+    pack_block_contiguous(max_dst_tile_offset, cb_stats, 1);
 
     // Validation that all counters are reset to 0
     // MATH(t6_semaphore_wait_on_max<p_stall::STALL_MATH>(SFPU_FPU));

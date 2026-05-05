@@ -160,7 +160,6 @@ void kernel_main() {
 
         LightweightMaskContext lw_mask;
         if constexpr (use_lightweight_causal_mask) {
-            lw_mask.enabled = true;
             lw_mask.is_causal = true;
             lw_mask.neginf_tile_idx = 0;
             lw_mask.causal_diag_tile_idx = 1;
@@ -190,7 +189,8 @@ void kernel_main() {
                         use_padded_mask,
                         is_chunked,
                         scale_fp32,
-                        sliding_window_size>(
+                        sliding_window_size,
+                        use_lightweight_causal_mask>(
                         Skt,
                         qk_in0_block_w,
                         qk_subblock_w,

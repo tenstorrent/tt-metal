@@ -4,4 +4,5 @@
 set(UNIT_TESTS_MISC_SRC
     test_tilize_untilize.cpp
     test_executor.cpp
+    test_stable_hash.cpp
 )

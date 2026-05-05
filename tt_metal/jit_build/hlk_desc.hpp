@@ -106,7 +106,7 @@ public:
 }  // namespace tt
 
 inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     for (size_t i = 0; i < obj.buf_dataformat_arr.size(); i++) {
         hasher.update(static_cast<uint64_t>(obj.get_buf_dataformat(i)));
         hasher.update(static_cast<uint64_t>(obj.get_buf_tile_r_dim(i)));
@@ -128,7 +128,7 @@ inline uint64_t stable_hash_hlk_desc(const tt::tt_hlk_desc& obj) {
     // reinterpret_casting is well defined.
     if (hlk_args != nullptr && hlk_args_size > 0) {
         const char* raw = reinterpret_cast<const char*>(hlk_args);
-        hasher.update(raw, raw + hlk_args_size);
+        hasher.update(std::string_view{raw, hlk_args_size});
     } else if (hlk_args != nullptr || hlk_args_size != 0) {
         TT_THROW("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
     }

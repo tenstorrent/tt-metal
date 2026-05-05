@@ -12,12 +12,12 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_exp2_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::exp2, APPROXIMATE>(sfpu::exp2_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::exp2>(sfpu::exp2_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_exp2(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::calculate_exp2<APPROXIMATE, is_fp32_dest_acc_en>, dst_index, vector_mode);
 }
 

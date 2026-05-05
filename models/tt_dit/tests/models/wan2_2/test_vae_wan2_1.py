@@ -1623,7 +1623,7 @@ def test_wan_decoder_production_blocking(
 
     logger.info(f"running tt model with production blocking (t_chunk_size={t_chunk_size}, cached={cached})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=1)
+    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, t_chunk_size=t_chunk_size)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3

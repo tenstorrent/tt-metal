@@ -15,7 +15,8 @@ from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.multimodal.llama_rope import RotarySetup
+from models.tt_transformers.tt.multimodal.tensor_utils import from_torch_host_to_device
 
 
 def _get_full_row_masked_out_mask(
@@ -250,7 +251,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         vision_seq_len = self.configuration.vision_max_num_chunks * chunk_length
         xattn_cache = [
             [
-                ttnn.from_torch(
+                from_torch_host_to_device(
                     torch.zeros(
                         max_batch_size, self.configuration.n_kv_heads, vision_seq_len, self.configuration.head_dim
                     ),

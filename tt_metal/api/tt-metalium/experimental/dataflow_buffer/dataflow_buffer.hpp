@@ -24,6 +24,13 @@ namespace tt::tt_metal::experimental::dfb {
 
 using AccessPattern = ::dfb::AccessPattern;
 
+// This enum is used to distinguish DFBs within one Neo vs DFBs across Neos
+// Both cases run the same compute kernel on all Neos
+enum class TensixScope : uint8_t {
+    INTRA,
+    INTER,
+};
+
 struct DataflowBufferConfig {
     uint32_t entry_size = 0;
     uint32_t num_entries = 0;
@@ -36,6 +43,8 @@ struct DataflowBufferConfig {
     bool enable_implicit_sync = false;
     DataFormat data_format = tt::DataFormat::Float16_b;
     std::optional<Tile> tile = std::nullopt;
+    // Set only when both producer and consumer are the same compute kernel
+    std::optional<TensixScope> tensix_scope = std::nullopt;
 };
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with

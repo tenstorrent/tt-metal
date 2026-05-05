@@ -393,6 +393,8 @@ def _emit_state_vars(risc_type: str, is_coordinator: bool, has_compute: bool, ha
             lines.append("volatile tt_l1_ptr uint32_t* writer_done;")
     elif risc_type == "compute":
         lines.append("volatile tt_l1_ptr uint32_t* compute_done;")
+        lines.append("volatile tt_l1_ptr uint32_t* pack_drained;")
+        lines.append("volatile tt_l1_ptr uint32_t* math_drained;")
     lines.append("volatile tt_l1_ptr uint32_t* reset_done;")
     lines.append("")
     return lines
@@ -449,7 +451,27 @@ def _emit_local_sync_coordinator(
 def _emit_local_sync_follower(risc_type: str) -> List[str]:
     """Emit ``namespace local { void sync(); }`` for BRISC or compute.
 
-    Order: done++ -> drain NOC (DM only) -> signal done -> wait reset_done.
+    Order:
+      DM follower:      done++ -> drain NOC -> signal *writer_done -> wait reset_done.
+      Compute follower: done++ -> drain tensix pipeline -> signal *compute_done -> wait reset_done.
+
+    The tensix-pipeline drain MUST happen BEFORE signalling ``*compute_done``
+    (issue #40330).  ``reset_cbs`` on the coordinator reads
+    ``STREAM.tiles_received`` / ``STREAM.tiles_acked`` for every CB and
+    equalizes them only when they differ.  ``push_back`` / ``pop_front``
+    instructions issued by compute go through the pack/unpack back-end
+    pipeline; the stream-register write happens at the END of that pipeline,
+    not at instruction-issue time.  ``tensix_sync()`` blocks the calling TRISC
+    until its own back-end has drained, so it is the only signal that the
+    stream registers reflect the just-completed phase.
+
+    If we signalled ``*compute_done`` first and drained second, the coordinator
+    raced ``reset_cbs`` against the in-flight ``push_back``: the read saw
+    ``received == acked == 0``, the equalize was skipped, then the drain
+    committed ``received = 8`` while ``acked`` stayed at 0 — and the next
+    phase's ``reserve_back`` deadlocked with ``free = 8 - (8 - 0) = 0``.  The
+    DPRINT capture in the gamma-loop reserve_back made this exact pattern
+    visible (slot 16: phase 1 entry shows ``received=8 acked=0``).
     """
     lines = ["namespace local {"]
     lines.append("    __attribute__((noinline)) void sync() {")
@@ -462,6 +484,31 @@ def _emit_local_sync_follower(risc_type: str) -> List[str]:
         lines.append("        noc_async_write_barrier();")
         lines.append("        *writer_done = done;")
     else:  # compute
+        lines.append("        // Issue #40330: drain the tensix pipeline BEFORE signalling")
+        lines.append("        // *compute_done so the coordinator's reset_cbs reads up-to-date")
+        lines.append("        // STREAM.tiles_received / tiles_acked values.  Order is")
+        lines.append("        // pack -> math -> unpack so each stage waits for its downstream")
+        lines.append("        // consumer before draining its own back-end:")
+        lines.append("        //   pack  needs CB space      (freed by coordinator reset_cbs)")
+        lines.append("        //   math  needs Dest registers (freed after pack drains)")
+        lines.append("        //   unpack needs SrcA/SrcB     (freed after math drains)")
+        lines.append("        // This drain ALSO ensures the next phase's LLK assert checks")
+        lines.append("        // (e.g. are_unpackers_AB_configured_correctly) — which call")
+        lines.append("        // tensix_sync() at init — see an empty back-end and do not")
+        lines.append("        // deadlock waiting for prior-phase instructions.")
+        lines.append("#ifdef TRISC_PACK")
+        lines.append("        tensix_sync();")
+        lines.append("        *pack_drained = done;")
+        lines.append("#endif")
+        lines.append("#ifdef TRISC_MATH")
+        lines.append("        while (*pack_drained < done) {}")
+        lines.append("        tensix_sync();")
+        lines.append("        *math_drained = done;")
+        lines.append("#endif")
+        lines.append("#ifdef TRISC_UNPACK")
+        lines.append("        while (*math_drained < done) {}")
+        lines.append("        tensix_sync();")
+        lines.append("#endif")
         lines.append("        *compute_done = done;")
     lines.append("        // Wait for coordinator to complete reset (op sem + CB)")
     lines.append("        // before proceeding.  Without this, a fast core can start")
@@ -596,6 +643,12 @@ def _emit_init_follower(
         lines.append("    *compute_done = 0;")
         lines.append("    reset_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
         lines.append("        get_arg_val<uint32_t>(rt_offset + 1));")
+        lines.append("    pack_drained = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+        lines.append("        get_arg_val<uint32_t>(rt_offset + 2));")
+        lines.append("    *pack_drained = 0;")
+        lines.append("    math_drained = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(")
+        lines.append("        get_arg_val<uint32_t>(rt_offset + 3));")
+        lines.append("    *math_drained = 0;")
     for seg_idx in range(num_segments):
         lines.append(f"    group::seg_{seg_idx}::init();")
     lines.append("}")
@@ -707,11 +760,15 @@ def _generate_barrier_namespace(
             )
             lines.append("")
     else:
+        # Compute follower has 4 base RT args (compute_done, reset_done,
+        # pack_drained, math_drained); DM follower has 2 (writer_done,
+        # reset_done).  Segment release addresses follow immediately after.
+        follower_base = 4 if risc_type == "compute" else 2
         for seg_idx in range(num_segments):
             lines.extend(
                 _SPINWAIT_SEGMENT_TEMPLATE.format(
                     seg_idx=seg_idx,
-                    release_offset=2 + seg_idx,  # +2: done_signal + reset_done
+                    release_offset=follower_base + seg_idx,
                 ).split("\n")
             )
             lines.append("")

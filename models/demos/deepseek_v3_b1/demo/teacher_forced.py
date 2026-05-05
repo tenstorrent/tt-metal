@@ -7,9 +7,7 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
-import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -19,9 +17,8 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
-from conftest import bh_2d_mesh_device_context
+from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
 from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
-from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
 
@@ -146,7 +143,11 @@ def run_teacher_forced(
     per_position_match: list[bool] = []
     stopped_early_predicted_eos = False
 
-    pred = model_pipeline.prefill_forward(prompt_token_ids)
+    prefill_results = model_pipeline.prefill_forward(prompt_token_ids)
+    if not prefill_results:
+        raise RuntimeError("prefill_forward() returned no DecodeResults")
+
+    pred = prefill_results[0].token_0
     predicted_token_ids.append(pred)
     per_position_match.append(pred == effective_ref[0])
     if eos_token_id is not None and pred == eos_token_id:
@@ -185,38 +186,6 @@ def run_teacher_forced(
         per_chunk_accuracy=per_chunk,
         chunk_accuracy_token_size=chunk_sz,
     )
-
-
-def _fabric_config_for_num_procs(num_procs: int):
-    """Infer fabric config from process count: 4 → FABRIC_2D, 16 → FABRIC_2D_TORUS_Y."""
-    if num_procs == 4:
-        return ttnn.FabricConfig.FABRIC_2D
-    if num_procs == 16:
-        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-    if num_procs == 64:
-        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
-
-
-@contextlib.contextmanager
-def open_mesh_device():
-    """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
-    if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
-        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
-    num_procs = int(ttnn.distributed_context_get_size())
-    device_params = {
-        "fabric_config": _fabric_config_for_num_procs(num_procs),
-        "fabric_router_config": create_fabric_router_config(15232),
-        "worker_l1_size": 1431568,
-    }
-    logger.info("Opening mesh device...")
-    with bh_2d_mesh_device_context(device_params) as mesh_device:
-        logger.info(
-            "Mesh device opened (id={}, shape={})",
-            mesh_device.get_system_mesh_id(),
-            mesh_device.shape,
-        )
-        yield mesh_device
 
 
 def create_parser() -> argparse.ArgumentParser:

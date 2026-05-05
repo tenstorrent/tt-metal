@@ -211,6 +211,53 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     )
 
 
+@pytest.mark.parametrize("input_w", [17, 34, 63])
+def test_layer_norm_post_all_gather_non_tile_aligned_width(device, input_w):
+    """Regression test for winv - check whether the kernel correctly normalises for non-tile-aligned widths."""
+    torch.manual_seed(0)
+
+    # Stats layout: one 32-wide tile per stats type per device.  For
+    # layernorm and num_devices=1 that is 2 tiles -> stats width 64.
+    stats_w = 64
+
+    inp = torch.randn(1, 1, 32, input_w, dtype=torch.bfloat16)
+    weight = torch.ones(input_w, dtype=torch.bfloat16)
+    bias = torch.randn(input_w, dtype=torch.bfloat16)
+
+    stats = torch.zeros(1, 1, 32, stats_w, dtype=torch.bfloat16)
+    stats[..., 0:1] = inp.float().pow(2).sum(dim=-1, keepdim=True).bfloat16()
+    stats[..., 32:33] = inp.float().sum(dim=-1, keepdim=True).bfloat16()
+
+    def to_device(t):
+        return ttnn.to_device(
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            device=device,
+        )
+
+    epsilon = 1e-5
+    out_ttnn = ttnn.layer_norm_post_all_gather(
+        to_device(inp),
+        to_device(stats),
+        epsilon=epsilon,
+        weight=to_device(weight),
+        bias=to_device(bias),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
+        dtype=ttnn.bfloat16,
+    )
+    out_torch = ttnn.to_torch(ttnn.from_device(out_ttnn)).float()[..., :input_w]
+
+    ref = torch.nn.functional.layer_norm(inp.float(), [input_w], weight.float(), bias.float(), epsilon)
+
+    passing, output_str = comp_pcc(ref, out_torch, pcc=0.99)
+    assert passing, f"input_w={input_w}: {output_str}"
+
+
 def _layernorm_stats_tiles_single_chunk(canon_inp: torch.Tensor) -> torch.Tensor:
     """Stats layout for layer_norm post_all_gather with a single full-width chunk (matches run_layernorm_part_2)."""
     inp_chunked = canon_inp.chunk(1, dim=-1)

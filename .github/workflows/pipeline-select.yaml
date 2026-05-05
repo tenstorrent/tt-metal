@@ -99,6 +99,7 @@ jobs:
           esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    needs: determine-tests
     permissions:
       packages: write
     secrets: inherit

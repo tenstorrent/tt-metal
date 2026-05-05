@@ -105,17 +105,14 @@ void kernel_main() {
         //   before the loop, one commit after the last tile).
         //   Only the final iteration needs to expose result tiles to PACK.
         //
-        // Init/init_short flow:
+        // Init/reinit flow:
         // - welford_init() is the full Welford setup. It programs the Welford SFPU path and
         //   clears any previous running mean/M2 state, so it must be done once before the loop,
         //   not inside the loop.
-        // - mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar) is a lightweight reconfigure
-        //   for "multiply input tile by scalar tile".
-        // - After that mul init, Welford still expects the copy/datacopy-style setup,
-        //   so copy_tile_to_dst_init_short(cb_in) is called to switch the settings back. This
-        //   is fragile, since Welford isn't actually doing the copy operation here.
-        //   This will be investigated in issue #41983.
-        // - In the !do_scale path we just copy the input tile directly into input_dst.
+        // - mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar) reconfigures for FPU scalar multiply.
+        // - welford_reinit(cb_in) restores UNPACK+MATH to the datacopy-style state Welford needs
+        //   after the mul (see llk_math_welfords_sfpu_reinit); it does not clear LREG4/5.
+        // - In the !do_scale path we use copy_tile_to_dst_init_short once, then copy_tile per tile.
         //
         // Per iteration:
         // - For all non-last H tiles, welford_update(input_dst, start_N, ...) consumes the full
@@ -142,12 +139,10 @@ void kernel_main() {
                 tile_regs_acquire();
                 mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
+
                 // Reconfigure the compute setup from scalar-multiply mode back to the
                 // SFPU state that Welford expects.
-                // copy_tile_to_dst_init_short is used here not for copying, but because
-                // mul_tiles_bcast_scalar_init_short changed the UNPACK+MATH configuration.
-                // This is fragile and will be investigated in issue #41983.
-                copy_tile_to_dst_init_short(cb_in);
+                welford_reinit(cb_in);
             } else {
                 copy_tile(cb_in, 0, input_dst);
             }

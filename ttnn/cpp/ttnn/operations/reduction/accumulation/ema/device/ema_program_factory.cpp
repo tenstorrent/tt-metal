@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ema_program_factory.hpp"
+#include "ema_device_operation.hpp"
 
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -18,7 +17,7 @@ using namespace tt::tt_metal;
 
 constexpr auto ema_buffer_depth = 2;
 
-EmaProgramFactory::cached_program_t EmaProgramFactory::create(
+tt::tt_metal::ProgramDescriptor EmaDeviceOperation::EmaProgramFactory::create_descriptor(
     const EmaParams& operation_attributes, const EmaInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     auto& output = tensor_return_value;
@@ -67,9 +66,9 @@ EmaProgramFactory::cached_program_t EmaProgramFactory::create(
     auto alpha_bits = std::bit_cast<uint32_t>(operation_attributes.alpha);
     auto beta_bits = std::bit_cast<uint32_t>(1.0f - operation_attributes.alpha);
 
-    // Create program
-    // --------------
-    auto program = Program();
+    // Create program descriptor
+    // -------------------------
+    ProgramDescriptor desc;
 
     // Circular buffer config
     // ----------------------
@@ -87,17 +86,35 @@ EmaProgramFactory::cached_program_t EmaProgramFactory::create(
     auto dst_cb_size = dst_tile_size * ema_buffer_depth;
     auto prev_cb_size = src_tile_size;
 
-    auto src_cb_cfg =
-        CircularBufferConfig(src_cb_size, {{src_cb_index, src_data_format}}).set_page_size(src_cb_index, src_tile_size);
-    CreateCircularBuffer(program, all_cores, src_cb_cfg);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = src_cb_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src_cb_index),
+            .data_format = src_data_format,
+            .page_size = src_tile_size,
+        }}},
+    });
 
-    auto dst_cb_cfg =
-        CircularBufferConfig(dst_cb_size, {{dst_cb_index, dst_data_format}}).set_page_size(dst_cb_index, dst_tile_size);
-    CreateCircularBuffer(program, all_cores, dst_cb_cfg);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = dst_cb_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(dst_cb_index),
+            .data_format = dst_data_format,
+            .page_size = dst_tile_size,
+        }}},
+    });
 
-    auto prev_cb_cfg = CircularBufferConfig(prev_cb_size, {{prev_cb_index, src_data_format}})
-                           .set_page_size(prev_cb_index, src_tile_size);
-    CreateCircularBuffer(program, all_cores, prev_cb_cfg);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = prev_cb_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(prev_cb_index),
+            .data_format = src_data_format,
+            .page_size = src_tile_size,
+        }}},
+    });
 
     // Compile time args for the kernels
     // ---------------------------------
@@ -114,90 +131,67 @@ EmaProgramFactory::cached_program_t EmaProgramFactory::create(
         beta_bits,
     };
 
-    // Create kernels
-    // --------------
+    // Create kernel descriptors
+    // -------------------------
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    auto reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_reader.cpp",
-        all_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_compile_args});
 
-    auto writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_writer.cpp",
-        all_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = writer_noc, .compile_args = writer_compile_args});
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_reader.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_args);
+    reader_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = reader_noc,
+    };
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/dataflow/ema_writer.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_args);
+    writer_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = writer_noc,
+    };
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
-    CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/compute/ema_compute.cpp",
-        all_cores,
-        ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_args});
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/accumulation/ema/kernels/compute/ema_compute.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = std::move(compute_compile_args);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
     // Set runtime args
     // ---------------
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
 
-    std::vector<uint32_t> reader_runtime_args = {
-        src_buffer->address(),
-        0,  // Placeholder for src_start_tile, populated below
-    };
-    std::vector<uint32_t> writer_runtime_args = {
-        dst_buffer->address(),
-        0,  // Placeholder for dst_start_tile, populated below
-    };
-
     uint32_t src_start_tile = 0;
     uint32_t dst_start_tile = 0;
     for (const auto& range : all_cores.ranges()) {
         for (const auto& core : range) {
-            reader_runtime_args[1] = src_start_tile;
-            writer_runtime_args[1] = dst_start_tile;
+            reader_desc.emplace_runtime_args(core, {src_buffer, src_start_tile});
+            writer_desc.emplace_runtime_args(core, {dst_buffer, dst_start_tile});
             src_start_tile += total_tiles_per_core;
             dst_start_tile += total_tiles_per_core;
-
-            SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-            SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
     }
 
-    return {
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .all_cores = std::move(all_cores)}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void EmaProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const EmaParams& /*operation_attributes*/,
-    const EmaInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
-
-    auto src_buffer_address = tensor_args.input.buffer()->address();
-    auto dst_buffer_address = tensor_return_value.buffer()->address();
-
-    // Update buffer addresses for all cores
-    for (const auto& range : shared_variables.all_cores.ranges()) {
-        for (const auto& core : range) {
-            GetRuntimeArgs(program, shared_variables.reader_kernel_id, core)[0] = src_buffer_address;
-            GetRuntimeArgs(program, shared_variables.writer_kernel_id, core)[0] = dst_buffer_address;
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

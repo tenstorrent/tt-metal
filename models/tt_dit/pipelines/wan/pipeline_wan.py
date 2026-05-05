@@ -18,7 +18,7 @@ from diffusers.models import AutoencoderKLWan
 from diffusers.models import WanTransformer3DModel as TorchWanTransformer3DModel
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, UniPCMultistepScheduler
+from diffusers.schedulers import UniPCMultistepScheduler
 from diffusers.video_processor import VideoProcessor
 from loguru import logger
 from transformers import AutoTokenizer, UMT5EncoderModel
@@ -31,12 +31,14 @@ from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...solvers import UniPCSolver
+from ...utils import cache, tensor
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import (
-    bf16_tensor,
     fast_device_to_host,
     float32_tensor,
+    float_to_uint8,
+    float_to_unit_range,
     local_device_to_torch,
     typed_tensor_2dshard,
 )
@@ -122,7 +124,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             Number of links to use for CCL operations.
         checkpoint_name (`str`, *optional*, defaults to `"Wan-AI/Wan2.2-T2V-A14B-Diffusers"`):
             HuggingFace Hub repo ID to load model weights from.
-        scheduler (`FlowMatchEulerDiscreteScheduler`, *optional*):
+        scheduler (`UniPCMultistepScheduler`, *optional*):
             Scheduler to use for denoising. Defaults to `UniPCMultistepScheduler` loaded from the checkpoint.
         boundary_ratio (`float`, *optional*, defaults to `0.875`):
             Ratio of total timesteps used as the boundary for switching between the two transformers in two-stage
@@ -155,7 +157,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         num_links,
         *,
         checkpoint_name: str = "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        scheduler: FlowMatchEulerDiscreteScheduler = None,
+        scheduler: UniPCMultistepScheduler = None,
         boundary_ratio: Optional[float] = 0.875,
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
@@ -168,6 +170,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         target_height: int = 0,
         target_width: int = 0,
         t_chunk_size: int = 0,
+        run_warmup: bool = True,
     ):
         super().__init__()
 
@@ -180,9 +183,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             checkpoint_name, subfolder="text_encoder", trust_remote_code=True
         )
         self.vae = AutoencoderKLWan.from_pretrained(checkpoint_name, subfolder="vae", trust_remote_code=True)
-        self.scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
-            checkpoint_name, subfolder="scheduler", flow_shift=12.0
-        )
         self.torch_transformer = TorchWanTransformer3DModel.from_pretrained(
             checkpoint_name, subfolder="transformer", trust_remote_code=True
         )
@@ -296,6 +296,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             TransformerState(self.transformer_2, "transformer_2", self.torch_transformer_2, guidance_scale=3.0),
         ]
 
+        scheduler = scheduler or UniPCMultistepScheduler.from_pretrained(
+            checkpoint_name, subfolder="scheduler", flow_shift=12.0
+        )
+        self._solver = UniPCSolver(scheduler=scheduler)
+
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
@@ -329,8 +334,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             1, self.vae.config.z_dim, 1, 1, 1
         )
 
+        # persistent latent buffers to enable safe tracing.
+        self.latent_buffer = None
+        self.condition_buffer = None
+
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
-        self.warmup_buffers(height=target_height, width=target_width)
+        if run_warmup:
+            self.warmup_buffers(height=target_height, width=target_width)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
@@ -340,9 +350,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ttnn.copy(prompt_1BLP, buffer)
         return buffer
 
-    def warmup_buffers(self, height, width):
+    def warmup_buffers(self, height, width, image_prompt=None):
         self.run_single_prompt(
             prompt="warmup",
+            image_prompt=image_prompt,
             height=height,
             width=width,
             num_frames=81,
@@ -517,6 +528,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt: Union[str, List[str]] = None,
         num_videos_per_prompt: int = 1,
         max_sequence_length: int = 512,
+        traced: bool = False,
     ):
         prompt = [prompt] if isinstance(prompt, str) else prompt
         prompt = [prompt_clean(u) for u in prompt]
@@ -544,7 +556,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         tt_prompt = ttnn.from_torch(
             text_input_ids,
             layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
+            device=self.mesh_device if not traced else None,
             mesh_mapper=mesh_mapper,
         )
 
@@ -552,14 +564,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
+            device=self.mesh_device if not traced else None,
             mesh_mapper=mesh_mapper,
         )
 
-        prompt_embeds = self.tt_umt5_encoder(tt_prompt, attention_mask=tt_mask)[-1]
-
-        # use the mask to zero out the padding tokens.
-        prompt_embeds = prompt_embeds * ttnn.unsqueeze(tt_mask, -1)
+        prompt_embeds = self.tt_umt5_encoder(tt_prompt, attention_mask=tt_mask, zero_masking=True, traced=traced)[-1]
 
         prompt_embeds = self.encoder_ccl_manager.all_gather(
             prompt_embeds, dim=0, mesh_axis=DP_axis, use_hyperparams=True
@@ -580,6 +589,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         max_sequence_length: int = 512,
+        traced: bool = True,
     ):
         r"""
         Batch encodes the prompt and negative prompt into text encoder hidden states..
@@ -647,6 +657,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             prompt=all_input_prompts,
             num_videos_per_prompt=num_videos_per_prompt,
             max_sequence_length=max_sequence_length,
+            traced=traced,
         )
 
         # When CFG is enabled, we should be able to leave the shards on device.
@@ -700,6 +711,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         """
         Adapter function to enable I2V. For base T2V, just return the latents.
         """
+        if latents.dtype == ttnn.float32:
+            latents = ttnn.typecast(latents, ttnn.bfloat16)
         return latents
 
     def prepare_latents(
@@ -756,7 +769,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         latents: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
-        output_type: Optional[str] = "np",
+        output_type: Optional[str] = "uint8",
         return_dict: bool = True,
         max_sequence_length: int = 512,
         traced: bool = False,
@@ -865,11 +878,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prompt_embeds=prompt_embeds,
                 negative_prompt_embeds=negative_prompt_embeds,
                 max_sequence_length=max_sequence_length,
+                traced=traced,
             )
 
-        # 4. Prepare timesteps
-        self.scheduler.set_timesteps(num_inference_steps, device=device)
-        timesteps = self.scheduler.timesteps
+        # 4. Prepare schedule
+        self._solver.set_schedule(num_inference_steps, device=device)
+        timesteps = self._solver.timesteps
 
         # 5. Prepare latent variables
         if seed is not None:
@@ -891,23 +905,23 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
 
         # 6. Denoising loop
-        num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         self._num_timesteps = len(timesteps)
 
         if self.config.boundary_ratio is not None:
-            boundary_timestep = self.config.boundary_ratio * self.scheduler.config.num_train_timesteps
+            boundary_timestep = self.config.boundary_ratio * self._solver.scheduler.config.num_train_timesteps
         else:
             boundary_timestep = -1  # Always use transformer (no transformer_2)
 
         if profiler:
             profiler.start("denoising", profiler_iteration)
 
-        permuted_latent = None
+        permuted_latent_tt = None
         rope_args = None
 
         latent_frames, latent_height, latent_width = latents.shape[2], latents.shape[3], latents.shape[4]
         prepared_prompts = [False, False]
 
+        sp_axis = self.transformer_states[0].model.parallel_config.sequence_parallel.mesh_axis
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
@@ -924,12 +938,22 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     )
                     prepared_prompts[transformer_idx] = True
 
-                if permuted_latent is None:
+                if permuted_latent_tt is None:
                     # First iteration, preprocess spatial input and prepare rope features
                     permuted_latent, patchified_seqlen = ts.model.preprocess_spatial_input_host(latents)
 
                     if cond_latents is not None:
                         cond_latents, _ = ts.model.preprocess_spatial_input_host(cond_latents)
+                        cond_latents = tensor.from_torch(
+                            cond_latents,
+                            device=self.mesh_device,
+                            mesh_axes=[None, None, sp_axis, None],
+                            dtype=ttnn.bfloat16,
+                        )
+                        if self.condition_buffer is None:
+                            self.condition_buffer = cond_latents
+                        else:
+                            ttnn.copy(cond_latents, self.condition_buffer)
 
                     rope_cos_1HND, rope_sin_1HND, trans_mat = ts.model.get_rope_features(latents)
                     rope_args = {
@@ -937,6 +961,19 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         "rope_sin_1HND": rope_sin_1HND,
                         "trans_mat": trans_mat,
                     }
+
+                    permuted_latent_tt = tensor.from_torch(
+                        permuted_latent,
+                        device=self.mesh_device,
+                        mesh_axes=[None, None, sp_axis, None],
+                        dtype=ts.model.output_dtype,
+                    )
+
+                # setup/update latent and condition buffers
+                if self.latent_buffer is None:
+                    self.latent_buffer = permuted_latent_tt
+                else:
+                    ttnn.copy(permuted_latent_tt, self.latent_buffer)
 
                 if self.config.expand_timesteps:
                     # seq_len: num_latent_frames * latent_height//2 * latent_width//2
@@ -946,14 +983,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 else:
                     timestep = t.expand(latents.shape[0])
 
-                permuted_model_input = self.get_model_input(permuted_latent, cond_latents)
-                permuted_model_input = bf16_tensor(
-                    permuted_model_input,
-                    device=self.mesh_device,
-                    mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
-                    shard_dim=-2,
-                    on_host=traced,
-                )
+                permuted_model_input = self.get_model_input(self.latent_buffer, self.condition_buffer)
 
                 assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
                 timestep = float32_tensor(
@@ -970,17 +1000,23 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     **rope_args,
                     guidance_scale=ts.guidance_scale,
                     traced=traced,
+                    gather_output=False,
                 )
 
-                # Move result to host for scheduler step
-                permuted_noise_pred = local_device_to_torch(permuted_noise_pred_tt)
+                permuted_latent_tt = self._solver.step(
+                    step=i,
+                    latent=self.latent_buffer,
+                    velocity_pred=permuted_noise_pred_tt,
+                )
 
-                # compute the previous noisy sample x_t -> x_t-1
-                permuted_latent = self.scheduler.step(permuted_noise_pred, t, permuted_latent, return_dict=False)[0]
+                progress_bar.update()
 
-                # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
+        self._current_timestep = None
+
+        permuted_latent_tt = ts.model.ccl_manager.all_gather_persistent_buffer(
+            permuted_latent_tt, dim=2, mesh_axis=sp_axis
+        )
+        permuted_latent = local_device_to_torch(permuted_latent_tt)
 
         # Postprocess spatial output
         latents = ts.model.postprocess_spatial_output_host(
@@ -1010,28 +1046,38 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             self._prepare_vae()
             tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, t_chunk_size=self.vae_t_chunk_size)
 
-            # On-device post-processing for np output: [-1,1] → [0,1]
-            # VAE output is ROW_MAJOR; arithmetic ops require TILE_LAYOUT.
-            if output_type == "np":
-                tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.TILE_LAYOUT)
-                tt_video_BCTHW = ttnn.add(tt_video_BCTHW, 1.0)
-                tt_video_BCTHW = ttnn.multiply(tt_video_BCTHW, 0.5)
-                tt_video_BCTHW = ttnn.clamp(tt_video_BCTHW, min=0.0, max=1.0)
-                tt_video_BCTHW = ttnn.to_layout(tt_video_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
-
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
+            d2h_permute = (0, 2, 3, 4, 1) if output_type in ("np", "uint8") else None
+
+            if output_type == "uint8":
+                pre_fn = float_to_uint8
+            elif output_type == "np":
+                pre_fn = float_to_unit_range
+            else:
+                pre_fn = None
+
             video_torch = fast_device_to_host(
                 tt_video_BCTHW,
                 self.mesh_device,
                 concat_dims,
                 ccl_manager=self.vae_ccl_manager,
+                pre_transfer_fn=pre_fn,
+                permute=d2h_permute,
             )
-            video_torch = video_torch[:, :, :, :new_logical_h, :]
 
-            if output_type == "np":
-                video = video_torch.permute(0, 2, 3, 4, 1).float().numpy()
+            if d2h_permute is not None:
+                # Output is (B, T, H, W, C) — trim height in dim 2.
+                video_torch = video_torch[:, :, :new_logical_h, :, :]
+            else:
+                # Output is (B, C, T, H, W) — trim height in dim 3.
+                video_torch = video_torch[:, :, :, :new_logical_h, :]
+
+            if output_type == "uint8":
+                video = video_torch.numpy()
+            elif output_type == "np":
+                video = video_torch.float().numpy()
             else:
                 video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:

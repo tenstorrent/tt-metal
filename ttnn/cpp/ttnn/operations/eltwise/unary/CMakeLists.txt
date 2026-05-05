@@ -2,6 +2,7 @@ add_library(ttnn_op_eltwise_unary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Unary ALIAS ttnn_op_eltwise_unary)
 
 tt_reuse_precompile_headers(ttnn_op_eltwise_unary TTNN::PCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_unary)
 set_target_properties(
     ttnn_op_eltwise_unary
     PROPERTIES
@@ -29,15 +30,22 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         common/unary_op_utils.cpp
+        common/unary_utils.cpp
         device/unary_composite_op.cpp
         device/unary_device_operation.cpp
         device/unary_program_factory.cpp
-        device/unary_sharded_program_factory.cpp
         unary.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_eltwise_unary PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_link_libraries(
+    ttnn_op_eltwise_unary
+    PUBLIC
+        TTNN::Core
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Eltwise::Binary
+)
 
 install(
     TARGETS

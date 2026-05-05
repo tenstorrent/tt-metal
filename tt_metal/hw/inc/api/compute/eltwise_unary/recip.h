@@ -6,12 +6,14 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_recip.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-
+#ifndef ARCH_QUASAR
 /**
  * Please refer to documentation for any_init.
  */
@@ -38,5 +40,5 @@ ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
     MATH(SFPU_FOUR_PARAM_KERNEL_FP32_FIRST_FN(
         calculate_reciprocal, APPROX, DST_ACCUM_MODE, 8, legacy_compat, idst, vector_mode));
 }
-
+#endif
 }  // namespace ckernel

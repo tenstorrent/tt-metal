@@ -478,11 +478,10 @@ class GroupNorm(Module):
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
-    def forward(self, x: ttnn.Tensor, num_out_blocks=-1) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
-        x = ttnn.group_norm(
-            x,
+        kwargs = dict(
             weight=self.weight.data,
             bias=self.bias.data,
             input_mask=self.mask.data,
@@ -493,6 +492,9 @@ class GroupNorm(Module):
             num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
         )
+        if compute_kernel_config is not None:
+            kwargs["compute_kernel_config"] = compute_kernel_config
+        x = ttnn.group_norm(x, **kwargs)
         x = x.reshape([batch_size, height, width, channels])
 
         return x

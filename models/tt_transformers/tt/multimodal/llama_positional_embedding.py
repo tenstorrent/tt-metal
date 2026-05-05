@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.multimodal.tensor_utils import from_torch_host_to_device
 
 TILE_SIZE = 32
 
@@ -35,7 +36,7 @@ class TtLlamaPositionalEmbedding(LightweightModule):
         gated_positional_embedding = state_dict[f"{state_dict_prefix}gated_positional_embedding"]
         gated_positional_embedding_gate = state_dict[f"{state_dict_prefix}gated_positional_embedding_gate"]
         positional_embedding = positional_embedding.unsqueeze(0)  # Add batch dimensions
-        pos_embed_device = ttnn.as_tensor(
+        pos_embed_device = from_torch_host_to_device(
             positional_embedding,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -49,7 +50,7 @@ class TtLlamaPositionalEmbedding(LightweightModule):
         padded_gated_embeddings, self.ar_mapping = self.generate_padded_gated_embeddings(
             gated_positional_embedding, gated_positional_embedding_gate
         )
-        padded_gated_embed = ttnn.as_tensor(
+        padded_gated_embed = from_torch_host_to_device(
             padded_gated_embeddings,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -64,7 +65,7 @@ class TtLlamaPositionalEmbedding(LightweightModule):
 
         # Add batch and ntok dimensions
         gated_positional_embedding_gate = gated_positional_embedding_gate.unsqueeze(0).unsqueeze(0)
-        self.gated_positional_embedding_gate = ttnn.as_tensor(
+        self.gated_positional_embedding_gate = from_torch_host_to_device(
             (
                 1 - gated_positional_embedding_gate.tanh()
             ),  # NOTE: The reference code has does the 1 - gate.tanh() at inference time

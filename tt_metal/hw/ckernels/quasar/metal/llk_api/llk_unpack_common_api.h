@@ -39,7 +39,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 
         // TODO: with multiple TCs are there multiple descriptors?
         buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B = g_dfb_interface[i].tc_slots[0].base_addr;
+        bd_val.f.l1_addr_16B = get_local_dfb_interface(i).tc_slots[0].base_addr;
         bd_val.f.format = static_cast<std::uint8_t>(l1_data_format);
         bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
         bd_val.f.y_dim = unpack_tile_face_r_dim[i];

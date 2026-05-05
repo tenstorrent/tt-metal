@@ -10,15 +10,14 @@ void kernel_main() {
     const uint32_t start_row_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t full_chunk_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t full_chunks_per_row = get_compile_time_arg_val(2);
-    constexpr uint32_t partial_chunk_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t partial_chunks_per_row = get_compile_time_arg_val(4);  // 0 or 1
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr uint32_t full_chunks_per_row = get_compile_time_arg_val(1);
+    constexpr uint32_t partial_chunks_per_row = get_compile_time_arg_val(2);  // 0 or 1
+    constexpr uint32_t full_chunk_size_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t partial_chunk_size_bytes = get_compile_time_arg_val(4);
+    constexpr auto dst_args = TensorAccessorArgs<5>();
 
     constexpr uint32_t onepage = 1;
 
-    // Create TensorAccessor using layout/aligned_page_size metadata carried in TensorAccessorArgs.
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     const uint32_t end_row_id = start_row_id + num_rows;

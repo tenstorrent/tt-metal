@@ -50,7 +50,7 @@
 - name: Deepseek V3 tests
   use_mlperf_mount: true
   cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     # Running only decode and prefill-128 tests with HF weights for moe and mlp layer

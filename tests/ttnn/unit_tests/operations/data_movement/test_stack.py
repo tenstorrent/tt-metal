@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize(
@@ -32,6 +32,6 @@ def test_stack(device, input_shapes, dim, layout):
     ttnn_result = ttnn.stack(ttnn_tensors, dim=dim)
 
     ttnn_result_torch = ttnn.to_torch(ttnn_result)
-    assert_with_pcc(torch_result, ttnn_result_torch)
+    assert_equal(torch_result, ttnn_result_torch)
 
     assert torch_result.shape == ttnn_result_torch.shape

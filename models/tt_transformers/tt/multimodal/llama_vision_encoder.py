@@ -15,6 +15,7 @@ from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlama
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 from models.tt_transformers.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
 from models.tt_transformers.tt.multimodal.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
+from models.tt_transformers.tt.multimodal.tensor_utils import from_torch_host_to_device
 
 
 def to_2tuple(x):
@@ -26,7 +27,7 @@ def to_2tuple(x):
 def pad_seq_one_tile(x, mesh_device):
     num_pad_tokens = 32 - (x.shape[2] % 32)
 
-    pad_tensor = ttnn.as_tensor(
+    pad_tensor = from_torch_host_to_device(
         torch.zeros(x.shape[0], x.shape[1], num_pad_tokens, x.shape[-1]),
         dtype=ttnn.bfloat16,
         device=mesh_device,
@@ -230,7 +231,7 @@ class TtLlamaVisionEncoder(LightweightModule):
         attn_mask = build_encoder_attention_mask(fake_x, ar, ntok, max_actual_num_chunks, 1)
         # Mask stripes for the extra padding required on TT hardware
         attn_mask = mask_tile_padding(attn_mask, ntok, npad, max_actual_num_chunks)
-        attn_mask = ttnn.from_torch(
+        attn_mask = from_torch_host_to_device(
             attn_mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,

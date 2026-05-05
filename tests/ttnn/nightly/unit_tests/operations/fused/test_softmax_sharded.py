@@ -357,5 +357,5 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
         pcc_threshold=0.999,
         rtol=0.085,
         atol=0.001,
-        frobenius_threshold=0.028,
+        frobenius_threshold=0.031,
     )

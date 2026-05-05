@@ -4,14 +4,24 @@
 #pragma once
 
 #include "argmax_device_operation_types.hpp"
-#include "argmax_multi_core_program_factory.hpp"
-#include "argmax_single_core_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <optional>
+#include <variant>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {
+
+struct ArgMaxSingleCoreProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
+};
+
+struct ArgMaxMultiCoreProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
+};
 
 struct ArgMaxDeviceOperation {
     using operation_attributes_t = ArgmaxParams;

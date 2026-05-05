@@ -1,0 +1,34 @@
+# Tested on 1x p150.
+# MGD: tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
+
+training_config:
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
+
+  optimizer:
+    type: MorehAdamW
+    lr: 5.0e-6
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    batch_size: 2
+    micro_batch_size: 16
+    num_iterations: 1
+    gradient_accumulation_steps: 8
+    logging_steps: 1
+    checkpointing: true
+    checkpoint_interval: 5
+    prompts_to_train: 1600
+    temperature: 1.5
+    max_completion_length: 256
+    num_generations: 8
+    warmup_steps: 0
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]

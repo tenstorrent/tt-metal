@@ -208,8 +208,9 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
+        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device);
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
-            workload, runtime_id, operation_name, std::move(spec_copies));
+            workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
 
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {

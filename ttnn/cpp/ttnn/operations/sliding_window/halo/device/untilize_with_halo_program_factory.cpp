@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/types.hpp"
 
@@ -245,8 +246,18 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
             clamped_block_size_height / TILE_HEIGHT  // number of tiles in height dimension that make up a block
 
         };
-        KernelHandle untilize_kernel_id =
-            CreateKernel(program, compute_kernel_name, all_cores, ComputeConfig{.compile_args = compute_ct_args});
+        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+            get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
+        KernelHandle untilize_kernel_id = CreateKernel(
+            program,
+            compute_kernel_name,
+            all_cores,
+            ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+                .math_approx_mode = math_approx_mode,
+                .compile_args = compute_ct_args});
 
         for (int core_id = 0; core_id < cores.size(); core_id++) {
             SetRuntimeArgs(program, untilize_kernel_id, cores[core_id], {number_of_blocks_per_core[core_id]});

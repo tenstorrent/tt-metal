@@ -127,6 +127,7 @@ def test_sum_4d(device, n, c, h, w, dim):
 )
 @pytest.mark.parametrize("keepdim", [True])
 def test_sum_nd_shard(device, shapes, keepdim):
+    torch.manual_seed(0)
     dim = -2
     input_shape, shard_shape, end_x, end_y = shapes
     torch_input_tensor = torch.rand(input_shape)

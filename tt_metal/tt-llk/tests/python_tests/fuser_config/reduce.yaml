@@ -1,15 +1,21 @@
+operands:
+  - name: "input_A"
+    dims: [64, 64]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 1.0
+  - name: "reduced_output"
+    dims: [64, 64]
+    format: "Float16_b"
+
 operations:
-  - src_a: "input_A"
-    src_b: "input_B"
-    output: "reduced_output"
-    src_a_dims: [64, 64]
-    src_b_dims: [64, 64]
-    output_dims: [64, 64]
-    src_b_const_value: 1.0
-    input_format: "Float16_b"
-    output_format: "Float16_b"
+  - output: "reduced_output"
     math:
       - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
         operation: "Reduce"
         reduce_dim: "REDUCE_COL"
         reduce_pool: "MAX"

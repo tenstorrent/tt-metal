@@ -42,7 +42,7 @@ enum PoolType
     MIN,
 };
 
-enum DataCopyType
+enum class DataCopyType : std::uint8_t
 {
     A2D,
     B2D,
@@ -76,6 +76,14 @@ enum BroadcastType
     COL    = 0x1, // A - None || B - Col Broadcast
     ROW    = 0x2, // A - None || B - Row Broadcast
     SCALAR = 0x3, // A - None || B - Scalar Broadcast
+};
+
+enum class Transpose : std::uint8_t
+{
+    None      = 0,
+    IntraFace = 1,
+    InterFace = 2,
+    Both      = 3,
 };
 
 enum src_op_id_e

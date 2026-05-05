@@ -17,9 +17,8 @@ ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t s
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
-            to_from_int8,
-            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE>(
-        srca_new_operand, srcb_new_operand)));
+            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
+            to_from_int8>(srca_new_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, to_from_int8>(srca_new_operand, srcb_new_operand)));
 #endif  // TODO: AM; add Quasar implementation
 }
@@ -37,9 +36,8 @@ ALWI void reconfig_data_format(
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
-            to_from_int8,
-            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE>(
-        srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand)));
+            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
+            to_from_int8>(srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE, to_from_int8>(
         srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand)));
 #endif  // TODO: AM; add Quasar implementation
@@ -54,9 +52,8 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
-            to_from_int8,
-            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE>(
-        srca_new_operand)));
+            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
+            to_from_int8>(srca_new_operand)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, to_from_int8>(srca_new_operand)));
 #endif  // TODO: AM; add Quasar implementation
 }
@@ -70,9 +67,8 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
-            to_from_int8,
-            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE>(
-        srca_old_operand, srca_new_operand)));
+            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
+            to_from_int8>(srca_old_operand, srca_new_operand)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE, to_from_int8>(srca_old_operand, srca_new_operand)));
 #endif  // TODO: AM; add Quasar implementation
 }
@@ -86,9 +82,8 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
-            to_from_int8,
-            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE>(
-        srcb_new_operand)));
+            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
+            to_from_int8>(srcb_new_operand)));
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, to_from_int8>(srcb_new_operand)));
 #endif  // TODO: AM; add Quasar implementation
 }
@@ -102,9 +97,8 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
-            to_from_int8,
-            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE>(
-        srcb_old_operand, srcb_new_operand)));
+            is_tile_dim_reconfig_en ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE,
+            to_from_int8>(srcb_old_operand, srcb_new_operand)));
     MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE, to_from_int8>(srcb_old_operand, srcb_new_operand)));
 #endif  // TODO: AM; add Quasar implementation
 }

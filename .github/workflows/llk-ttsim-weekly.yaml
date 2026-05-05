@@ -1,0 +1,211 @@
+name: 🗓️ LLK ttsim Weekly
+
+# Standalone scheduler for the LLK ttsim regression suite. Runs the full
+# regression against both architectures (blackhole + wormhole) on a
+# hardware-less runner. ttsim is still under active development so the
+# expectation is that many tests will fail — this workflow is strictly
+# *informational*: the job status stays neutral, no pass/fail checks are
+# published, and the Slack digest uses neutral language ("N/M passing")
+# rather than success/failure banners. The deliverable is the HTML report
+# uploaded as a per-arch artifact.
+#
+# Triggers:
+#   - on-demand via the Actions tab (workflow_dispatch)
+#   - weekly cron at 02:00 UTC every Friday
+on:
+  workflow_dispatch:
+    inputs:
+      workers:
+        description: "xdist workers per run"
+        required: false
+        default: "10"
+        type: string
+      per_test_timeout_seconds:
+        description: "Per-test timeout in seconds"
+        required: false
+        default: "300"
+        type: string
+      timeout_minutes:
+        description: "Per-architecture job timeout in minutes"
+        required: false
+        default: "120"
+        type: string
+  schedule:
+    # Fridays at 02:00 UTC. GitHub evaluates cron in UTC (note: scheduled
+    # runs can lag by a few minutes during peak load — don't rely on
+    # sub-hour precision).
+    - cron: "0 2 * * 5"
+
+permissions:
+  # `packages: write` is required by build-docker-artifact.yaml to push
+  # the LLK CI image tag if it doesn't already exist. No `checks: write`
+  # on purpose — see llk-ttsim-regression.yaml for rationale.
+  contents: read
+  packages: write
+
+jobs:
+  build-images:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+
+  ttsim-regression:
+    name: "🧪 LLK ttsim regression"
+    needs: build-images
+    uses: ./.github/workflows/llk-ttsim-regression.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      # Defaults on workflow_call inputs are only used when the caller omits
+      # them entirely. On workflow_dispatch inputs are strings, so cast them
+      # to the numbers the reusable workflow expects; on schedule they are
+      # empty and the `|| 'N'` fallback kicks in.
+      workers: ${{ fromJSON(inputs.workers || '10') }}
+      per_test_timeout_seconds: ${{ fromJSON(inputs.per_test_timeout_seconds || '300') }}
+      timeout_minutes: ${{ fromJSON(inputs.timeout_minutes || '120') }}
+
+  ttsim-digest:
+    name: "📊 Weekly ttsim digest"
+    runs-on: ubuntu-latest
+    # Only broadcast on scheduled runs — manual triggers are typically
+    # ad-hoc debugging and don't need Slack noise. `always()` so the job
+    # still runs when the regression reports failures (it's expected to).
+    if: always() && github.event_name == 'schedule'
+    needs: ttsim-regression
+    steps:
+      - name: Download blackhole report
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ttsim-report-blackhole
+          path: reports/blackhole
+        continue-on-error: true
+
+      - name: Download wormhole report
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ttsim-report-wormhole
+          path: reports/wormhole
+        continue-on-error: true
+
+      # Parse both arch XMLs with Python stdlib (no extra dependency) and
+      # emit the rendered Slack message body as a step output. The channel
+      # id and token are intentionally kept on the `Send Slack digest`
+      # step (matching .github/actions/report-failure's pattern) so it's
+      # obvious at-a-glance where the message is going.
+      - name: Build Slack message text
+        id: message
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+          REGRESSION_RESULT: ${{ needs.ttsim-regression.result }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > message.txt
+          import os
+          import re
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          REPO = os.environ["REPO"]
+          SERVER = os.environ["SERVER"]
+          RUN_ID = os.environ["RUN_ID"]
+          REG_RESULT = os.environ.get("REGRESSION_RESULT", "unknown")
+
+          RUN_URL = f"{SERVER}/{REPO}/actions/runs/{RUN_ID}"
+
+          # Read ttsim version from the pin file bundled in either artifact.
+          TTSIM_VERSION = "unknown"
+          for candidate in (Path("reports/blackhole/ttsim-version"),
+                            Path("reports/wormhole/ttsim-version")):
+              if candidate.is_file():
+                  for line in candidate.read_text().splitlines():
+                      m = re.match(r"ttsim_version=['\"]?([\w.]+)['\"]?", line.strip())
+                      if m:
+                          TTSIM_VERSION = m.group(1)
+                          break
+                  break
+
+          def summarize(xml_path: Path):
+              if not xml_path.is_file():
+                  return None
+              root = ET.parse(xml_path).getroot()
+              suites = list(root.iter("testsuite")) if root.tag == "testsuites" else [root]
+              total = failed = skipped = 0
+              for s in suites:
+                  total   += int(s.attrib.get("tests",    0) or 0)
+                  failed  += int(s.attrib.get("failures", 0) or 0)
+                  skipped += int(s.attrib.get("skipped",  0) or 0)
+              passed = max(total - failed - skipped, 0)
+              pct = (100.0 * passed / total) if total else 0.0
+              return dict(total=total, passed=passed, failed=failed,
+                          skipped=skipped, pass_pct=pct)
+
+          archs = [
+              ("Blackhole", Path("reports/blackhole/ttsim-blackhole.xml")),
+              ("Wormhole",  Path("reports/wormhole/ttsim-wormhole.xml")),
+          ]
+
+          lines = []
+          for label, xml in archs:
+              s = summarize(xml)
+              if s is None:
+                  lines.append(f"• *{label}*: no report produced (infra error — see run logs).")
+              else:
+                  lines.append(
+                      f"• *{label}*: "
+                      f"✅ {s['passed']}/{s['total']} passing "
+                      f"({s['pass_pct']:.1f}%) · "
+                      f"❌ {s['failed']} failed · "
+                      f"⏩ {s['skipped']} skipped"
+                  )
+
+          header = f"📊 *LLK ttsim weekly digest (v{TTSIM_VERSION})* 📊"
+          if REG_RESULT != "success":
+              # Only flag infra-level issues — ttsim test failures are expected
+              # and are reflected in the counts below, not in this banner.
+              header += "  _(regression workflow did not complete cleanly — check run logs)_"
+
+          body = "\n".join([
+              header,
+              "",
+              "_Informational run. ttsim is under active development; failures reflect simulator gaps, not tt-metal regressions._",
+              "",
+              *lines,
+              "",
+              f"<{RUN_URL}|Open the run to download per-arch HTML reports.>",
+          ])
+
+          print(body, end="")
+          PY
+
+          # Multi-line step output: required HEREDOC-style fence.
+          {
+            echo 'text<<MSG_EOF'
+            cat message.txt
+            echo
+            echo 'MSG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Send Slack digest
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          # Channel id comes from repo secret `LLK_CI_STATUS_CHANNEL_ID`
+          # (same secret that .github/actions/report-failure uses, so the
+          # digest lands in the same Slack channel as the nightly report).
+          # No `attachments` — Slack renders the attachment body below the
+          # top-level `text`, which duplicated the title, and the `color`
+          # attribute is the only thing producing the colored vertical
+          # sidebar. The neutral tone is carried by the 📊 emoji and the
+          # "Informational run" disclaimer in the body instead.
+          # `toJSON` JSON-escapes newlines, quotes, and the backticks/
+          # stars in the Slack mrkdwn body.
+          payload: |
+            {
+              "channel": "${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}",
+              "text": ${{ toJSON(steps.message.outputs.text) }}
+            }

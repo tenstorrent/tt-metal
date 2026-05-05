@@ -57,6 +57,14 @@ class LightweightAssertInfo:
     arguments_and_locals: str | None = triage_field("Arguments and Locals")
 
 
+def _macro_name_start_for_needle(code_line: str, needle_index: int) -> int:
+    """Move left from the open of a macro to the first character of its name (e.g. L in LLK_ASSERT)."""
+    macro_start = needle_index
+    while macro_start > 0 and (code_line[macro_start - 1].isalnum() or code_line[macro_start - 1] == "_"):
+        macro_start -= 1
+    return macro_start
+
+
 def extract_assert_code(file: str | None, line: int | None, column: int | None) -> str:
     if file is None or line is None:
         return "?"
@@ -69,19 +77,31 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
             if not (0 <= line - 1 < len(lines)):
                 return "?wrong line number? Check the first code line in the stack trace."
             code_line = lines[line - 1]
+
+            def scan_for_needle(needle: str) -> None:
+                nonlocal start_index
+                search_from = 0
+                while True:
+                    new_index = code_line.find(needle, search_from)
+                    if new_index == -1:
+                        break
+                    macro_start = _macro_name_start_for_needle(code_line, new_index)
+                    if column is not None:
+                        if macro_start == column:
+                            start_index = new_index
+                            break
+                        if macro_start > column:
+                            # Preserve the last ASSERT-like macro before the reported column.
+                            # If none was seen yet, fall back to the first later macro so we
+                            # still avoid returning "ASSERT() not found!" for approximate columns.
+                            if start_index == -1:
+                                start_index = new_index
+                            break
+                    start_index = new_index
+                    search_from = new_index + 1
+
             start_index = -1
-            while True:
-                new_index = code_line.find("ASSERT(", start_index + 1)
-                if new_index == -1:
-                    break
-                # Walk backward to find the actual start of the macro name
-                # (e.g. "LLK_ASSERT(" -> position of 'L', not 'A')
-                macro_start = new_index
-                while macro_start > 0 and (code_line[macro_start - 1].isalnum() or code_line[macro_start - 1] == "_"):
-                    macro_start -= 1
-                if column is not None and macro_start >= column:
-                    break
-                start_index = new_index
+            scan_for_needle("ASSERT(")
             if start_index == -1:
                 return "ASSERT() not found! Check the first code line in the stack trace."
             while start_index > 0 and (code_line[start_index - 1].isalnum() or code_line[start_index - 1] == "_"):
@@ -225,6 +245,23 @@ def dump_lightweight_asserts(
                 for var in top_frame.locals:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
+            if arguments_and_locals and " = ?" in arguments_and_locals:
+
+                def _any_value_missing(vs: list[CallstackEntryVariable]) -> bool:
+                    return any(v.value is None for v in vs)
+
+                if any(
+                    _any_value_missing(vs)
+                    for vs in (
+                        top_frame.template_parameters,
+                        top_frame.arguments,
+                        top_frame.locals,
+                    )
+                ):
+                    arguments_and_locals += (
+                        "\n\n[dim]Values shown as '?' were not returned by the debugger "
+                        "(e.g. optimized out, or not in a live range at the ebreak). The source may still be correct.[/]"
+                    )
         return LightweightAssertInfo(
             kernel_name=callstack_data.dispatcher_core_data.kernel_name,
             kernel_callstack_with_message=LightweightAssertCallstackWithCode(

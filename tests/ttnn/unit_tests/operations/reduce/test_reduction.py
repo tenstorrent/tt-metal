@@ -164,7 +164,6 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
     )
 
 
-# TODO: add few more shapes, once issue #42500 is solved
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -172,7 +171,7 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
 @pytest.mark.parametrize("dim_5", [4])
 @pytest.mark.parametrize("dim_6", [6])
 @pytest.mark.parametrize("dim_7", [7])
-@pytest.mark.parametrize("dim_8", [8])
+@pytest.mark.parametrize("dim_8", [8, 32, 63])
 @pytest.mark.parametrize("dim", [[3, 7]])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8, dim, keepdim):
@@ -816,6 +815,7 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     ],
 )
 def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
+    torch.manual_seed(0)
     run_maxpool(device, input_shape, kernel_size, kernel_size, (0, 0), (1, 1))
     run_reduce_sum_h(device, 1, 32, 32, -2)
 
@@ -841,6 +841,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
+    torch.manual_seed(42)
     if op not in ("std", "var") and use_legacy:
         pytest.skip("use_legacy only applies to std and var")
 

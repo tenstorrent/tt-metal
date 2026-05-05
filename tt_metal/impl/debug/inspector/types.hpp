@@ -5,16 +5,15 @@
 #pragma once
 
 #include <chrono>
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <vector>
 
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
 namespace tt::tt_metal {
     class Inspector;
@@ -59,6 +58,7 @@ struct MeshWorkloadRuntimeEntry {
     uint64_t runtime_id = 0;
     std::string_view operation_name;
     std::vector<TensorSpec> tensor_specs;
+    std::optional<distributed::MeshTraceId> trace_id;
 };
 
 std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs);

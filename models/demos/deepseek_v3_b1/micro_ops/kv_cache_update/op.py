@@ -53,7 +53,7 @@ class KVCacheUpdate:
         nope_cache_tensor,
         rope_cache_tensor,
         full_kv_cache_tensor,
-        position_ids_tensor: ttnn.Tensor,
+        metadata_tensor: ttnn.Tensor,
         output_tensor,
         knope_grid,
     ):
@@ -97,6 +97,10 @@ class KVCacheUpdate:
         kv_rmsnorm_page_size = TILE_16x32.get_tile_size(ttnn.bfloat16)
         nope_mcast_data_size_bytes = KV_RMSNORM_NUM_TILES * kv_rmsnorm_page_size
 
+        kv_tile_h, kv_tile_w = full_kv_cache_tensor.get_tile().tile_shape
+        kv_cache_pages_per_slot = (full_kv_cache_tensor.padded_shape[-2] // kv_tile_h) * (
+            full_kv_cache_tensor.padded_shape[-1] // kv_tile_w
+        )
         ncrisc_named = [
             ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
             ("krope_output_cb", KROPE_OUTPUT_CB),
@@ -104,6 +108,7 @@ class KVCacheUpdate:
             ("kv_cache_intermed_sync_cb", KV_CACHE_INTERMED_SYNC_CB),
             ("kv_cache_output_cb", KV_CACHE_OUTPUT_CB),
             ("kv_cache_grid_start_y", list(rope_core_grid.ranges())[0].start.y),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
             ("kv_cache_cur_pos_ready_semaphore_id", 0),
             ("nope_mcast_dest_noc_start_x", nope_mcast_dest_start_core.x),
             ("nope_mcast_dest_noc_start_y", nope_mcast_dest_start_core.y),
@@ -119,6 +124,7 @@ class KVCacheUpdate:
             ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
             ("kv_cache_grid_start_y", list(rope_core_grid.ranges())[0].start.y),
             ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
         ]
         trisc_named = [
             ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
@@ -203,9 +209,9 @@ class KVCacheUpdate:
             initial_value=0,
         )
 
-        pos_addr = position_ids_tensor.buffer_address()
-        ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), pos_addr]
-        brisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), pos_addr]
+        metadata_addr = metadata_tensor.buffer_address()
+        ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), metadata_addr]
+        brisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), metadata_addr]
 
         knope_grid_width = knope_grid_range.grid_size().x
         knope_core_index_desc = PerCoreCompileTimeDescriptor(
@@ -263,7 +269,7 @@ class KVCacheUpdate:
                 nope_mcast_receiver_semaphore_descriptor,
             ],
         )
-        io_tensors = [nope_cache_tensor, rope_cache_tensor, position_ids_tensor, output_tensor]
+        io_tensors = [nope_cache_tensor, rope_cache_tensor, metadata_tensor, output_tensor]
 
         output = ttnn.generic_op(io_tensors, program_descriptor)
 

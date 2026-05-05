@@ -57,6 +57,17 @@ class ModelArgs(TTModelArgs):
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
     ):
+        # Resolve HF_MODEL to a local snapshot path before super().__init__() so that
+        # all HF calls (AutoConfig, tokenizer, weights) skip the refs/main lookup,
+        # which is absent on some CI machines.  Left in env so sub-tests in the same
+        # pytest session (e.g. siglip/test_attention.py) also get the absolute path.
+        hf_model = os.environ.get("HF_MODEL", "")
+        if hf_model and not os.path.isabs(hf_model):
+            snapshot = ModelArgs._resolve_hf_snapshot(hf_model)
+            if snapshot:
+                logger.info(f"[Gemma3] Resolved HF model '{hf_model}' to snapshot: {snapshot}")
+                os.environ["HF_MODEL"] = str(snapshot)
+
         super().__init__(
             mesh_device,
             instruct=instruct,
@@ -70,6 +81,26 @@ class ModelArgs(TTModelArgs):
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         self.padded_vocab_size = 262400
+
+    @staticmethod
+    def _resolve_hf_snapshot(hf_model_name):
+        hf_cache = os.path.normpath(
+            os.environ.get("HF_HUB_CACHE")
+            or os.path.join(os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub")
+        )
+        model_slug = "models--" + hf_model_name.replace("/", "--")
+        snapshots_dir = os.path.normpath(os.path.join(hf_cache, model_slug, "snapshots"))
+        # Prevent path traversal: ensure the resolved path stays within hf_cache.
+        if not snapshots_dir.startswith(hf_cache + os.sep):
+            return None
+        if not os.path.isdir(snapshots_dir):
+            return None
+        snaps = [
+            os.path.join(snapshots_dir, s)
+            for s in os.listdir(snapshots_dir)
+            if os.path.isdir(os.path.join(snapshots_dir, s))
+        ]
+        return max(snaps, key=os.path.getmtime) if snaps else None
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
@@ -263,49 +294,6 @@ class ModelArgs(TTModelArgs):
                 state_dict.pop(k)
 
         return state_dict
-
-    def create_tokenizer(self):
-        from transformers import AutoTokenizer
-
-        # Mapping of base model names to their known tokenizer paths
-        # These are the original models that have proper tokenizers
-        base_model_tokenizer_mapping = {
-            "gemma-3-4b-it": "google/gemma-3-4b-it",
-        }
-
-        logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
-        logger.info(f"Model name: {self.model_name}")
-        logger.info(f"Base model name: {self.base_model_name}")
-
-        try:
-            # Try to load tokenizer from the original model path
-            # If there is no Processor, it will return Tokenizer (useful for multimodal models)
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
-            logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
-        except Exception as e:
-            logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
-
-            # Try to use base model tokenizer as fallback
-            fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
-
-            if fallback_tokenizer_path:
-                logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
-                try:
-                    tokenizer = AutoTokenizer.from_pretrained(
-                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
-                    )
-                    logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
-                except Exception as fallback_e:
-                    logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
-                    raise fallback_e
-            else:
-                logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
-                raise e
-
-        # Add meta-compatible stop token list to the HF tokenizer
-        if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
-            tokenizer.stop_tokens = [tokenizer.eos_token_id]
-        return tokenizer
 
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)

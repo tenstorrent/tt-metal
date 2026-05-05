@@ -46,7 +46,7 @@ on:
 
       # ── SKU selection ─────────────────────────────────────────────
       skus:
-        description: "SKUs to test (comma-separated). Options: all, wh_n150, wh_n300, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf"
+        description: "SKUs to test (comma-separated). Options: all, wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf"
         required: false
         type: string
         default: "all"
@@ -116,8 +116,8 @@ jobs:
       - name: Resolve SKU selection
         id: resolve-skus
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
-          VALID_SKUS="wh_n150 wh_n300 wh_llmbox_perf wh_galaxy wh_galaxy_perf"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
+          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf"
           SKU_INPUT="${{ inputs.skus || 'all' }}"
 
           # Trim leading/trailing whitespace from the entire input
@@ -134,7 +134,7 @@ jobs:
               # Skip empty tokens (e.g. from trailing commas)
               [[ -z "$item" ]] && continue
               if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
-                echo "::error::Invalid SKU '$item'. Valid options: all, wh_n150, wh_n300, wh_llmbox_perf, wh_galaxy"
+                echo "::error::Invalid SKU '$item'. Valid options: all, wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf"
                 exit 1
               fi
               SKUS="${SKUS:+$SKUS,}$item"

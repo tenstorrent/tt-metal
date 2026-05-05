@@ -11,6 +11,7 @@ from typing import Optional, Tuple
 import torch
 import ttnn
 from ttnn import ShardTensor2dMesh
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import replicate_with_topology
 
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
@@ -29,7 +30,10 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
-NUM_DEVICES = ttnn.get_num_devices()
+try:
+    NUM_DEVICES = ttnn.get_num_devices()
+except Exception:
+    NUM_DEVICES = 0  # Headless runner (vector generation only)
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
@@ -100,12 +104,133 @@ def _parse_shard_dims_from_placement(tensor_placement):
     if isinstance(placement, list):
         placement = " ".join(str(p) for p in placement)
     dims = []
-    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement):
+    for m in re.finditer(r"PlacementShard\((?:dim=)?(-?\d+)\)|PlacementReplicate", placement):
         if m.group(1) is not None:
             dims.append(int(m.group(1)))
         else:
             dims.append(None)
     return tuple(dims) if len(dims) == 2 else None
+
+
+_ABSENT = "__ABSENT__"
+
+
+def _was_traced(value):
+    """Return True if the loader marker indicates the kwarg WAS originally traced.
+
+    ``"__ABSENT__"`` means the master config did not include this kwarg.
+    A Python ``None`` may mean either "explicitly None" (when the key was
+    in the vector) or "default" (when it wasn't). Callers must combine this
+    check with extra context (e.g., presence of unpacked tensor fields)
+    to disambiguate when needed.
+    """
+    return value != _ABSENT
+
+
+def _torch_dtype_from_string(dtype_str):
+    """Map a TTNN/PyTorch dtype string to a torch dtype."""
+    s = str(dtype_str)
+    if "FLOAT32" in s or "float32" in s:
+        return torch.float32
+    if "BFLOAT16" in s or "bfloat16" in s:
+        return torch.bfloat16
+    if "FLOAT16" in s or "float16" in s:
+        return torch.float16
+    if "INT32" in s or "int32" in s:
+        return torch.int32
+    if "UINT32" in s or "uint32" in s:
+        return torch.int32  # torch lacks uint32; use int32 placeholder
+    return torch.bfloat16
+
+
+def _ttnn_dtype_from_string(dtype_str):
+    s = str(dtype_str)
+    if "FLOAT32" in s:
+        return ttnn.float32
+    if "BFLOAT16" in s:
+        return ttnn.bfloat16
+    if "FLOAT16" in s:
+        return ttnn.float16
+    if "INT32" in s:
+        return ttnn.int32
+    if "UINT32" in s:
+        return ttnn.uint32
+    return ttnn.bfloat16
+
+
+def _ttnn_layout_from_string(layout_str):
+    s = str(layout_str)
+    if "ROW_MAJOR" in s:
+        return ttnn.ROW_MAJOR_LAYOUT
+    return ttnn.TILE_LAYOUT
+
+
+def _parse_shape_str(s):
+    """Parse a tuple/list-shape value, accepting strings like '(1, 1, 75776, 64)'."""
+    if isinstance(s, (list, tuple)):
+        return tuple(int(x) for x in s)
+    if isinstance(s, str):
+        nums = re.findall(r"-?\d+", s)
+        return tuple(int(x) for x in nums)
+    raise ValueError(f"Cannot parse shape from {s!r}")
+
+
+def _v2_memory_config_to_ttnn(mc):
+    """Convert a V2 vector memory_config dict to a real ttnn.MemoryConfig."""
+    if mc is None or mc == _ABSENT:
+        return None
+    if isinstance(mc, ttnn.MemoryConfig):
+        return mc
+    data = mc.get("data", mc) if isinstance(mc, dict) else {}
+    buf = str(data.get("buffer_type", "DRAM"))
+    layout = str(data.get("memory_layout", "INTERLEAVED"))
+    bt = ttnn.BufferType.L1 if "L1" in buf else ttnn.BufferType.DRAM
+    if "INTERLEAVED" in layout:
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, bt)
+    return ttnn.DRAM_MEMORY_CONFIG
+
+
+def _build_persistent_output_buffer(
+    per_device_shape, dtype_str, layout_str, mem_config_dict, tensor_placement, device, mesh_shape
+):
+    """Build a real persistent_output_buffer tensor matching the traced spec.
+
+    The traced ``persistent_output_buffer.original_shape`` is the per-device
+    shape after the gather (master records per-device sizes). To create a
+    matching tt-tensor, scale per-device shape up to the global shape by the
+    sharded mesh axes, then map via ShardTensor2dMesh with the same dims.
+    """
+    torch_dtype = _torch_dtype_from_string(dtype_str)
+    ttnn_dtype = _ttnn_dtype_from_string(dtype_str)
+    ttnn_layout = _ttnn_layout_from_string(layout_str)
+    mem_config = _v2_memory_config_to_ttnn(mem_config_dict)
+
+    shard_dims = _parse_shard_dims_from_placement(tensor_placement)
+    per_device_shape = list(per_device_shape)
+    if shard_dims is not None and len(shard_dims) == 2:
+        global_shape = list(per_device_shape)
+        for axis_idx, sd in enumerate(shard_dims):
+            if sd is not None:
+                esd = sd if sd >= 0 else len(per_device_shape) + sd
+                global_shape[esd] *= mesh_shape[axis_idx]
+        torch_global = torch.zeros(global_shape, dtype=torch_dtype)
+        return ttnn.from_torch(
+            torch_global,
+            layout=ttnn_layout,
+            dtype=ttnn_dtype,
+            memory_config=mem_config,
+            device=device,
+            mesh_mapper=ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
+        )
+    torch_global = torch.zeros(per_device_shape, dtype=torch_dtype)
+    return ttnn.from_torch(
+        torch_global,
+        layout=ttnn_layout,
+        dtype=ttnn_dtype,
+        memory_config=mem_config,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
 
 
 GENERALITY_PARAMETERS = {
@@ -265,7 +390,7 @@ def run(
     input_a_memory_config=None,
     input_a_tensor_placement=None,
     memory_config=None,  # output memory_config
-    persistent_output_buffer=None,
+    persistent_output_buffer=_ABSENT,
     multi_device_global_semaphore=None,  # From traced config (ignored, we create fresh)
     barrier_semaphore=None,  # From traced config (ignored, we create fresh)
     mesh_device=None,  # From traced config (ignored, we use device param)
@@ -278,6 +403,17 @@ def run(
     device,  # unused
     **kwargs,
 ) -> list:
+    absent_keys = kwargs.get("__absent_keys__") or set()
+    if not isinstance(absent_keys, (set, frozenset, list, tuple)):
+        absent_keys = set()
+    else:
+        absent_keys = set(absent_keys)
+    persistent_output_buffer_was_provided = (
+        persistent_output_buffer != _ABSENT and "persistent_output_buffer" not in absent_keys
+    )
+    if not persistent_output_buffer_was_provided:
+        persistent_output_buffer = None
+
     # Check if this is a model_traced run (V2 format has input_a_shape)
     is_model_traced = input_a_shape is not None
 
@@ -285,6 +421,10 @@ def run(
         if NUM_DEVICES < 2:
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
             return [(True, "Skipped: requires 2+ devices"), 0.0]
+
+        # The loader remaps dim -> arg2 via _NAMED_TO_POSITIONAL_REMAP
+        if dim is None:
+            dim = kwargs.get("arg2")
 
         input_shape = input_a_shape
         input_dtype = input_a_dtype
@@ -376,37 +516,24 @@ def run(
         shard_dims = _parse_shard_dims_from_placement(input_a_tensor_placement) if is_2d_mesh else None
 
         if shard_dims is not None:
-            # Build a global tensor whose shape accounts for sharding on
-            # ALL mesh axes.  input_shape is the per-device shape, so each
-            # sharded dim must be scaled by the number of devices on that axis.
+            # V2 vectors store input_shape as the *global* pre-shard tensor
+            # shape; from_torch + ShardTensor2dMesh then carves it into
+            # per-shard chunks. Master records the per-shard shape, so the
+            # sweep tensor's `tensor.shape` after sharding must match
+            # input_shape / mesh_shape on each sharded axis. Use input_shape
+            # directly as the global tensor — do NOT scale by mesh size.
             global_shape = list(input_shape)
-            for axis_idx, sd in enumerate(shard_dims):
-                if sd is not None:
-                    esd = sd if sd >= 0 else len(input_shape) + sd
-                    global_shape[esd] *= mesh_shape[axis_idx]
-
             torch_global = torch.rand(global_shape).bfloat16()
 
-            # Golden reference for device 0 after all_gather:
-            # The op concatenates per-device chunks along `dim` (effective_dim),
-            # which may differ from the shard dimension on cluster_axis.
-            # Extract device-0's row/column of chunks and concat along `dim`.
+            # The traced model path below uses replicate_with_topology: every
+            # chip receives the full logical tensor while preserving the
+            # model's sharded topology metadata for trace matching. Mirror the
+            # resulting all_gather semantics in the golden by repeating the
+            # logical tensor across the gathered cluster axis.
             cluster_size = mesh_shape[cluster_axis]
-            chunks = []
-            for i in range(cluster_size):
-                slices = [slice(None)] * len(global_shape)
-                for axis_idx, sd in enumerate(shard_dims):
-                    if sd is not None:
-                        esd = sd if sd >= 0 else len(input_shape) + sd
-                        size = input_shape[esd]
-                        if axis_idx == cluster_axis:
-                            slices[esd] = slice(i * size, (i + 1) * size)
-                        else:
-                            # Device 0's slice on non-gathered axes
-                            slices[esd] = slice(0, size)
-                chunks.append(torch_global[tuple(slices)])
-
-            torch_reference = torch.cat(chunks, dim=effective_dim)
+            repeats = [1] * len(global_shape)
+            repeats[effective_dim] = cluster_size
+            torch_reference = torch_global.repeat(*repeats)
             torch_input = torch_global
         else:
             # 1D mesh or unparseable placement: shard only along gather dim.
@@ -448,14 +575,29 @@ def run(
                         mapper_dims = (None, effective_dim)
                     else:
                         mapper_dims = (effective_dim, None)
-                    tt_input = ttnn.from_torch(
-                        torch_input,
-                        layout=layout,
-                        dtype=input_dtype,
-                        memory_config=input_memory_config,
-                        mesh_mapper=ShardTensor2dMesh(device, dims=mapper_dims, mesh_shape=mesh_shape),
-                        device=device,
-                    )
+                    # Master's all_gather input was created via replicate_with_topology:
+                    # data is the full pre-shard tensor on every chip with a [Replicate,
+                    # Shard(-1)] topology stamped. Going through ShardTensor2dMesh would
+                    # actually shard to per-chip slices and shrink original_shape by mesh
+                    # axis size, so use replicate_with_topology to match master.
+                    if input_a_tensor_placement:
+                        tt_input = replicate_with_topology(
+                            torch_input,
+                            device,
+                            input_dtype,
+                            layout,
+                            input_memory_config,
+                            input_a_tensor_placement,
+                        )
+                    else:
+                        tt_input = ttnn.from_torch(
+                            torch_input,
+                            layout=layout,
+                            dtype=input_dtype,
+                            memory_config=input_memory_config,
+                            mesh_mapper=ShardTensor2dMesh(device, dims=mapper_dims, mesh_shape=mesh_shape),
+                            device=device,
+                        )
                 else:
                     tt_input = ttnn.from_torch(
                         torch_input,
@@ -492,71 +634,90 @@ def run(
             worker_sub_device_id = ttnn.SubDeviceId(0)
             sub_device_stall_group = [worker_sub_device_id]
 
-            # Set sub-device stall group
             device.set_sub_device_stall_group(sub_device_stall_group)
 
-            # Create semaphores for CCL operations - one set per iteration
             ccl_semaphore_handles = [
                 [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
                 for _ in range(num_iters)
             ]
 
-            # Create barrier semaphore if needed
             barrier_semaphore_handles = []
             if barrier_semaphore is not None:
                 barrier_semaphore_handles = [
                     ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
                 ]
 
-            # Persistent output buffers are not created for model_traced configs.
-            # They are a performance optimization (for tracing) but not required
-            # for correctness.  Creating them here is problematic because the
-            # traced input memory_config (often sharded) may not fit the gathered
-            # output shape, and the C++ op requires the persistent buffer's memory
-            # layout to match the input's.
             persistent_output_buffers = []
+
+            # Pre-compute traced-presence flags for the model_traced branch.
+            # We rebuild kwargs to mirror exactly what the master trace recorded:
+            # only pass kwargs the model originally passed (some models pass
+            # `memory_config` and `mesh_device`, others pass `persistent_output_buffer`,
+            # others pass CCL hint params). Distinguishing "explicit None" from
+            # "absent" requires looking at unpacked tensor fields when applicable.
+            if is_model_traced:
+                memory_config_was_traced = memory_config is not None and _was_traced(memory_config)
+                mesh_device_was_traced = mesh_device is not None and _was_traced(mesh_device)
+
+                pob_shape_kw = kwargs.get("persistent_output_buffer_shape", _ABSENT)
+                pob_dtype_kw = kwargs.get("persistent_output_buffer_dtype", _ABSENT)
+                pob_layout_kw = kwargs.get("persistent_output_buffer_layout", _ABSENT)
+                pob_mem_config_kw = kwargs.get("persistent_output_buffer_memory_config", _ABSENT)
+                pob_placement_kw = kwargs.get("persistent_output_buffer_tensor_placement", _ABSENT)
+                # PoB-tensor case: shape was unpacked (master had a real tensor).
+                pob_tensor_was_traced = pob_shape_kw not in (_ABSENT, None)
+                # PoB-explicit-None case: the kwarg was present in the master
+                # vector with value None. The runner's __absent_keys__ marker is
+                # the authoritative way to distinguish that from a missing kwarg.
+                pob_explicit_none = (
+                    not pob_tensor_was_traced
+                    and persistent_output_buffer is None
+                    and persistent_output_buffer_was_provided
+                )
 
             for i in range(num_iters):
                 try:
                     start_time = start_measuring_time()
 
                     if is_model_traced:
-                        # Build kwargs matching the reference test pattern
-                        # (test_minimal_all_gather_async.py::run_all_gather_impl).
-                        # subdevice_id is always passed; persistent_output_buffer
-                        # is created locally (not from traced JSON).
-                        # Use the persistent_buffer overload which accepts
-                        # cluster_axis as a keyword arg.  The mesh_device
-                        # overload requires positional args in a specific order
-                        # and is not needed here — the op infers the mesh from
-                        # the input tensor.
+                        # Build op_kwargs to mirror exactly the model trace's kwarg set.
                         op_kwargs = {
+                            "dim": dim,
+                            "multi_device_global_semaphore": ccl_semaphore_handles[i],
                             "num_links": num_links,
                             "topology": topology,
-                            "subdevice_id": worker_sub_device_id,
+                            "cluster_axis": cluster_axis,
                         }
-                        if cluster_axis is not None:
-                            op_kwargs["cluster_axis"] = cluster_axis
-                        if output_memory_config is not None:
+
+                        if memory_config_was_traced:
                             op_kwargs["memory_config"] = output_memory_config
-                        if barrier_semaphore_handles:
-                            op_kwargs["barrier_semaphore"] = barrier_semaphore_handles[i]
-                        if chunks_per_sync is not None:
-                            op_kwargs["chunks_per_sync"] = chunks_per_sync
-                        if num_workers_per_link is not None:
-                            op_kwargs["num_workers_per_link"] = num_workers_per_link
-                        if num_buffers_per_channel is not None:
-                            op_kwargs["num_buffers_per_channel"] = num_buffers_per_channel
-                        if use_broadcast is not None:
-                            op_kwargs["use_broadcast"] = use_broadcast
-                        persistent_buf = persistent_output_buffers[i] if persistent_output_buffers else None
-                        tt_out_tensor = ttnn.experimental.all_gather_async(
-                            tt_input,
-                            persistent_buf,
-                            dim,
-                            ccl_semaphore_handles[i],
-                            **op_kwargs,
-                        )
+                        if mesh_device_was_traced:
+                            op_kwargs["mesh_device"] = device
+
+                        # Optional CCL hint params: only pass when present in master.
+                        if _was_traced(chunks_per_sync) and chunks_per_sync is not None:
+                            op_kwargs["chunks_per_sync"] = int(chunks_per_sync)
+                        if _was_traced(num_workers_per_link) and num_workers_per_link is not None:
+                            op_kwargs["num_workers_per_link"] = int(num_workers_per_link)
+                        if _was_traced(num_buffers_per_channel) and num_buffers_per_channel is not None:
+                            op_kwargs["num_buffers_per_channel"] = int(num_buffers_per_channel)
+
+                        if pob_tensor_was_traced:
+                            pob_tensor = _build_persistent_output_buffer(
+                                per_device_shape=_parse_shape_str(pob_shape_kw),
+                                dtype_str=pob_dtype_kw,
+                                layout_str=pob_layout_kw,
+                                mem_config_dict=pob_mem_config_kw,
+                                tensor_placement=pob_placement_kw if isinstance(pob_placement_kw, dict) else None,
+                                device=device,
+                                mesh_shape=mesh_shape,
+                            )
+                            op_kwargs["persistent_output_buffer"] = pob_tensor
+                        elif pob_explicit_none:
+                            # Master had `persistent_output_buffer=None` explicitly.
+                            op_kwargs["persistent_output_buffer"] = None
+
+                        tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
                     else:
                         tt_out_tensor = ttnn.experimental.all_gather_async(
                             tt_input,

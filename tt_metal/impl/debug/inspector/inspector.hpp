@@ -6,10 +6,10 @@
 
 #include <memory>
 #include <optional>
-#include <vector>
 #include <string>
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
 
@@ -65,7 +65,9 @@ public:
         const distributed::MeshWorkloadImpl* mesh_workload,
         uint64_t runtime_id,
         std::string_view operation_name,
-        std::vector<TensorSpec> tensor_specs) noexcept;
+        std::vector<TensorSpec> tensor_specs,
+        std::optional<distributed::MeshTraceId> trace_id = std::nullopt) noexcept;
+    static void release_trace(distributed::MeshTraceId trace_id) noexcept;
 
     // static method for logging dispatch core info
     static void set_dispatch_core_info(

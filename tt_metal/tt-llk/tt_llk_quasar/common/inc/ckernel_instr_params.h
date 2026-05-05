@@ -126,6 +126,12 @@ struct p_ind
     constexpr static std::uint32_t LD_8bit  = 3;
 };
 
+struct p_mov
+{
+    constexpr static std::uint32_t DEST_NORM    = 0x0;
+    constexpr static std::uint32_t DEST_32B_LOW = 0x1;
+};
+
 struct p_movd2a
 {
     constexpr static std::uint32_t MOV_1_ROW  = 0x0;
@@ -141,6 +147,9 @@ struct p_movd2b
 
     constexpr static std::uint32_t SRC_ROW16_OFFSET = 0x10;
     constexpr static std::uint32_t SRC_ROW32_OFFSET = 0x20;
+
+    constexpr static std::uint32_t TRANSPOSE_OFF = 0x0;
+    constexpr static std::uint32_t TRANSPOSE_ON  = 0x1;
 };
 
 struct p_movb2a
@@ -153,6 +162,12 @@ struct p_movb2a
     constexpr static std::uint32_t SRCA_ZERO_OFFSET  = 0x0;
     constexpr static std::uint32_t SRCB_ROW16_OFFSET = 0x10;
     constexpr static std::uint32_t SRCB_ROW32_OFFSET = 0x20;
+};
+
+struct p_movb2d
+{
+    constexpr static std::uint32_t BCAST_OFF = 0x0;
+    constexpr static std::uint32_t BCAST_ON  = 0x1;
 };
 
 struct p_mov_src_to_dest

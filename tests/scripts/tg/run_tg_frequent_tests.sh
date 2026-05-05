@@ -46,7 +46,7 @@ run_tg_tests() {
 
   elif [[ "$1" == "mochi" ]]; then
     echo "LOG_METAL: running mochi run_tg_frequent_tests"
-    ARCH_NAME=wormhole_b0 FAKE_DEVICE=TG pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 4links-load_dit-large_latent or conv3d_1x1x1 or -4links-l768" --timeout=1500; fail+=$?
+    ARCH_NAME=wormhole_b0 FAKE_DEVICE=TG pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "(decoder and wh_8x4 and load_dit and large_latent) or conv3d_1x1x1 or (wh_8x4 and l768 and bf16)" --timeout=1500; fail+=$?
     ARCH_NAME=wormhole_b0 pytest models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq and 4x8"; fail+=$?
     ARCH_NAME=wormhole_b0 pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "4x8 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
 

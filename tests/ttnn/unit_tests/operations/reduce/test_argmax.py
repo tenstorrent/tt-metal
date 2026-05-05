@@ -65,6 +65,7 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
+    torch.manual_seed(0)
     rank = len(tensor_shape)
 
     # Create tensor based on data type

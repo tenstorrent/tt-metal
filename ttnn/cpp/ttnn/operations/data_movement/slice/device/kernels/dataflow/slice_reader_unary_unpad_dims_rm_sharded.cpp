@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t stick_size_padded = get_compile_time_arg_val(0);
@@ -20,9 +21,13 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
 
-    cb_reserve_back(cb_out0, num_sticks_unpadded);
-    uint32_t l1_read_addr = get_write_ptr(cb_in0);
-    uint32_t l1_write_addr = get_write_ptr(cb_out0);
+    // Create experimental CircularBuffers for Device 2.0 API
+    experimental::CircularBuffer cb_in(cb_in0);
+    experimental::CircularBuffer cb_out(cb_out0);
+
+    cb_out.reserve_back(num_sticks_unpadded);
+    uint32_t l1_read_addr = cb_in.get_write_ptr();
+    uint32_t l1_write_addr = cb_out.get_write_ptr();
 
     uint32_t chunk_ptr_offset = 0;
     uint32_t read_noc_xy_ptr_offset = 0;
@@ -49,5 +54,5 @@ void kernel_main() {
     }
 
     noc_async_read_barrier();
-    cb_push_back(cb_out0, num_sticks_unpadded);
+    cb_out.push_back(num_sticks_unpadded);
 }

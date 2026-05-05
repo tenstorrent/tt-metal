@@ -146,7 +146,7 @@ For multi-host tests, use **`tt-run`** with mock cluster mappings. See **README_
 - `TestClosetBox3PodTTSwitchControlPlaneInit` (world_size=3):
   ```bash
   tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto \
-         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_superpod_cluster_desc_mapping.yaml \
+         --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc_mapping.yaml \
          --mpi-args "--allow-run-as-root" \
          ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
          --gtest_filter="MultiHost.TestClosetBox3PodTTSwitchControlPlaneInit"

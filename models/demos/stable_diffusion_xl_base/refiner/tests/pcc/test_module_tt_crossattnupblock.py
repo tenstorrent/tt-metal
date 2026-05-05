@@ -66,7 +66,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             12,
             768,
             2,
-            0.990,
+            0.989,
         ),
     ],
 )

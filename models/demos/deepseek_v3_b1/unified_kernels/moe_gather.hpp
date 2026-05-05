@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "dataflow_utils.hpp"
 #include "kernel_op_api.hpp"
 #include "kernel_utils.hpp"
 
@@ -121,14 +122,16 @@ struct MoeGather {
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + offset);
                 uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
+                uint32_t input_data_addr = get_read_ptr(args.src_cb);
+                unified_kernels::noc_async_write_preprogram_all_state<true>(
+                    input_data_addr, dst_data_noc_addr, args.data_size_bytes);
+                unified_kernels::noc_async_atomic_inc_preprogram_all_state<false>(dst_semaphore_noc_addr, 1);
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
-                // Get source address from CB
-                uint32_t input_data_addr = get_read_ptr(args.src_cb);
-                noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, args.data_size_bytes);
+                unified_kernels::noc_async_write_issue_txn<true>();
                 // BH does not support posted atomics due to a bug
-                noc_semaphore_inc(dst_semaphore_noc_addr, 1);
+                unified_kernels::noc_async_atomic_inc_issue_txn<false>();
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {

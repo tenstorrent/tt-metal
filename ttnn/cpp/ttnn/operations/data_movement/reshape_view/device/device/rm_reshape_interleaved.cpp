@@ -77,7 +77,7 @@ void kernel_main() {
     cb_push_back(cb_id_in1, 1);
     cb_push_back(cb_id_in0, 1);
 
-    uint64_t dst_noc_addr = get_noc_addr(write_page, d);
+    uint64_t dst_noc_addr = d.get_noc_addr(write_page);
     uint64_t write_offset = (dst_noc_addr & OFFSET_16) + write_start_offset;
     uint64_t begin_write_offset = write_offset;
     constexpr bool can_be_clean = ((source_page_size_bytes % 16) == 0 && (dest_page_size_bytes % 16) == 0);

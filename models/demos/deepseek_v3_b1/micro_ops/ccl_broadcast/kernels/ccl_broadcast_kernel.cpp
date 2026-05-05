@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Unified CCL Broadcast kernel
-// - NCRISC: Broadcast reader (reads local data into CB)
-// - BRISC: Broadcast writer (sends to fabric / waits for data)
+// - NCRISC: Broadcast transport / forwarding
+// - BRISC: Root ingress reader
 // - TRISC: No-op (dataflow only)
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
@@ -45,7 +45,8 @@ void kernel_main() {
     using BcastCTArgs = Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_data_cb_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_is_root")>;
+        get_named_compile_time_arg_val("bcast_is_root"),
+        get_named_compile_time_arg_val("bcast_use_socket")>;
 
     // Runtime args:
     Broadcast::ReaderArgs bcast_args{};
@@ -64,10 +65,27 @@ void kernel_main() {
         bcast(bcast_args);
     };
 
-    {
-        DeviceZoneScopedN("CCL_BROADCAST_LOOP");
-        for (uint32_t i = 0; i < num_iterations; i++) {
+#if defined(COMPILE_FOR_NCRISC)
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        {
+            DeviceZoneScopedN("CCL_BROADCAST_TRANSPORT");
             body();
         }
     }
+#elif defined(COMPILE_FOR_BRISC)
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        if constexpr (BcastCTArgs::is_root) {
+            {
+                DeviceZoneScopedN("CCL_BROADCAST_READER");
+                body();
+            }
+        } else {
+            body();
+        }
+    }
+#elif defined(COMPILE_FOR_TRISC)
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        body();
+    }
+#endif
 }

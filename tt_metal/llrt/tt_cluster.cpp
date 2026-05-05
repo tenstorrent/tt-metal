@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <optional>
 #include <tt_stl/fmt.hpp>
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
@@ -232,7 +233,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
 
-    if (this->target_type_ != tt::TargetDevice::Mock) {
+    if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
         this->assert_risc_reset();
     }
 }
@@ -245,10 +246,13 @@ void Cluster::detect_arch_and_target() {
     if (this->target_type_ == tt::TargetDevice::Mock) {
         log_warning(tt::LogDevice, "Currently using mock cluster descriptor, all device driver calls will be mocked");
     }
+    if (this->target_type_ == tt::TargetDevice::Emule) {
+        log_warning(tt::LogDevice, "Using emulated device mode with memory-backed I/O");
+    }
 
     TT_FATAL(
         this->target_type_ == tt::TargetDevice::Silicon || this->target_type_ == tt::TargetDevice::Simulator ||
-            this->target_type_ == tt::TargetDevice::Mock,
+            this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule,
         "Target type={} is not supported",
         this->target_type_);
 }
@@ -272,7 +276,8 @@ void Cluster::generate_cluster_descriptor() {
             this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
             "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
     }
-    if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock) {
+    if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock ||
+        this->target_type_ == TargetDevice::Emule) {
         return;
     }
 
@@ -383,20 +388,8 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        // This is the target/desired number of mem channels per arch/device.
-        // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
-        // and assert if workload uses more than available.
-        auto discovered_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        auto grouped_chips = discovered_cluster_desc->get_chips_grouped_by_closest_mmio();
-        uint32_t max_chips_per_mmio = 0;
-        for (const auto& [mmio_device_id, chips] : grouped_chips) {
-            max_chips_per_mmio = std::max(max_chips_per_mmio, static_cast<uint32_t>(chips.size()));
-        }
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
-            .num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, max_chips_per_mmio),
-            .sdesc_path = {},
-            .target_devices = discovered_cluster_desc->get_all_chips(),
-            .cluster_descriptor = discovered_cluster_desc.get(),
+            .num_host_mem_ch_per_mmio_device = std::nullopt,  // Automatically determine number of host mem channels.
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
@@ -427,6 +420,19 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
         });
+    } else if (this->target_type_ == TargetDevice::Emule) {
+#ifdef TT_METAL_USE_EMULE
+        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
+        auto mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+
+        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+            .chip_type = tt::umd::ChipType::SWEMULE,
+            .sdesc_path = sdesc_path,
+            .cluster_descriptor = mock_cluster_desc.get(),
+        });
+#else
+        TT_FATAL(false, "TargetDevice::Emule requires building with TT_METAL_USE_EMULE=ON");
+#endif
     }
 
     this->driver_ = std::move(device_driver);
@@ -722,7 +728,11 @@ std::optional<int> Cluster::get_physical_slot(ChipId chip) const {
         log_warning(tt::LogDevice, "get_physical_slot is not supported for non-silicon devices");
         return std::nullopt;
     }
-    return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
+    umd::PCIDevice* pci_device = this->driver_->get_tt_device(chip)->get_pci_device();
+    if (pci_device == nullptr) {
+        return std::nullopt;
+    }
+    return pci_device->get_device_info().physical_slot;
 }
 
 void Cluster::deassert_risc_reset_at_core(

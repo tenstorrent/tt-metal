@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -27,21 +30,29 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb(cb_in0);
+
     uint32_t i_stick = start_id;
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         for (uint32_t h = 0; h < Ht; ++h) {
-            cb_reserve_back(cb_in0, Wt);
-            uint32_t l1_write_addr = get_write_ptr(cb_in0);
+            cb.reserve_back(Wt);
+            uint32_t l1_write_offset = 0;
             uint32_t H_curr = h == Ht - 1 ? H_per_tile_last : H_per_tile;
             for (uint32_t h_datum = 0; h_datum < H_curr; ++h_datum) {
-                tt::data_movement::common::noc_async_read_sharded(l1_write_addr, s, i_stick, 0, stick_size_bytes);
-                l1_write_addr += l1_write_offset_bytes;
+                noc.async_read(
+                    s,
+                    cb,
+                    stick_size_bytes,
+                    {.page_id = i_stick, .offset_bytes = 0},
+                    {.offset_bytes = l1_write_offset});
+                l1_write_offset += l1_write_offset_bytes;
                 i_stick += 1;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_in0, Wt);
+            noc.async_read_barrier();
+            cb.push_back(Wt);
         }
     }
 }

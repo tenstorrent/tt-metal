@@ -15,11 +15,15 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     const auto& input = tensor_args.input;
     const auto& preallocated_output = tensor_args.preallocated_output;
 
-    // validate tensor
-    operations::check_tensor(input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    // FLOAT32 is allowed so multi-stage Sum chains can carry FP32 between stages.
+    operations::check_tensor(
+        input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
     if (preallocated_output.has_value()) {
         operations::check_tensor(
-            preallocated_output.value(), "FastReduceNC", "output", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+            preallocated_output.value(),
+            "FastReduceNC",
+            "output",
+            {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::FLOAT32});
     }
 
     // validate input dim
@@ -44,9 +48,10 @@ TensorSpec FastReduceNCDeviceOperation::compute_output_specs(
     auto output_shape = input_shape;
     // last 2-dim
     output_shape[args.dim] = 1;
+    const auto output_dtype = args.output_dtype.value_or(input.dtype());
     return TensorSpec(
         output_shape,
-        operations::TensorLayout(input.dtype(), operations::PageConfig(Layout::TILE), args.output_mem_config));
+        operations::TensorLayout(output_dtype, operations::PageConfig(Layout::TILE), args.output_mem_config));
 }
 
 Tensor FastReduceNCDeviceOperation::create_output_tensors(
@@ -68,14 +73,16 @@ Tensor fast_reduce_nc(
     const std::optional<const Tensor>& output,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<DataType>& output_dtype) {
     using OperationType = ttnn::experimental::prim::FastReduceNCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .dim = dim,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
-        .sub_core_grids = sub_core_grids};
+        .sub_core_grids = sub_core_grids,
+        .output_dtype = output_dtype};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
