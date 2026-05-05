@@ -76,8 +76,9 @@ models/demos/granite_ttm_r1/
 ## Setup
 ```bash
 cd tt-metal/
-export PYTHONPATH=`pwd`
 source python_env/bin/activate
+export PYTHONPATH=`pwd`
+export TTNN_CONFIG_OVERRIDES='{"enable_model_cache": true}'
 
 uv pip install granite-tsfm
 ```
