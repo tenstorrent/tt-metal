@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@fix/job-owner-representative-note
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@temp/e2e-wire-job-owner-note-20260505
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
