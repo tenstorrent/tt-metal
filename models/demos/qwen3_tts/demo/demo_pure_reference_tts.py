@@ -774,8 +774,11 @@ def main():
 
     from models.demos.qwen3_tts.demo.reference_icl_utils import trim_reference_for_icl_conditioning
 
-    # Encode reference audio, then shorten if needed so text_len > codec_len
+    # Encode reference audio, then shorten if needed so text_len > codec_len.
+    # Keep the ORIGINAL (pre-ICL-trim) codes so we can do HF-style bleed trim
+    # after decode, matching what demo_full_ttnn_tts.py does at line 2941.
     ref_codes, audio_data = encode_reference_audio(ref_audio, main_weights)
+    ref_codes_original = ref_codes.clone()
     ref_codes, audio_data = trim_reference_for_icl_conditioning(
         ref_codes, audio_data, tokenizer, args.ref_text, args.text
     )
@@ -813,11 +816,24 @@ def main():
         print("ERROR: Failed to generate codes")
         return
 
-    # Decode to audio
-    audio = decode_audio(codes, decoder_weights)
+    # HF-style bleed trim: prepend ORIGINAL reference codes, decode the full
+    # sequence, then cut the leading samples in proportion to the prepended
+    # length. This is what demo_full_ttnn_tts.py does (line 2941) and what HF's
+    # generate_voice_clone does internally — without it, the first ~0.3 s of
+    # generated audio bleeds the reference speaker's last word.
+    ref_codes_len = ref_codes_original.shape[0]
+    codes_for_decode = torch.cat([ref_codes_original, codes], dim=0)
+    total_codes_len = codes_for_decode.shape[0]
+    print(f"  Decoding: {ref_codes_len} ref (original) + {len(codes)} gen = {total_codes_len} total frames")
 
-    # Save
+    audio = decode_audio(codes_for_decode, decoder_weights)
+
+    # Trim leading reference portion proportionally (HF formula)
     audio_np = audio.squeeze().detach().cpu().float().numpy()
+    cut_samples = int(ref_codes_len / total_codes_len * len(audio_np))
+    audio_np = audio_np[cut_samples:]
+    print(f"  HF-style trim: removed {cut_samples} samples ({cut_samples/24000:.2f}s) of reference")
+
     sf.write(args.output, audio_np, 24000)
     print(f"\nSaved to: {args.output}")
 
