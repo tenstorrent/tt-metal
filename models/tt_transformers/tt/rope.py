@@ -597,10 +597,22 @@ class HfRotarySetup(LightweightModule):
         if use_qk_fused:
             raise NotImplementedError("use_qk_fused")
         self.batch_size = batch_size
+        self.original_batch_size = batch_size
         self.head_dim = head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.prefetcher = prefetcher
+        self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
+        if self.num_devices == 32:
+            self.batch_size_per_device_group = max(
+                self.original_batch_size // list(device.shape)[shard_batch_to_mesh_dim], 1
+            )
+        else:
+            self.batch_size_per_device_group = self.original_batch_size
+        # Match RotarySetup: Wormhole Galaxy reports (8, 9) storage grid; decode rope shards use (8, 8).
+        self.core_grid = (
+            device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
+        )
 
         # Decode: ROW_MAJOR cache for embedding lookup (same numerics as prefill via get_rot_mats_hf).
         self.cos_matrix, self.sin_matrix = get_rot_mats_hf(
@@ -624,8 +636,6 @@ class HfRotarySetup(LightweightModule):
 
         self.transformation_mat = None
         self.transformation_mat_prefill = None
-
-        self.core_grid = device.compute_with_storage_grid_size()
 
     def get_rot_idxs(self, position_idxs: torch.Tensor, on_host: bool = False) -> ttnn.Tensor:
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
@@ -703,8 +713,8 @@ class HfRotarySetup(LightweightModule):
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1(padded to 32), head_dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1(padded to 32), head_dim]
 
-        batch = self.batch_size
-        num_cores = min(batch, self.core_grid.x * self.core_grid.y)
+        batch_decode = self.batch_size_per_device_group
+        num_cores = min(batch_decode, self.core_grid.x * self.core_grid.y)
         batch_grid = ttnn.num_cores_to_corerangeset(num_cores, self.core_grid, row_wise=True)
 
         mem_config = ttnn.create_sharded_memory_config(
@@ -715,9 +725,9 @@ class HfRotarySetup(LightweightModule):
             use_height_and_width_as_shard_shape=True,
         )
 
-        if batch % ttnn.TILE_SIZE != 0:
-            cos = cos[:, :batch, :, :]
-            sin = sin[:, :batch, :, :]
+        if batch_decode % ttnn.TILE_SIZE != 0:
+            cos = cos[:, :batch_decode, :, :]
+            sin = sin[:, :batch_decode, :, :]
 
         cos = ttnn.interleaved_to_sharded(cos, mem_config)
         sin = ttnn.interleaved_to_sharded(sin, mem_config)
