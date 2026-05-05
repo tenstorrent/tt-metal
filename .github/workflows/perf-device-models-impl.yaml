@@ -408,6 +408,7 @@ jobs:
           device_perf_model_name: "ops-perf-tests"
           commands: |
             pytest tests/ttnn/perf_tests/operations/conv -m models_device_performance_bare_metal --timeout=300
+            ${{ matrix.test-info.arch == 'blackhole' && 'SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_scaled_dot_product_attention_sprint.py::test_sdpa_perf_check -svv' || '' }}
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['ops-perf-tests'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
