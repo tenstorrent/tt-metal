@@ -365,6 +365,38 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
         return tt_output
 
 
+class TTNNLinearGemma4IReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
+    """BFP8_B weight variant of the col-sharded replicated-input linear, trace-enabled.
+
+    Mirrors the Step-1 pattern (TTNNLinearGemma4IColShardedWRowSharded at line 238).
+    Forward inherited from TTNNLinearIReplicatedWColSharded (lines 298-309).
+    No @trace_disabled / @deallocate_weights_after — TTNNGemma4Attention is
+    @trace_enabled (gemma4_attention.py:45).
+
+    Used for o_proj in Gemma4 (gemma4_attention.py:147 / LinearClsOut at :118).
+    Output dtype inherits from input (bf16 in production); o_proj output flows
+    into post_attention_layernorm + residual-add (gemma4_modules.py:197-200).
+    """
+
+    def move_weights_to_device_impl(self):
+        if isinstance(self.tt_weight_host, torch.Tensor):
+            self.tt_weight_host = preprocess_linear_weight(
+                self.tt_weight_host,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+            )
+        if isinstance(self.tt_bias_host, torch.Tensor):
+            self.tt_bias_host = preprocess_linear_bias(
+                self.tt_bias_host,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+            )
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+        self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+
+
 @trace_disabled
 class TTNNLinearLLamaBFloat16(TTNNLinear):
     """TTNN Linear layer optimized for LLaMA models using bfloat16."""

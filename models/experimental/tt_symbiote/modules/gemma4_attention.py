@@ -30,8 +30,8 @@ from models.experimental.tt_symbiote.modules.attention import (
 )
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
-    TTNNLinearIReplicatedWColSharded,
     TTNNLinearGemma4IColShardedWAllReduced,
+    TTNNLinearGemma4IReplicatedWColSharded,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNLocalRMSNorm
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
@@ -115,7 +115,7 @@ class TTNNGemma4Attention(TTNNModule):
         new_attn.scaling = getattr(hf_attn, "scaling", 1.0)
         new_attn.sliding_window = getattr(hf_attn, "sliding_window", None)
 
-        LinearClsOut = TTNNLinearIReplicatedWColSharded if distributed else TTNNLinear
+        LinearClsOut = TTNNLinearGemma4IReplicatedWColSharded if distributed else TTNNLinear
 
         q_weight = hf_attn.q_proj.weight.data.clone()
         k_weight = hf_attn.k_proj.weight.data.clone()
