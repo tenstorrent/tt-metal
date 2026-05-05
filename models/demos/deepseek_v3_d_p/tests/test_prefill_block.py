@@ -137,7 +137,6 @@ def test_prefill_block(
 
     init_checker(cache_dir)
     ttnn_cache_complete = TtPrefillBlock.check_cache_complete(cache_dir, layer_idx, is_dense)
-    torch_weights_cache = cache_dir / "torch_weights.pt"
     torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
 
     need_hf_model = not ttnn_cache_complete or (
@@ -158,10 +157,6 @@ def test_prefill_block(
         hf_sd = hf_model.state_dict()
         state_dict = extract_layer_state_dict(hf_sd, layer_idx, hf_model.layers[layer_idx])
         profiler.end("weights_creation")
-
-        if not torch_weights_cache.exists():
-            logger.info(f"Saving torch weights to {torch_weights_cache}")
-            torch.save(state_dict, torch_weights_cache)
     else:
         logger.info("TTNN cache complete, skipping torch weight creation")
         state_dict = {}
