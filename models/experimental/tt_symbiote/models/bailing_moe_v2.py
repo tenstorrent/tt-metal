@@ -4,6 +4,8 @@
 
 """TTNN BailingMoeV2 Model implementation."""
 
+import logging
+import os
 from typing import Optional, List
 
 import torch
@@ -15,6 +17,55 @@ from transformers.modeling_attn_mask_utils import (
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
+
+logger = logging.getLogger(__name__)
+
+
+# Cross-request prefill sync barrier (mirrors gemma4_text.py).
+#
+# When this model is driven by an asynchronous serving stack (e.g. vLLM with
+# read_from_device=False decode), the FDMeshCommandQueue accumulates work
+# across all decode steps of one request and is only drained at the end of
+# the request when its final token is read back to host. If the next
+# request's prefill begins before that drain completes, the in-flight decode
+# ops can race with the prefill ops issued by the new request.
+#
+# Empirically, on Ling-mini-2.0 (T3K, FABRIC_1D) this race manifests as a
+# deterministic deadlock during the warmup loop's transition from
+# prefill ISL=128 to prefill ISL=1024: py-spy shows the engine stuck inside
+# tt::umd::SiliconTlbWindow::read_block on the FDMeshCommandQueue while
+# enqueueing ttnn::experimental::rotary_embedding_llama. The hang is in the
+# C++ TTNN runtime, not in Python, so the Python-side prefill watchdog
+# cannot fire.
+#
+# We bracket the prefill compute path with two ttnn.synchronize_device
+# calls:
+#   1. Before the decoder layer loop when seq_len > 1 (prefill): drains any
+#      pending work from the previous request's async-decode pipeline (or,
+#      during warmup, from the previous warmup ISL).
+#   2. After the final norm and BEFORE the mtp_layers loop: drains any
+#      latent ops queued during the main decoder so they cannot leak into
+#      the MTP layers or the first decode of this same request.
+#
+# Each sync costs ~0.7-1.1 ms on T3K (negligible relative to prefill).
+#
+# Behaviour is ON by default and can be disabled via env var:
+#   TT_SYMBIOTE_LING_PREFILL_SYNC=1   enable barriers (default)
+#   TT_SYMBIOTE_LING_PREFILL_SYNC=0   disable
+_PREFILL_SYNC_ENABLED = os.environ.get("TT_SYMBIOTE_LING_PREFILL_SYNC", "1") == "1"
+
+
+def _sync_device_safely(device, label: str) -> None:
+    """Drain the FDMeshCommandQueue, never raising into the model's forward.
+
+    ttnn.synchronize_device wraps the C++ runtime; if it fails for any
+    reason (e.g. mesh teardown during shutdown) we log and continue rather
+    than abort the inference call.
+    """
+    try:
+        ttnn.synchronize_device(device)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("ttnn.synchronize_device(%s) failed: %s", label, exc)
 
 
 class MoeV2ModelOutputWithPast(MoeModelOutputWithPast):
@@ -169,6 +220,12 @@ class TTNNBailingMoeV2Model(TTNNModule):
         layers = self.layers[: -self.num_nextn_predict_layers] if self.num_nextn_predict_layers > 0 else self.layers
         mtp_layers = self.layers[-self.num_nextn_predict_layers :] if self.num_nextn_predict_layers > 0 else None
 
+        # Drain any prior async-decode / previous-warmup-ISL work before
+        # enqueueing this prefill. See module-level comment for rationale.
+        is_prefill = seq_length > 1
+        if is_prefill and _PREFILL_SYNC_ENABLED:
+            _sync_device_safely(ttnn_object.device, "before_prefill")
+
         for layer_idx, decoder_layer in enumerate(layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -218,6 +275,11 @@ class TTNNBailingMoeV2Model(TTNNModule):
 
         hidden_states = self.norm(hidden_states)
         main_hidden_states = hidden_states
+
+        # Drain prefill-queued work so it cannot leak into the mtp_layers
+        # or the first decode of this same request.
+        if is_prefill and _PREFILL_SYNC_ENABLED:
+            _sync_device_safely(ttnn_object.device, "after_prefill")
 
         # add hidden states from the last decoder layer
         if output_hidden_states:

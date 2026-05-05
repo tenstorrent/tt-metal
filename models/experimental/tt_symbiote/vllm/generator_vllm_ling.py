@@ -124,10 +124,14 @@ class SymbioteBailingMoeV2ForCausalLM:
         "supports_multimodal": False,
     }
 
-    # Sequence lengths primed during warmup. Covers the small/medium ISLs the
-    # benchmark sweep exercises. Values <= max_position_embeddings are filtered
-    # at runtime in warmup_model_prefill.
-    WARMUP_PREFILL_SEQ_LENS = (128, 1024)
+    # Sequence lengths primed during warmup. Covers every ISL the
+    # benchmark sweep exercises against the spec's max_context=2048 cap:
+    # rows (128,128), (128,1024), (1024,128), (2048,128) all hit a warmed
+    # program-cache bucket so first-request TTFT does not pay JIT compile
+    # cost. Values <= max_position_embeddings are filtered at runtime in
+    # warmup_model_prefill. If max_context is raised in the future, extend
+    # this tuple to match (e.g. add 3072 for max_context=3072).
+    WARMUP_PREFILL_SEQ_LENS = (128, 1024, 2048)
 
     # Mirrors Generator.already_warmed_up_prefill so TTModelRunner can reset
     # the flag between Phase 1 (compile) and Phase 2 (trace capture).
