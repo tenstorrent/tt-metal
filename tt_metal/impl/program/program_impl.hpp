@@ -17,6 +17,7 @@
 #include "program_device_map.hpp"        // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
+#include "tt-metalium/experimental/tensor/spec/tensor_spec.hpp"  // Metal 2.0 TensorBinding registry
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
@@ -336,11 +337,15 @@ public:
     void register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle);
     void register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id);
+    void register_tensor_binding(const std::string& name, const TensorSpec& spec);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const KernelSpecName& name) const;
     uint32_t get_dfb_handle(const DFBSpecName& name) const;
     uint32_t get_semaphore_handle(const SemaphoreSpecName& name) const;
+    // Returns nullptr if name is not registered (caller validates).
+    const TensorSpec* get_tensor_binding_spec(const std::string& name) const;
+    std::vector<std::string> get_registered_tensor_binding_names() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const KernelSpecName& name) const {
@@ -449,6 +454,10 @@ private:
         std::unordered_map<DFBSpecName, uint32_t> dfb_handles;
         std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
         std::unordered_map<KernelSpecName, KernelRTASchema> kernel_rta_schemas;
+        // TensorBinding name -> expected single-device TensorSpec.
+        // Used by ValidateProgramRunParams to check that the supplied MeshTensor's spec matches
+        // the binding's declared spec, and as the per-binding lookup for completeness checks.
+        std::unordered_map<std::string, TensorSpec> tensor_binding_specs;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 

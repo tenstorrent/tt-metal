@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstring>
+#include <limits>
+#include <string_view>
 #include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
@@ -148,20 +150,40 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             }
         }
 
-        // Validate named CRTAs: every declared name set, no extras.
+        // Validate named CRTAs: every user-declared name set, no extras.
+        // Implicit reserved-prefix CRTAs (e.g., __ta_addr_<name> for TensorAccessor bindings) are
+        // not part of the user-facing named-CRTA contract; they're filled from TensorRunParams at
+        // dispatch time. Validation:
+        //   - Skip implicit names when checking which user values are required.
+        //   - Reject any user-supplied CRTA name with a reserved prefix (collision with implicits).
         const auto& named_crta_names = schema->named_common_runtime_args;
-        TT_FATAL(
-            kernel_params.named_common_runtime_args.size() == named_crta_names.size(),
-            "Kernel '{}' expects {} named CRTAs, but {} were provided",
-            kernel_name,
-            named_crta_names.size(),
-            kernel_params.named_common_runtime_args.size());
+        size_t expected_user_crta_count = 0;
         for (const auto& name : named_crta_names) {
+            const bool is_implicit = name.starts_with(kTensorAccessorAddrCrtaPrefix);
+            if (!is_implicit) {
+                ++expected_user_crta_count;
+                TT_FATAL(
+                    kernel_params.named_common_runtime_args.contains(name),
+                    "Kernel '{}' is missing named CRTA '{}'.",
+                    kernel_name,
+                    name);
+            }
+        }
+        TT_FATAL(
+            kernel_params.named_common_runtime_args.size() == expected_user_crta_count,
+            "Kernel '{}' expects {} user-named CRTAs, but {} were provided",
+            kernel_name,
+            expected_user_crta_count,
+            kernel_params.named_common_runtime_args.size());
+        for (const auto& [user_name, _value] : kernel_params.named_common_runtime_args) {
+            (void)_value;
             TT_FATAL(
-                kernel_params.named_common_runtime_args.contains(name),
-                "Kernel '{}' is missing named CRTA '{}'.",
+                !std::string_view(user_name).starts_with(kTensorAccessorAddrCrtaPrefix),
+                "Kernel '{}' named CRTA '{}' uses a reserved prefix ('{}') that is managed by the "
+                "TensorAccessor binding machinery. Choose a different name.",
                 kernel_name,
-                name);
+                user_name,
+                kTensorAccessorAddrCrtaPrefix);
         }
     }
 
@@ -189,6 +211,41 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
     // Unlike kernels, DFBs don't require DFBRunParams.
     // It is only required for DFBs built on borrowed memory. (Which is not yet supported.)
+
+    // Validate tensor runtime parameters:
+    //   - No duplicate tensor_binding_name entries
+    //   - Every entry references a TensorBinding declared in the ProgramSpec
+    //   - The supplied MeshTensor's TensorSpec equals the binding's expected TensorSpec
+    //     (full equality — see also the design note in tensor_binding.hpp; loosens to
+    //     layout-compatible-modulo-shape in the follow-up PR that adds RuntimeTensorShape).
+    //   - Every declared TensorBinding is set
+    std::unordered_set<std::string> tensor_bindings_with_params;
+    for (const auto& tensor_params : params.tensor_run_params) {
+        auto [it, inserted] = tensor_bindings_with_params.insert(tensor_params.tensor_binding_name);
+        TT_FATAL(
+            inserted,
+            "Duplicate tensor_binding_name '{}' in ProgramRunParams.tensor_run_params. Each TensorBinding must appear "
+            "at most once.",
+            tensor_params.tensor_binding_name);
+        const TensorSpec* expected_spec = program_impl.get_tensor_binding_spec(tensor_params.tensor_binding_name);
+        TT_FATAL(
+            expected_spec != nullptr,
+            "TensorRunParams references unknown TensorBinding '{}'.",
+            tensor_params.tensor_binding_name);
+        const TensorSpec& runtime_spec = tensor_params.tensor.get().tensor_spec();
+        TT_FATAL(
+            runtime_spec == *expected_spec,
+            "TensorRunParams for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
+            "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; the "
+            "supplied tensor must conform to it.",
+            tensor_params.tensor_binding_name);
+    }
+    for (const std::string& declared : program_impl.get_registered_tensor_binding_names()) {
+        TT_FATAL(
+            tensor_bindings_with_params.contains(declared),
+            "TensorBinding '{}' is declared in the Program but has no TensorRunParams entry.",
+            declared);
+    }
 }
 
 // ============================================================================
@@ -202,6 +259,21 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
     ValidateProgramRunParams(program, params);
 
     detail::ProgramImpl& program_impl = program.impl();
+
+    // Build a tensor_binding_name -> base address lookup from the user's TensorRunParams entries.
+    // Used below to fill the implicit __ta_addr_ CRTAs from MeshTensor::address(). Lockstep mesh
+    // allocation makes this a single uint32_t per binding (same address on every device).
+    std::unordered_map<std::string, uint32_t> ta_binding_addresses;
+    ta_binding_addresses.reserve(params.tensor_run_params.size());
+    for (const auto& tensor_params : params.tensor_run_params) {
+        const auto address = tensor_params.tensor.get().address();
+        TT_FATAL(
+            address <= std::numeric_limits<uint32_t>::max(),
+            "TensorBinding '{}' base address {} exceeds uint32_t max",
+            tensor_params.tensor_binding_name,
+            address);
+        ta_binding_addresses.emplace(tensor_params.tensor_binding_name, static_cast<uint32_t>(address));
+    }
 
     // Process kernel runtime arguments.
     // Named RTAs/CRTAs and vararg RTAs/CRTAs share a single dispatch buffer each (RTA + CRTA).
@@ -266,10 +338,32 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
             kernel->set_runtime_args(node, combined);
         }
 
+        // Build a per-kernel implicit CRTA name -> tensor_binding_name lookup so the CRTA fill
+        // loop below can route reserved-prefix names to TensorRunParams instead of expecting
+        // user-supplied named_common_runtime_args values.
+        std::unordered_map<std::string, std::string> implicit_crta_to_tensor_binding;
+        for (const auto& handle : kernel->tensor_accessor_handles()) {
+            implicit_crta_to_tensor_binding.emplace(
+                std::string(kTensorAccessorAddrCrtaPrefix) + handle.accessor_name, handle.tensor_binding_name);
+        }
+
         // Combine named CRTAs and vararg CRTAs into one common buffer.
+        // Two value sources for named CRTAs: user-supplied named_common_runtime_args (default) and
+        // (for reserved-prefix implicit slots) the per-binding base address from TensorRunParams.
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(schema->named_common_runtime_args.size() + kernel_params.common_runtime_varargs.size());
         for (const auto& name : schema->named_common_runtime_args) {
+            auto implicit_it = implicit_crta_to_tensor_binding.find(name);
+            if (implicit_it != implicit_crta_to_tensor_binding.end()) {
+                auto addr_it = ta_binding_addresses.find(implicit_it->second);
+                TT_FATAL(
+                    addr_it != ta_binding_addresses.end(),
+                    "Internal error: tensor binding '{}' has no resolved base address (validation should have caught "
+                    "this).",
+                    implicit_it->second);
+                combined_crtas.push_back(addr_it->second);
+                continue;
+            }
             auto v_it = kernel_params.named_common_runtime_args.find(name);
             TT_FATAL(
                 v_it != kernel_params.named_common_runtime_args.end(),

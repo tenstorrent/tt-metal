@@ -109,7 +109,8 @@ Kernel::Kernel(
     const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles,
     const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles,
     const std::vector<std::string>& named_runtime_args,
-    const std::vector<std::string>& named_common_runtime_args) :
+    const std::vector<std::string>& named_common_runtime_args,
+    const TensorAccessorBindingHandleMap& tensor_accessor_handles) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -121,6 +122,7 @@ Kernel::Kernel(
     semaphore_local_accessor_handles_(semaphore_local_accessor_handles),
     named_runtime_args_(named_runtime_args),
     named_common_runtime_args_(named_common_runtime_args),
+    tensor_accessor_handles_(tensor_accessor_handles),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -290,6 +292,14 @@ void Kernel::process_semaphore_local_accessor_handles(
     const std::function<void(const std::string& accessor_name, uint16_t semaphore_id)> callback) const {
     for (const auto& [accessor_name, semaphore_id] : this->semaphore_local_accessor_handles_) {
         callback(accessor_name, semaphore_id);
+    }
+}
+
+void Kernel::process_tensor_accessor_handles(
+    const std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>
+        callback) const {
+    for (const auto& handle : this->tensor_accessor_handles_) {
+        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset);
     }
 }
 

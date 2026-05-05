@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_binding.hpp>
 #include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
 #include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
@@ -153,6 +154,16 @@ struct KernelSpec {
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;
+
+    // TensorAccessor bindings
+    // Declares this kernel's named access to a TensorBinding declared at the ProgramSpec level.
+    // The underlying TensorBinding is the single source of truth for the tensor's layout; multiple
+    // kernels can bind to the same TensorBinding without risk of binding-skew.
+    struct TensorAccessorBinding {
+        TensorBindingName tensor_binding_name;  // identify the TensorBinding within the ProgramSpec
+        std::string accessor_name;              // TensorAccessor name (used in the kernel source code)
+    };
+    std::vector<TensorAccessorBinding> tensor_accessor_bindings;
 
     // TODO -- GlobalSemaphore bindings
     // TODO -- GlobalDataflowBuffer bindings

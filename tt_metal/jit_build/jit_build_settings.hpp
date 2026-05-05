@@ -13,6 +13,14 @@
 
 namespace tt::tt_metal {
 
+// Reserved CRTA name prefix for the implicit per-tensor base-address CRTA used by Metal 2.0
+// TensorAccessor bindings. Named CRTAs starting with this prefix are managed by the binding
+// machinery: emitted into the `ta::` namespace as part of each binding's token (not into the
+// user-facing `args::` namespace), and filled at dispatch from the corresponding TensorRunParams
+// entry (not from user-supplied named_common_runtime_args).
+// User-supplied CRTA names with this prefix are rejected by validation.
+inline constexpr std::string_view kTensorAccessorAddrCrtaPrefix = "__ta_addr_";
+
 // Abstract base class for kernel specialization
 // Higher levels of the SW derive from this and fill in build details not known to the build system
 // (eg, API specified settings)
@@ -36,11 +44,21 @@ public:
     // Called to process the user kernel resource bindings (Metal 2.0 APIs)
     //  - DFB accessors
     //  - Semaphore accessors
-    //  - Tensor accessors (TODO)
+    //  - Tensor accessors
     virtual void process_dataflow_buffer_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
     virtual void process_semaphore_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
+    // TensorAccessor binding callback emits the codegen-relevant fields only:
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `ta::` namespace
+    //  - cta_offset: starting word index of this binding's CTA payload in the kernel's
+    //    positional compile-time-args buffer
+    //  - addr_crta_offset: byte offset of the implicit base-address CRTA within the kernel's
+    //    common-runtime-args section
+    // The tensor_binding_name (program-level reference) lives on the Kernel object itself; it is
+    // a dispatch concern, not a codegen one, and is intentionally not surfaced here.
+    virtual void process_tensor_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args

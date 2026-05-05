@@ -481,6 +481,40 @@ auto make_tensor_accessor_tuple(const std::tuple<Args...>& args, uint32_t addres
         args, address_rt_arg_index_start, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
 
+namespace tensor_accessor {
+
+// TensorAccessorBindingToken: codegen-emitted handle for a Metal 2.0 ProgramSpec TensorAccessor
+// binding. Pairs the binding's static layout (TensorAccessorArgs<CTA_OFFSET>) with the byte offset
+// of its implicit base-address CRTA — the slot SetProgramRunParameters fills from the binding's
+// TensorRunParams entry at enqueue time.
+//
+// Kernel authors don't construct this directly. Codegen emits a per-binding instance into the
+// `ta::` namespace (see kernel_bindings_generated.h). Use `make_tensor_accessor(ta::name)` at the
+// call site to construct a TensorAccessor.
+//
+// Per-binding type alias `<name>_t` is generated alongside the value, providing forward-extension
+// surface for adding token metadata (per-kernel access patterns, alignment hints, etc.) without
+// touching kernel source.
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+struct TensorAccessorBindingToken {
+    using args_t = TensorAccessorArgs<CTA_OFFSET>;
+    static constexpr args_t args{};
+    static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
+};
+
+}  // namespace tensor_accessor
+
+// Construct a TensorAccessor from a Metal 2.0 binding token.
+// Reads the per-enqueue base address from the implicit CRTA at the token's addr_crta_offset, and
+// delegates to the existing TensorAccessor(args, address) ctor — the deduction guide on that ctor
+// handles selecting the right specialization (interleaved vs sharded, DRAM vs L1, etc).
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+inline auto make_tensor_accessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) {
+    return TensorAccessor(
+        TensorAccessorArgs<CTA_OFFSET>{},
+        static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))));
+}
+
 /**
  * @brief AbstractTensorAccessorWrapper provides a unified interface over templated tensor accessors.
  *

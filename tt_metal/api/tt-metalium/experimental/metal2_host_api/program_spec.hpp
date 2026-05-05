@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_binding.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
@@ -61,6 +62,11 @@ struct ProgramSpec {
     std::vector<DataflowBufferSpec> dataflow_buffers;
     std::vector<RemoteDataflowBufferSpec> remote_dataflow_buffers;
     std::vector<SemaphoreSpec> semaphores;
+
+    // User-managed Tensor declarations.
+    // Grouped separately from the program-managed resources above to keep the user-managed /
+    // program-managed distinction visible.
+    std::vector<TensorBinding> tensor_bindings;
 
     // WorkUnit specifications:
     // A valid ProgramSpec has at least one WorkUnitSpec.

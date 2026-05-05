@@ -108,20 +108,40 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
+    // Get the tensor accessor bindings from the settings callback
+    // Sort by name for deterministic output (parallel to DFB / Semaphore handling above)
+    struct TaEntry {
+        string name;
+        uint32_t cta_offset;
+        uint32_t addr_crta_offset;
+    };
+    vector<TaEntry> ta_entries;
+    settings.process_tensor_accessor_handles(
+        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset) {
+            ta_entries.push_back({name, cta_offset, addr_crta_offset});
+        });
+    sort(ta_entries.begin(), ta_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
+    //  - TensorAccessor bindings are emitted into the ta namespace
     //
-    // NOTE: Both accessor types are emitted as constexpr variables, i.e. as implicit CTAs.
+    // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
     //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-accessor basis.)
     //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
     //       We are starting simple and can adjust later if problems arise.
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
+    //
+    //       TensorAccessor is the first accessor category to use implicit CRTAs: each binding's
+    //       per-enqueue base address rides a reserved-prefix named CRTA filled by SetProgramRunParameters
+    //       from the corresponding TensorRunParams. The static layout metadata (rank, shape, bank coords,
+    //       etc.) still flows through CTAs, packed by the host into the kernel's positional CTA buffer.
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -129,6 +149,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
         if (!sem_entries.empty()) {
             content << "#include <cstdint>\n";
+        }
+        if (!ta_entries.empty()) {
+            content << "#include \"api/tensor/tensor_accessor.h\"\n";
         }
         content << "\n";
 
@@ -146,6 +169,23 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 content << "constexpr std::uint32_t " << name << " = " << id << "u;\n";
             }
             content << "}  // namespace sem\n";
+        }
+
+        if (!ta_entries.empty()) {
+            // TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+            // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
+            // its implicit base-address CRTA. The kernel-side TensorAccessor(token) constructor
+            // unpacks both pieces.
+            //
+            // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
+            // template with extra metadata in the future without touching kernel source.
+            content << "namespace ta {\n";
+            for (const auto& entry : ta_entries) {
+                content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
+                        << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
+                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+            }
+            content << "}  // namespace ta\n";
         }
     }
     write_file(path, content.str());
@@ -199,9 +239,19 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             rta_offset += sizeof(uint32_t);
         }
         // Named CRTAs
+        // Implicit reserved-prefix CRTAs (e.g., __ta_addr_<name> for TensorAccessor bindings)
+        // co-exist in the dispatch layout but are NOT exposed in `args::` — they're surfaced
+        // through their owning binding's namespace instead (`ta::`). The offset still advances
+        // for them so dispatch and codegen stay in lockstep on the layout.
         uint32_t crta_offset = 0;
         for (const auto& name : crta_names) {
-            content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
+            const bool is_implicit =
+                name.size() >= tt::tt_metal::kTensorAccessorAddrCrtaPrefix.size() &&
+                std::string_view(name).substr(0, tt::tt_metal::kTensorAccessorAddrCrtaPrefix.size()) ==
+                    tt::tt_metal::kTensorAccessorAddrCrtaPrefix;
+            if (!is_implicit) {
+                content << "constexpr experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
+            }
             crta_offset += sizeof(uint32_t);
         }
         // Named CTAs
