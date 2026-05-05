@@ -75,7 +75,8 @@ struct Matmul {
         bool transpose_ = false,
         uint32_t fused_activation_ = 0,
         bool fused_activation_approx_mode_ = false,
-        uint32_t custom_sfpu_cb_ = 0>
+        uint32_t custom_sfpu_cb_ = 0,
+        uint32_t custom_sfpu_signal_cb_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t out_w = out_w_;
         static constexpr bool transpose = transpose_;
@@ -86,6 +87,7 @@ struct Matmul {
         static constexpr bool fused_activation_approx_mode = fused_activation_approx_mode_;
         static constexpr uint32_t custom_sfpu_cb = custom_sfpu_cb_;
         static constexpr bool has_custom_sfpu_cb = custom_sfpu_cb_ > 0;
+        static constexpr uint32_t custom_sfpu_signal_cb = custom_sfpu_signal_cb_;
     };
 
     // ========================================================================
@@ -179,19 +181,18 @@ struct Matmul {
                     //   LOWER  (10) raw  → LReg[15:0], LReg[31:16] preserved
                     // See:
                     //   tt-isa-documentation/BlackholeA0/TensixTile/TensixCoprocessor/SFPLOADI.md
-                    //
-                    // Two layers of UNPACK→PACK sync:
-                    //   1. cb_wait_front (cb_api.h) is TRISC_UNPACK-guarded; UNPACK posts
-                    //      semaphore::UNPACK_OPERAND_SYNC after the wait returns so PACK
-                    //      knows the producer's tile is committed in L1.
-                    //   2. get_tile_address (cb_api.h:155-177) does its own mailbox handoff
-                    //      of the byte address: UNPACK computes (fifo_rd_ptr + off)<<4 and
-                    //      writes to the MathThread/PackThread mailboxes; PACK's invocation
-                    //      blocks on mailbox_read until UNPACK posts.
                     if constexpr (CTArgs::has_custom_sfpu_cb) {
-                        UNPACK(({ cb_wait_front(CTArgs::custom_sfpu_cb, 1); }));
-                        uint32_t cb_rd_addr = get_tile_address(CTArgs::custom_sfpu_cb, 0);
+                        // NCRISC→PACK direct sync: caller pre-fills `custom_sfpu_signal_cb`
+                        // (cb_push_back from PACK before this op runs), so this
+                        // cb_reserve_back blocks until NCRISC cb_pop_front's after the
+                        // mcast lands the scalar tile in `custom_sfpu_cb`. PACK then
+                        // reads the L1 byte address from its own local CB interface
+                        // (fifo_rd_ptr<<4) — same arithmetic as get_tile_address, but
+                        // no UNPACK→PACK mailbox handoff.
                         PACK(({
+                            cb_reserve_back(CTArgs::custom_sfpu_signal_cb, 1);
+                            // get_operand_id(cb) is identity on Blackhole/WH; cb_id == operand_id.
+                            uint32_t cb_rd_addr = get_local_cb_interface(CTArgs::custom_sfpu_cb).fifo_rd_ptr << 4;
                             volatile tt_l1_ptr uint16_t* l1_ptr =
                                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rd_addr);
                             uint16_t bits = l1_ptr[0];
@@ -202,6 +203,7 @@ struct Matmul {
                             // as two independent 4-lane groups).
                             TTI_SFPTRANSP(0, 0, 0, 0);
                         }));
+                        PACK(TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::PACK));
                     }
                     PACK((ckernel::llk_math_eltwise_unary_sfpu_apply_scaler_init<
                           CTArgs::fused_activation_approx_mode>()));

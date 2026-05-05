@@ -990,6 +990,11 @@ class AttentionBlock:
         # Destination CB on dkv matmul cores receiving the 1/RMS scalar via mcast.
         # Allocated on the full mcast grid for safe NoC mcast layout; only dkv cores read.
         raw_input_rms_inv_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # Signal CB for NCRISC→PACK direct sync on dkv matmul cores. PACK in the dkv
+        # CUSTOM_SFPU activation pushes then reserve_back's; NCRISC pops after the
+        # rms_inv mcast lands the scalar in raw_input_rms_inv_dst_cb. 1 page is enough
+        # because we only need the tiles_received/tiles_acked counters as a rendezvous.
+        raw_input_rms_inv_signal_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         # TD_1x32 view of `rmsnorm2_input_cb`'s L1 region (input core only).
         # gather_reduce writes its output as 3 tiles in TD_16x32 layout; matmul2_in0
         # on receivers is TD_1x32. The mcast2 sender reads through this view (48 1x32
@@ -1006,6 +1011,10 @@ class AttentionBlock:
         # Destination CB on matmul2 cores receiving the post-MCAST2 1/RMS scalar via mcast.
         # Allocated on the full mcast grid for safe NoC mcast layout; only matmul2 cores read.
         mcast2_rms_inv_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # Signal CB for NCRISC→PACK direct sync on matmul2 cores. PACK in the matmul2
+        # CUSTOM_SFPU activation pushes then reserve_back's; NCRISC pops after the
+        # post-MCAST2 mcast lands the scalar in mcast2_rms_inv_dst_cb. 1 page rendezvous.
+        mcast2_rms_inv_signal_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         krope_output_cb = matmul3_output_cb  # Shares CB ID (disjoint: krope_grid col 8, rows 8-9)
         create_q_heads_receiver_in_cb = cb_id_context.get_cb_id(
             data_format, TD_8x32
@@ -2370,6 +2379,27 @@ class AttentionBlock:
                 tile=matmul_input_tile_descriptor,
             )
         ]
+        # CB: Raw-input RMSInverse signal CB (used only for tiles_received/tiles_acked
+        # counters as an NCRISC→PACK rendezvous; the L1 page is never read or written).
+        # Shares the same L1 offset as raw_input_rms_inv_dst_cb: dst_cb's data region
+        # holds the scalar (mcast write + PACK read) while signal_cb only mutates its
+        # own CB metadata. PACK on dkv matmul cores cb_push_back's then cb_reserve_back's;
+        # NCRISC cb_pop_front's after the rms_inv mcast receiver completes.
+        raw_input_rms_inv_signal_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            raw_input_rms_inv_signal_cb,
+            ref_sdpa_kv_cache_buffer,
+            address_offset=sdpa_kv_cache_running_offset_mcast_core,
+            total_size=matmul_input_page_size,  # 1x32 tile = 64 B for bf16
+            core_ranges=full_device_grid,
+        )
+        raw_input_rms_inv_signal_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=raw_input_rms_inv_signal_cb,
+                data_format=data_format,
+                page_size=matmul_input_page_size,
+                tile=matmul_input_tile_descriptor,
+            )
+        ]
         sdpa_kv_cache_running_offset_mcast_core += raw_input_rms_inv_dst_cb_descriptor.total_size  # +64 B
 
         # CB: Post-MCAST2 RMSInverse output (1 tile of 1x32 = 64 B for bf16).
@@ -2457,6 +2487,28 @@ class AttentionBlock:
         mcast2_rms_inv_dst_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
                 buffer_index=mcast2_rms_inv_dst_cb,
+                data_format=data_format,
+                page_size=matmul_input_page_size,
+                tile=matmul_input_tile_descriptor,
+            )
+        ]
+
+        # CB: Post-MCAST2 RMSInverse signal CB (used only for tiles_received/tiles_acked
+        # counters as an NCRISC→PACK rendezvous; the L1 page is never read or written).
+        # Sharing the same L1 offset as mcast2_rms_inv_dst_cb is safe: dst_cb's data
+        # region holds the scalar (mcast write + PACK read) while signal_cb only mutates
+        # its own CB metadata. Likewise the time-disjoint sharing with matmul3_output_cb /
+        # qrope_output_cb is preserved (we deliberately do NOT advance the offset).
+        mcast2_rms_inv_signal_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            mcast2_rms_inv_signal_cb,
+            ref_sdpa_out_interm_buffer,
+            address_offset=sdpa_out_interm_running_offset,
+            total_size=matmul_input_page_size,  # 1x32 tile = 64 B for bf16
+            core_ranges=full_device_grid,
+        )
+        mcast2_rms_inv_signal_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=mcast2_rms_inv_signal_cb,
                 data_format=data_format,
                 page_size=matmul_input_page_size,
                 tile=matmul_input_tile_descriptor,
@@ -3269,6 +3321,9 @@ class AttentionBlock:
             ("rms_inv_mcast_data_receiver_semaphore_addr", rms_inv_mcast_data_receiver_semaphore_addr),
             ("rms_inv_mcast_dst_num_pages", rms_inv_mcast_dst_num_pages),
             ("raw_input_rms_inv_dst_cb", raw_input_rms_inv_dst_cb),
+            # NCRISC pops this signal CB on dkv cores after the rms_inv mcast lands the
+            # scalar in raw_input_rms_inv_dst_cb, unblocking PACK's CUSTOM_SFPU SFPLOADI.
+            ("raw_input_rms_inv_signal_cb", raw_input_rms_inv_signal_cb),
         ]
 
         # ========================================================================
@@ -3296,20 +3351,27 @@ class AttentionBlock:
             ),
             ("mcast2_rms_inv_mcast_dst_num_pages", mcast2_rms_inv_mcast_dst_num_pages),
             ("mcast2_rms_inv_dst_cb", mcast2_rms_inv_dst_cb),
+            # NCRISC pops this signal CB on matmul2 cores after the mcast lands the
+            # scalar in mcast2_rms_inv_dst_cb, unblocking PACK's CUSTOM_SFPU SFPLOADI.
+            ("mcast2_rms_inv_signal_cb", mcast2_rms_inv_signal_cb),
         ]
 
         # The krope-side dkv_matmul fuses the 1/RMS apply via FusedActivation::CUSTOM_SFPU
         # (custom_sfpu_cb_ template arg points at raw_input_rms_inv_dst_cb), so TRISC
-        # needs that CB id resolvable as a named compile-time arg.
+        # needs that CB id resolvable as a named compile-time arg. The signal CB is the
+        # NCRISC→PACK rendezvous; PACK push/reserve_back's it inside the activation.
         krope_rms_apply_trisc_named_compile_time_args = [
             ("raw_input_rms_inv_dst_cb", raw_input_rms_inv_dst_cb),
+            ("raw_input_rms_inv_signal_cb", raw_input_rms_inv_signal_cb),
         ]
 
         # matmul2 (q_proj_b) fuses the post-MCAST2 1/RMS apply via FusedActivation::CUSTOM_SFPU
         # (custom_sfpu_cb_ template arg points at mcast2_rms_inv_dst_cb), so TRISC
-        # needs that CB id resolvable as a named compile-time arg.
+        # needs that CB id resolvable as a named compile-time arg. The signal CB is the
+        # NCRISC→PACK rendezvous; PACK push/reserve_back's it inside the activation.
         mcast2_rms_inv_apply_trisc_named_compile_time_args = [
             ("mcast2_rms_inv_dst_cb", mcast2_rms_inv_dst_cb),
+            ("mcast2_rms_inv_signal_cb", mcast2_rms_inv_signal_cb),
         ]
 
         k_addr = ref_kv_cache_tensor.buffer_address()
@@ -3658,8 +3720,10 @@ class AttentionBlock:
             dkv_matmul_in0_view_cb_descriptor,
             raw_input_rms_inv_output_cb_descriptor,
             raw_input_rms_inv_dst_cb_descriptor,
+            raw_input_rms_inv_signal_cb_descriptor,
             mcast2_rms_inv_output_cb_descriptor,
             mcast2_rms_inv_dst_cb_descriptor,
+            mcast2_rms_inv_signal_cb_descriptor,
             rmsnorm2_input_cb_descriptor,
             mcast2_src_view_cb_descriptor,
             gather_reduce_scratch_cb_descriptor,

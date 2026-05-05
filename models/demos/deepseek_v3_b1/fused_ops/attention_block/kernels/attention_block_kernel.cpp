@@ -1182,7 +1182,8 @@ void kernel_main() {
         /*transpose=*/false,
         (uint32_t)FusedActivation::CUSTOM_SFPU,
         /*approx_mode=*/false,
-        get_named_compile_time_arg_val("mcast2_rms_inv_dst_cb")>;
+        get_named_compile_time_arg_val("mcast2_rms_inv_dst_cb"),
+        get_named_compile_time_arg_val("mcast2_rms_inv_signal_cb")>;
 
     // Matmul2 compute args (from compile-time args)
     deepseek_b1_ops::Matmul::ComputeArgs matmul2_args{
@@ -1250,7 +1251,8 @@ void kernel_main() {
         /*transpose=*/false,
         (uint32_t)FusedActivation::CUSTOM_SFPU,
         /*approx_mode=*/false,
-        get_named_compile_time_arg_val("raw_input_rms_inv_dst_cb")>;
+        get_named_compile_time_arg_val("raw_input_rms_inv_dst_cb"),
+        get_named_compile_time_arg_val("raw_input_rms_inv_signal_cb")>;
 
     // DKV Matmul compute args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Matmul::ComputeArgs dkv_matmul_args{
@@ -1547,6 +1549,19 @@ void kernel_main() {
             rms_inv_mcast(rms_inv_mcast_args);
         }
 
+        // ====================================================================
+        // NCRISC→PACK rendezvous for the krope-side CUSTOM_SFPU 1/RMS apply:
+        // now that the scalar has landed in raw_input_rms_inv_dst_cb on each
+        // krope core, NCRISC pops the signal CB so PACK's reserve_back inside
+        // dkv_matmul_krope's CUSTOM_SFPU activation can proceed. The knope path
+        // is a plain matmul (no CUSTOM_SFPU), so no pop there.
+        // ====================================================================
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_krope_core) {
+            cb_pop_front(get_named_compile_time_arg_val("raw_input_rms_inv_signal_cb"), 1);
+        }
+#endif
+
         if constexpr (Core::is_input_core) {
             volatile tt_l1_ptr uint32_t* ccl_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
@@ -1635,12 +1650,34 @@ void kernel_main() {
                 mcast2_rms_inv_mcast(mcast2_rms_inv_mcast_args);
             }
             // ====================================================================
+            // NCRISC→PACK rendezvous: now that the 1/RMS scalar has landed in
+            // mcast2_rms_inv_dst_cb on each matmul2 core, NCRISC pops the signal CB
+            // (which PACK pushed and is reserve_back'ing inside the matmul2
+            // CUSTOM_SFPU activation), unblocking PACK's SFPLOADI without any UNPACK
+            // mailbox handoff. See matmul.hpp Op::impl fuse_custom_sfpu block.
+            // ====================================================================
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_matmul2_core) {
+                cb_pop_front(get_named_compile_time_arg_val("mcast2_rms_inv_signal_cb"), 1);
+            }
+#endif
+            // ====================================================================
             // Matmul2 (q_proj_b): runs the matmul with FusedActivation::CUSTOM_SFPU
             // fused in, scaling the output by the mcasted 1/RMS scalar from
             // mcast2_rms_inv_dst_cb (replaces the standalone RMSNorm2 + apply pass).
             // ====================================================================
             {
                 DeviceZoneScopedN("MATMUL2");
+                // Pre-fill the signal CB on PACK so its cb_reserve_back inside the
+                // matmul2 CUSTOM_SFPU init blocks until NCRISC pops (above). Doing
+                // the cb_push_back here (before any matmul state is queued) keeps
+                // the STALL_THCON-on-PACK gate inside llk_push_to_brisc cheap —
+                // PACK is idle at this point.
+#if defined(COMPILE_FOR_TRISC)
+                if constexpr (Core::is_matmul2_core) {
+                    PACK((cb_push_back(get_named_compile_time_arg_val("mcast2_rms_inv_signal_cb"), 1)));
+                }
+#endif
                 deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
                 matmul2(matmul2_args);
             }
@@ -1724,6 +1761,13 @@ void kernel_main() {
                     DeviceZoneScopedN("DKV_MATMUL");
                     deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_knope_core, true, false> dkv_matmul_knope;
                     dkv_matmul_knope(dkv_matmul_args);
+                    // Pre-fill the signal CB on PACK before the krope matmul (which uses
+                    // CUSTOM_SFPU). Same rationale as the matmul2 pre-fill above.
+#if defined(COMPILE_FOR_TRISC)
+                    if constexpr (Core::is_krope_core) {
+                        PACK((cb_push_back(get_named_compile_time_arg_val("raw_input_rms_inv_signal_cb"), 1)));
+                    }
+#endif
                     deepseek_b1_ops::Matmul::Op<DKV_MatmulApplyRMSCTArgs, Core::is_krope_core, true, false>
                         dkv_matmul_krope;
                     dkv_matmul_krope(dkv_matmul_args);
