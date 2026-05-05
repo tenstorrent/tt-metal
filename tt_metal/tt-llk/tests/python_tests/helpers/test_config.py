@@ -1316,7 +1316,7 @@ class TestConfig:
         match boot_mode:
             case BootMode.BRISC:
                 if TestConfig.TEST_TARGET.run_simulator:
-                    # if we're in a simulator, just release BRSIC from reset, it will release other cores automatically
+                    # if we're in a simulator, just release BRISC from reset, it will release other cores automatically
                     set_tensix_soft_reset(
                         0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
                     )

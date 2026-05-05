@@ -276,7 +276,10 @@ def pytest_configure(config):
         utils_module._RECORD_TEST_ORDER = True
 
     # We don't need to override tensix dump on simulator
-    if not TestConfig.TEST_TARGET.run_simulator:
+    if (
+        not TestConfig.TEST_TARGET.run_simulator
+        and TestConfig.ARCH != ChipArchitecture.QUASAR
+    ):
         override_gprs_used_by_tensix_dump()
 
     log_file = "pytest_errors.log"
@@ -311,7 +314,7 @@ def pytest_configure(config):
                 # ttsim: already initialized at module import above; runs in-process, no server.
                 # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
-                if test_target.reset_simulator_per_test:
+                if TestConfig.TEST_TARGET.reset_simulator_per_test:
                     pytest.exit(
                         "ERROR: --reset-simulator-per-test is not supported with ttsim. "
                         "Re-run without it.",
