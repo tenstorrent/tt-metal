@@ -99,8 +99,16 @@ NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgram
     uint32_t q_start_addr = q_base_addr;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
+        // Each output core i corresponds to head index i. Within the input shard, that head lives in
+        // head-tile (i / 32) at row (i % 32). The two cases below pick the row's byte offset within
+        // a single 32x32 tile (face 0 for rows < 16, face 2 for rows >= 16); add the head-tile skip
+        // to land in the right tile when padded_heads > 32.
+        uint32_t head_tile_idx = i / 32;
+        uint32_t head_in_tile = i % 32;
         uint32_t in_tile_offset_by_batch =
-            i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
+            (head_in_tile < 16 ? head_in_tile * sub_tile_line_bytes
+                               : (head_in_tile - 16) * sub_tile_line_bytes + 512 * element_size) +
+            head_tile_idx * head_size;
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
@@ -125,7 +133,8 @@ NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgram
             .element_size = element_size,
             .sub_tile_line_bytes = sub_tile_line_bytes,
             .num_cores = num_cores,
-            .cb_q_output = cb_q_output}};
+            .cb_q_output = cb_q_output,
+            .head_size = head_size}};
 }
 
 void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
@@ -144,9 +153,13 @@ void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
     uint32_t q_start_addr = q_base_addr;
 
     for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
+        uint32_t head_tile_idx = i / 32;
+        uint32_t head_in_tile = i % 32;
         uint32_t in_tile_offset_by_batch =
-            i < 16 ? i * shared_variables.sub_tile_line_bytes
-                   : ((i - 16) * shared_variables.sub_tile_line_bytes) + (512 * shared_variables.element_size);
+            (head_in_tile < 16
+                 ? head_in_tile * shared_variables.sub_tile_line_bytes
+                 : (head_in_tile - 16) * shared_variables.sub_tile_line_bytes + 512 * shared_variables.element_size) +
+            head_tile_idx * shared_variables.head_size;
         const auto& core = shared_variables.cores[i];
         auto& runtime_args = GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
         runtime_args[0] = in_tile_offset_by_batch;

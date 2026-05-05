@@ -247,7 +247,7 @@ void init_unary_bcast_col(uint32_t cb_col_vec) {
     reconfig_data_format_srcb(cb_col_vec);
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_col_vec)));
-    MATH((llk_math_eltwise_unary_datacopy_init<B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_col_vec)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_col_vec)));
 }
 
 // Scale prev_mm_out tiles by a column-broadcast factor and L1-accumulate onto cur_mm_out.

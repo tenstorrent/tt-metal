@@ -30,13 +30,14 @@ void kernel_main() {
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_7;
     constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;
 
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);
-    constexpr uint32_t kWt = get_compile_time_arg_val(1);
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);
-    constexpr uint32_t q_heads = get_compile_time_arg_val(3);
-    constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);              // Q/K width in tiles
+    constexpr uint32_t kWt = get_compile_time_arg_val(1);              // key width in tiles (K read)
+    constexpr uint32_t vWt = get_compile_time_arg_val(2);              // V/dO/O width in tiles
+    constexpr uint32_t Ht = get_compile_time_arg_val(3);               // sequence length in tiles
+    constexpr uint32_t q_heads = get_compile_time_arg_val(4);          // number of query heads
+    constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // heads per group
 
-    constexpr auto grad_output_args = TensorAccessorArgs<5>();
+    constexpr auto grad_output_args = TensorAccessorArgs<6>();
     constexpr auto query_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
@@ -69,16 +70,18 @@ void kernel_main() {
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     auto read_row = [&](const uint32_t global_row_idx) {
-        const uint32_t kv_start_idx = global_row_idx * kWt;
+        const uint32_t k_start_idx = global_row_idx * kWt;
+        const uint32_t v_start_idx = global_row_idx * vWt;
 
-        read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
-        read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_key, key_address_generator, k_start_idx, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_value, value_address_generator, v_start_idx, vWt, tile_bytes, vWt);
 
         const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
         const uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);
 
         const uint32_t first_q_head_idx = group_idx * heads_per_group;
         const uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
+        const uint32_t vo_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * vWt;
 
         const uint32_t k_row_tile = global_row_idx % Ht;
 
@@ -105,7 +108,8 @@ void kernel_main() {
                     interm_tile_bytes,
                     num_of_interm_tiles);
 
-                read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+                const uint32_t vo_start_idx = vo_offset + (q_head_idx * Ht + h) * vWt;
+                read_tiles_by_row(cb_grad_output, grad_output_address_generator, vo_start_idx, vWt, tile_bytes, vWt);
 
                 read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_scaler_head_offset + h);
             }
@@ -132,16 +136,18 @@ void kernel_main() {
     // process rows of K and V assigned to this core
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t global_row_idx = start_row + i;
-        const uint32_t kv_start_idx = global_row_idx * kWt;
+        const uint32_t k_start_idx = global_row_idx * kWt;
+        const uint32_t v_start_idx = global_row_idx * vWt;
 
-        read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
-        read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_key, key_address_generator, k_start_idx, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_value, value_address_generator, v_start_idx, vWt, tile_bytes, vWt);
 
         const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
         const uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);
 
         const uint32_t first_q_head_idx = group_idx * heads_per_group;
         const uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
+        const uint32_t vo_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * vWt;
 
         const uint32_t k_row_tile = global_row_idx % Ht;
 
@@ -181,7 +187,8 @@ void kernel_main() {
                     interm_tile_bytes,
                     num_of_interm_tiles);
 
-                read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+                const uint32_t vo_start_idx = vo_offset + (q_head_idx * Ht + h) * vWt;
+                read_tiles_by_row(cb_grad_output, grad_output_address_generator, vo_start_idx, vWt, tile_bytes, vWt);
 
                 read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_scaler_head_offset + h);
             }

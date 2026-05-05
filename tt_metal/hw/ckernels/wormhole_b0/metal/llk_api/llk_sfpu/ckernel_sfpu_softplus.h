@@ -126,7 +126,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         // Round-to-nearest for bf16 destination (SFPSTORE defaults to truncation)
         sfpi::vFloat result = beta_reciprocal * sp;
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg[0] = result;
     }

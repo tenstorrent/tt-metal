@@ -293,6 +293,41 @@ def test_addcmul_with_int32_inputs(device, in_data1_shape, in_data2_shape, in_da
 
 
 @pytest.mark.parametrize(
+    "in_data1_shape, in_data2_shape, in_data3_shape",
+    [
+        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 32, 32)),
+        ((1, 1, 1, 1), (1, 1, 32, 32), (1, 1, 1, 1)),
+    ],
+)
+@pytest.mark.parametrize("value", [6, -6.0, float(2**31 + 7), 2**32 - 1])
+def test_addcmul_with_uint32_inputs(device, in_data1_shape, in_data2_shape, in_data3_shape, value):
+    # Use values spanning the full uint32 range. Store them as int32 bit-patterns;
+    # TTNN interprets those bit-patterns as uint32, and the golden is compared via 32-bit wraparound.
+    in_data1 = torch.randint(0, 2**32, in_data1_shape, dtype=torch.int64).to(torch.int32)
+    in_data2 = torch.randint(0, 2**16, in_data2_shape, dtype=torch.int64).to(torch.int32)
+    in_data3 = torch.randint(0, 2**16, in_data3_shape, dtype=torch.int64).to(torch.int32)
+
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor3 = ttnn.from_torch(in_data3, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.addcmul(input_tensor1, input_tensor2, input_tensor3, value=value)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    # Float values are narrowed to float32 by the C++ binding, so apply the same rounding
+    # to the golden to keep both sides in sync (e.g. float(2**31+7) → 2147483648.0 in float32).
+    golden_value = float(torch.tensor(value, dtype=torch.float32).item()) if isinstance(value, float) else value
+
+    # Promote to int64 before calling the golden function to prevent intermediate overflow,
+    # then truncate back to int32 to match the 32-bit wraparound semantics of uint32 hardware.
+    golden_fn = ttnn.get_golden_function(ttnn.addcmul)
+    golden_tensor = golden_fn(
+        in_data1.to(torch.int64), in_data2.to(torch.int64), in_data3.to(torch.int64), value=golden_value
+    ).to(torch.int32)
+
+    assert_equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
         (torch.bfloat16, ttnn.bfloat16),

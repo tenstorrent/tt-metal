@@ -1,13 +1,15 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "argmax_multi_core_program_factory.hpp"
+#include "argmax_device_operation.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
@@ -37,7 +39,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
     const uint32_t min_red_dim_units_per_core,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     CoreRangeSet all_cores, cores0, cores1;
-    uint32_t red_dim_units0, red_dim_units1;
+    uint32_t red_dim_units0 = 0, red_dim_units1 = 0;
 
     if (sub_core_grids.has_value()) {
         all_cores = sub_core_grids.value();
@@ -56,7 +58,6 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
 
             red_dim_units0 = blocks_per_core * min_red_dim_units_per_core;
             red_dim_units1 = blocks_per_core * min_red_dim_units_per_core;
-            ;
         } else {
             // If there is only one core group, assign to cores0, keep cores1 empty
             cores0 = all_cores;
@@ -154,7 +155,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
  *
  *    Refer to the kernel code for info on compile time args and runtime args
  */
-ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::create(
+ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
@@ -162,7 +163,7 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
     const bool keepdim = operation_attributes.keepdim;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
-    tt::tt_metal::Program program{};
+    ProgramDescriptor desc;
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto input_unit_size = input.element_size();
@@ -206,41 +207,67 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
     // Create input CB to read reduction dim worth of data at once (split across all cores)
     const uint32_t src_cb_idx = tt::CBIndex::c_0;
     const auto src_cb_page_size0 = round_up_to_mul32(red_dim_units0 * input_unit_size);
-    const auto src_cb_config0 =
-        tt::tt_metal::CircularBufferConfig(src_cb_page_size0, {{src_cb_idx, input_cb_data_format}})
-            .set_page_size(src_cb_idx, src_cb_page_size0);
-    tt::tt_metal::CreateCircularBuffer(program, cores0, src_cb_config0);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = src_cb_page_size0,
+        .core_ranges = cores0,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src_cb_idx),
+            .data_format = input_cb_data_format,
+            .page_size = src_cb_page_size0,
+        }}},
+    });
 
     // We only create the second CB if there are some cores assigned to the second group
     if (num_cores1 > 0) {
         const auto src_cb_page_size1 = round_up_to_mul32(red_dim_units1 * input_unit_size);
-        const auto src_cb_config1 =
-            tt::tt_metal::CircularBufferConfig(src_cb_page_size1, {{src_cb_idx, input_cb_data_format}})
-                .set_page_size(src_cb_idx, src_cb_page_size1);
-        tt::tt_metal::CreateCircularBuffer(program, cores1, src_cb_config1);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = src_cb_page_size1,
+            .core_ranges = cores1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(src_cb_idx),
+                .data_format = input_cb_data_format,
+                .page_size = src_cb_page_size1,
+            }}},
+        });
     }
 
     // Create output CB based on the output shape's last dimension
     const uint32_t dst_cb_idx = tt::CBIndex::c_1;
-    const auto dst_db_config = tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_idx, output_cb_data_format}})
-                                   .set_page_size(dst_cb_idx, dst_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = dst_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(dst_cb_idx),
+            .data_format = output_cb_data_format,
+            .page_size = dst_page_size,
+        }}},
+    });
 
     // Create intermediate CB for indices based on number of cores and output shape's last dimension
     const uint32_t red_idxs_cb_idx = tt::CBIndex::c_2;
     const auto red_idxs_page_size = round_up_to_mul32(output_last_dim * output_unit_size) * num_total_cores;
-    const auto red_idxs_db_config =
-        tt::tt_metal::CircularBufferConfig(red_idxs_page_size, {{red_idxs_cb_idx, output_cb_data_format}})
-            .set_page_size(red_idxs_cb_idx, red_idxs_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, red_idxs_db_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = red_idxs_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(red_idxs_cb_idx),
+            .data_format = output_cb_data_format,
+            .page_size = red_idxs_page_size,
+        }}},
+    });
 
     // Create intermediate CB for values based on number of cores and output shape's last dimension
     const uint32_t red_vals_cb_idx = tt::CBIndex::c_3;
     const auto red_vals_page_size = round_up_to_mul32(output_last_dim * input_unit_size) * num_total_cores;
-    const auto red_vals_cb_config =
-        tt::tt_metal::CircularBufferConfig(red_vals_page_size, {{red_vals_cb_idx, input_cb_data_format}})
-            .set_page_size(red_vals_cb_idx, red_vals_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = red_vals_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(red_vals_cb_idx),
+            .data_format = input_cb_data_format,
+            .page_size = red_vals_page_size,
+        }}},
+    });
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
@@ -263,8 +290,20 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
     const auto num_cores_range1 = all_cores.size() > 1 ? group1.size() : 0;
 
     // Allocate two semaphores for synchronization (cores -> reducer core) and (reducer core -> cores)
-    const auto start_sem_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-    const auto done_sem_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    const uint32_t start_sem_idx = 0;
+    const uint32_t done_sem_idx = 1;
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = start_sem_idx,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = done_sem_idx,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = all_cores,
+        .initial_value = 0,
+    });
 
     // Byte size of the data to read from the input CB for each core
     const auto src_read_size0 = red_dim_units0 * input_unit_size;
@@ -274,7 +313,7 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
     // of data We calculate that number here
     const int ideal_red_dim_units = (num_cores0 * red_dim_units0) + (num_cores1 * red_dim_units1);
 
-    uint32_t red_dim_units_last0, red_dim_units_last1;
+    uint32_t red_dim_units_last0 = 0, red_dim_units_last1 = 0;
     if (num_cores1 > 0) {
         red_dim_units_last0 = red_dim_units0;
         red_dim_units_last1 = ideal_red_dim_units == red_dim_units
@@ -304,49 +343,39 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
         outer_dim_units,
         inner_dim_units,
         red_dim_units,
-        (uint32_t)(reduce_all),
+        static_cast<uint32_t>(reduce_all),
         num_total_cores,
         reduce_core_id,
-        (uint32_t)reduce_core.x,
-        (uint32_t)reduce_core.y,
+        static_cast<uint32_t>(reduce_core.x),
+        static_cast<uint32_t>(reduce_core.y),
         // end comes before start for NOC1
-        (uint32_t)end_core0.x,
-        (uint32_t)end_core0.y,
-        (uint32_t)start_core0.x,
-        (uint32_t)start_core0.y,
-        (uint32_t)end_core1.x,
-        (uint32_t)end_core1.y,
-        (uint32_t)start_core1.x,
-        (uint32_t)start_core1.y,
-        (uint32_t)num_cores_range0,
-        (uint32_t)num_cores_range1,
+        static_cast<uint32_t>(end_core0.x),
+        static_cast<uint32_t>(end_core0.y),
+        static_cast<uint32_t>(start_core0.x),
+        static_cast<uint32_t>(start_core0.y),
+        static_cast<uint32_t>(end_core1.x),
+        static_cast<uint32_t>(end_core1.y),
+        static_cast<uint32_t>(start_core1.x),
+        static_cast<uint32_t>(start_core1.y),
+        static_cast<uint32_t>(num_cores_range0),
+        static_cast<uint32_t>(num_cores_range1),
         start_sem_idx,
         done_sem_idx,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(reader_compile_args);
 
-    std::map<std::string, std::string> kernel_defines;
-    tt::tt_metal::KernelHandle reader_kernel_id0 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
-        cores0,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = reader_compile_args});
+    KernelDescriptor reader_desc0;
+    reader_desc0.kernel_source =
+        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp";
+    reader_desc0.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc0.core_ranges = cores0;
+    reader_desc0.compile_time_args = reader_compile_args;
+    reader_desc0.config = DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = tt::tt_metal::NOC::RISCV_1_default,
+    };
 
-    tt::tt_metal::KernelHandle reader_kernel_id1 = 0;
-    if (num_cores1 > 0) {
-        reader_kernel_id1 = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
-            cores1,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt::tt_metal::NOC::RISCV_1_default,
-                .compile_args = reader_compile_args});
-    }
     const auto cores_coords0 = corerange_to_cores(cores0, num_cores0, true);
     const auto cores_coords1 = corerange_to_cores(cores1, num_cores1, true);
 
@@ -354,12 +383,10 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
     // Refer to the kernel code for explanation of the args
     for (uint32_t i = 0; i < num_cores0; ++i) {
         const CoreCoord& core = cores_coords0.at(i);
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel_id0,
+        reader_desc0.emplace_runtime_args(
             core,
-            {src_buffer->address(),
-             dst_buffer->address(),
+            {src_buffer,
+             dst_buffer,
              i,
              i * src_read_size0,
              i * red_dim_units0,
@@ -367,51 +394,40 @@ ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::c
              (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
     }
 
-    const uint32_t src_offset1 = static_cast<uint32_t>(src_read_size0 * num_cores0);
-    const uint32_t red_dim_offset1 = static_cast<uint32_t>(red_dim_units0 * num_cores0);
+    desc.kernels.push_back(std::move(reader_desc0));
 
-    for (uint32_t i = 0; i < num_cores1; ++i) {
-        const CoreCoord& core = cores_coords1.at(i);
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel_id1,
-            core,
-            {src_buffer->address(),
-             dst_buffer->address(),
-             static_cast<uint32_t>(num_cores0 + i),
-             src_offset1 + (i * src_read_size1),
-             red_dim_offset1 + (i * red_dim_units1),
-             (i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1,
-             (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
+    if (num_cores1 > 0) {
+        KernelDescriptor reader_desc1;
+        reader_desc1.kernel_source =
+            "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp";
+        reader_desc1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        reader_desc1.core_ranges = cores1;
+        reader_desc1.compile_time_args = std::move(reader_compile_args);
+        reader_desc1.config = DataMovementConfigDescriptor{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
+        };
+
+        const uint32_t src_offset1 = static_cast<uint32_t>(src_read_size0 * num_cores0);
+        const uint32_t red_dim_offset1 = static_cast<uint32_t>(red_dim_units0 * num_cores0);
+
+        for (uint32_t i = 0; i < num_cores1; ++i) {
+            const CoreCoord& core = cores_coords1.at(i);
+            reader_desc1.emplace_runtime_args(
+                core,
+                {src_buffer,
+                 dst_buffer,
+                 static_cast<uint32_t>(num_cores0 + i),
+                 src_offset1 + (i * src_read_size1),
+                 red_dim_offset1 + (i * red_dim_units1),
+                 (i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1,
+                 (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
+        }
+
+        desc.kernels.push_back(std::move(reader_desc1));
     }
 
-    return {std::move(program), {reader_kernel_id0, reader_kernel_id1, cores_coords0, cores_coords1}};
-}
-
-void ArgMaxMultiCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ArgmaxParams& /*operation_attributes*/,
-    const ArgmaxInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto* src_buffer = tensor_args.input.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
-
-    auto& program = cached_program.program;
-    const auto& reader_kernel_id0 = cached_program.shared_variables.reader_kernel_id0;
-    const auto& reader_kernel_id1 = cached_program.shared_variables.reader_kernel_id1;
-    const auto& cores_coords0 = cached_program.shared_variables.cores_coords0;
-    const auto& cores_coords1 = cached_program.shared_variables.cores_coords1;
-
-    for (const auto& core : cores_coords0) {
-        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id0, core);
-        reader_runtime_args[0] = src_buffer->address();
-        reader_runtime_args[1] = dst_buffer->address();
-    }
-    for (const auto& core : cores_coords1) {
-        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id1, core);
-        reader_runtime_args[0] = src_buffer->address();
-        reader_runtime_args[1] = dst_buffer->address();
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

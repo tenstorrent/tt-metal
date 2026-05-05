@@ -23,6 +23,7 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
+#include <bit>
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
@@ -199,7 +200,6 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     uint32_t K = shape[-1];
     uint32_t Kt = K / TILE_WIDTH;
     // block
-    uint32_t block_w = block_wt * TILE_WIDTH;
     uint32_t num_blocks = 0;
 
     auto bbox = shard_spec.grid.bounding_box();
@@ -853,19 +853,12 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
-    float winv = 1.0f / block_w;           // bcast-w scaler
     float cinv_pre = (1.0f / num_blocks);  // bcast-cores scaler
     float cinv = (1.0f / num_distributed_devices);
     float cinv_one = 1.0f;  // bcast-cores scaler for all-to-all cores not on first row/col
-    auto bfloat_cinv_value = bfloat16(cinv);
-    auto bfloat_cinv_value_pre = bfloat16(cinv_pre);
-    uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
-    uint32_t packed_cinv_value_pre = pack_two_bfloat16_into_uint32({bfloat_cinv_value_pre, bfloat_cinv_value_pre});
-
-    auto bfloat_cinv_value_one = bfloat16(cinv_one);
-    uint32_t packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_value_one, bfloat_cinv_value_one});
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
+    uint32_t cinv_bits = std::bit_cast<uint32_t>(cinv);
+    uint32_t cinv_pre_bits = std::bit_cast<uint32_t>(cinv_pre);
+    uint32_t cinv_one_bits = std::bit_cast<uint32_t>(cinv_one);
     union {
         float f;
         uint32_t u;
@@ -1125,11 +1118,9 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             writer_mcast_sender_args.push_back(mcast_end.x);
             writer_mcast_sender_args.push_back(mcast_end.y);
             if (use_two_stage_reduce && (!(width_index < 1))) {
-                writer_mcast_sender_args.push_back(packed_winv_value);
-                writer_mcast_sender_args.push_back(packed_cinv_value_one);
+                writer_mcast_sender_args.push_back(cinv_one_bits);
             } else {
-                writer_mcast_sender_args.push_back(packed_winv_value);
-                writer_mcast_sender_args.push_back(packed_cinv_value_pre);
+                writer_mcast_sender_args.push_back(cinv_pre_bits);
             }
             writer_mcast_sender_args.push_back(i);  // Core ID to limit number of cores to do all gather on
             writer_mcast_sender_args.insert(
@@ -1138,12 +1129,12 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             std::vector<uint32_t> writer_mcast_post_sender_args;
             if (use_two_stage_reduce) {
                 if (width_index < 1) {
-                    writer_mcast_post_sender_args.push_back(packed_cinv_value);
+                    writer_mcast_post_sender_args.push_back(cinv_bits);
                 } else {
-                    writer_mcast_post_sender_args.push_back(packed_cinv_value_one);
+                    writer_mcast_post_sender_args.push_back(cinv_one_bits);
                 }
             } else {
-                writer_mcast_post_sender_args.push_back(packed_cinv_value);
+                writer_mcast_post_sender_args.push_back(cinv_bits);
             }
             writer_mcast_post_sender_args.push_back(e.u);
             writer_mcast_post_sender_args.push_back(gamma_dram_addr);
@@ -1175,14 +1166,13 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             writer_mcast_receiver_args.push_back(mcast_start.y);
             writer_mcast_receiver_args.push_back(mcast_end.x);
             writer_mcast_receiver_args.push_back(mcast_end.y);
-            writer_mcast_receiver_args.push_back(packed_winv_value);
-            writer_mcast_receiver_args.push_back(packed_cinv_value_pre);
+            writer_mcast_receiver_args.push_back(cinv_pre_bits);
             writer_mcast_receiver_args.push_back(i);  // Core ID to limit number of cores to do all gather on
             writer_mcast_receiver_args.insert(
                 writer_mcast_receiver_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_receiver_args.at(0) = writer_mcast_receiver_args.size();
             std::vector<uint32_t> writer_mcast_post_receiver_args;
-            writer_mcast_post_receiver_args.push_back(packed_cinv_value);
+            writer_mcast_post_receiver_args.push_back(cinv_bits);
             writer_mcast_post_receiver_args.push_back(e.u);
             writer_mcast_post_receiver_args.push_back(gamma_dram_addr);
             writer_mcast_post_receiver_args.push_back(gamma_tile_start_id);
@@ -1270,14 +1260,14 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
 
             if (writer_kernel_id == shared_vars.writer_mcast_sender_kernels_id) {
                 auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-                runtime_args[8] = operation_attributes.semaphore.address();
-                runtime_args[10] = stats_tensor.value().buffer()->address();
+                runtime_args[7] = operation_attributes.semaphore.address();
+                runtime_args[9] = stats_tensor.value().buffer()->address();
                 // runtime_args[0] holds the start of the post arguments, apply that offset
                 runtime_args[runtime_args[0] + 2] = gamma_address;
             } else if (writer_kernel_id == shared_vars.writer_mcast_receiver_kernels_id) {
                 auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-                runtime_args[8] = operation_attributes.semaphore.address();
-                runtime_args[10] = stats_tensor.value().buffer()->address();
+                runtime_args[7] = operation_attributes.semaphore.address();
+                runtime_args[9] = stats_tensor.value().buffer()->address();
                 runtime_args[runtime_args[0] + 2] = gamma_address;
             }
         }
