@@ -30,11 +30,11 @@ repos:
       files: ^models/
       exclude: ^models/(demos/llama3_70b_galaxy|experimental)/
 - repo: https://github.com/BlankSpruce/gersemi
-  rev: 0.16.2
+  rev: 0.26.1
   hooks:
     - id: gersemi
 - repo: https://github.com/adrienverge/yamllint.git
-  rev: v1.35.1
+  rev: v1.38.0
   hooks:
     - id: yamllint
 - repo: https://github.com/pre-commit/mirrors-clang-format
@@ -102,6 +102,31 @@ repos:
       pass_filenames: false
       files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
 
+- repo: https://github.com/shellcheck-py/shellcheck-py
+  rev: v0.11.0.1
+  hooks:
+    - id: shellcheck
+      files: ^.*\.sh$
+
+#- repo: https://github.com/rhysd/actionlint
+#  rev: v2.7.12
+#  hooks:
+#    - id: actionlint
+#      files: ^\.github/.*\.(yaml|yml)$
+
+- repo: local
+  hooks:
+    - id: check-github-actions-security
+      name: Check GitHub Actions for security anti-patterns
+      entry: bash .github/scripts/security/check-actions-security-parallel.sh --strict
+      language: system
+      pass_filenames: false
+      files: ^\.github/.*\.(yaml|yml)$
+
+
+# ---- LLK hooks (tt_metal/tt-llk/) ----
+# LLK lives at tt_metal/tt-llk/ and has its own formatting standards.
+# Metal's hooks above are excluded from that subtree; these entries replace them.
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.
 # Metal's hooks above are excluded from that subtree; these entries replace them.
