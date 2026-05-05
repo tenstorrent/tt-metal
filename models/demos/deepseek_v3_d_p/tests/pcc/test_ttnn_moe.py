@@ -11,7 +11,6 @@ Gate → Dispatch → Routed Experts → Combine → Split → Add Shared.
 """
 
 import random
-from pathlib import Path
 
 import pytest
 import torch
@@ -51,7 +50,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
     log_validation_results,
     visualize_expert_dispatch_table,
 )
-from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
@@ -142,7 +140,6 @@ def test_ttnn_moe(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
     n_sp_devices, n_tp_devices = mesh_device.shape
-    layer_idx = 0
 
     logger.debug(f"\n{'='*60}")
     logger.debug("TtMoe PCC Test")
@@ -174,7 +171,7 @@ def test_ttnn_moe(
     )
 
     # ========================================
-    # Step 1: Create weights (cache-aware)
+    # Step 1: Create weights
     # ========================================
     moe_cache_dir = Path(
         f"/tmp/deepseek_v3_moe_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid"
@@ -262,10 +259,10 @@ def test_ttnn_moe(
             all_routed_weights = None
             shared_expert_weights = None
     else:
-        logger.info("TTNN cache complete, skipping torch weight creation")
         all_routed_weights = None
         shared_expert_weights = None
-        gate_weights = None
+
+    gate_weights = create_gate_weights(num_routed_experts, emb_dim)
 
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
@@ -352,8 +349,6 @@ def test_ttnn_moe(
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
-        weight_cache_path=moe_cache_dir,
-        layer_idx=layer_idx,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
