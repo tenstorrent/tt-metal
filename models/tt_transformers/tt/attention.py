@@ -1150,10 +1150,6 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        # For single-user prefill, reshape to expected format for nlp_concat_heads
-        # For batched prefill (batch_size > 1), skip this reshape - nlp_concat_heads handles [B, H, S, D]
-        # IMPORTANT: Reshaping [B, H, S, D] to [1, H, B*S, D] BEFORE concat_heads would scramble data
-        # because batch and sequence dimensions are separated by heads. Must reshape AFTER concat_heads.
         if batch_size == 1:
             attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
         else:
@@ -1171,15 +1167,10 @@ class Attention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        # For batched prefill, reshape to concatenate batch dimension into sequence
-        # This MUST happen AFTER nlp_concat_heads to preserve correct data layout
-        # nlp_concat_heads outputs [B, 1, S_per_user, H*D], reshape to [1, 1, B*S, H*D]
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
         # reshaping long sequence to matmul fit on device (chunks of 1024 along seq)
-        # Total seq must be divisible by 1024 (e.g. batched prefill: batch*seq_per_user can be 12800)
-        # Length along seq after rounding up to a multiple of 1024 (not "pad to length 1024").
         seq_len_1024_aligned = seq_len
         if seq_len > 1024:
             seq_len_1024_aligned = ((seq_len + 1023) // 1024) * 1024

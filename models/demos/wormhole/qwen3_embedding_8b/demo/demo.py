@@ -42,13 +42,18 @@ import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
-from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES, Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name
 
 # HuggingFace checkpoint id; must match model_config (set HF_MODEL in the environment).
 _DEFAULT_HF_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 MODEL_NAME = (os.environ.get("HF_MODEL") or _DEFAULT_HF_MODEL).strip() or _DEFAULT_HF_MODEL
 BLOCK_SIZE = 32
+
+
+def _embedding_max_batch_size(batch_per_dp: int) -> int:
+    padded = next((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_per_dp), batch_per_dp)
+    return max(batch_per_dp, padded)
 
 
 def _hf_hub_cache_dir() -> str:
@@ -284,7 +289,7 @@ def prepare_embedding_model(
         model_args_i, model_i, kv_cache_i, state_dict = create_tt_model(
             submesh,
             instruct=False,
-            max_batch_size=batch_per_dp,
+            max_batch_size=_embedding_max_batch_size(batch_per_dp),
             optimizations=optimizations,
             max_seq_len=max_seq_len,
             paged_attention_config=paged_attention_config,
