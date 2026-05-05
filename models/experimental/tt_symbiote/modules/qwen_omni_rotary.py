@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3-Omni-MoE RoPE on TTNN: HF-compatible freqs; inv_freq/MRoPE interleave in torch; cos/sin via ttnn; mesh may need AG for full S. Non-default rope_type delegates to _fallback_torch_layer."""
+"""Qwen3-Omni-MoE RoPE: HF-compatible freqs; inv_freq/MRoPE interleave + cos/sin computed in torch on host. Outputs are returned as host tensors so downstream attention modules decide their own upload/layout (avoids redundant per-layer host-device round-trips). Non-default rope_type delegates to _fallback_torch_layer."""
 
 from __future__ import annotations
 
@@ -118,62 +118,21 @@ def _apply_interleaved_mrope_torch(
 
 
 def _cos_sin_ttnn(emb: torch.Tensor, attention_scaling: float, device, out_dtype: torch.dtype):
-    """Compute ``cos(emb)``, ``sin(emb)`` on device with ``ttnn``; stitch seq shards on mesh if needed."""
+    """Compute ``cos(emb)``, ``sin(emb)`` in torch and return host tensors.
+
+    Audio/text output is mathematically unchanged: this matches HF's reference path
+    (``emb.cos() * attention_scaling``, ``emb.sin() * attention_scaling``) and ``emb`` is
+    already float32 from the caller. The previous implementation uploaded ``emb`` to the
+    mesh, ran ``ttnn.cos/sin`` in float32, and read back to host, after which downstream
+    attention modules re-uploaded ``cos/sin`` with their own layout/mesh strategy. That
+    round-trip only added latency / PCIe pressure on every layer's RoPE call.
+    ``device`` is intentionally unused (kept for signature compatibility with callers).
+    """
     if emb.ndim != 3:
         raise ValueError(f"_cos_sin_ttnn expects [batch, seq, dim], got {tuple(emb.shape)}")
-
-    b, s, h = int(emb.shape[0]), int(emb.shape[1]), int(emb.shape[2])
-    target_shape = (b, s, h)
-    nd = int(device.get_num_devices())
-    mesh_mapper = ttnn.ReplicateTensorToMesh(device) if nd > 1 else None
-
-    emb_tt = ttnn.from_torch(
-        emb.float().contiguous(),
-        device=device,
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=mesh_mapper,
-    )
-    cos = ttnn.cos(emb_tt) * attention_scaling
-    sin = ttnn.sin(emb_tt) * attention_scaling
-    if out_dtype == torch.bfloat16:
-        cos = ttnn.typecast(cos, ttnn.bfloat16)
-        sin = ttnn.typecast(sin, ttnn.bfloat16)
-    elif out_dtype == torch.float16:
-        cos = ttnn.typecast(cos, ttnn.float16)
-        sin = ttnn.typecast(sin, ttnn.float16)
-
-    if nd > 1:
-        # Mesh cos/sin may shard sequence on any dim, not only dim=1; stitch before host readback.
-        while True:
-            gather_dim = None
-            for d in range(len(cos.shape)):
-                s_local = int(cos.shape[d])
-                if s_local != s and s_local * nd == s:
-                    gather_dim = d
-                    break
-            if gather_dim is None:
-                break
-            cos = ttnn.all_gather(cos, dim=gather_dim, num_links=1, topology=ttnn.Topology.Linear)
-            sin = ttnn.all_gather(sin, dim=gather_dim, num_links=1, topology=ttnn.Topology.Linear)
-            ttnn.synchronize_device(device)
-
-    if nd <= 1:
-        cos_t = ttnn.to_torch(cos)
-        sin_t = ttnn.to_torch(sin)
-    else:
-        composer = ttnn.ConcatMeshToTensor(device, dim=0)
-        cos_t = ttnn.to_torch(cos, mesh_composer=composer)
-        sin_t = ttnn.to_torch(sin, mesh_composer=composer)
-        if cos_t.shape != target_shape:
-            if cos_t.numel() == b * s * h:
-                cos_t = cos_t.reshape(target_shape)
-                sin_t = sin_t.reshape(target_shape)
-            elif cos_t.ndim == 3 and cos_t.shape[0] == nd * b and cos_t.shape[1] == s and cos_t.shape[2] == h:
-                cos_t = cos_t[:b].contiguous()
-                sin_t = sin_t[:b].contiguous()
-
-    return cos_t.to(dtype=out_dtype), sin_t.to(dtype=out_dtype)
+    cos = emb.cos() * attention_scaling
+    sin = emb.sin() * attention_scaling
+    return cos.to(dtype=out_dtype), sin.to(dtype=out_dtype)
 
 
 class TTNNQwen3OmniMoeThinkerTextRotaryEmbedding(TTNNModule):
@@ -333,30 +292,10 @@ class TTNNQwen3OmniMoeVisionRotaryEmbedding(TTNNModule):
         return _set_rotary_outputs_replicated(self, output_tensors)
 
     def forward(self, seqlen: int):
+        # Same math as HF reference: torch.outer(arange, inv_freq). The previous TTNN matmul
+        # path uploaded both 1D operands and read the tiny result back, so it only added
+        # host-device round-trips with no kernel benefit.
         inv_freq = self._inv_freq_cpu
-        d_half = int(inv_freq.shape[0])
         seq = torch.arange(seqlen, device=inv_freq.device, dtype=torch.float32)
         freqs = torch.outer(seq, inv_freq)
-
-        if self.device is None:
-            return freqs.to(dtype=inv_freq.dtype)
-
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-        seq_col = ttnn.from_torch(
-            seq.reshape(seqlen, 1).contiguous(),
-            device=self.device,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=mesh_mapper,
-        )
-        inv_row = ttnn.from_torch(
-            inv_freq.reshape(1, d_half).contiguous(),
-            device=self.device,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=mesh_mapper,
-        )
-        freqs_tt = ttnn.matmul(seq_col, inv_row)
-        freqs_host = _ttnn_replicated_to_torch(self.device, freqs_tt, leading_dim=seqlen)
-        freqs_out = freqs_host.reshape(seqlen, d_half).to(dtype=inv_freq.dtype)
-        return freqs_out
+        return freqs.to(dtype=inv_freq.dtype)

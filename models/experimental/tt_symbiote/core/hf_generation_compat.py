@@ -110,10 +110,12 @@ def apply_qwen3_omni_talker_prepare_inputs_fix() -> None:
                     return_dict_in_generate=True,
                 )
                 if cp_do_sample:
-                    # Conservative defaults to improve pronunciation stability on named entities.
+                    # Conservative defaults to improve pronunciation stability on named entities
+                    # (e.g. "Porsche 911"): greedy bf16 deterministically picks bad code tokens, but
+                    # too-loose sampling produces audio noise bursts, so keep a tight nucleus.
                     _cp_kw["top_k"] = 20
                     _cp_kw["top_p"] = 0.6
-                    _cp_kw["temperature"] = 0.7
+                    _cp_kw["temperature"] = 0.5
                 predictor_result = self.code_predictor.generate(**_cp_kw)
                 residual_codes = torch.cat((input_ids, predictor_result.sequences.to(input_ids.device)), dim=-1)
 

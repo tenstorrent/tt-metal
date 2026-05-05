@@ -845,19 +845,32 @@ def test_qwen_omni(mesh_device):
 
     DispatchManager.clear_timings()
 
-    # Inference: generation of output text and audio. Greedy talker decoding (do_sample=False) is fragile with TTNN bfloat16 precision:
-    talker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_MAX_NEW_TOKENS", "1024"))
-    talker_do_sample = os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_DO_SAMPLE", "1").lower() in ("1", "true", "yes")
-    thinker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_THINKER_MAX_NEW_TOKENS", "32"))
+    # Inference: generation of output text and audio. Greedy talker decoding (do_sample=False) is fragile with TTNN bfloat16 precision.
+    # Mild sampling on a tight nucleus is what actually produces clean audio for rare/foreign
+    # names (e.g. "Porsche 911"): HF defaults are top_p=1.0 / temperature=0.9 which, combined
+    # with bf16 logit drift, occasionally samples low-probability code tokens that the codec
+    # renders as audible noise bursts. The values below mirror the residual code-predictor
+    # nucleus configured in core/hf_generation_compat.py so both stages of the talker pipeline
+    # stay coherent.
+    talker_max_new_tokens = 1024
+    talker_do_sample = True
+    talker_speaker = "Chelsie"
+    talker_top_k = 20
+    talker_top_p = 0.6
+    talker_temperature = 0.5
+    thinker_max_new_tokens = 32
     t_start = time.perf_counter()
     text_ids, audio = model.generate(
         **inputs,
-        speaker="Ethan",
+        speaker=talker_speaker,
         thinker_return_dict_in_generate=True,
         max_new_tokens=thinker_max_new_tokens,
         use_audio_in_video=USE_AUDIO_IN_VIDEO,
         talker_do_sample=talker_do_sample,
         talker_max_new_tokens=talker_max_new_tokens,
+        talker_top_k=talker_top_k,
+        talker_top_p=talker_top_p,
+        talker_temperature=talker_temperature,
     )
     ttnn.synchronize_device(mesh_device)
     total_time_s = time.perf_counter() - t_start
