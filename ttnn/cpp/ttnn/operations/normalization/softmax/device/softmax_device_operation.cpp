@@ -9,6 +9,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "softmax_operation_types.hpp"
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -328,67 +329,8 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
 
                 const auto& a = tensors_args.input_tensor;
                 if (a.is_sharded()) {
-                    const auto& shard_spec = a.shard_spec().value();
-                    const auto& shard_shape = shard_spec.shape;
-                    const auto& shard_grid = shard_spec.grid;
-                    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-                    const uint32_t tile_width = a.tensor_spec().tile().get_width();
-
-                    const auto device_grid = a.device()->compute_with_storage_grid_size();
-                    const auto program_grid = program_config.compute_with_storage_grid_size;
-
-                    TT_FATAL(shard_grid.num_cores() > 0, "Shard grid must have at least one core");
-
-                    const CoreRange device_range(CoreCoord{0, 0}, CoreCoord{device_grid.x - 1, device_grid.y - 1});
-                    const CoreRange program_range(CoreCoord{0, 0}, CoreCoord{program_grid.x - 1, program_grid.y - 1});
-                    TT_FATAL(
-                        device_range.contains(program_range),
-                        "program_config grid ({}x{}) must be contained within device grid ({}x{})",
-                        program_grid.x,
-                        program_grid.y,
-                        device_grid.x,
-                        device_grid.y);
-
-                    const auto shard_bbox = shard_grid.bounding_box();
-                    const auto shard_offset = shard_bbox.start_coord;
-                    const CoreRange shifted_shard_bbox(
-                        CoreCoord{0, 0},
-                        CoreCoord{shard_bbox.end_coord.x - shard_offset.x, shard_bbox.end_coord.y - shard_offset.y});
-                    TT_FATAL(
-                        program_range.contains(shifted_shard_bbox),
-                        "shard_spec.grid size {}x{} does not fit within program_config grid {}x{}",
-                        shard_bbox.end_coord.x - shard_bbox.start_coord.x + 1,
-                        shard_bbox.end_coord.y - shard_bbox.start_coord.y + 1,
-                        program_grid.x,
-                        program_grid.y);
-
-                    TT_FATAL(
-                        shard_shape[0] > 0 && shard_shape[1] > 0,
-                        "shard shape must be non-zero, got H={} W={}",
-                        shard_shape[0],
-                        shard_shape[1]);
-
-                    TT_FATAL(
-                        shard_shape[0] % tile_height == 0,
-                        "shard height {} must be divisible by tile height {}",
-                        shard_shape[0],
-                        tile_height);
-                    TT_FATAL(
-                        shard_shape[1] % tile_width == 0,
-                        "shard width {} must be divisible by tile width {}",
-                        shard_shape[1],
-                        tile_width);
-
-                    const auto num_cores = shard_grid.num_cores();
-                    const auto total_from_shards = static_cast<uint64_t>(num_cores) * shard_shape[0] * shard_shape[1];
-                    TT_FATAL(
-                        total_from_shards == a.physical_volume(),
-                        "Total elements from shards ({} cores * {}x{}) = {} does not match tensor physical volume {}",
-                        num_cores,
-                        shard_shape[0],
-                        shard_shape[1],
-                        total_from_shards,
-                        a.physical_volume());
+                    ttnn::operations::normalization::detail::validate_sharded_input(
+                        a, program_config.compute_with_storage_grid_size);
                 }
             }
         },
