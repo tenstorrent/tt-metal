@@ -8,7 +8,6 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
-#include "api/compute/transpose_wh.h"  // for transpose_wh_init_short used in welford_init
 #ifdef TRISC_MATH
 #include "llk_math_welfords_sfpu_entry.h"
 #endif
@@ -22,13 +21,12 @@ namespace ckernel {
  * @brief Initializes the Welford's algorithm.
  * Programs the address mod and replay buffers for the Welford's algorithm.
  * Clears the previous mean and m2 values stored in the registers.
- * Also calls transpose_wh_init_short to set state properly.
  * This call is blocking and is only available on the compute engine.
  */
 ALWI void welford_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
     MATH((llk_math_welfords_sfpu_init()));
     MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
-    transpose_wh_init_short(cbid, call_line);
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 }
 
 /**

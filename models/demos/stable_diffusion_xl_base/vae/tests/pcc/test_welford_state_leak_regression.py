@@ -3,25 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Fast regression test for tt-metal#39225 (welford GN unpacker state leak on
+Fast regression test for tt-metal#39225 (welford GN state leak on
 Blackhole).
-
-The bug: an earlier op (in the same Python process / pytest run) that uses
-the Tensix unpacker SrcB pipeline can leave the TDMA SrcB regif port in a
-non-default state (e.g. addr=0x18, data_format=5 for bfloat16). A
-subsequent welford-GN compute kernel then inherits that leaked state and
-corrupts its first SrcB FPU read.
-
-Originally observed in `test_module_tt_resnetblock2d.py::test_vae_resnetblock2d`
-where running case 1 (up_blocks-0-0) before case 2 (up_blocks-1-0) caused
-case 2's welford GN1 to fail PCC at a bit-identical 0.9129693567794291 (vs
-~0.999 expected) -- the failure compounded through silu / conv / norm2 /
-silu / conv / residual into a final PCC of 0.913.
-
-The fix in `tt_metal/hw/inc/api/compute/welford.h` makes `welford_init`
-call `state_configure` + `llk_unpack_A_init` with transpose flags ON
-(mirroring `transpose_wh_init_short`). That LLK sequence is the only one
-observed to drain the leaked TDMA SrcB pipeline state without deadlocking.
 
 This regression test is the *minimum* reproduction we found: just two
 parametrize cases of test_vae_resnetblock2d, in order, both with welford
@@ -162,11 +145,7 @@ def test_welford_state_leak_regression(
 ):
     """tt-metal#39225 regression. Runs the up_blocks-0-0 resnet block
     (PRIME) and then the up_blocks-1-0 resnet block (PROBE) in the same
-    process. PROBE must reach PCC >= 0.999.
-
-    Without the welford_init unpack-A-init drain (welford.h), PROBE's
-    welford GN1 inherits leaked TDMA SrcB pipeline state from PRIME and
-    PCC drops to a bit-identical 0.9129693567794291."""
+    process. PROBE must reach PCC >= 0.999."""
 
     # Load the VAE state dict once and pass it to both cases. The
     # AutoencoderKL.from_pretrained call inside _run_resnet_forward
