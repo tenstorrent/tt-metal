@@ -433,7 +433,10 @@ class VectorExportSource(VectorSource):
                         try:
                             machine_info = _json.loads(line[len("__MI__") :])
                         except _json.JSONDecodeError:
-                            pass
+                            logger.debug(
+                                "Failed to decode get_machine_info JSON payload; ignoring line: %s",
+                                line[len("__MI__") :][:500],
+                            )
                         break
             else:
                 logger.debug(
