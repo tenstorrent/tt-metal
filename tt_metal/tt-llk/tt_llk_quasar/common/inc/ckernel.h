@@ -750,51 +750,14 @@ void set_up_dest_dvalid_per_thread(dest_dvalid_client const (&clients)[N])
 
 // d e e p e s t l o r e
 __attribute__((always_inline)) inline void rv_wrcfg(
-    std::uint32_t const &wrdata_hi,
-    std::uint32_t const &wrdata_lo,
-    std::uint32_t const &cfg_addr,
-    std::uint32_t const write_64b = 0,
-    std::uint32_t const byte_mask = 0xFF)
+    std::uint32_t wrdata_hi, std::uint32_t wrdata_lo, std::uint32_t cfg_addr, std::uint32_t write_64b = 0, std::uint32_t byte_mask = 0xFF)
 {
-    std::uint32_t const base_instrn = TT_OP_RV_WRCFG(byte_mask, write_64b, 0, 0, 0);
     asm volatile(
-        ".equ reg_lut_zero, 0\n"
-        ".equ reg_lut_ra, 1\n"
-        ".equ reg_lut_sp, 2\n"
-        ".equ reg_lut_gp, 3\n"
-        ".equ reg_lut_tp, 4\n"
-        ".equ reg_lut_t0, 5\n"
-        ".equ reg_lut_t1, 6\n"
-        ".equ reg_lut_t2, 7\n"
-        ".equ reg_lut_s0, 8\n"
-        ".equ reg_lut_fp, 8\n"
-        ".equ reg_lut_s1, 9\n"
-        ".equ reg_lut_a0, 10\n"
-        ".equ reg_lut_a1, 11\n"
-        ".equ reg_lut_a2, 12\n"
-        ".equ reg_lut_a3, 13\n"
-        ".equ reg_lut_a4, 14\n"
-        ".equ reg_lut_a5, 15\n"
-        ".equ reg_lut_a6, 16\n"
-        ".equ reg_lut_a7, 17\n"
-        ".equ reg_lut_s2, 18\n"
-        ".equ reg_lut_s3, 19\n"
-        ".equ reg_lut_s4, 20\n"
-        ".equ reg_lut_s5, 21\n"
-        ".equ reg_lut_s6, 22\n"
-        ".equ reg_lut_s7, 23\n"
-        ".equ reg_lut_s8, 24\n"
-        ".equ reg_lut_s9, 25\n"
-        ".equ reg_lut_s10, 26\n"
-        ".equ reg_lut_s11, 27\n"
-        ".equ reg_lut_t3, 28\n"
-        ".equ reg_lut_t4, 29\n"
-        ".equ reg_lut_t5, 30\n"
-        ".equ reg_lut_t6, 31\n"
-        ".ttinsn %[base_instrn] + (reg_lut_%[reg0] << 0) + (reg_lut_%[reg1] << 5) + (reg_lut_%[reg2] << 10)"
-        :
-        : [base_instrn] "n"(base_instrn), [reg2] "r"(wrdata_lo), [reg1] "r"(wrdata_hi), [reg0] "r"(cfg_addr)
-        :);
+        "ttrv_wrcfg %[addr],%[hi],%[lo],%[mask],%[wr64b]" ::[addr] "r"(cfg_addr),
+        [hi] "r"(wrdata_hi),
+        [lo] "r"(wrdata_lo),
+        [mask] "n"(byte_mask),
+        [wr64b] "n"(write_64b));
 }
 
 // Refer to the comments about the Ports for RISC memory-mapped access near
