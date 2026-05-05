@@ -151,17 +151,16 @@ class TriageScriptManager:
         context: Context,
     ) -> Any:
         """Run the loaded subgraph for an explicit `--run X`.
-        Deps run with log_error=True so their failures/skips are captured and can cascade
-        cleanly to the target. The target itself runs with log_error=False so its own
-        failure raises rather than being silently swallowed."""
-        target_path = os.path.abspath(script_path)
+        Failures and skips are captured into each script's status so the caller can route
+        them through serialize_result uniformly. Failed deps still raise TTTriageError
+        so the cascade surfaces loudly under --run, rather than silently skipping."""
         results: dict[str, Any] = {}
         for script in self.script_queue:
             if _propagate_skip(script, raise_on_failed_dep=True):
                 results[script.path] = None
                 continue
-            results[script.path] = script.run(args=args, context=context, log_error=script.path != target_path)
-        return results.get(target_path)
+            results[script.path] = script.run(args=args, context=context)
+        return results.get(os.path.abspath(script_path))
 
     def build_summary(self) -> str:
         """One line per script: FAIL, SKIP, or pass (data providers' pass status is omitted)."""
