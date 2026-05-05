@@ -72,10 +72,12 @@ runs:
         fi
 
         # Output the data using heredoc for multi-line safety
+        # Use a unique delimiter to prevent early termination if data contains the literal string
+        DELIM="EOF_DATA_$$_${RANDOM}"
         {
-          echo "data<<EOF_DATA"
+          echo "data<<${DELIM}"
           echo "$DATA"
-          echo "EOF_DATA"
+          echo "${DELIM}"
         } >> "$GITHUB_OUTPUT"
 
     - name: Extract outputs
@@ -88,10 +90,12 @@ runs:
         set -euo pipefail
 
         # Pass through the full data
+        # Use a unique delimiter to prevent early termination if data contains the literal string
+        DELIM="EOF_DATA_$$_${RANDOM}"
         {
-          echo "data<<EOF_DATA"
+          echo "data<<${DELIM}"
           echo "$DATA"
-          echo "EOF_DATA"
+          echo "${DELIM}"
         } >> "$GITHUB_OUTPUT"
 
         # Extract each mapped output

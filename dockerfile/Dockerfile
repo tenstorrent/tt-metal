@@ -258,7 +258,7 @@ RUN adduser --uid 1001 --shell /bin/bash user && \
     usermod -aG sudo user && \
     echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
     mkdir -p /run/sshd && \
-    echo "StrictModes no" | sudo tee -a /etc/ssh/sshd_config
+    echo "StrictModes no" >> /etc/ssh/sshd_config
 
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899

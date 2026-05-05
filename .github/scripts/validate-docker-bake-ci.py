@@ -12,6 +12,8 @@ import sys
 BAKE_FILE = "dockerfile/docker-bake.hcl"
 HARBOR_PREFIX = "harbor.ci.tenstorrent.net/"
 REPO = "ghcr.io/tenstorrent/tt-metal"
+# zstd level 22 (max) — matches the BAKE_OUTPUT env in build-docker-artifact.yaml.
+# Update here whenever the workflow env constant changes.
 BAKE_OUTPUT = "type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"
 
 
@@ -140,6 +142,22 @@ def main() -> int:
         ]
     )
 
+    for tool in ("ccache", "sfpi"):
+        sets.extend(
+            [
+                "--set",
+                f"evaluation.contexts.{tool}-layer=docker-image://{harbor_prefixed(TOOL_TAGS[tool])}",
+            ]
+        )
+    sets.extend(
+        [
+            "--set",
+            f"evaluation.tags={REPO}/tt-metalium/evaluation:test",
+            "--set",
+            f"evaluation.output={BAKE_OUTPUT}",
+        ]
+    )
+
     rendered = run_bake_print(
         *sets,
         "ci-build",
@@ -148,6 +166,7 @@ def main() -> int:
         "basic-dev",
         "basic-ttnn-runtime",
         "manylinux",
+        "evaluation",
     )
     targets = rendered["target"]
 
@@ -158,6 +177,7 @@ def main() -> int:
         "basic-dev",
         "basic-ttnn-runtime",
         "manylinux",
+        "evaluation",
     ):
         target = targets[name]
         if not target.get("tags"):

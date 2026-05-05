@@ -19,6 +19,9 @@ permissions:
   packages: write
 
 env:
+  # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
+  # Acceptable for tool/venv images (built infrequently). For ci-test/dev images (built on every
+  # Dockerfile change), monitor push duration and lower to level 3 if it becomes a bottleneck.
   BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
@@ -130,18 +133,7 @@ jobs:
       llk-ci-exists: ${{ steps.llk-images.outputs.llk-ci-exists }}
       llk-ci-tag: ${{ steps.llk-images.outputs.llk-ci-tag }}
     steps:
-      - name: Checkout repo for metadata computation
-        if: ${{ inputs.platform-data == '' || inputs.tool-tags == '' }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-          fetch-depth: 1
-          submodules: recursive
-
-      # When platform-data and tool-tags are both supplied (e.g. from build-all-docker-images preflight),
-      # the checkout above is skipped — still need tt_llk for LLK tag + manifest check.
-      - name: Checkout repo for LLK metadata
-        if: ${{ inputs.platform-data != '' && inputs.tool-tags != '' }}
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.sha }}

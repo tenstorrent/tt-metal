@@ -16,13 +16,15 @@ jobs:
   check:
     name: "Check Harbor"
     runs-on: tt-ubuntu-light
+    permissions:
+      contents: read
     outputs:
       harbor-prefix: ${{ steps.check.outputs.harbor-prefix }}
     steps:
       - name: Check Harbor availability
         id: check
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
           HARBOR_HEALTHY=false
           if ! command -v jq > /dev/null 2>&1; then

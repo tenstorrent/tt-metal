@@ -77,7 +77,7 @@ runs:
           if docker pull "$harbor_tag" 2>/dev/null; then
             echo "  Successfully pulled through Harbor"
           else
-            echo "  Harbor pull failed, trying direct GHCR: $ghcr_tag"
+            echo "::warning::Harbor pull failed for $harbor_tag — falling back to direct GHCR"
             if docker pull "$ghcr_tag" 2>/dev/null; then
               echo "  Successfully pulled from GHCR"
             else

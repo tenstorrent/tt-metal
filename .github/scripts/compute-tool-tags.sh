@@ -40,7 +40,7 @@ done
 
 # Handle special cases (sfpi and openmpi) separately
 SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 12)
-OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh | sha1sum | cut -d' ' -f1 | head -c 12)
+OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh .github/scripts/install-slurm.sh | sha1sum | cut -d' ' -f1 | head -c 12)
 
 # Generate tags: <harbor-prefix>ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
 BASE="${HARBOR_PREFIX}ghcr.io/${REPO}/tt-metalium/tools"

@@ -16,6 +16,9 @@ name: "Build all Docker images"
 # =============================================================================
 
 env:
+  # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
+  # Acceptable for tool/venv images (built infrequently). For ci-test/dev images (built on every
+  # Dockerfile change), monitor push duration and lower to level 3 if it becomes a bottleneck.
   BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
