@@ -563,9 +563,21 @@ def test_qwen_omni_vision_attention_pcc(mesh_device, full_omni_model_for_pcc):
 
     head_dim = config.hidden_size // config.num_heads
 
-    # cos/sin [seq, head_dim] like HF; 3D [seq,1,head] breaks TTNN vision RoPE (rank mismatch after unsqueeze).
-    cos = torch.randn(seq_len, head_dim, dtype=torch.bfloat16)
-    sin = torch.randn(seq_len, head_dim, dtype=torch.bfloat16)
+    # Drive cos/sin from the real vision rotary module so that cos = cos(θ) and sin = sin(θ)
+    # for the same θ — random independent draws hide structural RoPE bugs (wrong head-dim
+    # split, swapped halves) because they don't satisfy sin² + cos² = 1. Mirrors the HF
+    # vision encoder construction:
+    #   freq_table   = rotary_pos_emb(seq_len)               # [seq, head_dim // 4]
+    #   rotary_pos_e = cat([freq_table, freq_table], dim=-1) # [seq, head_dim // 2] (h⊕w freqs)
+    #   emb          = cat([rotary_pos_e, rotary_pos_e], -1) # [seq, head_dim]
+    #   cos, sin     = emb.cos(), emb.sin()
+    vision_rotary_emb = m.thinker.visual.rotary_pos_emb
+    with torch.no_grad():
+        freq_table = vision_rotary_emb(seq_len)
+        rotary_pos_emb_full = torch.cat((freq_table, freq_table), dim=-1)
+        emb = torch.cat((rotary_pos_emb_full, rotary_pos_emb_full), dim=-1)
+        cos = emb.cos().to(torch.bfloat16)
+        sin = emb.sin().to(torch.bfloat16)
 
     with torch.no_grad():
         torch_out = torch_attn(
@@ -665,10 +677,19 @@ def test_qwen_omni_code2wav_attention_pcc(mesh_device, full_omni_model_for_pcc):
 
     batch, seq_len = 1, 64
     hs = torch.randn(batch, seq_len, config.hidden_size, dtype=torch.bfloat16)
-    head_dim = int(torch_attn.head_dim)
-    cos = torch.cos(torch.randn(batch, seq_len, head_dim, dtype=torch.bfloat16))
-    sin = torch.sin(torch.randn(batch, seq_len, head_dim, dtype=torch.bfloat16))
+
+    # Drive cos/sin from the real code2wav rotary embedding so cos = cos(θ) and sin = sin(θ)
+    # come from the same θ. Independent random draws don't satisfy sin² + cos² = 1 and would
+    # let structural RoPE bugs (head-dim split, swapped halves) slip through PCC. This mirrors
+    # the production path in Qwen3OmniMoeCode2WavTransformerModel.forward:
+    #   position_ids = torch.arange(seq_len).unsqueeze(0)
+    #   position_embeddings = self.rotary_emb(hidden_states, position_ids)
+    rotary_emb = code2wav.pre_transformer.rotary_emb
+    position_ids = torch.arange(seq_len).unsqueeze(0)
     with torch.no_grad():
+        cos, sin = rotary_emb(hs, position_ids)
+        cos = cos.to(torch.bfloat16)
+        sin = sin.to(torch.bfloat16)
         torch_out, _ = torch_attn(hs, position_embeddings=(cos, sin), attention_mask=None)
     tt_ret = tt_attn(
         TorchTTNNTensor(hs),
