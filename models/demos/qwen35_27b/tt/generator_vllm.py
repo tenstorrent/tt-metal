@@ -56,17 +56,22 @@ class Qwen35ForCausalLM(Generator):
         assert tt_data_parallel == 1, (
             "Qwen3.5-27B vLLM adapter currently supports only tt_data_parallel=1; " f"got {tt_data_parallel}."
         )
-        # Resolution order for the weights path:
-        #   1. hf_config._name_or_path (what vLLM resolved from --model)
+        # Resolution order for the weights path. Prefer env-var paths first
+        # because vLLM's hf_config._name_or_path is the HF repo name (e.g.
+        # "Qwen/Qwen3.5-27B-FP8"), not a filesystem path; using it blindly
+        # would make load_qwen35_state_dict() try to open the repo name as a
+        # relative directory and fail.
+        #   1. MODEL_WEIGHTS_DIR (Docker convention, tt-inference-server sets this)
         #   2. HF_MODEL env var
-        #   3. create_qwen35_model's hardcoded ~/models/Qwen3.5-27B-FP8 default
+        #   3. hf_config._name_or_path — only if it resolves to a real directory
+        #   4. create_qwen35_model's hardcoded ~/models/Qwen3.5-27B-FP8 default
         import os
 
-        model_path = None
-        if hf_config is not None:
-            model_path = getattr(hf_config, "_name_or_path", None)
-        if not model_path:
-            model_path = os.environ.get("HF_MODEL")
+        model_path = os.environ.get("MODEL_WEIGHTS_DIR") or os.environ.get("HF_MODEL")
+        if not model_path and hf_config is not None:
+            candidate = getattr(hf_config, "_name_or_path", None)
+            if candidate and os.path.isdir(os.path.expanduser(candidate)):
+                model_path = candidate
         model = create_qwen35_model(
             mesh_device,
             model_path=model_path,
