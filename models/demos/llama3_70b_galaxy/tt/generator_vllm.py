@@ -6,6 +6,7 @@ import os
 
 import ttnn
 import torch
+from loguru import logger
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.generator import Generator
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
@@ -14,9 +15,20 @@ from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
 
 
+_DUMMY_WEIGHTS_LOGGED = False
+
+
 def _dummy_weights_from_env() -> bool:
     """vLLM nightly random-weights mode toggle (TT_DUMMY_WEIGHTS=1)."""
-    return os.environ.get("TT_DUMMY_WEIGHTS", "").lower() in ("1", "true", "yes")
+    enabled = os.environ.get("TT_DUMMY_WEIGHTS", "").lower() in ("1", "true", "yes")
+    global _DUMMY_WEIGHTS_LOGGED
+    if enabled and not _DUMMY_WEIGHTS_LOGGED:
+        logger.info(
+            "TT_DUMMY_WEIGHTS=1 detected; passing dummy_weights=True to galaxy "
+            "vLLM TT model construction (HF config + tokenizer still load; weights are random)"
+        )
+        _DUMMY_WEIGHTS_LOGGED = True
+    return enabled
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):

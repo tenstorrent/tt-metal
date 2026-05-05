@@ -32,6 +32,8 @@ from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
+_DUMMY_WEIGHTS_LOGGED = False
+
 
 def _dummy_weights_from_env() -> bool:
     """vLLM nightly random-weights mode toggle.
@@ -40,7 +42,15 @@ def _dummy_weights_from_env() -> bool:
     in this module with ``dummy_weights=True`` (config + tokenizer still load
     from HF Hub; only the multi-GB weight materialisation is skipped).
     """
-    return os.environ.get("TT_DUMMY_WEIGHTS", "").lower() in ("1", "true", "yes")
+    enabled = os.environ.get("TT_DUMMY_WEIGHTS", "").lower() in ("1", "true", "yes")
+    global _DUMMY_WEIGHTS_LOGGED
+    if enabled and not _DUMMY_WEIGHTS_LOGGED:
+        logger.info(
+            "TT_DUMMY_WEIGHTS=1 detected; passing dummy_weights=True to every "
+            "vLLM TT model construction (HF config + tokenizer still load; weights are random)"
+        )
+        _DUMMY_WEIGHTS_LOGGED = True
+    return enabled
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):

@@ -444,14 +444,16 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
-          # Build the VLLM server arguments array. --load-format dummy tells
-          # vLLM-core to skip its own weight materialisation; combined with
-          # TT_DUMMY_WEIGHTS=1 in the job env this means no weights ever leave
-          # HF Hub. We don't set TT_CACHE_PATH because random weights differ
-          # run to run — caching them is meaningless.
+          # vLLM's --load-format dummy is a no-op on the TT path:
+          # plugins/vllm-tt-plugin's TTModelLoader is instantiated directly by
+          # TTModelRunner.load_model and never consults model_config.load_format,
+          # so the stock DummyModelLoader is bypassed. The actual short-circuit
+          # is TT_DUMMY_WEIGHTS=1 in the job env, which our generator_vllm.py
+          # bridges read to flip dummy_weights=True on every TT model
+          # construction. We don't set TT_CACHE_PATH because random weights
+          # differ run to run — caching them is meaningless.
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
-          VLLM_SERVER_ARGS+=(--load-format dummy)
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${OVERRIDE_TT_CONFIG[@]}")
 
