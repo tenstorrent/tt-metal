@@ -1121,10 +1121,6 @@ class ModelArgs:
         # TODO: Add more model-specific filtering here
         # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
 
-        # RoPE / prefill buffers are allocated for this instance's max_seq_len; do not
-        # warm up at longer lengths (e.g. demos with max_seq_len=256 vs table [128, 1024]).
-        to_warmup_seq_lens = [s for s in to_warmup_seq_lens if s <= self.max_seq_len]
-
         # TODO: https://github.com/tenstorrent/tt-metal/issues/33991 - for P100 only, P150 has assert for ISL > 1K
         if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P100":
             for seq_len in to_warmup_seq_lens:
@@ -1136,6 +1132,7 @@ class ModelArgs:
     # =========================================================================
     # RESIDUAL MEMORY CONFIGS
     # =========================================================================
+    @lru_cache(maxsize=None)
     def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None):
         """Get the memory config for residual tensors (decode: sharded L1; prefill: L1 for short-seq on single-chip)."""
         if mode == Mode.DECODE:
@@ -1205,6 +1202,7 @@ class ModelArgs:
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
     # =========================================================================
+    @lru_cache(maxsize=None)
     def get_mlp_input_mem_config(
         self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -1346,6 +1344,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_mlp_ff1_3_mem_config(
         self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -1367,6 +1366,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_mlp_ff2_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None):
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1461,6 +1461,7 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     # NOTE: get_mlp_act_mem_config is a TG-specific MLP to memory config
+    @lru_cache(maxsize=None)
     def get_mlp_act_mem_config(self, mode: Mode, prefill_seq_len: Optional[int] = None):
         """Get the memory config for MLP activation (TG specific)."""
         if mode == Mode.DECODE:
@@ -1559,6 +1560,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_input_mem_config(
         self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -1657,6 +1659,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_qkv_mm_mem_config(
         self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -1683,6 +1686,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_qkv_all_reduce_output_mem_config(
         self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -1713,6 +1717,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_create_head_input_mem_config(self, mode: Mode, prefill_seq_len: Optional[int] = None):
         """Get the memory config for create_head input (TG specific)."""
         if mode == Mode.DECODE:
@@ -1722,6 +1727,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_create_head_output_mem_config(
         self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -1754,6 +1760,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_sdpa_output_mem_config(
         self,
         mode: Mode,
@@ -1791,6 +1798,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_concat_heads_output_mem_config(
         self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -1828,6 +1836,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_all_gather_output_mem_config(
         self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -1978,6 +1987,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_wo_output_mem_config(
         self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -2001,6 +2011,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_dense_output_mem_config(
         self, mode: Mode, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
@@ -2030,6 +2041,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_all_reduce_output_mem_config(
         self,
         mode: Mode,
@@ -2062,6 +2074,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_gather_users_mem_config(
         self, mode: Mode, mesh_cols: int = 1, prefetcher: Prefetcher = None, prefill_seq_len: Optional[int] = None
     ):
