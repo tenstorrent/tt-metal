@@ -337,6 +337,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 signpost(header="first_moe_layer")
 
         else:
+            i = 0
             # Normal mode: run all layers
             for (block_cfg, BlockClass), page_table in zip(
                 itertools.chain(
@@ -388,23 +389,11 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         converges on the target token's logits.
         """
         CHUNK_SIZE = cfg["model_chunk"]
-        cos_dim = rope_tensors["cos_matrix"].shape[3]
-        sin_dim = rope_tensors["sin_matrix"].shape[3]
-        _decoder_cfgs = cfg["mlp_decoder_block"] or cfg["moe_decoder_block"]
-        block_size = int(_decoder_cfgs[0]["mla"]["mla1d"]["kvpe_cache"].shape[2])
         logits = []
         hidden_for_mtp = []
         for start in range(0, x.shape[2], CHUNK_SIZE):
             end = min(start + CHUNK_SIZE, x.shape[2])
             x_chunk = ttnn.slice(x, [0, 0, start], [1, 1, end])
-            rope_chunk = {
-                "cos_matrix": ttnn.slice(rope_tensors["cos_matrix"], [0, 0, start, 0], [1, 1, end, cos_dim]),
-                "sin_matrix": ttnn.slice(rope_tensors["sin_matrix"], [0, 0, start, 0], [1, 1, end, sin_dim]),
-                "trans_matrix": rope_tensors["trans_matrix"],
-            }
-            start_block = start // block_size
-            end_block = (end + block_size - 1) // block_size
-            page_tables_chunk = [ttnn.slice(pt, [0, start_block], [pt.shape[0], end_block]) for pt in page_tables]
 
             # When prompt_len is set, only compute LMHead for the chunk that
             # contains the target token; skip it (but still run decoder blocks
@@ -417,19 +406,19 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 else:
                     skip_lm_head = True
 
+            logger.info(f"prefill chunk {start}-{end} out of {x.shape[2]}")
             logits_chunk, *hidden_for_mtp_chunk = cls._forward_prefill(
                 x_chunk,
                 user_id,
                 cfg,
-                rope_chunk,
-                page_tables_chunk,
+                rope_tensors,
+                page_tables,
                 return_hidden,
+                chunk_start_idx=start,
                 lm_head_local_idx=lm_head_local_idx,
                 skip_lm_head=skip_lm_head,
             )
             ttnn.deallocate(x_chunk)
-            ttnn.deallocate(rope_chunk["cos_matrix"])
-            ttnn.deallocate(rope_chunk["sin_matrix"])
             # for pt_chunk in page_tables_chunk:
             #     ttnn.deallocate(pt_chunk)
             if logits_chunk is not None:
@@ -455,6 +444,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         rope_tensors: dict,
         page_tables: Sequence[ttnn.Tensor],
         return_hidden: bool = False,
+        chunk_start_idx: int = 0,
         lm_head_local_idx: int | None = None,
         skip_lm_head: bool = False,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -478,6 +468,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
 
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
 
+        i = 0
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
                 zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
@@ -486,7 +477,12 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             page_tables,
             strict=True,
         ):
-            x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
+            # logger.info(f"{BlockClass} ({i}) starting...")
+            x = BlockClass.forward_prefill(
+                x, user_id, block_cfg, rope_tensors, page_table, chunk_start_idx=chunk_start_idx
+            )
+            # logger.info(f"{BlockClass} ({i}) finished")
+            # i += 1
 
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None

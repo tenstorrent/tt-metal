@@ -74,14 +74,14 @@ PREFILL_CHUNK_SIZES = {
     # QUAD
     16: (
         (0, PrefillChunkSizes(DEFAULT_MAX_SEQ_LEN, DEFAULT_MAX_SEQ_LEN, 2 * 1024)),
-        (32 * 1024, PrefillChunkSizes(8 * 1024, 2 * 1024, 2 * 1024)),
-        (48 * 1024, PrefillChunkSizes(48 * 1024, 48 * 1024, 2 * 1024)),
-        (64 * 1024, PrefillChunkSizes(64 * 1024, 32 * 1024, 2 * 1024)),
+        (32 * 1024, PrefillChunkSizes(32 * 1024, 32 * 1024, 8 * 1024)),
+        (48 * 1024, PrefillChunkSizes(48 * 1024, 48 * 1024, 4 * 1024)),
+        (64 * 1024, PrefillChunkSizes(64 * 1024, 4 * 1024, 4 * 1024)),
         # (96 * 1024, PrefillChunkSizes(32 * 1024, 16 * 1024, 2 * 1024)),
         # (112 * 1024, PrefillChunkSizes(16 * 1024, 8 * 1024, 2 * 1024)),
         # (120 * 1024, PrefillChunkSizes(8 * 1024, 4 * 1024, 1 * 1024)),
         # (124 * 1024, PrefillChunkSizes(2 * 1024, 2 * 1024, 1 * 1024)),
-        (128 * 1024, PrefillChunkSizes(1 * 1024, 1 * 1024, 1 * 1024)),
+        (128 * 1024, PrefillChunkSizes(1 * 1024, 1024, 512)),
     ),
     # DUAL
     8: (
