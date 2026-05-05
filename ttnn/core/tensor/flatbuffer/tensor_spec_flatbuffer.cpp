@@ -37,7 +37,6 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
         case flatbuffer::DataType::UInt8: return tt::tt_metal::DataType::UINT8;
         case flatbuffer::DataType::UInt16: return tt::tt_metal::DataType::UINT16;
         case flatbuffer::DataType::Int32: return tt::tt_metal::DataType::INT32;
-        case flatbuffer::DataType::Fp8E4M3: return tt::tt_metal::DataType::FP8_E4M3;
         case flatbuffer::DataType::Invalid: return tt::tt_metal::DataType::INVALID;
     }
     TT_THROW("Unsupported DataType from flatbuffer.");
@@ -53,7 +52,7 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::UINT8: return flatbuffer::DataType::UInt8;
         case tt::tt_metal::DataType::UINT16: return flatbuffer::DataType::UInt16;
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
-        case tt::tt_metal::DataType::FP8_E4M3: return flatbuffer::DataType::Fp8E4M3;
+        case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 cannot be serialized to flatbuffer");
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
     }
     TT_THROW("Unsupported DataType to flatbuffer.");
