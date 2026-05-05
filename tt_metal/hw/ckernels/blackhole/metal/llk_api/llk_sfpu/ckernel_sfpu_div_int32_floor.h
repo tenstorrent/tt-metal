@@ -76,7 +76,7 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute tmp = correction * b.
     b1 = sfpi::fractional_mul(correction, b1);
-    sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, FractionalHalf::High);
+    sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
     sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
     tmp_hi += b1;
     tmp_hi <<= 23;
