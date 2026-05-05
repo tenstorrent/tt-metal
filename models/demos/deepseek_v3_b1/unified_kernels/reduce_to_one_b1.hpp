@@ -25,6 +25,7 @@
 #if defined(COMPILE_FOR_BRISC)
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
+#include "dataflow_utils.hpp"
 #include "api/socket_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -33,6 +34,7 @@
 
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
+#include "dataflow_utils.hpp"
 
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
@@ -398,22 +400,27 @@ struct ReduceToOneB1 {
             // ROOT1: gather all shards to output tensor; each worker sends its shard downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
                 // Notify the aggregator (or persistent forwarder) that this worker is done.
-                // Issued between socket_notify_receiver and socket_barrier in the socket branch
-                // so the downstream consumer can wake up while we wait for the socket ack.
-                auto signal_aggregator = [&]() __attribute__((always_inline)) {
+                auto prepare_signal_aggregator = [&]() __attribute__((always_inline)) {
                     if (args.persistent_enable != 0) {
-                        volatile tt_l1_ptr uint32_t* agg_sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
                         uint64_t fc_sem = get_noc_addr(
                             args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
-                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
-                        noc_semaphore_set(agg_sem_ptr, 0);
-                        noc_semaphore_inc(fc_sem, 1);
-                        noc_async_atomic_barrier();
+                        unified_kernels::noc_async_atomic_inc_preprogram_all_state</*posted=*/false>(fc_sem, 1);
                     } else if (args.agg_sem_l1_addr != 0) {
                         uint64_t agg_sem_noc =
                             get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
-                        noc_semaphore_inc(agg_sem_noc, 1);
+                        unified_kernels::noc_async_atomic_inc_preprogram_all_state</*posted=*/false>(agg_sem_noc, 1);
+                    }
+                };
+                auto complete_signal_aggregator = [&]() __attribute__((always_inline)) {
+                    if (args.persistent_enable != 0) {
+                        volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                        noc_semaphore_set(agg_sem_ptr, 0);
+                        unified_kernels::noc_async_atomic_inc_issue_txn</*posted=*/false>();
+                        noc_async_atomic_barrier();
+                    } else if (args.agg_sem_l1_addr != 0) {
+                        unified_kernels::noc_async_atomic_inc_issue_txn</*posted=*/false>();
                         noc_async_atomic_barrier();
                     }
                 };
@@ -435,25 +442,40 @@ struct ReduceToOneB1 {
                             downstream_enc.d2d.downstream_noc_x,
                             downstream_enc.d2d.downstream_noc_y,
                             sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
-                        cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+
+                        static_assert(
+                            useful_per_shard <= NOC_MAX_BURST_SIZE,
+                            "useful_per_shard exceeds NOC_MAX_BURST_SIZE; preprogrammed single-packet path "
+                            "cannot handle multi-packet writes");
                         uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
-                        // Socket barrier means receiver has received and acknowledged the write, so we can use posted
-                        // writes here
-                        noc_async_write<useful_per_shard, true, /*posted=*/true>(src_addr, fifo_dst, useful_per_shard);
+                        unified_kernels::noc_async_write_preprogram_all_state</*posted=*/true>(
+                            src_addr, fifo_dst, useful_per_shard);
+                        cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                        unified_kernels::noc_async_write_issue_txn</*posted=*/true>();
 
                         if constexpr (is_last_worker_metadata_forwarder) {
                             if (is_last_worker) {
-                                noc_async_write<CTArgs::forward_metadata_size_bytes, true, /*posted=*/true>(
+                                static_assert(
+                                    CTArgs::forward_metadata_size_bytes <= NOC_MAX_BURST_SIZE,
+                                    "forward_metadata_size_bytes exceeds NOC_MAX_BURST_SIZE; "
+                                    "partial-reprogram path cannot handle multi-packet writes");
+                                unified_kernels::unicast_write_with_state<
+                                    /*posted=*/true,
+                                    /*set_addresses=*/true,
+                                    /*set_size=*/true,
+                                    /*wait_cmd_buf_ready=*/true,
+                                    /*increment_counters=*/true,
+                                    write_cmd_buf>(
                                     args.metadata_addr,
-                                    fifo_dst + useful_per_shard,
+                                    (uint32_t)(fifo_dst + useful_per_shard),
                                     CTArgs::forward_metadata_size_bytes);
                             }
                         }
-                        noc_async_posted_writes_flushed();
-
                         socket_push_pages(sender_socket, 1);
+                        noc_async_posted_writes_flushed();
                         socket_notify_receiver(sender_socket);
-                        signal_aggregator();
+                        prepare_signal_aggregator();
+                        complete_signal_aggregator();
                         socket_barrier(sender_socket);
                         update_socket_config(sender_socket);
                     }
@@ -461,11 +483,18 @@ struct ReduceToOneB1 {
                     uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
                     uint64_t dst_noc_addr_0 =
                         get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr_0);
-                    cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                    static_assert(
+                        CTArgs::payload_size_bytes <= NOC_MAX_BURST_SIZE,
+                        "payload_size_bytes exceeds NOC_MAX_BURST_SIZE; preprogrammed single-packet path "
+                        "cannot handle multi-packet writes");
                     uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
-                    noc_async_write<CTArgs::payload_size_bytes>(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
+                    unified_kernels::noc_async_write_preprogram_all_state</*posted=*/false>(
+                        src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
+                    prepare_signal_aggregator();
+                    cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
+                    unified_kernels::noc_async_write_issue_txn</*posted=*/false>();
                     noc_async_write_barrier();
-                    signal_aggregator();
+                    complete_signal_aggregator();
                 }
 
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
@@ -505,6 +534,15 @@ struct ReduceToOneB1 {
             // Source CB: LEAF uses local_cb, others use scratch_cb
             constexpr uint32_t source_cb = (CTArgs::device_role == MESH_LEAF) ? CTArgs::local_cb : CTArgs::scratch_cb;
 
+            uint32_t data_addr = get_read_ptr(source_cb);
+            unified_kernels::noc_async_write_preprogram_all_state</*posted=*/true>(
+                reinterpret_cast<uint32_t>(packet_header),
+                header_noc_addr,
+                packet_header_size_bytes,
+                worker_to_forwarder_noc);
+            unified_kernels::noc_async_atomic_inc_preprogram_all_state</*posted=*/false>(
+                arrival_sem_noc_addr, 1u << args.my_slot_idx, /*wrap=*/31, worker_to_forwarder_noc);
+
             // Wait for data
             // - LEAF: when fused (SkipLocalCbPush=true), previous op pushed to local_cb, so we wait
             //         when standalone (SkipLocalCbPush=false), data is already in-place, no wait needed
@@ -516,21 +554,23 @@ struct ReduceToOneB1 {
             } else {
                 cb_wait_front(source_cb, CTArgs::num_tiles);
             }
-            uint32_t data_addr = get_read_ptr(source_cb);
 
-            // Send header and payload to fabric core
-            noc_async_write<packet_header_size_bytes, /*enable_noc_tracing=*/false, /*posted=*/true>(
-                reinterpret_cast<uint32_t>(packet_header),
-                header_noc_addr,
-                packet_header_size_bytes,
-                worker_to_forwarder_noc);
-            noc_async_write<CTArgs::payload_size_bytes, /*enable_noc_tracing=*/false, /*posted=*/true>(
-                data_addr, payload_noc_addr, CTArgs::payload_size_bytes, worker_to_forwarder_noc);
+            static_assert(
+                CTArgs::payload_size_bytes <= NOC_MAX_BURST_SIZE,
+                "payload_size_bytes exceeds NOC_MAX_BURST_SIZE; partial-reprogram path "
+                "cannot handle multi-packet writes");
+            unified_kernels::noc_async_write_issue_txn</*posted=*/true>(worker_to_forwarder_noc);
+            unified_kernels::unicast_write_with_state<
+                /*posted=*/true,
+                /*set_addresses=*/true,
+                /*set_size=*/true,
+                /*wait_cmd_buf_ready=*/true,
+                /*increment_counters=*/true,
+                write_cmd_buf>(
+                data_addr, (uint32_t)payload_noc_addr, CTArgs::payload_size_bytes, worker_to_forwarder_noc);
 
-            // Ensure the staged packet is visible before advertising the slot as ready.
-            noc_async_posted_writes_flushed(worker_to_forwarder_noc);
-            noc_semaphore_inc(arrival_sem_noc_addr, 1u << args.my_slot_idx, worker_to_forwarder_noc);
-            noc_async_atomic_barrier();
+            unified_kernels::noc_async_atomic_inc_issue_txn</*posted=*/false>(worker_to_forwarder_noc);
+            noc_async_atomic_barrier(worker_to_forwarder_noc);
 
             // Pop source_cb to free it for the next iteration.
             // Must match the wait_front guard: LEAF standalone (SkipLocalCbPush=false)

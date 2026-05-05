@@ -397,7 +397,12 @@ jobs:
 
       - name: 📀 Install vLLM
         run: |
-          uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 2>&1 | tee "${FILE_INSTALL_LOG}"
+          {
+            uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+            if [ -d vllm/plugins/vllm-tt-plugin ]; then
+              uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
+            fi
+          } 2>&1 | tee "${FILE_INSTALL_LOG}"
           exit "${PIPESTATUS[0]}"
 
       - name: 🚀 Run server
