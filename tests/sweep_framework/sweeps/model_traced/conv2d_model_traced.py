@@ -565,6 +565,8 @@ def run(
             try:
                 apply_tensor_placement_topology(t, tensor_placement, mesh_shape_tuple)
             except Exception:
+                # Best-effort only: if topology stamping fails, keep the replicated host tensor
+                # and continue so conv2d setup remains functional.
                 pass
         return t
 
