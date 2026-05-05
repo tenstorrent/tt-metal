@@ -646,10 +646,12 @@ def get_padded_prefill_len(seq_len: int) -> int:
     # TODO: https://github.com/tenstorrent/tt-metal/issues/34117
     if seq_len <= 128:
         return 128
-    if seq_len <= 256:
-        return 256
-    if seq_len <= 512:
-        return 512
+    hf = os.environ.get("HF_MODEL", "").lower()
+    if "qwen3" in hf and "embedding" in hf:
+        if seq_len <= 256:
+            return 256
+        if seq_len <= 512:
+            return 512
     if seq_len <= 1024:
         return 1024
     else:
