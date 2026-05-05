@@ -30,7 +30,8 @@ from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, crea
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.persistent_loop.op import PersistentLoop
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert, SharedExpert
 from models.demos.deepseek_v3_b1.utils import (
@@ -721,6 +722,7 @@ class DecoderStage(StageKind):
         forward_metadata: bool = True,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        host_loopback: bool = False,
     ) -> None:
         if not isinstance(weights, (DeepSeekV3MoELayerWeights, DeepSeekV3DenseLayerWeights)):
             raise ValueError(
@@ -745,6 +747,7 @@ class DecoderStage(StageKind):
         self._forward_metadata = forward_metadata
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
+        self._host_loopback = host_loopback
         self._num_links_bcast = 1
         self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
@@ -790,6 +793,9 @@ class DecoderStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
+            loopback=LoopbackConfig.host_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
+            if self._host_loopback
+            else LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
         )
 
     def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
@@ -874,6 +880,7 @@ class DecoderStage(StageKind):
             downstream_sockets=self._state["downstream_sockets"],
             persistent_next_iter_semaphore=self._state.get("persistent_next_iter_semaphore"),
             persistent_mode=self._persistent_mode,
+            termination_semaphore=self._state.get("termination_semaphore"),
             is_torus=self._is_torus,
             forward_metadata=self._forward_metadata,
         )
@@ -896,9 +903,7 @@ class DecoderStage(StageKind):
         )
         moe_semaphores = MoeOp.create_semaphores(mesh_device)
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
-        persistent_next_iter_semaphore = (
-            ttnn.create_global_semaphore(mesh_device, available_cores, 1) if self._persistent_mode else None
-        )
+        self._persistent_loop = PersistentLoop(mesh_device, available_cores, self._persistent_mode)
 
         if self._is_moe:
             d = create_decoder_block_tensors(
@@ -946,8 +951,9 @@ class DecoderStage(StageKind):
             "downstream_sockets": downstream_sockets,
         }
 
-        if persistent_next_iter_semaphore is not None:
-            self._state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
+        if self._persistent_mode:
+            self._state["persistent_next_iter_semaphore"] = self._persistent_loop.next_iter_semaphore
+            self._state["termination_semaphore"] = self._persistent_loop.termination_semaphore
 
         self._state["decoder_program_context"] = self._build_decoder_program_context()
 
@@ -955,6 +961,9 @@ class DecoderStage(StageKind):
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         DecoderBlock.execute(*self._state["decoder_program_context"])
+
+    def terminate(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        self._persistent_loop.terminate()
 
 
 class MoEDecoderStage(DecoderStage):
@@ -980,6 +989,7 @@ class MoEDecoderStage(DecoderStage):
         forward_metadata: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        host_loopback: bool = False,
     ) -> None:
         super().__init__(
             weights=weights,
@@ -996,6 +1006,7 @@ class MoEDecoderStage(DecoderStage):
             forward_metadata=forward_metadata,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
+            host_loopback=host_loopback,
         )
 
 
@@ -1019,6 +1030,7 @@ class DenseDecoderStage(DecoderStage):
         forward_metadata: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        host_loopback: bool = False,
     ) -> None:
         super().__init__(
             weights=weights,
@@ -1035,4 +1047,5 @@ class DenseDecoderStage(DecoderStage):
             forward_metadata=forward_metadata,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
+            host_loopback=host_loopback,
         )

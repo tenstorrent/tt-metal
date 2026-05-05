@@ -39,9 +39,10 @@ inline void llk_pack_block_contiguous_mop_config(const std::uint32_t output) {
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block_contiguous(std::uint32_t tile_index, std::uint32_t output, std::uint32_t num_tiles) {
     LLK_ASSERT(
-        ((num_tiles >= 1 && num_tiles <= 8) &&
+        (num_tiles >= 1 && num_tiles <= 8 &&
          ((tile_index + num_tiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>())),
-        "Dst tile exceeds packer destination capacity for the configured W-stride.");
+        "num_tiles must be in the range [1, 8], and the destination tile range must fit within the packer "
+        "capacity for the configured W-stride.");
 
     std::uint8_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =

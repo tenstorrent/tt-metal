@@ -234,7 +234,7 @@ class ModelArgs:
                 weights_path,
                 torch_dtype="auto"
                 # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # may come in any dtype. If the model weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
             )
             state_dict = model.state_dict()

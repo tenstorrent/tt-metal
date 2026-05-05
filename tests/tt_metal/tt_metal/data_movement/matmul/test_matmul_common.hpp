@@ -12,6 +12,14 @@
 
 namespace tt::tt_metal::unit_tests::dm::matmul {
 
+constexpr uint32_t L1_DEBUG_PADDING_BYTES = 0x10;
+
+// Per-variant test_id offsets. Each matmul variant shares the same MatmulTestConfig list,
+// so we offset the test_id per variant to keep profiler results (CSVs/plots) separate.
+constexpr uint32_t MATMUL_1D_TEST_ID_OFFSET = 0;
+constexpr uint32_t MATMUL_1D_V2_TEST_ID_OFFSET = 100;
+constexpr uint32_t MATMUL_2D_TEST_ID_OFFSET = 200;
+
 struct MatmulTestConfig {
     uint32_t test_id = 0;
     CoreCoord start_logical_core;
@@ -25,12 +33,19 @@ struct MatmulTestConfig {
     uint32_t page_size_bytes = 1;
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t dram_bank_id = 0;
+
+    std::vector<uint32_t> num_subblocks_r_dim_sweep;
+    std::vector<uint32_t> num_subblocks_c_dim_sweep;
+    std::vector<uint32_t> num_subblocks_k_dim_sweep;
+    std::vector<uint32_t> subblock_r_dim_sweep;
+    std::vector<uint32_t> subblock_c_dim_sweep;
+    std::vector<uint32_t> subblock_k_dim_sweep;
 };
 
 // Hardcoded test configurations shared by all matmul test variants.
 // Each config is an explicit, representative test point.
 inline std::vector<MatmulTestConfig> get_matmul_test_configs() {
-    return {
+    std::vector<MatmulTestConfig> configs = {
         // ---- Grid shape tests ----
         // ID 1000: 2x2 default grid
         {.test_id = 1000},
@@ -64,10 +79,14 @@ inline std::vector<MatmulTestConfig> get_matmul_test_configs() {
          .num_subblocks_k_dim = 2},
 
         // ---- K dimension tests ----
-        // ID 1012: K=2 on 2x2 grid
-        {.test_id = 1012, .num_subblocks_k_dim = 2},
-        // ID 1013: K=3 on 3x2 grid
-        {.test_id = 1013, .num_subblocks_r_dim = 3, .num_subblocks_c_dim = 2, .num_subblocks_k_dim = 3},
+        // ID 1012: K=2 on 2x2 grid, sweep subblock_k_dim
+        {.test_id = 1012, .num_subblocks_k_dim = 2, .subblock_k_dim_sweep = {1u, 2u}},
+        // ID 1013: K=3 on 3x2 grid, sweep subblock_k_dim
+        {.test_id = 1013,
+         .num_subblocks_r_dim = 3,
+         .num_subblocks_c_dim = 2,
+         .num_subblocks_k_dim = 3,
+         .subblock_k_dim_sweep = {1u, 2u}},
 
         // ---- Subblock dimension tests ----
         // ID 1014: subblock_r=2
@@ -112,13 +131,56 @@ inline std::vector<MatmulTestConfig> get_matmul_test_configs() {
         {.test_id = 1022, .dram_bank_id = 1},
 
         // ---- K-vs-C edge case tests ----
-        // ID 1023: K < C — only some columns ever send (R=2, C=4, K=2)
-        {.test_id = 1023, .num_subblocks_r_dim = 2, .num_subblocks_c_dim = 4, .num_subblocks_k_dim = 2},
-        // ID 1024: K == C — each column sends exactly once (R=2, C=3, K=3)
-        {.test_id = 1024, .num_subblocks_r_dim = 2, .num_subblocks_c_dim = 3, .num_subblocks_k_dim = 3},
-        // ID 1025: K not divisible by C — uneven round-robin (R=2, C=3, K=5)
-        {.test_id = 1025, .num_subblocks_r_dim = 2, .num_subblocks_c_dim = 3, .num_subblocks_k_dim = 5},
+        // ID 1023: K < C — only some columns ever send (R=2, C=4, K=2), sweep subblock_c_dim
+        {.test_id = 1023,
+         .num_subblocks_r_dim = 2,
+         .num_subblocks_c_dim = 4,
+         .num_subblocks_k_dim = 2,
+         .subblock_c_dim_sweep = {1u, 2u}},
+        // ID 1024: K == C — each column sends exactly once (R=2, C=3, K=3), sweep subblock_r_dim
+        {.test_id = 1024,
+         .num_subblocks_r_dim = 2,
+         .num_subblocks_c_dim = 3,
+         .num_subblocks_k_dim = 3,
+         .subblock_r_dim_sweep = {1u, 2u}},
+        // ID 1025: K not divisible by C — uneven round-robin (R=2, C=3, K=5), sweep subblock_k_dim
+        {.test_id = 1025,
+         .num_subblocks_r_dim = 2,
+         .num_subblocks_c_dim = 3,
+         .num_subblocks_k_dim = 5,
+         .subblock_k_dim_sweep = {1u, 2u}},
+
+        // ---- K subblock size sweep ----
+        {.test_id = 1026,
+         .num_subblocks_r_dim = 4,
+         .num_subblocks_c_dim = 4,
+         .num_subblocks_k_dim = 4,
+         .subblock_r_dim = 4,
+         .subblock_c_dim = 4,
+         .subblock_k_dim_sweep = {1u, 2u, 4u, 8u}},
+
+        // ---- R subblock size sweep ----
+        // ID 1027: 4x4 grid, K=4, subblock_k=4, subblock_c=1, sweep subblock_r_dim.
+        {.test_id = 1027,
+         .num_subblocks_r_dim = 4,
+         .num_subblocks_c_dim = 4,
+         .num_subblocks_k_dim = 8,
+         .subblock_c_dim = 1,
+         .subblock_k_dim = 1,
+         .subblock_r_dim_sweep = {1u, 2u, 4u, 8u, 16u, 32u}},
+
+        // ---- C subblock size sweep ----
+        // ID 1028: 4x4 grid, K=4, subblock_k=4, subblock_r=1, sweep subblock_c_dim.
+        {.test_id = 1028,
+         .num_subblocks_r_dim = 4,
+         .num_subblocks_c_dim = 4,
+         .num_subblocks_k_dim = 8,
+         .subblock_r_dim = 1,
+         .subblock_k_dim = 1,
+         .subblock_c_dim_sweep = {1u, 2u, 4u, 8u, 16u, 32u}},
     };
+
+    return configs;
 }
 
 struct MatmulTestNameGenerator {
@@ -141,5 +203,8 @@ class Matmul1DParamFixture : public GenericMeshDeviceFixture,
 
 class Matmul1DV2ParamFixture : public GenericMeshDeviceFixture,
                                public ::testing::WithParamInterface<unit_tests::dm::matmul::MatmulTestConfig> {};
+
+class Matmul2DParamFixture : public GenericMeshDeviceFixture,
+                             public ::testing::WithParamInterface<unit_tests::dm::matmul::MatmulTestConfig> {};
 
 }  // namespace tt::tt_metal

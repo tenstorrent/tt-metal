@@ -19,10 +19,11 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import extract_named_tensor_kwargs
@@ -67,31 +68,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape, l1_small_size=65536)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, l1_small_size=65536, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
-
-
-# CI sets TT_METAL_OPERATION_TIMEOUT_SECONDS=5 for hang detection.
-# paged_fused_update_cache needs extra time for large KV cache tensors (1024-2048 pages),
-# especially on multi-device setups.
-os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "60"
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -197,8 +178,18 @@ def run(
     # spec causes a device-level hang (NOC deadlock) that is NOT catchable via
     # try/except — only a 60s timeout kills it.  Keep all tensors on DRAM.
     def _to_ttnn(torch_tensor, dtype, layout, mem_config, placement_key="input_a_tensor_placement"):
+        placement = kwargs.get(placement_key, None)
         if not is_host:
-            if is_mesh_device:
+            if is_mesh_device and placement:
+                return create_tensor_on_mesh(
+                    torch_tensor,
+                    device,
+                    dtype,
+                    layout,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                    placement,
+                )
+            elif is_mesh_device:
                 return ttnn.from_torch(
                     torch_tensor,
                     dtype=dtype,
@@ -355,6 +346,10 @@ def run(
         e2e_perf = stop_measuring_time(start_time)
 
         if output_tensor is not None:
+            if is_mesh_device:
+                torch_output = reconcile_golden_to_actual(
+                    torch_output, output_tensor, input_a_tensor_placement, kwargs.get("input_b_tensor_placement", None)
+                )
             pcc = check_with_pcc(torch_output, output_tensor, 0.999)
         else:
             pcc = (False, "Output tensor is None")

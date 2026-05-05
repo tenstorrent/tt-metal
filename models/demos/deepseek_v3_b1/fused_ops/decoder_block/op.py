@@ -200,6 +200,7 @@ class DecoderBlock:
         broadcast_topology_override=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
+        termination_semaphore=None,
         is_torus=True,
         forward_metadata=False,
     ):
@@ -292,6 +293,7 @@ class DecoderBlock:
             downstream_sockets=downstream_sockets,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
             persistent_mode=persistent_mode,
+            termination_semaphore=termination_semaphore,
             bcast_sender_coord=sender_coord,
             is_torus=is_torus,
             forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,

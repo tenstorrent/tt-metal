@@ -540,6 +540,9 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {cb_index, /*use_dfbs=*/false}});
 
+        // DRAM buffers use page_size = buffer_size (whole buffer), so compute
+        // the per-tile stride directly. single_tile_size is the real per-tile
+        // stride here since tiles are packed contiguously inside the buffer.
         SetRuntimeArgs(
             program_,
             reader_kernel,
@@ -548,6 +551,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 (uint32_t)src_dram_buffer->address(),
                 0,
                 (uint32_t)num_tiles,
+                single_tile_size,
             });
         SetRuntimeArgs(
             program_,
@@ -557,6 +561,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 (uint32_t)dst_dram_buffer->address(),
                 0,
                 (uint32_t)num_tiles,
+                single_tile_size,
             });
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(

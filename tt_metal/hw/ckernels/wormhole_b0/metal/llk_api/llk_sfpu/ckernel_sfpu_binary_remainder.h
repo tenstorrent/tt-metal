@@ -207,7 +207,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        result = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+        result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
     }
 
     return result;

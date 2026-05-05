@@ -16,7 +16,8 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     cb_descriptor_from_overlapped_tensors,
     record_cb_metadata,
 )
-from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args, _get_element_size_bytes, _round_up
+from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_DIM
+from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args, _get_element_size_bytes
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_gather.op import AllGatherConfig
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
@@ -25,6 +26,7 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     get_max_page_size_and_num_pages,
     get_noc_max_page_size,
 )
+from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.config import resolve_sdpa_reduce_config
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
@@ -188,10 +190,10 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links_bcast=1, num_links_allreduce=1):
-        # Pipeline semaphores: mcast (4) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) = 27
+        # Pipeline semaphores: mcast (4) + gather (2) + rope (1) + MLA (6) + post-SDPA fused (10) + SDPA (2) + ccl_sync (1) + ccl_sync2 (1) + risc_sync (1)= 28
         # Post-SDPA fused (10): gather2 noc0/noc1 (2) + mcast3 receiver (1) + gather3 noc0/noc1 (2)
         #                       + scatter_arrival (1) + sdpa fwd r1/r2 (2) + sdpa bwd r1/r2 (2)
-        pipeline_num_semaphores = 27
+        pipeline_num_semaphores = 28
         allreduce_num_semaphores = DeepseekMinimalAllReduce.get_num_semaphores(num_links=num_links_allreduce)
         bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links_bcast)
         allgather_num_semaphores = 2  # handoff_sem + recv_sem
@@ -590,7 +592,7 @@ class AttentionBlock:
 
         # TP4 outer-dim: each device produces [1, per_device_out_w]
         num_sp = mesh_shape[0]
-        per_device_out_w = input_shape[1] // num_sp
+        per_device_out_w = ACTIVATION_DIM // num_sp
         per_device_out_tiles = per_device_out_w // tile_width
 
         # Full grid (union of all cores for semaphore allocation)
@@ -626,6 +628,8 @@ class AttentionBlock:
         sdpa_forwarder_grid = sdpa_forwarder_scratch_sample.memory_config().shard_spec.grid
         sdpa_forwarder_cores = list(ttnn.corerange_to_cores(sdpa_forwarder_grid, row_wise=True))
         num_sdpa_forwarder_cores = len(sdpa_forwarder_cores)
+        assert num_sdpa_forwarder_cores == 2, "num_sdpa_forwarder_cores must be 2"
+        sdpa_forwarder_noc_coords = [device.worker_core_from_logical_core(core) for core in sdpa_forwarder_cores]
 
         # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
         full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
@@ -636,41 +640,36 @@ class AttentionBlock:
         # Get actual tile dimensions from input tensor (matches original op)
         sdpa_tile_height, sdpa_tile_width = sdpa_tile.tile_shape
         sdpa_element_size_bytes = _get_element_size_bytes(sdpa_dtype)
-        sdpa_input_page_size_bytes = sdpa_element_size_bytes * sdpa_tile_height * sdpa_tile_width
         sdpa_l1_alignment = 16  # L1 alignment for SDPA (matches original op)
-
-        # Get shard spec to calculate tile counts (matches original op)
         sdpa_shard_spec = sdpa_l_mem_config.shard_spec
-        sdpa_input_l_num_pages = (sdpa_shard_spec.shape[0] // sdpa_tile_height) * (
-            sdpa_shard_spec.shape[1] // sdpa_tile_width
+
+        sdpa_num_workers = 8
+        sdpa_num_forwarders = 2
+        sdpa_config = resolve_sdpa_reduce_config(
+            batch_size=sdpa_shard_spec.shape[0],
+            l_width=sdpa_shard_spec.shape[1],
+            num_cores=sdpa_num_workers,
+            tile_height=sdpa_tile_height,
+            tile_width=sdpa_tile_width,
+            bytes_per_element=sdpa_element_size_bytes,
+            num_links=sdpa_num_forwarders,
+            packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(),
+            l1_alignment=sdpa_l1_alignment,
+            max_payload_size_bytes=ttnn.get_tt_fabric_max_payload_size_bytes(),
         )
-
-        # Calculate out_tiles using same formula as original op
-        PNH = 8
-        DH = sdpa_input_l_num_pages * sdpa_tile_width
-        DHt = DH // sdpa_tile_width
-        PNHt = PNH // sdpa_tile_height
-        Sq_chunk_t = PNHt
-        sdpa_out_tiles = Sq_chunk_t * DHt
-
-        # Chunking formula (identical to original op)
-        sdpa_max_tiles_per_chunk = 8
-        sdpa_min_num_l_chunks = (sdpa_out_tiles + sdpa_max_tiles_per_chunk - 1) // sdpa_max_tiles_per_chunk
-        sdpa_num_l_chunks = max(sdpa_min_num_l_chunks, 4)
-        if sdpa_out_tiles % sdpa_num_l_chunks != 0:
-            raise ValueError(
-                f"sdpa_out_tiles ({sdpa_out_tiles}) must be divisible by sdpa_num_l_chunks ({sdpa_num_l_chunks})"
-            )
-
-        sdpa_tiles_per_l_chunk = sdpa_out_tiles // sdpa_num_l_chunks
-        sdpa_l_chunk_size_bytes = sdpa_tiles_per_l_chunk * sdpa_input_page_size_bytes
+        sdpa_input_page_size_bytes = sdpa_config.input_page_size_bytes
+        sdpa_out_tiles = sdpa_config.out_tiles
+        sdpa_num_l_chunks = sdpa_config.num_l_chunks
+        sdpa_tiles_per_l_chunk = sdpa_config.tiles_per_l_chunk
+        sdpa_l_chunk_size_bytes = sdpa_config.l_chunk_size_bytes
+        sdpa_compute_block_size = sdpa_config.compute_block_size
 
         # Alias for backward compatibility with CB descriptor code
         sdpa_l_tiles_per_worker = sdpa_out_tiles
 
         # SDPA tile sizes (get from actual tensor, not hardcoded)
         sdpa_l_tile_size = sdpa_input_page_size_bytes  # Actual tile size from input
-        sdpa_ms_tile_size = _round_up(sdpa_input_page_size_bytes, sdpa_l1_alignment)  # Aligned for MS
+        sdpa_ms_tile_size = sdpa_config.ms_tile_size_bytes
 
         # SDPA scatter parameters (scatter output to matmul4 cores)
         # Each SDPA worker scatters rows to matmul4 cores (one row per tile when using 8x32 tiles)
@@ -685,16 +684,10 @@ class AttentionBlock:
         sdpa_scatter_row_face_size = 1 * (sdpa_tile_width // 2) * sdpa_element_size_bytes  # dest_h=1 for 1x32
 
         # SDPA forwarder parameters (using Type A/B worker split like original op)
-        sdpa_num_workers = 8
-        sdpa_num_forwarders = 2
-        sdpa_workers_per_forwarder = sdpa_num_workers // sdpa_num_forwarders  # 4
-        sdpa_workers_per_type = sdpa_workers_per_forwarder // 2  # 2 (Type A and Type B alternate)
-        sdpa_slots_per_worker = 1 + sdpa_num_l_chunks  # MS + L chunks = 5 slots
-        sdpa_fwd_slots_per_round = sdpa_workers_per_type * sdpa_slots_per_worker  # 2 * 5 = 10 slots per direction
-        sdpa_fwd_slot_size = (
-            ttnn.get_tt_fabric_packet_header_size_bytes() + sdpa_l_chunk_size_bytes
-        )  # Header + max payload
-        sdpa_fwd_r2_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size
+        sdpa_slots_per_worker = sdpa_config.slots_per_worker
+        sdpa_fwd_slots_per_round = sdpa_config.slots_per_round
+        sdpa_fwd_slot_size = sdpa_config.slot_size
+        sdpa_fwd_r2_buffer_offset = sdpa_config.r2_buffer_offset
 
         sdpa_scale_fp32_bits = float_to_uint32(sdpa_scale)
 
@@ -747,6 +740,8 @@ class AttentionBlock:
         # ========================================================================
 
         # Semaphore IDs for mcast synchronization
+        risc_sync_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
         mcast_data_sender_semaphore_addr = ttnn.get_global_semaphore_address(
             attention_block_semaphores[semaphore_index]
         )
@@ -1871,9 +1866,14 @@ class AttentionBlock:
                 ("input_noc_coord_y", input_noc_coord.y),
                 ("ccl_sender_noc_x", ccl_sender_noc_core.x),
                 ("ccl_sender_noc_y", ccl_sender_noc_core.y),
+                ("sdpa_forwarder0_noc_x", sdpa_forwarder_noc_coords[0].x),
+                ("sdpa_forwarder0_noc_y", sdpa_forwarder_noc_coords[0].y),
+                ("sdpa_forwarder1_noc_x", sdpa_forwarder_noc_coords[1].x),
+                ("sdpa_forwarder1_noc_y", sdpa_forwarder_noc_coords[1].y),
                 # CCL sync semaphore
                 ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
                 ("ccl_sync_semaphore2_addr", ccl_sync_semaphore2_addr),
+                ("risc_sync_semaphore_addr", risc_sync_semaphore_addr),
             ]
         )
 
@@ -1910,6 +1910,7 @@ class AttentionBlock:
             # CCL sync semaphore
             ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
             ("ccl_sync_semaphore2_addr", ccl_sync_semaphore2_addr),
+            ("risc_sync_semaphore_addr", risc_sync_semaphore_addr),
         ]
 
         # Append AllReduceConfig BRISC CT args (writer on sender core)
@@ -1971,6 +1972,7 @@ class AttentionBlock:
             # CCL sync semaphore
             ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
             ("ccl_sync_semaphore2_addr", ccl_sync_semaphore2_addr),
+            ("risc_sync_semaphore_addr", risc_sync_semaphore_addr),
         ]
 
         # Append AllReduceConfig TRISC CT args (compute on receiver core)
@@ -1991,6 +1993,7 @@ class AttentionBlock:
                 ("sdpa_scale_fp32", sdpa_scale_fp32_bits),
                 ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
                 ("sdpa_num_l_chunks", sdpa_num_l_chunks),
+                ("sdpa_compute_block_size", sdpa_compute_block_size),
                 # SDPA position
                 ("sdpa_position_enabled", 1),
                 ("sdpa_per_device_chunk_size", sdpa_per_device_chunk_size),
@@ -2053,9 +2056,12 @@ class AttentionBlock:
         # contiguously. We pad the backing buffer to fit metadata after the activation
         # data, but the CB format (what RMSNorm reads) remains activation-only.
         activation_size = num_tiles * cb_page_size
-
         in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            input_cb, ref_input_tensor, core_ranges=full_device_grid
+            input_cb,
+            ref_input_tensor,
+            address_offset=0,
+            total_size=activation_size,
+            core_ranges=full_device_grid,
         )
         in_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
@@ -2065,7 +2071,6 @@ class AttentionBlock:
                 tile=tile_descriptor,
             )
         ]
-        in_cb_descriptor.total_size = activation_size
 
         # Keep broadcast writer backing address explicit for this fused path.
         input_cb_l1_addr = ttnn.get_cb_address(in_cb_descriptor)
