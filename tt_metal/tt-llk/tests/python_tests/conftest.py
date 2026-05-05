@@ -277,7 +277,7 @@ def pytest_configure(config):
 
     # We don't need to override tensix dump on simulator
     if not TestConfig.TEST_TARGET.run_simulator:
-        overrirde_gprs_used_by_tensix_dump()
+        override_gprs_used_by_tensix_dump()
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
