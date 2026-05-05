@@ -703,7 +703,7 @@ def main():
     parser.add_argument(
         "--ref-text",
         type=str,
-        default="Let me also go over the review slides.",
+        default="So basically you put up the high level overview slides.",
         help="Reference audio transcript (default: transcript for jim_reference.wav)",
     )
     parser.add_argument("--output", type=str, default="/tmp/pure_reference_tts.wav", help="Output audio path")
