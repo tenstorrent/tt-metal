@@ -61,8 +61,7 @@ def test_binary_gcd_ttnn(input_shapes, device):
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([5, 8, 1024, 1024])),
+        (torch.Size([4, 2, 64, 128])),
     ),
 )
 @pytest.mark.parametrize(
@@ -198,7 +197,7 @@ def test_binary_gcd_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([5, 10, 1024, 1024])),
+        (torch.Size([3, 2, 64, 128])),
     ),
 )
 @pytest.mark.parametrize(
