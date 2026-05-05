@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import torch
@@ -14,6 +16,26 @@ import ttnn
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from types import EllipsisType
+
+
+# Module-level lazy thread pool for parallel host-side shard reassembly.
+# uint8/bf16 strided copies through PyTorch's TensorIterator release the GIL,
+# so dispatching the per-shard scatters across a few threads gives near-linear
+# scaling. A persistent pool avoids paying ~1 ms of thread-startup per call.
+# Callers can override via the `pool` parameter on `_reassemble_2d` /
+# `fast_device_to_host` if they manage their own pool lifetime.
+_DEFAULT_REASSEMBLE_POOL: ThreadPoolExecutor | None = None
+_DEFAULT_REASSEMBLE_WORKERS = min(8, os.cpu_count() or 8)
+
+
+def _get_default_reassemble_pool() -> ThreadPoolExecutor:
+    global _DEFAULT_REASSEMBLE_POOL
+    if _DEFAULT_REASSEMBLE_POOL is None:
+        _DEFAULT_REASSEMBLE_POOL = ThreadPoolExecutor(
+            max_workers=_DEFAULT_REASSEMBLE_WORKERS,
+            thread_name_prefix="tt_dit_reassemble",
+        )
+    return _DEFAULT_REASSEMBLE_POOL
 
 
 def typed_tensor(
@@ -378,13 +400,19 @@ def _reassemble_2d(
     concat_dims: list[int | None],
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
+    *,
+    pool: ThreadPoolExecutor | None = None,
 ) -> torch.Tensor:
     """Reassemble per-device shards into a single tensor for a 2D mesh.
 
-    For the common case where both axes are concatenated, writes each shard
-    directly into a pre-allocated output buffer.  When *permute* and/or *dtype*
-    are given the permutation and type conversion are fused into the scatter
-    write, halving total memory traffic.
+    Per-shard scatters are dispatched across a ThreadPoolExecutor — uint8/bf16
+    strided copies through PyTorch's TensorIterator release the GIL, so a few
+    threads make near-linear progress.  When *permute* is given the source
+    permute view is fed directly to ``copy_()`` so no contiguous intermediate
+    is materialised; the permute and the scatter share a single strided pass.
+
+    Pass *pool* to reuse a persistent pool; otherwise a module-level lazy
+    default is used.
     """
     d0, d1 = concat_dims
 
@@ -395,6 +423,9 @@ def _reassemble_2d(
         full_shape[d1] *= mesh_shape[1]
         ndim = len(full_shape)
 
+        if pool is None:
+            pool = _get_default_reassemble_pool()
+
         if permute is not None:
             out_shape = [full_shape[p] for p in permute]
             out_dtype = dtype if dtype is not None else shards[0].dtype
@@ -403,22 +434,39 @@ def _reassemble_2d(
             d1_out = perm_list.index(d1)
 
             out = torch.empty(out_shape, dtype=out_dtype)
-            for coord, shard in zip(mesh_coords, shards):
+
+            def _scatter_perm(coord, shard):
                 r, c = int(coord[0]), int(coord[1])
                 slices = [slice(None)] * ndim
                 slices[d0_out] = slice(r * s0, (r + 1) * s0)
                 slices[d1_out] = slice(c * s1, (c + 1) * s1)
-                out[tuple(slices)] = shard.permute(*permute).contiguous()
+                # Strided->strided copy in one pass: no .contiguous() materialisation.
+                out[tuple(slices)].copy_(shard.permute(*permute))
+
+            futures = [
+                pool.submit(_scatter_perm, coord, shard)
+                for coord, shard in zip(mesh_coords, shards)
+            ]
+            for f in futures:
+                f.result()
             return out
 
         out_dtype = dtype if dtype is not None else shards[0].dtype
         out = torch.empty(full_shape, dtype=out_dtype)
-        for coord, shard in zip(mesh_coords, shards):
+
+        def _scatter(coord, shard):
             r, c = int(coord[0]), int(coord[1])
             slices = [slice(None)] * ndim
             slices[d0] = slice(r * s0, (r + 1) * s0)
             slices[d1] = slice(c * s1, (c + 1) * s1)
-            out[tuple(slices)] = shard
+            out[tuple(slices)].copy_(shard)
+
+        futures = [
+            pool.submit(_scatter, coord, shard)
+            for coord, shard in zip(mesh_coords, shards)
+        ]
+        for f in futures:
+            f.result()
         return out
 
     if d0 is not None:
@@ -440,6 +488,7 @@ def fast_device_to_host(
     pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
+    pool: ThreadPoolExecutor | None = None,
 ) -> torch.Tensor | None:
     """Fast D2H transfer using async DMA and zero-copy to_torch.
 
@@ -472,6 +521,10 @@ def fast_device_to_host(
             intermediate tensor in the original layout is ever materialised.
         dtype: Output dtype.  When combined with ``permute``, the dtype
             conversion is fused into the scatter write (single-pass copy).
+        pool: Optional ThreadPoolExecutor for parallel host-side reassembly.
+            If ``None``, a module-level lazy default pool is used.  Pass a
+            persistent pool to avoid per-call thread-startup overhead in tight
+            loops, or to share workers with other concurrent host work.
     """
     mesh_shape = tuple(mesh_device.shape)
 
@@ -570,7 +623,9 @@ def fast_device_to_host(
             coord[intra_host_axis] = intra_remap[int(c[intra_host_axis])]
             local_coords.append(tuple(coord))
 
-        return _reassemble_2d(local_coords, shards, logical_shape, local_mesh_shape, concat_dims, permute, dtype)
+        return _reassemble_2d(
+            local_coords, shards, logical_shape, local_mesh_shape, concat_dims, permute, dtype, pool=pool
+        )
 
     # --- Single-host: async DMA on all devices + host-side concat -----------
 
@@ -594,7 +649,9 @@ def fast_device_to_host(
     trim = tuple(slice(0, d) for d in logical_shape)
     shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
-    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
+    return _reassemble_2d(
+        mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype, pool=pool
+    )
 
 
 def upsample(
