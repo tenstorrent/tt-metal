@@ -7,7 +7,7 @@
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearIColShardedWRowSharded,
+    TTNNLinearGemma4IColShardedWRowSharded,
 )
 
 
@@ -36,12 +36,12 @@ class TTNNGemma4TextMLP(TTNNModule):
 
         tt_module.intermediate_size = torch_mlp.gate_proj.out_features  # 21504
 
-        tt_module.gate_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_mlp.gate_proj)
-        tt_module.up_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_mlp.up_proj)
+        tt_module.gate_proj = TTNNLinearGemma4IColShardedWRowSharded.from_torch(torch_mlp.gate_proj)
+        tt_module.up_proj = TTNNLinearGemma4IColShardedWRowSharded.from_torch(torch_mlp.up_proj)
 
         tt_module.fused_gate_up_proj = None
 
-        tt_module.down_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_mlp.down_proj)
+        tt_module.down_proj = TTNNLinearGemma4IColShardedWRowSharded.from_torch(torch_mlp.down_proj)
 
         return tt_module
 

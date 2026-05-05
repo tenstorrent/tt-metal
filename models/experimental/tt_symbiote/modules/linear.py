@@ -235,6 +235,28 @@ class TTNNLinearLLamaIColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
         return super().forward(input_tensor)
 
 
+class TTNNLinearGemma4IColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
+    """BFP8_B weight variant of the row-sharded col-input linear, trace-enabled."""
+
+    def move_weights_to_device_impl(self):
+        if isinstance(self.tt_weight_host, torch.Tensor):
+            self.tt_weight_host = preprocess_linear_weight(
+                self.tt_weight_host,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+            )
+        if isinstance(self.tt_bias_host, torch.Tensor):
+            self.tt_bias_host = preprocess_linear_bias(
+                self.tt_bias_host,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim),
+            )
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+        self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+
+
 class TTNNLinearInputReplicatedWeightSharded(TTNNLinear):
     """TTNN-accelerated linear layer."""
 
