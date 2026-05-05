@@ -58,7 +58,7 @@ struct MoeGather {
     // Sender args (BRISC): [dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_addr,
     //                       src_cb, src_num_pages, sender_grid_start_x, sender_grid_start_y,
     //                       sender_grid_end_x, sender_grid_end_y, row_major, receiver_data_addr,
-    //                       sender_idx]
+    //                       sender_idx, noc]
     struct SenderArgs {
         uint32_t dest_noc_x;
         uint32_t dest_noc_y;
@@ -73,6 +73,7 @@ struct MoeGather {
         uint32_t row_major;
         uint32_t receiver_data_addr;
         uint32_t sender_idx;  // Per-core sender index (only used if UsePerCoreSenderIdx=true)
+        uint32_t noc;         // 0=NOC_0, 1=NOC_1; selected per-core based on optimal hop distance
     };
 
     // Compute args (TRISC) - not used for gather (dataflow only)
@@ -117,7 +118,7 @@ struct MoeGather {
                 }
                 uint32_t offset = core_index * args.data_size_bytes;
 
-                const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
+                const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0, args.noc);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + offset);
                 uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
@@ -126,16 +127,17 @@ struct MoeGather {
 
                 // Get source address from CB
                 uint32_t input_data_addr = get_read_ptr(args.src_cb);
-                noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, args.data_size_bytes);
+                noc_async_write_one_packet<true, true>(
+                    input_data_addr, dst_data_noc_addr, args.data_size_bytes, args.noc);
                 // BH does not support posted atomics due to a bug
-                noc_semaphore_inc(dst_semaphore_noc_addr, 1);
+                noc_semaphore_inc(dst_semaphore_noc_addr, 1, args.noc);
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
-                    noc_async_posted_writes_flushed();
+                    noc_async_posted_writes_flushed(args.noc);
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
-                noc_async_atomic_barrier();
+                noc_async_atomic_barrier(args.noc);
             }
 #elif defined(COMPILE_FOR_NCRISC)
             // ================================================================
