@@ -484,7 +484,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
                     }
 
+#ifdef ARCH_BLACKHOLE
+                    _llk_pack_init_<false, false>();
+#else
                     _llk_pack_init_<false, false>(pack_dst_format);
+#endif
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 

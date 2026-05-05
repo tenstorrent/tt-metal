@@ -113,25 +113,10 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
     const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
     const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
     _llk_pack_init_<untilize, zero_output, tilize>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
-        false,  // partial_face,
-        false,  // narrow_tile,
-        num_tiles,
-        is_input_8bit_format);
+        pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
 #else
     _llk_pack_init_<untilize, zero_output, tilize>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
-        false,  // partial_face,
-        false,  // narrow_tile,
-        num_tiles);
+        pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles);
 #endif
 }
 
@@ -322,11 +307,13 @@ inline void llk_pack_dest_section_done() {
 
 template <bool untilize = false, bool diagonal = false>
 inline void llk_init_packer_dest_offset_registers([[maybe_unused]] const std::uint32_t pack_output = 16) {
+    LLK_ASSERT(pack_output == 16, "pack_output is unused for blackhole and must remain default value.");
     _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE>();
 }
 
 template <bool is_fp32_dest_acc_en, bool untilize = false>
 inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output = 16) {
+    LLK_ASSERT(pack_output == 16, "pack_output is unused for blackhole and must remain default value.");
     _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
@@ -348,8 +335,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         face_r_dim,
         tile_c_dim,
         num_faces,
-        false,   // partial_face
-        false);  // narrow_tile
+        false);  // partial_face
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499

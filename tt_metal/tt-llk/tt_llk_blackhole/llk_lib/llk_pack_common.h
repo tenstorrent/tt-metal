@@ -81,28 +81,6 @@ inline void _llk_pack_dest_init_()
     pack_sync_tile_dst_ptr = 0;
 }
 
-template <bool mail2math = true, bool mail2pack = true>
-inline void _llk_pack_get_tile_([[maybe_unused]] std::uint32_t tile_index, std::uint32_t *p_tile)
-{
-    if constexpr (mail2pack)
-    {
-        *p_tile = mailbox_read(ThreadId::UnpackThreadId);
-    }
-    else
-    {
-        *p_tile = 0x0;
-    }
-}
-
-template <bool mail2math = true, bool mail2pack = true>
-inline void _llk_pack_release_tile_()
-{
-    if constexpr (mail2pack)
-    {
-        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
-    }
-}
-
 inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);

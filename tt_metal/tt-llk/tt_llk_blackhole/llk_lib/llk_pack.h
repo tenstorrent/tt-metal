@@ -315,12 +315,11 @@ inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
-    const std::uint32_t tile_c_dim          = TILE_C_DIM,
-    const std::uint32_t num_faces           = 4,
-    const bool partial_face                 = false,
-    [[maybe_unused]] const bool narrow_tile = false,
-    const std::uint32_t num_tiles           = 1)
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces  = 4,
+    const bool partial_face        = false,
+    const std::uint32_t num_tiles  = 1)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face);
@@ -358,13 +357,10 @@ inline void _llk_pack_hw_configure_(
 // TODO NC: Clean up as the part of tt-metal#34587
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_init_(
-    [[maybe_unused]] const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim           = FACE_R_DIM,
-    const std::uint32_t tile_c_dim           = TILE_C_DIM,
-    const std::uint32_t num_faces            = 4,
-    [[maybe_unused]] const bool partial_face = false,
-    [[maybe_unused]] const bool narrow_tile  = false,
-    const std::uint32_t num_tiles            = 1)
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces  = 4,
+    const std::uint32_t num_tiles  = 1)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     _llk_pack_configure_addrmod_<untilize, tilize>();
@@ -375,14 +371,11 @@ inline void _llk_pack_init_(
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
-    [[maybe_unused]] const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim,
     const std::uint32_t tile_c_dim,
     const std::uint32_t num_faces,
-    [[maybe_unused]] const bool partial_face = false,
-    [[maybe_unused]] const bool narrow_tile  = false,
-    const std::uint32_t num_tiles            = 1,
-    const bool skip_bh_tilize_workaround     = false)
+    const std::uint32_t num_tiles,
+    const bool skip_bh_tilize_workaround = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const DataFormat src_format = static_cast<DataFormat>(pack_src_format);
