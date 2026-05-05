@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import torch
@@ -77,7 +78,7 @@ class PromptEncoder:
 
         cache.load_model(
             self._encoder,
-            model_name="flux2",
+            model_name=os.path.basename(self._checkpoint_name),
             subfolder="text_encoder",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
