@@ -15,6 +15,7 @@
 #include "api/compute/bcast.h"
 #endif
 
+#include "api/compute/eltwise_binary.h"
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif

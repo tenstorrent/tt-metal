@@ -4065,6 +4065,9 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
     const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
 
+    const bool reuse_in0_in_CB = (in0_B == 1 && in1_B > 1) && !in0_is_sharded && !output_is_sharded && !bcast_batch &&
+                                 !fused_activation.has_value();
+
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
         (std::uint32_t)in0_tensor_stride_w,
@@ -4091,10 +4094,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)0,  // in0_mcast_num_dests
         (std::uint32_t)0,  // in0_mcast_num_cores
         // batch args
-        (std::uint32_t)M * K,  // MtKt
-        (std::uint32_t)in0_B,  // batch
-        (std::uint32_t)in1_B,  // batch
-        (std::uint32_t)false,  // reuse_in0_in_CB
+        (std::uint32_t)M * K,            // MtKt
+        (std::uint32_t)in0_B,            // batch
+        (std::uint32_t)in1_B,            // batch
+        (std::uint32_t)reuse_in0_in_CB,  // reuse_in0_in_CB
 
         // sparsity args
         (std::uint32_t)0,     // batchB
@@ -4127,9 +4130,9 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)num_cores - 1,                     // in1_mcast_num_dests
         (std::uint32_t)in1_mcast_receiver_num_cores - 1,  // in1_mcast_num_cores
         // batch args
-        (std::uint32_t)K * N,                                        // KtNt
-        (std::uint32_t)((in0_B == 1 && in1_B > 1) ? in1_B : in0_B),  // batch
-        (std::uint32_t)bcast_batch,                                  // bcast_B
+        (std::uint32_t)K * N,                              // KtNt
+        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch
+        (std::uint32_t)bcast_batch,                        // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -4179,7 +4182,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)((in0_B == 1 && in1_B > 1) ? in1_B : in0_B),  // batch (must match in1 sender)
+        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch (must match in1 sender)
 
         // WRITER
         // out tensor args
@@ -4363,11 +4366,11 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         out_num_blocks_x,  // out_num_blocks_x
         out_num_blocks_y,  // out_num_blocks_y
 
-        out_subblock_h,               // out_subblock_h
-        out_subblock_w,               // out_subblock_w
-        out_subblock_num_tiles,       // out_subblock_num_tiles
-        bcast_batch ? in0_B : in1_B,  // batch (use in0_B when broadcasting in1, otherwise in1_B)
-        out_block_tiles,              // out_block_num_tiles
+        out_subblock_h,                   // out_subblock_h
+        out_subblock_w,                   // out_subblock_w
+        out_subblock_num_tiles,           // out_subblock_num_tiles
+        reuse_in0_in_CB ? in1_B : in0_B,  // batch
+        out_block_tiles,                  // out_block_num_tiles
 
         untilize_out,  // untilize_out
         false,         // get_batch_from_reader
