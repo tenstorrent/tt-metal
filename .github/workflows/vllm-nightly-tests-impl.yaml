@@ -563,7 +563,7 @@ jobs:
             --percentile-metrics ttft,tpot,itl,e2el \
             --dataset json-unique \
             --output-len 1024 \
-            --save-result \
+            --save-results \
             --result-filename output/vllm_result_structured.json \
             "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
             "${ADDITIONAL_STRUCTURED_OUTPUT_ARGS[@]}" \
