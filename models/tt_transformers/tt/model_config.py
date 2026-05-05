@@ -24,6 +24,7 @@ from models.tt_transformers.tt.common import (
     encode_prompt_hf,
     get_base_model_name,
     get_out_subblock_w,
+    get_padded_prefill_len,
     nearest_multiple,
     num_to_core_range_set,
     rope_scaling_model_factory,
@@ -1169,17 +1170,10 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    def _is_qwen3_embedding_0_6b_or_4b_for_short_seq_l1(self) -> bool:
-        """Only Qwen3-Embedding-0.6B and Qwen3-Embedding-4B use the short-seq L1 prefill path."""
-        tag = f"{self.model_name} {self.base_model_name} {getattr(self, 'CKPT_DIR', '')}".lower()
-        return "qwen3-embedding-0.6b" in tag or "qwen3-embedding-4b" in tag
+    def padded_prefill_len(self, seq_len: int) -> int:
+        return get_padded_prefill_len(seq_len)
 
     def use_short_seq_l1_prefill(self, seq_len: int = None):
-        """L1-backed prefill activations on single-chip meshes when batch is 1 and sequence is short.
-
-        Enabled only for **Qwen3-Embedding-0.6B** and **Qwen3-Embedding-4B** (not 8B or other models).
-        Threshold is ``TT_SHORT_SEQ_L1_PREFILL_MAX`` (default 512). Opt out with ``TT_PREFILL_FORCE_DRAM=1``.
-        """
         force_dram = os.getenv("TT_PREFILL_FORCE_DRAM", "0") == "1"
         if force_dram:
             return False
@@ -1189,14 +1183,13 @@ class ModelArgs:
             return False
         if self.max_batch_size != 1:
             return False
-        if not self._is_qwen3_embedding_0_6b_or_4b_for_short_seq_l1():
+        if self.base_model_name not in ("Qwen3-Embedding-0.6B", "Qwen3-Embedding-4B"):
             return False
         max_short = int(os.getenv("TT_SHORT_SEQ_L1_PREFILL_MAX", "512"))
         effective_seq_len = self.max_seq_len if seq_len is None else seq_len
         return effective_seq_len <= max_short
 
     def get_prefill_activation_mem_config(self, seq_len: int = None):
-        """Preferred prefill activation memory placement (L1 for guarded short-seq path)."""
         return ttnn.L1_MEMORY_CONFIG if self.use_short_seq_l1_prefill(seq_len) else ttnn.DRAM_MEMORY_CONFIG
 
     # =========================================================================
@@ -1793,7 +1786,6 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
         elif mode == Mode.PREFILL:
-            # Match concat_heads / WO: keeps SDPA output off DRAM when use_short_seq_l1_prefill (embedding <512)
             return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
         else:
             raise ValueError(f"Invalid mode: {mode}")
