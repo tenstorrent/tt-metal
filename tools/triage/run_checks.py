@@ -126,7 +126,7 @@ def get_devices(
     else:
         device_ids = [int(id) for id in devices]
 
-    return [context.devices[id] for id in device_ids if id in context.devices]
+    return [context.devices[id] for id in device_ids]
 
 
 def _convert_to_on_chip_coordinates(
