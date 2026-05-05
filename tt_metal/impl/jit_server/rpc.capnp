@@ -17,7 +17,7 @@ struct TargetRecipe {
 
     # Compile recipe.
     cflags @1 :Text;
-    defines @2 :Text;
+    defines @2 :List(Text);
     includes @3 :Text;
     compilerOptLevel @4 :Text;
     srcs @5 :List(Text);

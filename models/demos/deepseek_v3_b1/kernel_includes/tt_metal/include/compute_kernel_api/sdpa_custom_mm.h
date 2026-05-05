@@ -14,6 +14,11 @@
 #endif
 namespace ckernel {
 
+ALWI void sdpa_custom_mm_block_init_pack_short() {
+    PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2)));
+    PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2)));
+}
+
 template <bool transpose = false>
 ALWI void sdpa_custom_mm_block_init(
     const std::uint32_t in0_cb_id,
@@ -31,11 +36,10 @@ ALWI void sdpa_custom_mm_block_init(
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
 
-    PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2)));
-    PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2)));
+    sdpa_custom_mm_block_init_pack_short();
 }
 
-template <bool transpose = false>
+template <bool transpose = false, bool init_pack = true>
 ALWI void sdpa_custom_mm_block_init_short(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -44,8 +48,9 @@ ALWI void sdpa_custom_mm_block_init_short(
     UNPACK((llk_unpack_AB_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
     MATH((llk_math_sdpa_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2)));
-    PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2)));
+    if constexpr (init_pack) {
+        sdpa_custom_mm_block_init_pack_short();
+    }
 }
 
 template <bool read_transposed = false>

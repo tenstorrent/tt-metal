@@ -85,7 +85,7 @@ def get_callstack(
                 error_message = None
                 if len(cs) == 0:
                     error_message = "PC was not in range of any provided ELF files."
-                    if location in location._device.active_eth_block_locations:
+                    if dispatcher_core_data.block_type == "active_eth":
                         error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except TimeoutDeviceRegisterError:
@@ -98,7 +98,7 @@ def get_callstack(
                 error_message = None
                 if len(cs) == 0:
                     error_message = "PC was not in range of any provided ELF files."
-                    if location in location._device.active_eth_block_locations:
+                    if dispatcher_core_data.block_type == "active_eth":
                         error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except TimeoutDeviceRegisterError:
@@ -113,7 +113,7 @@ def get_callstack(
                     cs = top_callstack(pc, elfs, offsets, context)
                     if len(cs) == 0:
                         additional_message = "PC was not in range of any provided ELF files."
-                        if location in location._device.active_eth_block_locations:
+                        if dispatcher_core_data.block_type == "active_eth":
                             additional_message += (
                                 " Probably context switch occurred and PC is contained in base ERISC firmware."
                             )
@@ -273,7 +273,7 @@ class CallstackProvider:
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
 
-        if location in location._device.active_eth_block_locations and not self.force_active_eth:
+        if dispatcher_core_data.block_type == "active_eth" and not self.force_active_eth:
             callstack_with_message = get_callstack(
                 location,
                 risc_name,

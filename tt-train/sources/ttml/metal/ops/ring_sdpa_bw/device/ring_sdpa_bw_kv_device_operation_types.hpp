@@ -26,7 +26,7 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     ttnn::Tensor grad_output;
-    ttnn::Tensor attn_output;
+    ttnn::Tensor u_scaler;  // Precomputed rowsum(dO * O) from Q kernel
     ttnn::Tensor query;
     ttnn::Tensor key;
     ttnn::Tensor value;

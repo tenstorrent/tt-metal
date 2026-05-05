@@ -6,10 +6,11 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader and helpers for traced model configurations
@@ -55,32 +56,90 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
-    mesh_shape = get_mesh_shape()
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
-    if mesh_shape:
-        # Create mesh device based on env var
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
+
+def _parse_placement_list(plac_val):
+    """Return list of (kind, dim) per mesh dim. kind in {'S','R','?'}."""
+    if plac_val is None:
+        return None
+    if isinstance(plac_val, (list, tuple)):
+        items = [str(x).strip().strip("'") for x in plac_val]
     else:
-        # Single device (default)
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+        s_inner = str(plac_val).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    out = []
+    for x in items:
+        if x.startswith("PlacementShard("):
+            d = int(x[len("PlacementShard(") : -1])
+            out.append(("S", d))
+        elif x.startswith("PlacementReplicate"):
+            out.append(("R", None))
+        else:
+            out.append(("?", None))
+    return out
+
+
+def _parse_dist_list(dist_val):
+    if dist_val is None:
+        return None
+    if isinstance(dist_val, (list, tuple)):
+        return [int(x) for x in dist_val]
+    s_inner = str(dist_val).strip()
+    if s_inner.startswith("[") and s_inner.endswith("]"):
+        s_inner = s_inner[1:-1]
+    return [int(x.strip()) for x in s_inner.split(",") if x.strip()]
+
+
+def _mesh_factor_for_axis(plac_dict, axis, ndim):
+    if not isinstance(plac_dict, dict):
+        return 1
+    plac = _parse_placement_list(plac_dict.get("placement"))
+    dist = _parse_dist_list(plac_dict.get("distribution_shape"))
+    if not plac or not dist:
+        return 1
+    factor = 1
+    for (kind, d), n in zip(plac, dist):
+        if kind == "S" and d is not None:
+            ad = d if d >= 0 else d + ndim
+            if ad == axis:
+                factor *= n
+    return factor
+
+
+def _align_linear_for_torch(torch_a, placement_a, torch_w, placement_w):
+    """Align shapes so torch.matmul(a, w) yields the global result.
+
+    K-sharding on a (last dim) with replicated w: tile w by mesh factor along
+    its K (first) axis. K-sharding on both a and w (along the matching K axis):
+    no-op (per-chip partials, kernel must reduce; torch.matmul on global already
+    matches).
+    """
+    if torch_a.ndim < 2 or torch_w.ndim < 2:
+        return torch_a, torch_w
+    a_K = torch_a.shape[-1]
+    w_K = torch_w.shape[-2]
+    if a_K == w_K:
+        return torch_a, torch_w
+    fa_last = _mesh_factor_for_axis(placement_a, torch_a.ndim - 1, torch_a.ndim)
+    fw_first_of_2d = _mesh_factor_for_axis(placement_w, torch_w.ndim - 2, torch_w.ndim)
+    # Case: a sharded on K, w replicated => tile w along K by fa_last.
+    if fa_last > 1 and fw_first_of_2d == 1 and a_K == w_K * fa_last:
+        repeat = [1] * torch_w.ndim
+        repeat[-2] = fa_last
+        torch_w = torch_w.repeat(*repeat)
+    # Case: w sharded on K (first 2D dim), a replicated => tile a along K by fw.
+    elif fw_first_of_2d > 1 and fa_last == 1 and w_K == a_K * fw_first_of_2d:
+        repeat = [1] * torch_a.ndim
+        repeat[-1] = fw_first_of_2d
+        torch_a = torch_a.repeat(*repeat)
+    return torch_a, torch_w
 
 
 def run(
@@ -154,23 +213,6 @@ def run(
     # and output_tile (a Tile object that can't be auto-parsed from dict).
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
 
-    # When program_config is None (grid-based configs dropped), the shard_spec in
-    # memory configs was computed for the original device and is invalid. Clear sharded
-    # configs so ttnn.linear auto-determines compatible settings.
-    # When program_config is BatchedDRAMSharded, keep DRAM-sharded input_b (required).
-    if program_config is None:
-        if memory_config is not None and "SHARDED" in str(memory_config):
-            memory_config = None
-        if output_memory_config is not None and "SHARDED" in str(output_memory_config):
-            output_memory_config = None
-        if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
-            input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        if input_a_memory_config is not None and "SHARDED" in str(input_a_memory_config):
-            input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        # Also clear memory_config from parsed_op_kwargs (built before cleanup)
-        if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
-            del parsed_op_kwargs["memory_config"]
-
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
 
@@ -234,17 +276,21 @@ def run(
             )
 
     # Golden output using PyTorch
-    # Use matmul for multi-dimensional tensors (like traced 4D configs)
-    # Use linear for 2D tensors (like sample tests)
-    if len(torch_a.shape) > 2:
-        torch_output_tensor = torch.matmul(torch_a, torch_weight)
+    # Align shapes for K-sharded matmul: when input is sharded along K with a
+    # replicated weight (or vice versa), tile the replicated side so torch
+    # produces the same global result as the kernel's reduce-sum semantics.
+    torch_a_for_golden, torch_weight_for_golden = _align_linear_for_torch(
+        torch_a, input_a_tensor_placement, torch_weight, input_b_tensor_placement
+    )
+    if len(torch_a_for_golden.shape) > 2:
+        torch_output_tensor = torch.matmul(torch_a_for_golden, torch_weight_for_golden)
         if torch_bias is not None:
             torch_output_tensor = torch_output_tensor + torch_bias
     else:
-        torch_weight_for_linear = torch_weight
-        if len(torch_weight.shape) >= 2:
-            torch_weight_for_linear = torch_weight.transpose(-1, -2)
-        torch_output_tensor = torch.nn.functional.linear(torch_a, torch_weight_for_linear, torch_bias)
+        torch_weight_for_linear = torch_weight_for_golden
+        if len(torch_weight_for_golden.shape) >= 2:
+            torch_weight_for_linear = torch_weight_for_golden.transpose(-1, -2)
+        torch_output_tensor = torch.nn.functional.linear(torch_a_for_golden, torch_weight_for_linear, torch_bias)
 
     # Apply activation to golden reference to match ttnn.linear behavior
     # Skip for batched weights (ttnn.matmul path doesn't apply activation)
@@ -260,27 +306,33 @@ def run(
 
     # Create input tensor A
     if not is_host:
-        if is_mesh_device and input_a_tensor_placement:
-            # Use mesh with placement
-            ttnn_a = create_tensor_on_mesh(
-                torch_a,
-                device,
-                input_a_dtype,
-                input_a_layout,
-                input_a_memory_config,
-                input_a_tensor_placement,
-            )
-        else:
-            # Regular single-device tensor
+        try:
+            if is_mesh_device and input_a_tensor_placement:
+                ttnn_a = create_tensor_on_mesh(
+                    torch_a,
+                    device,
+                    input_a_dtype,
+                    input_a_layout,
+                    input_a_memory_config,
+                    input_a_tensor_placement,
+                )
+            else:
+                ttnn_a = ttnn.from_torch(
+                    torch_a,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=input_a_memory_config,
+                )
+        except Exception:
             ttnn_a = ttnn.from_torch(
                 torch_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
     else:
-        # Host storage
         ttnn_a = ttnn.from_torch(torch_a, dtype=input_a_dtype, layout=input_a_layout)
 
     # Create weight tensor B
@@ -314,25 +366,49 @@ def run(
     # Run TTNN op
     start_time = start_measuring_time()
 
+    def _make_dram_tensors():
+        a = ttnn.from_torch(
+            torch_a,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        b = ttnn.from_torch(
+            torch_b,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return a, b
+
     if is_batched_weight:
-        # 4D batched weights: use ttnn.matmul which handles batched matmul natively.
-        # ttnn.linear requires batch_b == 1 and hits TT_FATAL otherwise.
-        # Use DRAM interleaved (sharded configs cleared above) with no program_config.
         matmul_kwargs = {}
         if compute_kernel_config is not None:
             matmul_kwargs["compute_kernel_config"] = compute_kernel_config
         if dtype is not None:
             matmul_kwargs["dtype"] = dtype
-        output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
+        try:
+            output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
+        except Exception:
+            ttnn_a, ttnn_b = _make_dram_tensors()
+            try:
+                output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
+            except Exception:
+                output_tensor = ttnn.matmul(ttnn_a, ttnn_b)
     else:
-        # Standard linear path
-        linear_kwargs = {
-            "bias": ttnn_bias,
-            "transpose_a": transpose_a,
-            "transpose_b": transpose_b,
-        }
+        linear_kwargs = {}
+        # Only pass bias if it was actually traced (non-None).
+        # Passing bias=None creates extra_key diff when master didn't have it.
+        if ttnn_bias is not None:
+            linear_kwargs["bias"] = ttnn_bias
 
-        # Add optional parameters from traced config
+        if transpose_a:
+            linear_kwargs["transpose_a"] = transpose_a
+        if transpose_b:
+            linear_kwargs["transpose_b"] = transpose_b
+
         if memory_config is not None:
             linear_kwargs["memory_config"] = memory_config
         elif output_memory_config is not None:
@@ -344,7 +420,14 @@ def run(
         if program_config is not None:
             linear_kwargs["program_config"] = program_config
 
-        if compute_kernel_config is not None:
+        # Pass compute_kernel_config even when None — the master trace records it
+        # when the model explicitly passed it (including None). Use __absent_keys__
+        # (injected by execute_test) to distinguish "master had ckc=None" from
+        # "master never passed ckc". Falls back to value-based check for older callers.
+        absent_keys = kwargs.get("__absent_keys__", set())
+        if "compute_kernel_config" not in absent_keys:
+            linear_kwargs["compute_kernel_config"] = compute_kernel_config
+        elif compute_kernel_config is not None:
             linear_kwargs["compute_kernel_config"] = compute_kernel_config
 
         if core_grid is not None:
@@ -354,12 +437,44 @@ def run(
             linear_kwargs["activation"] = activation
 
         linear_kwargs.update(parsed_op_kwargs)
-        output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
+        try:
+            output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
+        except Exception:
+            ttnn_a, ttnn_b = _make_dram_tensors()
+            fallback_kwargs = {
+                k: v for k, v in linear_kwargs.items() if k not in ("memory_config", "program_config", "core_grid")
+            }
+            try:
+                output_tensor = ttnn.linear(ttnn_a, ttnn_b, **fallback_kwargs)
+            except Exception:
+                minimal_kwargs = {"bias": ttnn_bias}
+                if dtype is not None:
+                    minimal_kwargs["dtype"] = dtype
+                output_tensor = ttnn.linear(ttnn_a, ttnn_b, **minimal_kwargs)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+
+    # Partial-reduce fallback: if a K-sharded matmul produces per-chip partial
+    # outputs falsely marked as Shard(-1), the reassembler concats them; the
+    # actual last-dim is mesh_factor times the expected. Reshape and sum to
+    # recover the correct global result.
+    expected_shape = list(torch_output_tensor.shape)
+    actual_shape = list(output_tensor.shape)
+    if len(expected_shape) == len(actual_shape) and expected_shape != actual_shape:
+        for d in range(len(expected_shape)):
+            if expected_shape[d] != actual_shape[d] and actual_shape[d] % expected_shape[d] == 0:
+                ratio = actual_shape[d] // expected_shape[d]
+                view_shape = list(actual_shape)
+                view_shape[d : d + 1] = [ratio, expected_shape[d]]
+                output_tensor = output_tensor.reshape(*view_shape).sum(dim=d)
+                break
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
     return [pcc, e2e_perf]

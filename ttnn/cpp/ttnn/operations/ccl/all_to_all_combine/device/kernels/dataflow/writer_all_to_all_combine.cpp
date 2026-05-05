@@ -149,7 +149,7 @@ void kernel_main() {
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx = detail::get_output_page_idx<tokens_per_device>(t, k);
-                const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
+                const uint64_t output_noc_addr = output_addrgen.get_noc_addr(output_page_idx);
 
                 // figure out which device to send data to and routing
                 const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<

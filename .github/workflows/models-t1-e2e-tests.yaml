@@ -1,10 +1,9 @@
-name: "[Tier 1] Models End-To-End Tests"
+name: "(Tier 1) Models End-To-End Tests"
 
 on:
   schedule:
-    # Twice a day at 02:00 and 14:00 UTC — all models, all SKUs
+    # Once a day at 02:00 UTC — all models, all SKUs
     - cron: "0 2 * * *"
-    - cron: "0 14 * * *"
   workflow_dispatch:
     inputs:
       model:
@@ -64,7 +63,7 @@ permissions:
   packages: write
   contents: write
 
-run-name: "[Tier 1] Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
+run-name: "(Tier 1) Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
   resolve-skus:
