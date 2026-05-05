@@ -658,6 +658,85 @@ class TtGatedDeltaNet(LightweightModule):
             ttnn.deallocate(self._prefill_rec_states_f32)
             self._prefill_rec_states_f32 = None
 
+    def replicate_prefill_state_to_slot(self, slot):
+        """Copy B=1 prefill GDN states into a single decode slot, leaving other slots untouched.
+
+        Used by vLLM continuous batching: after prefilling one user, write that
+        user's recurrent and conv state only into row `slot` of the batched
+        rec_states / conv_states, so other in-flight users' GDN states are not
+        clobbered.
+
+        On first call, lazy-allocates the batched decode state (zeros) via
+        reset_state(). Mirrors the host round-trip pattern used by
+        replicate_prefill_state_to_batch.
+        """
+        if not hasattr(self, "_prefill_conv_states") or self._prefill_conv_states is None:
+            return
+
+        B = self.batch_size
+        Nv_TP = self.Nv_TP
+        mesh = self.mesh_device
+
+        if self.conv_states is None:
+            self.reset_state()
+
+        assert 0 <= slot < B, f"slot {slot} out of range [0, {B})"
+
+        # Conv states: write only row `slot` of [1, B, qkv_dim_tp] per device.
+        for i in range(self.conv_kernel_size):
+            pre_per_dev = ttnn.get_device_tensors(self._prefill_conv_states[i])
+            cur_per_dev = ttnn.get_device_tensors(self.conv_states[i])
+            new_parts = []
+            for pre_dev, cur_dev in zip(pre_per_dev, cur_per_dev):
+                pre_cpu = ttnn.to_torch(pre_dev)  # [1, 1, qkv_dim_tp]
+                cur_cpu = ttnn.to_torch(cur_dev).clone()  # [1, B, qkv_dim_tp]
+                cur_cpu[:, slot : slot + 1, :] = pre_cpu
+                new_parts.append(cur_cpu)
+            combined = torch.cat(new_parts, dim=0)
+            new_state = ttnn.from_torch(
+                combined,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )
+            ttnn.copy(new_state, self.conv_states[i])
+            ttnn.deallocate(new_state)
+
+        # Rec states: write rows [slot*Nv_TP : (slot+1)*Nv_TP] of [B*Nv_TP, Dk, Dv] per device.
+        pre_per_dev_rec = ttnn.get_device_tensors(self._prefill_rec_states)
+        cur_per_dev_rec = ttnn.get_device_tensors(self.rec_states)
+        new_rec_parts = []
+        for pre_dev, cur_dev in zip(pre_per_dev_rec, cur_per_dev_rec):
+            pre_cpu = ttnn.to_torch(pre_dev)  # [Nv_TP, Dk, Dv]
+            cur_cpu = ttnn.to_torch(cur_dev).clone()  # [B*Nv_TP, Dk, Dv]
+            cur_cpu[slot * Nv_TP : (slot + 1) * Nv_TP, :, :] = pre_cpu
+            new_rec_parts.append(cur_cpu)
+        combined_rec = torch.cat(new_rec_parts, dim=0)
+        new_rec = ttnn.from_torch(
+            combined_rec,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        ttnn.copy(new_rec, self.rec_states)
+        ttnn.deallocate(new_rec)
+
+        # Free prefill states so the next request's lazy _init_prefill_states
+        # (gated at gdn.py forward_prefill: "if ... is None: self._init_prefill_states()")
+        # allocates fresh zeros.
+        for s in self._prefill_conv_states:
+            ttnn.deallocate(s)
+        ttnn.deallocate(self._prefill_rec_states)
+        ttnn.deallocate(self._prefill_fused_output)
+        self._prefill_conv_states = None
+        self._prefill_rec_states = None
+        self._prefill_fused_output = None
+        if hasattr(self, "_prefill_rec_states_f32") and self._prefill_rec_states_f32 is not None:
+            ttnn.deallocate(self._prefill_rec_states_f32)
+            self._prefill_rec_states_f32 = None
+
     def _forward_prefill_sequential(self, x):
         """GDN prefill via sequential per-token decode (high-quality fallback).
 

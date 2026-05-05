@@ -655,7 +655,16 @@ def create_qwen35_model(
         Transformer instance with all weights loaded
     """
     if model_path is None:
-        model_path = os.path.expanduser("~/models/Qwen3.5-27B-FP8")
+        # Honor MODEL_WEIGHTS_DIR (Docker convention) and HF_MODEL so callers
+        # like the vLLM adapter don't need to plumb the path through every call
+        # site. Falls back to the historical default for e2e-test entry points
+        # that don't set either env var.
+        model_path = (
+            os.environ.get("MODEL_WEIGHTS_DIR")
+            or os.environ.get("HF_MODEL")
+            or os.path.expanduser("~/models/Qwen3.5-27B-FP8")
+        )
+    model_path = os.path.expanduser(model_path)
 
     # ModelArgs requires HF_MODEL env var
     if not os.environ.get("HF_MODEL"):

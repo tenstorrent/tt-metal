@@ -735,15 +735,37 @@ class Qwen35Attention(LightweightModule):
             k_chunk_size=k_chunk,
         )
 
+        # When called from the framework's non-chunked prefill path (vLLM short
+        # prompts), `page_table` is sliced to cover only the unpadded prompt's
+        # blocks, but Q is padded by get_padded_prefill_len → K < Q + chunk_start_idx
+        # trips the chunked SDPA assertion. Pad page_table here with zeros so K
+        # covers Q; the causal mask + the fact that we only paged_fill_cache'd
+        # the real blocks means the padded slots contribute nothing valid.
+        sdpa_page_table = page_table
+        needed_blocks = (seq_len + chunk_start_idx + block_size - 1) // block_size
+        if page_table.shape[-1] < needed_blocks:
+            pad_blocks = needed_blocks - page_table.shape[-1]
+            zeros_pad = ttnn.zeros(
+                (page_table.shape[0], pad_blocks),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            sdpa_page_table = ttnn.concat([page_table, zeros_pad], dim=-1)
+            ttnn.deallocate(zeros_pad)
+
         attn_out = ttnn.transformer.chunked_scaled_dot_product_attention(
             input_tensor_q=q_8b,
             input_tensor_k=k_paged,
             input_tensor_v=v_paged,
-            page_table_tensor=page_table,
+            page_table_tensor=sdpa_page_table,
             chunk_start_idx=chunk_start_idx,
             compute_kernel_config=self.compute_cfg,
             program_config=sdpa_config,
         )
+        if sdpa_page_table is not page_table:
+            ttnn.deallocate(sdpa_page_table)
         ttnn.deallocate(q_8b)
 
         # ---- Sigmoid gating (verbatim) ----

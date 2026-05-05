@@ -309,6 +309,13 @@ class Qwen35ModelArgs(ModelArgs):
         # We need up to 4096 for attention layers that process full sequences.
         self.prefill_len_cutoff = 4096
 
+        # Framework's MAX_PREFILL_CHUNK_SIZES_DIV1024 table doesn't list Qwen3.5-27B,
+        # so the base ModelArgs defaults max_prefill_chunk_size to 4 * 1024 = 4096.
+        # vLLM's chunked prefill loop calls model.ttnn_prefill_forward() once per
+        # chunk; clamp to 2048 to match ATTN_CHUNK_SIZE and the GDN kernel chunk
+        # size that prefill_layer_chunked has been validated against.
+        self.max_prefill_chunk_size = 2048
+
         # TP-derived dimensions
         self.gdn_nk_tp = GDN_Nk // tp
         self.gdn_nv_tp = GDN_Nv // tp

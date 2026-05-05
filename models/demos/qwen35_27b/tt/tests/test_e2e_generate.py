@@ -448,6 +448,7 @@ def test_e2e_generate_traced(mesh_device, reset_seeds, ensure_gc, input_prompts,
         dtype=ttnn.bfloat8_b,
         paged_attention_config=paged_attention_config,
         use_paged_kv_cache=use_paged,
+        # n_layers=4,
     )
     load_time = time.time() - t0
     logger.info(f"Model created in {load_time:.1f}s")
