@@ -29,7 +29,6 @@ ProgramDescriptor MorehDotOperation::create_descriptor(
     auto* src0_buffer = input_a.buffer();
     auto* src1_buffer = input_b.buffer();
     auto* dst_buffer = output.buffer();
-    float scaler = 1.0f;
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_a.dtype());
     const uint32_t cb_tile_size = tile_size(cb_data_format);
