@@ -34,6 +34,8 @@ class Bucket:
     timeout: int
     targets: tuple[str, ...]
     pytest_args: tuple[str, ...] = ()
+    # Run each collected nodeid in its own pytest subprocess so a timeout cannot poison later cases.
+    case_isolated: bool = False
     reset_before: bool = True
     slow_dispatch: bool = True
     env: tuple[tuple[str, str], ...] = ()
@@ -155,6 +157,7 @@ BUCKETS: tuple[Bucket, ...] = (
         timeout=600,
         # TODO: Remove the `not mtp_layer_61` exclusion after the MTP decoder cases are burned down.
         pytest_args=("-k", "(unrigged_all_experts or rigged_groups8) and random_weights and not mtp_layer_61"),
+        case_isolated=True,
         targets=(f"{UNIT_TEST_DIR}/test_decoder_block.py",),
     ),
     Bucket(
@@ -281,6 +284,20 @@ def run_command(command: list[str], *, env: dict[str, str], dry_run: bool) -> No
     subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
 
 
+def collect_nodeids(command: list[str], *, env: dict[str, str], dry_run: bool) -> list[str]:
+    print(f"+ {quote_command(command)}", flush=True)
+    if dry_run:
+        return []
+
+    result = subprocess.run(command, cwd=REPO_ROOT, env=env, text=True, capture_output=True)
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr, flush=True)
+    result.check_returncode()
+    return [line for line in result.stdout.splitlines() if ".py::" in line]
+
+
 def reset_validate_smoke(*, env: dict[str, str], dry_run: bool, run_smoke: bool) -> None:
     for attempt in range(1, RESET_VALIDATE_SMOKE_ATTEMPTS + 1):
         print(
@@ -327,6 +344,54 @@ def reset_validate_smoke(*, env: dict[str, str], dry_run: bool, run_smoke: bool)
             )
 
 
+def run_case_isolated_bucket(
+    bucket: Bucket,
+    *,
+    args: argparse.Namespace,
+    env: dict[str, str],
+) -> list[str]:
+    nodeids = collect_nodeids(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            *args.pytest_arg,
+            *bucket.pytest_args,
+            *bucket.targets,
+        ],
+        env=env,
+        dry_run=args.dry_run,
+    )
+
+    failures: list[str] = []
+    for case_idx, nodeid in enumerate(nodeids, start=1):
+        print(f"\n=== {bucket.name} case {case_idx}/{len(nodeids)} ===", flush=True)
+        try:
+            run_command(
+                [
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    f"--timeout={bucket.timeout}",
+                    *args.pytest_arg,
+                    *bucket.pytest_args,
+                    nodeid,
+                ],
+                env=env,
+                dry_run=args.dry_run,
+            )
+        except subprocess.CalledProcessError as exc:
+            failures.append(f"{bucket.name}::{nodeid} exited with {exc.returncode}")
+            if not args.continue_on_failure:
+                break
+            if bucket.reset_before and not args.no_reset and case_idx < len(nodeids):
+                reset_validate_smoke(env=env, dry_run=args.dry_run, run_smoke=args.smoke_after_reset)
+
+    return failures
+
+
 def selected_buckets(names: list[str] | None, excluded_names: list[str]) -> tuple[Bucket, ...]:
     selected = BUCKETS
     if names:
@@ -341,7 +406,10 @@ def print_buckets() -> None:
     for bucket in BUCKETS:
         reset = "reset" if bucket.reset_before else "no-reset"
         dispatch = "slow-dispatch" if bucket.slow_dispatch else "fast-dispatch"
-        print(f"{bucket.name}: timeout={bucket.timeout}, {reset}, {dispatch}, targets={len(bucket.targets)}")
+        isolation = "case-isolated" if bucket.case_isolated else "bucket-isolated"
+        print(
+            f"{bucket.name}: timeout={bucket.timeout}, {reset}, {dispatch}, {isolation}, targets={len(bucket.targets)}"
+        )
 
 
 def main() -> int:
@@ -358,6 +426,11 @@ def main() -> int:
         try:
             if bucket.reset_before and not args.no_reset:
                 reset_validate_smoke(env=env, dry_run=args.dry_run, run_smoke=args.smoke_after_reset)
+            if bucket.case_isolated:
+                failures.extend(run_case_isolated_bucket(bucket, args=args, env=env))
+                if failures and not args.continue_on_failure:
+                    break
+                continue
             run_command(
                 [
                     sys.executable,
