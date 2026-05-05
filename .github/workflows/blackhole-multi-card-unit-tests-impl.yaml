@@ -91,7 +91,7 @@ jobs:
             cmd: |
               SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
               SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
-            timeout: 60
+            timeout: 10
             test-type: slow
           - name: fabric infra unit tests
             cmd: |
