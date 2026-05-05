@@ -1272,6 +1272,15 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                     }
                 }
 
+                if (fuse_op) {
+                    if (fused_op_signaler->is_all_gather()) {
+                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+                    } else if (fused_op_signaler->is_reduce_scatter()) {
+                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
+                    } else {
+                        TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
+                    }
+                }
                 if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
                     if (in1_is_width_sharded) {
                         uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
@@ -1337,15 +1346,6 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                     } else {
                         // Height sharded: no additional runtime args needed
                         // (bank/offset computed from compile-time args + batch index)
-                    }
-                }
-                if (fuse_op) {
-                    if (fused_op_signaler->is_all_gather()) {
-                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
-                    } else if (fused_op_signaler->is_reduce_scatter()) {
-                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
-                    } else {
-                        TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
                     }
                 }
                 tt_metal::SetRuntimeArgs(
