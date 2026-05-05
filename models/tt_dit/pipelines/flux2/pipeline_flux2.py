@@ -41,12 +41,13 @@ class StateTensor:
         self,
         value: torch.Tensor | ttnn.Tensor,
         traced: bool,
+        dtype: ttnn.DataType = ttnn.bfloat16,
         mesh_axes: list[int] | None = None,
         device: ttnn.Device | None = None,
     ) -> None:
         if torch.is_tensor(value):
             assert device is not None, "device must be provided if using torch tensor"
-            value = tensor.from_torch(value, device=device, mesh_axes=mesh_axes)
+            value = tensor.from_torch(value, device=device, mesh_axes=mesh_axes, dtype=dtype)
         if self._value is None or not traced:
             self._value = value
         else:
@@ -204,6 +205,20 @@ class Flux2Pipeline:
 
         self.ts = Flux2TransformerState()
 
+        sp_axis = self._parallel_config.sequence_parallel.mesh_axis
+        text_ids = _prepare_ids(text_sequence_length=512)  # matches sequence_length=512 in encode
+        image_ids = _prepare_ids(height=self._height // 16, width=self._width // 16)
+        prompt_rope_cos, prompt_rope_sin = self._pos_embed.forward(text_ids)
+        spatial_rope_cos, spatial_rope_sin = self._pos_embed.forward(image_ids)
+        self.ts._tt_spatial_rope_cos.update(
+            spatial_rope_cos, False, mesh_axes=[sp_axis, None], device=self._mesh_device
+        )
+        self.ts._tt_spatial_rope_sin.update(
+            spatial_rope_sin, False, mesh_axes=[sp_axis, None], device=self._mesh_device
+        )
+        self.ts._tt_prompt_rope_cos.update(prompt_rope_cos, False, device=self._mesh_device)
+        self.ts._tt_prompt_rope_sin.update(prompt_rope_sin, False, device=self._mesh_device)
+
         self.warmup()  # E2E warmup
         if trace_warmup:  # warmup for trace capture
             self.warmup(traced=True)
@@ -354,22 +369,9 @@ class Flux2Pipeline:
             shape = [transformer_batch_size, self._num_channels_latents, latents_height, latents_width]
             latents = self._patchify(torch.randn(shape).permute(0, 2, 3, 1))
 
-            text_ids = _prepare_ids(text_sequence_length=prompt_sequence_length)
-            image_ids = _prepare_ids(height=self._height // 16, width=self._width // 16)
-            prompt_rope_cos, prompt_rope_sin = self._pos_embed.forward(text_ids)
-            spatial_rope_cos, spatial_rope_sin = self._pos_embed.forward(image_ids)
-
             self.ts._tt_prompt_embeds.update(prompt_embeds, traced, device=self._mesh_device)
             self.ts._tt_latents_step.update(latents, traced, mesh_axes=[None, sp_axis, None], device=self._mesh_device)
             self.ts._tt_guidance.update(guidance.unsqueeze(1), traced, device=self._mesh_device)
-            self.ts._tt_spatial_rope_cos.update(
-                spatial_rope_cos, traced, mesh_axes=[sp_axis, None], device=self._mesh_device
-            )
-            self.ts._tt_spatial_rope_sin.update(
-                spatial_rope_sin, traced, mesh_axes=[sp_axis, None], device=self._mesh_device
-            )
-            self.ts._tt_prompt_rope_cos.update(prompt_rope_cos, traced, device=self._mesh_device)
-            self.ts._tt_prompt_rope_sin.update(prompt_rope_sin, traced, device=self._mesh_device)
 
             logger.info("denoising...")
             self._prepare_transformer()
@@ -379,8 +381,10 @@ class Flux2Pipeline:
                     sigma_difference = (sigmas[i + 1] - sigmas[i]).item()
 
                     self.ts._tt_timestep.update(
-                        tensor.float32_tensor(torch.full([1, 1], fill_value=float(t)), device=self._mesh_device),
-                        traced,
+                        torch.full([1, 1], fill_value=float(t)),
+                        device=self._mesh_device,
+                        dtype=ttnn.float32,
+                        traced=traced,
                     )
 
                     self._step(
