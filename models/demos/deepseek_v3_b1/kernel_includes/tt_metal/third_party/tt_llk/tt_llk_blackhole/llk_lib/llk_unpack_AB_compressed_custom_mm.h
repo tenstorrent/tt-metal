@@ -28,8 +28,8 @@ using namespace ckernel::unpacker;
 
 inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
     constexpr std::uint8_t set_dvadlid = 1;
-    load_replay_buf(0, 26, [] {
-        // Bfp8
+    load_replay_buf(0, 28, [] {
+        // Bfp8 (0)
         TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
         TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_3, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
         TTI_NOP;
@@ -38,7 +38,7 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
         TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
-        // Bfp4
+        // Bfp4 (8)
         TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
         TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_2, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
         TTI_NOP;
@@ -47,7 +47,7 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
         TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
-        // Bfp2
+        // Bfp2 (16)
         TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
         TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
         TTI_NOP;
@@ -56,8 +56,11 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_() {
         TTI_NOP;
         TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
         TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
+        // Bfp0 (24)
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
         TTI_UNPACR_NOP(SrcA, 0, 0, set_dvadlid, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
+        TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvadlid);
     });
 }
 
@@ -81,12 +84,12 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo) {
     std::uint8_t curr = (combo >> 3) & 0b11;
 
     bool use_b = (combo >> 2) & 0b1;
-    bool need_reconfig = prev != curr;
-    bool need_stall = need_reconfig && (prev == 1 || curr == 1);
+    bool need_reconfig = prev != curr && curr != 0;
+    bool need_stall = (need_reconfig && (prev == 1 || curr == 1)) || (curr == 0 && prev != 0);
 
-    std::uint32_t start_idx = curr == 3 ? 0 : curr == 2 ? 8 : 16;
-    std::uint32_t start_offset = 3;
-    std::uint32_t replay_len = 3;
+    std::uint32_t start_idx = curr == 3 ? 0 : curr == 2 ? 8 : curr == 1 ? 16 : 24;
+    std::uint32_t start_offset = curr != 0 ? 3 : 1;
+    std::uint32_t replay_len = curr != 0 ? 3 : 1;
 
     if (use_b) {
         replay_len += 2;
@@ -98,14 +101,6 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo) {
     if (need_stall) {
         start_offset -= 1;
         replay_len += 1;
-    }
-
-    if (curr == 0) {
-        if (use_b) {
-            return lltt::replay_insn(22, 4);
-        } else {
-            return lltt::replay_insn(24, 2);
-        }
     }
 
     return lltt::replay_insn(start_idx + start_offset, replay_len);
