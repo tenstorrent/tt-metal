@@ -196,8 +196,8 @@ void matmul_qk_by_v(
 
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
-    pack_reconfig_data_format(cb_cur_mm_out);
     mm_init_short(cb_attention_weights, cb_value, /* transpose */ 0);
+    pack_reconfig_data_format(cb_cur_mm_out);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -256,10 +256,10 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
     cb_wait_front(cb_exp_max_diff, onetile);
 
     const uint32_t exp_sum_dst_idx = 0;
+    reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_bcast_cols_init_short(cb_prev_sum_exp, cb_exp_max_diff);
     tile_regs_acquire();
     // multiply previous exp sum with exp_max_diff
-    reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, 0, 0, exp_sum_dst_idx);
 
     // copy current sum exp to next register
@@ -285,6 +285,7 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 // Only reprograms UNPACK and MATH MOPs — safe inside a tile_regs_acquire block.
 // Uses reconfig_data_format_srcb so SrcA format register is preserved for the caller.
 void init_unary_bcast_col(uint32_t cb_col_vec) {
+    reconfig_data_format_srca(cb_col_vec);
     reconfig_data_format_srcb(cb_col_vec);
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_col_vec)));
