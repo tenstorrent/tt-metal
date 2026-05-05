@@ -232,15 +232,21 @@ public:
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
-        // Enumerate all Buffer* reachable from tensor_args and tensor_return_value,
-        // in a stable field-declaration order via reflection.  Used to map buffer
-        // bindings to indices that survive across calls without storing raw pointers.
+        // Enumerate all Buffer* reachable from tensor_args, tensor_return_value, and
+        // any Tensor fields inside resources (from prepare_resources).  Stable field
+        // order via reflection.  Used to map buffer bindings to indices that survive
+        // across calls without storing raw pointers.  Resource tensors are included
+        // so factories can bind kernel runtime args to halo lookup tables and other
+        // op-owned buffers via emplace_runtime_args() / Buffer*.
         static std::vector<tt::tt_metal::Buffer*> collect_tensor_buffers(
-            const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
+            const tensor_args_t& tensor_args,
+            const tensor_return_value_t& tensor_return_value,
+            const resource_t& resources) {
             std::vector<tt::tt_metal::Buffer*> buffers;
             auto collect = [&buffers](const Tensor& t) { buffers.push_back(t.buffer()); };
             ttsl::reflection::visit_object_of_type<Tensor>(collect, tensor_args);
             ttsl::reflection::visit_object_of_type<Tensor>(collect, tensor_return_value);
+            ttsl::reflection::visit_object_of_type<Tensor>(collect, resources);
             return buffers;
         }
 
@@ -328,7 +334,7 @@ public:
                     auto desc = invoke_create_descriptor(
                         attrs, tensor_args, tensor_return_value, resources, mesh_dispatch_coordinate);
                     tt::tt_metal::Program program{desc};
-                    auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value);
+                    auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value, resources);
                     auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
@@ -357,7 +363,7 @@ public:
                 if (!sv.resolved_bindings.empty()) {
                     // Fast path: patch only the buffer positions using current tensor addresses.
                     // No create_descriptor() call — tensor_buffers enumeration is O(n_tensors).
-                    auto current_buffers = collect_tensor_buffers(tensor_args, tensor_return_value);
+                    auto current_buffers = collect_tensor_buffers(tensor_args, tensor_return_value, sv.resources);
                     tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, current_buffers);
                 } else {
                     // Slow path: full descriptor rebuild + bulk copy.
