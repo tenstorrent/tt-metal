@@ -284,6 +284,10 @@ def run_command(command: list[str], *, env: dict[str, str], dry_run: bool) -> No
     subprocess.run(command, cwd=REPO_ROOT, env=env, check=True)
 
 
+class CollectionError(RuntimeError):
+    pass
+
+
 def collect_nodeids(command: list[str], *, env: dict[str, str], dry_run: bool) -> list[str]:
     print(f"+ {quote_command(command)}", flush=True)
     if dry_run:
@@ -295,7 +299,12 @@ def collect_nodeids(command: list[str], *, env: dict[str, str], dry_run: bool) -
     if result.stderr:
         print(result.stderr, end="", file=sys.stderr, flush=True)
     result.check_returncode()
-    return [line for line in result.stdout.splitlines() if ".py::" in line]
+    nodeids = [line.strip() for line in result.stdout.splitlines() if ".py::" in line]
+    if not nodeids:
+        raise CollectionError(
+            "pytest collection completed but produced no nodeids; refusing to mark the bucket as passed"
+        )
+    return nodeids
 
 
 def reset_validate_smoke(*, env: dict[str, str], dry_run: bool, run_smoke: bool) -> None:
@@ -356,7 +365,8 @@ def run_case_isolated_bucket(
             "-m",
             "pytest",
             "--collect-only",
-            "-q",
+            # pytest.ini adds -vvs, which makes collect-only print a tree instead of nodeids.
+            "-qqq",
             *args.pytest_arg,
             *bucket.pytest_args,
             *bucket.targets,
@@ -445,6 +455,10 @@ def main() -> int:
                 env=env,
                 dry_run=args.dry_run,
             )
+        except CollectionError as exc:
+            failures.append(f"{bucket.name} collection failed: {exc}")
+            if not args.continue_on_failure:
+                break
         except subprocess.CalledProcessError as exc:
             failures.append(f"{bucket.name} exited with {exc.returncode}")
             if not args.continue_on_failure:
