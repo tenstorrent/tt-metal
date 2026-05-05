@@ -611,9 +611,7 @@ ProgramDescriptor MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    // Use first mesh coordinate to get device
-    tt::tt_metal::IDevice* device =
-        reuse_batched_hs_dram_sharded_optimized_helpers::get_device_for_dram_banks(a, ttnn::MeshCoordinate(0));
+    tt::tt_metal::IDevice* device = a.buffer()->device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
