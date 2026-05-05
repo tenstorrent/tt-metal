@@ -1926,7 +1926,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
             self._warmup_completed_configs.add(warmup_cache_key)
         else:
-            # Keep profiler timing stable even when warmup is skipped.
+            # Warmup already ran for this runtime configuration.
             logger.info(f"Skipping warmup_model; warmup already completed for cache key={warmup_cache_key}.")
 
         decode_steps_for_stats = 0
