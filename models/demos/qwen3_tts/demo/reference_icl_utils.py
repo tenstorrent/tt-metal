@@ -68,37 +68,13 @@ def trim_reference_for_icl_conditioning(
     ref_text: str,
     target_text: str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """No-op pass-through: match HF's `Qwen3TTSForConditionalGeneration.generate_icl_prompt`,
+    which never trims `ref_code`. The previous heuristic ("ensure >=16 trailing text
+    tokens") was our own invention and produces a leading reference echo at the
+    start of generated audio — verified by running QwenLM/Qwen3-TTS's official
+    `generate_voice_clone` on the same prompt + ref_audio (clean) vs ours (bleeds).
+    HF's `generate_icl_prompt` simply pads text with `tts_pad_embed` when
+    text_lens <= codec_lens, and otherwise emits trailing = text_lens - codec_lens
+    even when that's small.
     """
-    If reference is too long for the tokenized text, keep only the first N codec
-    frames and proportionally trim the waveform (same alignment as the encoder).
-
-    Args:
-        ref_codes: [T, 16]
-        audio_data: [num_samples] at 24 kHz mono float32
-        tokenizer: HF tokenizer for Qwen3-TTS
-        ref_text / target_text: same strings used for ICL
-
-    Returns:
-        (trimmed ref_codes, trimmed audio_data)
-    """
-    max_frames, text_lens = _reference_frame_cap_and_text_lens(
-        tokenizer, ref_text, target_text, _DEFAULT_MIN_TRAILING_TEXT_TOKENS
-    )
-    n = int(ref_codes.shape[0])
-    if n <= max_frames:
-        return ref_codes, audio_data
-
-    orig_audio_len = int(audio_data.shape[0])
-    ref_codes = ref_codes[:max_frames].contiguous()
-    n_samples = max(1, int(orig_audio_len * max_frames / n))
-    n_samples = min(n_samples, orig_audio_len)
-    audio_data = audio_data[:n_samples].contiguous()
-
-    trailing = text_lens - (1 + max_frames)
-    print(
-        f"\n  Reference shortened for ICL: "
-        f"{n} -> {max_frames} codec frames (~{n_samples / 24000:.2f}s audio), "
-        f"~{trailing} trailing text tokens for decode"
-    )
-
     return ref_codes, audio_data
