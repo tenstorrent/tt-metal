@@ -273,7 +273,11 @@ def run_batch(
                     if done_since_save >= save_every:
                         save_results(output, header, results_by_idx)
                         done_since_save = 0
-        except BaseException as error:
+        except KeyboardInterrupt as error:
+            run_error = error
+        except SystemExit as error:
+            run_error = error
+        except Exception as error:
             run_error = error
 
     save_results(output, header, results_by_idx)
