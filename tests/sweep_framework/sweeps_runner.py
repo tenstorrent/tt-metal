@@ -14,7 +14,6 @@ import sys
 import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
-from multiprocessing import Process
 from pathlib import Path
 from queue import Empty
 
@@ -40,7 +39,7 @@ import framework.tt_smi_util as tt_smi_util
 try:
     from faster_fifo import Queue  # faster IPC; not available on aarch64 Linux
 except ImportError:
-    from multiprocessing import Queue
+    Queue = _mp.Queue
 
 # tt
 from framework.device_fixtures import default_device
