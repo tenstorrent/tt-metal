@@ -92,7 +92,7 @@ struct OpConfig {
     template <class EnumT>
     OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype = std::nullopt);
 
-    std::map<std::string, std::string> as_defines(DataType dtype) const;
+    std::map<std::string, std::string> as_defines(DataType dtype, bool enable_replay = false) const;
 
     std::optional<unary::UnaryOpType> process_lhs;
     std::optional<unary::UnaryOpType> process_rhs;

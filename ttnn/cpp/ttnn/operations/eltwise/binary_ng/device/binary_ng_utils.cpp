@@ -397,7 +397,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
     }
 }
 
-std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu_binary_op, DataType dtype) {
+std::pair<std::string, std::string> get_sfpu_init_fn(
+    OpConfig::SfpuBinaryOp sfpu_binary_op, DataType dtype, bool enable_replay = false) {
     using enum OpConfig::SfpuBinaryOp;
 
     std::optional<std::string> int_data_format;
@@ -420,6 +421,9 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {
                     fmt::format("mul_int_tile_init<DataFormat::{}>();", *int_data_format),
                     fmt::format("mul_int_tile<DataFormat::{}>", *int_data_format)};
+            }
+            if (enable_replay) {
+                return {"mul_binary_tile_init_replay();", "mul_binary_tile_replay"};
             }
             return {"mul_binary_tile_init();", "mul_binary_tile"};
         case DIV:
@@ -453,10 +457,26 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT:
+            if (enable_replay) {
+                if (int_data_format) {
+                    return {
+                        fmt::format("binary_left_shift_init_replay<DataFormat::{}>();", *int_data_format),
+                        fmt::format("binary_left_shift_tile_replay", *int_data_format)};
+                }
+                return {"binary_left_shift_init_replay();", "binary_left_shift_tile_replay"};
+            }
             return {
                 "binary_shift_tile_init();",
                 fmt::format("binary_left_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
         case RIGHT_SHIFT:
+            if (enable_replay) {
+                if (int_data_format) {
+                    return {
+                        fmt::format("binary_right_shift_init_replay<DataFormat::{}>();", *int_data_format),
+                        fmt::format("binary_right_shift_tile_replay", *int_data_format)};
+                }
+                return {"binary_right_shift_init_replay();", "binary_right_shift_tile_replay"};
+            }
             return {
                 "binary_shift_tile_init();",
                 fmt::format("binary_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
@@ -465,14 +485,38 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 "binary_shift_tile_init();",
                 fmt::format("binary_logical_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
         case BITWISE_AND:
+            if (enable_replay) {
+                if (int_data_format) {
+                    return {
+                        fmt::format("bitwise_and_binary_init_replay<DataFormat::{}>();", *int_data_format),
+                        fmt::format("bitwise_and_binary_tile_replay", *int_data_format)};
+                }
+                return {"bitwise_and_binary_init_replay();", "bitwise_and_binary_tile_replay"};
+            }
             return {
                 "binary_bitwise_tile_init();",
                 fmt::format("bitwise_and_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
         case BITWISE_OR:
+            if (enable_replay) {
+                if (int_data_format) {
+                    return {
+                        fmt::format("bitwise_or_binary_init_replay<DataFormat::{}>();", *int_data_format),
+                        fmt::format("bitwise_or_binary_tile_replay", *int_data_format)};
+                }
+                return {"bitwise_or_binary_init_replay();", "bitwise_or_binary_tile_replay"};
+            }
             return {
                 "binary_bitwise_tile_init();",
                 fmt::format("bitwise_or_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
         case BITWISE_XOR:
+            if (enable_replay) {
+                if (int_data_format) {
+                    return {
+                        fmt::format("bitwise_xor_binary_init_replay<DataFormat::{}>();", *int_data_format),
+                        fmt::format("bitwise_xor_binary_tile_replay", *int_data_format)};
+                }
+                return {"bitwise_xor_binary_init_replay();", "bitwise_xor_binary_tile_replay"};
+            }
             return {
                 "binary_bitwise_tile_init();",
                 fmt::format("bitwise_xor_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
@@ -544,7 +588,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
     }
 }
 
-std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
+std::map<std::string, std::string> OpConfig::as_defines(DataType dtype, bool enable_replay) const {
     std::map<std::string, std::string> defines;
 
     if (!is_sfpu_op()) {
@@ -554,7 +598,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
         defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
         return defines;
     }
-    auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
+    auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype, enable_replay);
     defines["BINARY_SFPU_INIT"] = std::move(tile_init);
     defines["BINARY_SFPU_OP"] = std::move(tile_fn);
     return defines;

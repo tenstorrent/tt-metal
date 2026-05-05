@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
+#include "tools/profiler/kernel_profiler.hpp"
+
 constexpr uint32_t num_trids = 3;
 uint32_t get_next_trid(uint32_t trid) { return trid == num_trids ? 1 : (trid + 1); }
 
@@ -125,15 +127,21 @@ void kernel_main() {
         b_cb_ptr = next_b_cb_addr(b_cb_ptr, chunk);
 
         if (!first_iter) {
-            noc_async_read_barrier_with_trid(trid_to_wait, noc);
+            {
+                DeviceZoneScopedN("data ready");
+                noc_async_read_barrier_with_trid(trid_to_wait, noc);
+            }
 
             trid_to_wait = get_next_trid(trid_to_wait);
             cb_push_back(cb_a, prev_chunk);
             cb_push_back(cb_b, prev_chunk);
 
             // Reserve two blocks of space to issue multiple block reads in parallel
-            cb_reserve_back(cb_a, 2 * prev_chunk);
-            cb_reserve_back(cb_b, 2 * prev_chunk);
+            {
+                DeviceZoneScopedN("reserve cb");
+                cb_reserve_back(cb_a, 2 * prev_chunk);
+                cb_reserve_back(cb_b, 2 * prev_chunk);
+            }
         }
 
         trid = get_next_trid(trid);
