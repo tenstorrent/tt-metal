@@ -64,7 +64,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     const bool enable_unpack_to_dest =
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     if (enable_unpack_to_dest) {
-        static_assert(false, "Quasar: unpack_to_dest not supported on this path");
+        ASSERT(false);  // Quasar unpack_to_dest unary bcast not implemented yet;
         UNPACK((llk_unpack_A_init<false /* TRANSPOSE_EN */, true /* IS_32b_DEST_EN */>(icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, true /* IS_32b_DEST_EN */>(icb)));
     } else {
