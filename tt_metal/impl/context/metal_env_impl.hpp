@@ -14,6 +14,7 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_metal/impl/device/safe_device_open.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -44,6 +45,9 @@ public:
 
     void acquire();
     void release();
+
+    // Called from MetalContext::on_dispatch_timeout_detected(); forwards to SafeDeviceGuard::on_hang().
+    void on_dispatch_hang();
 
     // --- Fabric config ---
     tt_fabric::FabricConfig get_fabric_config() const;
@@ -101,6 +105,9 @@ private:
     MetalEnvDescriptor descriptor_;
 
     std::unique_ptr<llrt::RunTimeOptions> rtoptions_;
+    // Declared before cluster_ so it destructs after cluster_ (C++ reverses declaration order),
+    // ensuring the mutex is held until devices are fully closed.
+    std::unique_ptr<SafeDeviceGuard> safe_device_guard_;
     std::unique_ptr<Cluster> cluster_;
     std::unique_ptr<Hal> hal_;
 

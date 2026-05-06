@@ -103,6 +103,12 @@ MetalEnvImpl::~MetalEnvImpl() {
 void MetalEnvImpl::acquire() { use_count_.fetch_add(1, std::memory_order_acq_rel); }
 void MetalEnvImpl::release() { use_count_.fetch_sub(1, std::memory_order_acq_rel); }
 
+void MetalEnvImpl::on_dispatch_hang() {
+    if (safe_device_guard_) {
+        safe_device_guard_->on_hang();
+    }
+}
+
 bool MetalEnvImpl::check_use_count_zero() const {
     const int use_count = use_count_.load(std::memory_order_acquire);
     if (use_count > 0) {
@@ -129,9 +135,33 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->set_mock_cluster_desc(std::string(descriptor_.mock_cluster_desc_path()));
     }
 
-    const bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(*this->rtoptions_));
+    // Run topology discovery once. We capture the ClusterDescriptor so we can:
+    //   1. Construct SafeDeviceGuard (dirty-bit check + tt-smi -r) before the persistent UMD
+    //      open, which is the ordering fix for the recovery-reset-vs-live-FW race.
+    //   2. Pass the descriptor into the Cluster constructor to avoid a second topology probe.
+    auto [cluster_type, cluster_desc] =
+        Cluster::get_cluster_type_from_cluster_desc(*this->rtoptions_);
+    const bool is_base_routing_fw_enabled = Cluster::is_base_routing_fw_enabled(cluster_type);
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
+
+    // Construct SafeDeviceGuard before the persistent UMD open so that:
+    //   - the dirty-bit check (and any tt-smi -r reset) fires on a quiescent device, and
+    //   - the mutex is held for the full lifetime of the UMD cluster.
+    // Skip on mock/simulator — they don't need cross-process device serialization.
+    const char* safe_open_env = std::getenv("TT_METAL_SAFE_DEVICE_OPEN");
+    const bool safe_open_enabled = safe_open_env != nullptr && std::string_view(safe_open_env) == "1";
+    if (safe_open_enabled && !rtoptions_->get_mock_enabled() && !rtoptions_->is_simulator_or_emulated()) {
+        using namespace std::chrono_literals;
+        if (rtoptions_->get_timeout_duration_for_operations() == std::chrono::duration<float>(0.0f)) {
+            rtoptions_->set_timeout_duration_for_operations(std::chrono::duration<float>(30.0f));
+            log_info(
+                tt::LogMetal,
+                "TT_METAL_SAFE_DEVICE_OPEN=1: defaulting TT_METAL_OPERATION_TIMEOUT_SECONDS to 30");
+        }
+        std::vector<tt::ChipId> chip_ids(
+            cluster_desc->get_all_chips().begin(), cluster_desc->get_all_chips().end());
+        safe_device_guard_ = std::make_unique<SafeDeviceGuard>(chip_ids);
+    }
 
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();
