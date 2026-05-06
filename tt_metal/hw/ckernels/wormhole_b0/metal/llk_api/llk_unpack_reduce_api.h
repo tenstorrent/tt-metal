@@ -12,7 +12,7 @@
 
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce_mop_config() {
-    _llk_unpack_reduce_mop_config_<type, dim>();
+    _llk_unpack_reduce_mop_config_<type, dim>(4);
 }
 
 template <PoolType type, ReduceDim dim>

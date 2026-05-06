@@ -19,28 +19,26 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 template <PoolType type, ReduceDim dim>
-inline void _llk_unpack_reduce_mop_config_()
+inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces = 4)
 {
-    static constexpr std::uint32_t unpack_srca     = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_zerosrca = TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
-    static constexpr std::uint32_t unpack_srcb     = TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    static constexpr std::uint32_t unpack_srca_no_z_inc = TT_OP_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_zerosrca      = TT_OP_UNPACR_NOP(p_unpacr_nop::UNP0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+    static constexpr std::uint32_t unpack_srcb          = TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        true, // src B
-        true, // halo - just used for 4 unpacks
-        unpack_zerosrca,
-        unpack_srca,
-        TT_OP_NOP,
-        TT_OP_NOP,
-        0,
-        unpack_srcb,
-        0);
+    constexpr std::uint32_t outerloop = 1;
+    constexpr std::uint32_t innerloop = 1;
+    ckernel_template tmp(outerloop, innerloop, unpack_zerosrca, unpack_srca_no_z_inc);
+    tmp.set_start_op(unpack_srcb);
     tmp.program();
 }
 
 template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_init_(
-    const std::uint32_t unpB_src_format, const std::uint32_t unpB_dst_format, const std::uint32_t within_face_16x16_transpose = 0)
+    const std::uint32_t unpB_src_format,
+    const std::uint32_t unpB_dst_format,
+    const std::uint32_t within_face_16x16_transpose = 0,
+    const std::uint32_t num_faces                   = 4)
 {
     // Configure SrcB format registers
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(unpB_dst_format);
@@ -55,9 +53,10 @@ inline void _llk_unpack_reduce_init_(
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
 
-    TTI_SETADCXX(0b11, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    TT_SETADCXX(p_setadc::UNP0, num_faces * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    TTI_SETADCXX(p_setadc::UNP1, FACE_C_DIM - 1, 0x0);
 
-    _llk_unpack_reduce_mop_config_<type, dim>();
+    _llk_unpack_reduce_mop_config_<type, dim>(num_faces);
 }
 
 template <PoolType type, ReduceDim dim>
@@ -78,17 +77,11 @@ inline void _llk_unpack_reduce_(const std::uint32_t address)
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);
 
-    // Load only 16 datums into srcB
-    TTI_SETADCXX(p_setadc::UNP1, FACE_C_DIM - 1, 0x0);
-
     // Stall unpacker until pending CFG writes from Trisc have completed
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // Run MOP
-    mop_run(0, 4);
-
-    // Restore face height
-    TTI_SETADCXX(p_setadc::UNP1, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    ckernel::ckernel_template::run();
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
