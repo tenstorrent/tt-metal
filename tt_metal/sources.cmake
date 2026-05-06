@@ -65,6 +65,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/program_run_params.hpp
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
+    api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
     api/tt-metalium/experimental/mock_device.hpp
     api/tt-metalium/experimental/noc_estimator/noc_estimator.hpp
     api/tt-metalium/experimental/noc_estimator/types.hpp
