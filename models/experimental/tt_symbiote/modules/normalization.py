@@ -7,9 +7,8 @@
 from torch import nn
 import torch
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule, tree_map, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
+from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 
 
 class TTNNLayerNorm(TTNNModule):
@@ -172,71 +171,6 @@ class TTNNDistributedRMSNorm(TTNNModule):
 
     """
 
-    @property
-    def weight(self):
-        """HF RMSNorm / ``_tied_weights_keys`` / init code expect ``.weight`` on the module."""
-        tl = self.torch_layer
-        if tl is not None and hasattr(tl, "weight"):
-            return tl.weight
-        raise AttributeError(f"{type(self).__name__} has no attribute 'weight'")
-
-    @property
-    def variance_epsilon(self):
-        """HF ``Qwen3OmniMoeRMSNorm`` and helpers read ``variance_epsilon`` (some norms use ``eps``)."""
-        tl = self.torch_layer
-        if tl is None:
-            raise AttributeError(f"{type(self).__name__} has no attribute 'variance_epsilon'")
-        if hasattr(tl, "variance_epsilon"):
-            return tl.variance_epsilon
-        if hasattr(tl, "eps"):
-            return tl.eps
-        raise AttributeError(f"{type(self).__name__} has no attribute 'variance_epsilon'")
-
-    @property
-    def _is_distributed(self):
-        """True when running on a multi-device mesh (col-sharded activations; CCL not required for output metadata)."""
-        return self.device is not None and self.device.get_num_devices() > 1
-
-    def set_output_tensors_config_impl(self, output_tensors):
-        """Col-sharded activations, or replicated full width when using gather + local ``ttnn.rms_norm``."""
-
-        def set_gather_output_config(e):
-            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and self.device is not None:
-                e.set_distributed_tensor_config(
-                    DistributedTensorConfig(
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-                        mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-                    )
-                )
-            return e
-
-        def set_col_sharded_config(e):
-            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
-                if self._is_distributed and self.device is not None:
-                    mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
-                    mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=-1)
-
-                    def logical_shape_for_col_sharded(shape):
-                        shape_list = list(shape)
-                        num_devices = self.device.get_num_devices()
-                        shape_list[-1] = shape_list[-1] * num_devices
-                        return tuple(shape_list)
-
-                    e.set_distributed_tensor_config(
-                        DistributedTensorConfig(
-                            mesh_mapper=mesh_mapper,
-                            mesh_composer=mesh_composer,
-                            logical_shape_fn=logical_shape_for_col_sharded,
-                        )
-                    )
-            return e
-
-        if not self._is_distributed:
-            return super().set_output_tensors_config_impl(output_tensors)
-        if getattr(self, "_distributed_gather_rmsnorm", False) and self.device is not None:
-            return tree_map(set_gather_output_config, output_tensors)
-        return tree_map(set_col_sharded_config, output_tensors)
-
     @classmethod
     def from_torch(cls, rms_norm: "RMSNorm"):
         """Create from PyTorch RMSNorm."""
@@ -249,109 +183,22 @@ class TTNNDistributedRMSNorm(TTNNModule):
 
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device."""
-        dim = int(self.torch_layer.weight.shape[0])
-        # Pad to nearest multiple of 32 for TILE compatibility (matches rms_norm_post_all_gather).
+        dim = self.torch_layer.weight.shape[0]
+        # Pad to nearest multiple of 32 for TILE compatibility
         padded_dim = ((dim + 31) // 32) * 32
         weight = self.torch_layer.weight
         if padded_dim != dim:
             weight = torch.nn.functional.pad(weight, (0, padded_dim - dim), value=1.0)
-        w_bf16 = weight.to(torch.bfloat16)
-
-        self._distributed_gather_rmsnorm = False
-        self.tt_weight_gather = None
-        self._gather_full_dim = padded_dim
-
-        if self.device is None or self.device.get_num_devices() <= 1:
-            relayout = w_bf16.view(1, 1, padded_dim // 32, 32)
-            self.weight_distributed = ttnn.as_tensor(relayout, layout=ttnn.ROW_MAJOR_LAYOUT)
-            self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
-            return
-
-        mesh_shape = list(self.device.shape)
-        ncol = int(mesh_shape[-1])
-        ntiles = padded_dim // 32
-
-        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-
-        # ShardTensor2dMesh(..., dims=(None, 2), mesh_shape=(1, ncol)) requires the sharded axis
-        # (tile rows) to align with the mesh — e.g. code_predictor q_norm (dim=128 → 4 tiles) on T3K
-        # (ncol=8) does not shard as 8 chunks. Match :class:`TTNNQwenLayerNorm` gather path:
-        # all_gather activations to full width, apply local ``ttnn.rms_norm`` with replicated gamma.
-        if ntiles % ncol != 0:
-            self._distributed_gather_rmsnorm = True
-            rep = ttnn.ReplicateTensorToMesh(self.device)
-            w_row = w_bf16.reshape(1, -1)
-            self.tt_weight_gather = ttnn.from_torch(
-                w_row,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                mesh_mapper=rep,
-            )
-            self.weight_distributed = None
-            return
-
-        relayout = w_bf16.view(1, 1, ntiles, 32)
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=mesh_shape)
         self.weight_distributed = ttnn.as_tensor(
-            relayout,
+            weight.unsqueeze(0).view(1, 1, padded_dim).reshape([1, 1, padded_dim // 32, 32]).to(torch.bfloat16),
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
         )
         self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
 
-    def _forward_distributed_gather_rms(self, inp: ttnn.Tensor, original_shape: tuple) -> ttnn.Tensor:
-        """Col-shard width does not tile-shard evenly on mesh: gather, full ``ttnn.rms_norm``, replicate out."""
-        emb = int(self._gather_full_dim)
-        n_dev = int(self.device.get_num_devices())
-        if inp.layout != ttnn.TILE_LAYOUT:
-            inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        wloc = int(inp.shape[-1])
-        if wloc * n_dev == emb:
-            inp = ttnn.all_gather(
-                inp,
-                dim=-1,
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-            )
-        elif wloc != emb:
-            raise RuntimeError(
-                f"TTNNDistributedRMSNorm gather path: need col-shard {emb}/{n_dev} or full width {emb}, got last dim {wloc}"
-            )
-
-        rank = len(original_shape)
-        if rank == 2:
-            inp = ttnn.unsqueeze(ttnn.unsqueeze(inp, 0), 0)
-        elif rank == 3:
-            inp = ttnn.unsqueeze(inp, 1)
-        elif rank != 4:
-            raise RuntimeError(f"TTNNDistributedRMSNorm: gather path expected rank 2–4 activations, got rank {rank}")
-
-        eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
-        tt_out = ttnn.rms_norm(
-            inp,
-            weight=self.tt_weight_gather,
-            epsilon=eps,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-
-        if rank == 3 and len(tt_out.shape) == 4:
-            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
-        elif rank == 2 and len(tt_out.shape) == 4:
-            tt_out = ttnn.reshape(tt_out, [int(tt_out.shape[2]), int(tt_out.shape[3])])
-        return tt_out
-
     @run_on_devices(DeviceArch.T3K)
     def forward(self, inp):
-        original_shape = tuple(int(d) for d in inp.shape)
-        if self._is_distributed and getattr(self, "_distributed_gather_rmsnorm", False):
-            return self._forward_distributed_gather_rms(inp, original_shape)
+        original_shape = inp.shape
         if len(original_shape) == 3:
             inp = ttnn.unsqueeze(inp, 1)  # Add batch dimension for RMSNorm
         if inp.layout != ttnn.TILE_LAYOUT:
