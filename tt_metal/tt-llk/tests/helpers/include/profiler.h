@@ -104,7 +104,8 @@ __attribute__((always_inline)) inline void sync_threads()
 
     // wait for all the threads to set the barrier
     barrier[TRISC_ID] = 1;
-    asm volatile("fence" ::: "memory");
+    ckernel::invalidate_data_cache();
+    ckernel::fence_compiler();
     for (std::uint32_t i = 0; i < NUM_CORES; ++i)
     {
         if (i == TRISC_ID)
@@ -113,7 +114,8 @@ __attribute__((always_inline)) inline void sync_threads()
         }
         while (barrier[i] != 1)
         {
-            asm volatile("fence" ::: "memory");
+            ckernel::invalidate_data_cache();
+            ckernel::fence_compiler();
         }
     }
 }
