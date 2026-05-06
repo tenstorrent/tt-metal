@@ -152,23 +152,10 @@ def optimized_tree_map_with_only_dict_list(*args, **kwargs):
         keys = data_structures[0].keys()
         if not all(ds.keys() == keys for ds in data_structures):
             raise ValueError("All dicts must have the same keys")
-        mapped = {
+        return {
             key: optimized_tree_map_with_only_dict_list(func, *(ds[key] for ds in data_structures), **kwargs)
             for key in keys
         }
-        # HuggingFace ``ModelOutput`` subclasses ``OrderedDict`` (``Mapping``). Returning a bare ``dict``
-        try:
-            from transformers.utils.generic import ModelOutput as _HFModelOutput
-        except ImportError:
-            _HFModelOutput = None  # type: ignore[misc, assignment]
-        if (
-            _HFModelOutput is not None
-            and len(data_structures) == 1
-            and isinstance(data_structures[0], _HFModelOutput)
-            and type(data_structures[0]) is not _HFModelOutput
-        ):
-            return type(data_structures[0])(**mapped)
-        return mapped
     elif all(isinstance(ds, Sequence) and not isinstance(ds, str) for ds in data_structures):
         if not all(len(ds) == len(data_structures[0]) for ds in data_structures):
             raise ValueError("All lists must have the same length")
