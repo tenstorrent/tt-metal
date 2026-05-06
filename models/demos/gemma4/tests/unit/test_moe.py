@@ -42,6 +42,15 @@ def test_moe(batch_size, seq_len, mesh_device, reset_seeds, request):
     hf_router = hf_layer.router
     hf_experts = hf_layer.experts
 
+    # Boost router proj σ so softmax produces peaked distributions. The
+    # factory's default N(0, 0.02) gives expert_scores std ≈ 0.019, which
+    # makes the post-softmax distribution near-uniform across experts; bf16
+    # and fp32 then disagree on topk rankings purely due to mantissa
+    # precision (a test artifact, not a routing bug). Real trained Gemma4
+    # routing is peaked, so we mirror that here.
+    with torch.no_grad():
+        hf_router.proj.weight.normal_(0, 1.0)
+
     state_dict = {
         "router.scale": hf_router.scale.data.clone(),
         "router.proj.weight": hf_router.proj.weight.data.clone(),

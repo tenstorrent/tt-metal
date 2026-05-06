@@ -49,5 +49,26 @@
       "test_single_layer_model[wormhole_b0-full_group-1x1]": 0.99,
       "test_single_layer_model[wormhole_b0-sliding_only-1x1]": 0.99
     }
+  },
+  "gemma-4-26B-A4B-it": {
+    "1x8": {
+      "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
+      "test_attention_prefill[wormhole_b0-seq4096-global-1x8]": 0.98,
+      "test_full_model[wormhole_b0-1x8]": 0.85,
+      "test_layer_forward[wormhole_b0-prefill_128-sliding-1x8]": 0.98,
+      "test_layer_forward[wormhole_b0-prefill_4096-sliding-1x8]": 0.98,
+      "test_moe[wormhole_b0-prefill_4096-1x8]": 0.95,
+      "test_router[wormhole_b0-prefill_1024-1x8]": 0.99,
+      "test_router[wormhole_b0-prefill_4096-1x8]": 0.99
+    }
+  },
+  "gemma-4-31B-it": {
+    "1x8": {
+      "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
+      "test_attention_prefill[wormhole_b0-seq1024-sliding-1x8]": 0.98,
+      "test_attention_prefill[wormhole_b0-seq4096-global-1x8]": 0.98,
+      "test_attention_prefill[wormhole_b0-seq4096-sliding-1x8]": 0.98,
+      "test_full_model[wormhole_b0-1x8]": 0.98
+    }
   }
 }
