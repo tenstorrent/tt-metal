@@ -22,8 +22,6 @@ namespace ttml::ops::distributed {
 
 autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     const autograd::TensorPtr& logits, const autograd::TensorPtr& targets, std::optional<uint32_t> cluster_axis) {
-    auto* device = &autograd::ctx().get_device();
-
     const auto logits_shape = logits->get_value().logical_shape();
     const auto targets_shape = targets->get_value().logical_shape();
 
@@ -115,12 +113,10 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     }
     const auto& logits_val = logits->get_value();
 
-    // Can use empty because ttml_select_target_logit zero-initializes its output tile before writing.
-    auto gather_output = ttnn::empty(
-        ttnn::Shape({B, 1U, S, 1U}), ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device, ttnn::DRAM_MEMORY_CONFIG);
-
-    ttnn::prim::ttml_select_target_logit(
-        logits_val, targets_raw, /*local_V=*/local_V, /*cluster_axis=*/cluster_axis, /*first_v=*/0U, gather_output);
+    // Output [B,1,S,1] BF16 TILE in DRAM is allocated by SelectTargetLogitDeviceOperation::create_output_tensors;
+    // its compute_output_specs derives shape/dtype/layout/memory_config from logits_val.
+    auto gather_output = ttnn::prim::ttml_select_target_logit(
+        logits_val, targets_raw, /*local_V=*/local_V, /*cluster_axis=*/cluster_axis, /*first_v=*/0U);
 
     // All-reduce to collect contributions from all TP shards  [B,1,S,1]
     auto target_logit = ttnn_fixed::distributed::all_reduce(gather_output, cluster_axis);

@@ -29,6 +29,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
 #include "tools/profiler/op_profiler_serialize.hpp"
@@ -232,10 +233,26 @@ void run_standard_ce_loop(uint32_t batch_size, uint32_t seq_len, uint32_t vocab_
     auto* device = &autograd::ctx().get_device();
 
     fmt::println(
-        "[perf-test] standard CE (replicated): B={} S={} V={} iters={}", batch_size, seq_len, vocab_size, iterations);
+        "[perf-test] standard CE (TP-sharded input + all_gather): B={} S={} V={} iters={} (V/tp_size={})",
+        batch_size,
+        seq_len,
+        vocab_size,
+        iterations,
+        vocab_size / kTpSize);
 
     const auto host = make_host_inputs(batch_size, seq_len, vocab_size);
 
+    // Mirror the production setup: a TP model with `gather_output=true` on the classifier head
+    // produces sharded logits `[B, 1, S, V/tp]` per device, then runs `ops::distributed::all_gather`
+    // (dim=last, GradOutputType::REPLICATED) immediately before the loss.  See
+    // tt-train/sources/ttml/modules/distributed/linear.cpp:114-118.
+    using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
+    using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+
+    ttsl::SmallVector<Placement> tp_logits_placements{Replicate{}, Shard{3}};
+    auto tp_logits_mapper =
+        ttnn::distributed::TensorToMesh::create(*device, {.placements = std::move(tp_logits_placements)});
     auto replicate_mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
 
     auto targets_dev = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
@@ -246,8 +263,25 @@ void run_standard_ce_loop(uint32_t batch_size, uint32_t seq_len, uint32_t vocab_
     auto grad_dev = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
         grad_ones, device, ttnn::Layout::TILE, replicate_mapper.get());
 
-    auto logits_dev = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-        host.logits, device, ttnn::Layout::TILE, replicate_mapper.get());
+    // Same warm-up as the VP CE loop: pre-issue an all_reduce on a representative shape so that
+    // the very first composite-CCL doesn't pay the GlobalSemaphore-init wedge cost.  Use the full
+    // V replicated (representative of what the loss receives post-gather) to seed the right caches.
+    {
+        fmt::println("[perf-test] warm-up: dispatching one all_reduce to seed CCL caches");
+        const auto t_warm = std::chrono::steady_clock::now();
+        auto warm_logits_dev = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            host.logits, device, ttnn::Layout::TILE, replicate_mapper.get());
+        auto sum_per_pos = ttnn::sum(warm_logits_dev, 3, /*keepdim=*/true);
+        (void)ttnn_fixed::distributed::all_reduce(sum_per_pos, /*cluster_axis=*/1U);
+        autograd::ctx().reset_graph();
+        fmt::println("[perf-test] warm-up done in {:.1f} ms", elapsed_ms_since(t_warm));
+    }
+
+    // Upload sharded logits once, reuse across iterations.  Each device holds [B, 1, S, V/tp]
+    // in BF16 at this point — the per-iter all_gather inside the signposts is what materializes
+    // the full V on every device, just like the production training loop.
+    auto logits_dev =
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(host.logits, device, ttnn::Layout::TILE, &tp_logits_mapper);
 
     for (uint32_t it = 0U; it < iterations; ++it) {
         const auto t0 = std::chrono::steady_clock::now();
@@ -255,14 +289,26 @@ void run_standard_ce_loop(uint32_t batch_size, uint32_t seq_len, uint32_t vocab_
 
         auto logits_ptr = autograd::create_tensor(logits_dev, true);
 
+        const auto t_fwd_start = std::chrono::steady_clock::now();
         perf_signpost(fmt::format("std_ce_fwd_begin iter={}", it));
-        auto loss = ops::cross_entropy_loss(logits_ptr, targets_ptr, ops::ReduceType::MEAN);
+        // Production-shaped path: gather the sharded TP output along the vocab dim, replicate the
+        // grad on backward (matching ColumnParallelLinear with gather_output=true).
+        auto gathered_logits = ops::distributed::all_gather(
+            logits_ptr, /*dim=*/3, /*cluster_axis=*/1U, ops::distributed::GradOutputType::REPLICATED);
+        auto loss = ops::cross_entropy_loss(gathered_logits, targets_ptr, ops::ReduceType::MEAN);
         perf_signpost(fmt::format("std_ce_fwd_end iter={}", it));
+        const auto t_fwd_done = std::chrono::steady_clock::now();
+        fmt::println("[perf-test] iter {} forward dispatched in {:.1f} ms", it, elapsed_ms_since(t_fwd_start));
 
         loss->set_grad(grad_dev);
         perf_signpost(fmt::format("std_ce_bwd_begin iter={}", it));
         loss->backward();
         perf_signpost(fmt::format("std_ce_bwd_end iter={}", it));
+        const auto t_bwd_done = std::chrono::steady_clock::now();
+        fmt::println(
+            "[perf-test] iter {} backward dispatched in {:.1f} ms",
+            it,
+            std::chrono::duration<double, std::milli>(t_bwd_done - t_fwd_done).count());
 
         autograd::ctx().reset_graph();
         fmt::println("[perf-test] iter {} done in {:.1f} ms", it, elapsed_ms_since(t0));
