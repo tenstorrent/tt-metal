@@ -20,7 +20,7 @@
     junitparser merge pytest-report-wormhole-1-compile.xml pytest-report-wormhole-1-run.xml pytest-report-wormhole-1.xml
   skus:
     wh_n150_civ2:
-      timeout: 240
+      timeout: 69
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_wormhole group 2/5
@@ -40,7 +40,7 @@
     junitparser merge pytest-report-wormhole-2-compile.xml pytest-report-wormhole-2-run.xml pytest-report-wormhole-2.xml
   skus:
     wh_n150_civ2:
-      timeout: 240
+      timeout: 69
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_wormhole group 3/5
@@ -60,7 +60,7 @@
     junitparser merge pytest-report-wormhole-3-compile.xml pytest-report-wormhole-3-run.xml pytest-report-wormhole-3.xml
   skus:
     wh_n150_civ2:
-      timeout: 240
+      timeout: 69
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_wormhole group 4/5
@@ -80,7 +80,7 @@
     junitparser merge pytest-report-wormhole-4-compile.xml pytest-report-wormhole-4-run.xml pytest-report-wormhole-4.xml
   skus:
     wh_n150_civ2:
-      timeout: 240
+      timeout: 69
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_wormhole group 5/5
@@ -100,7 +100,7 @@
     junitparser merge pytest-report-wormhole-5-compile.xml pytest-report-wormhole-5-run.xml pytest-report-wormhole-5.xml
   skus:
     wh_n150_civ2:
-      timeout: 240
+      timeout: 69
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 1/5
@@ -120,7 +120,7 @@
     junitparser merge pytest-report-blackhole-1-compile.xml pytest-report-blackhole-1-run.xml pytest-report-blackhole-1.xml
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 107
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 2/5
@@ -140,7 +140,7 @@
     junitparser merge pytest-report-blackhole-2-compile.xml pytest-report-blackhole-2-run.xml pytest-report-blackhole-2.xml
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 107
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 3/5
@@ -160,7 +160,7 @@
     junitparser merge pytest-report-blackhole-3-compile.xml pytest-report-blackhole-3-run.xml pytest-report-blackhole-3.xml
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 107
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 4/5
@@ -180,7 +180,7 @@
     junitparser merge pytest-report-blackhole-4-compile.xml pytest-report-blackhole-4-run.xml pytest-report-blackhole-4.xml
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 107
   owner_id: U07J3K6KS1K
 
 - name: llk_perf_blackhole group 5/5
@@ -200,5 +200,5 @@
     junitparser merge pytest-report-blackhole-5-compile.xml pytest-report-blackhole-5-run.xml pytest-report-blackhole-5.xml
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 107
   owner_id: U07J3K6KS1K
