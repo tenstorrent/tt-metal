@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include "common/filesystem_utils.hpp"
 
@@ -252,21 +253,20 @@ bool exec_command(
 
 std::vector<std::uint8_t> read_file_bytes(const std::filesystem::path& path) {
     std::ifstream file;
-    [[maybe_unused]] std::error_code ec;
+    std::error_code ec;
     if (!tt::filesystem::safe_open(file, path, std::ios::binary | std::ios::ate, ec)) {
-        throw std::runtime_error(fmt::format("Cannot read file '{}': {}", path, ec.message()));
+        TT_THROW("Cannot read file '{}': {}", path, ec.message());
     }
     std::streampos pos = file.tellg();
     if (pos == std::streampos(-1)) {
-        throw std::runtime_error("Cannot determine size of file: " + path.string());
+        TT_THROW("Cannot determine size of file: {}", path.string());
     }
     auto byte_count = static_cast<std::streamsize>(pos);
     file.seekg(0, std::ios::beg);
     std::vector<std::uint8_t> data(static_cast<std::size_t>(byte_count));
     file.read(reinterpret_cast<char*>(data.data()), byte_count);
     if (file.gcount() != byte_count || (!file && !file.eof())) {
-        throw std::runtime_error(
-            fmt::format("Failed to read file '{}' fully (expected {} bytes, got {})", path, byte_count, file.gcount()));
+        TT_THROW("Failed to read file '{}' fully (expected {} bytes, got {})", path, byte_count, file.gcount());
     }
     return data;
 }
@@ -294,7 +294,7 @@ bool create_file(const std::filesystem::path& file_path) {
     tt::filesystem::safe_create_directories(file_path.parent_path());
 
     std::ofstream file;
-    [[maybe_unused]] std::error_code ec;
+    std::error_code ec;
     return tt::filesystem::safe_open(file, file_path, ec);
 }
 
