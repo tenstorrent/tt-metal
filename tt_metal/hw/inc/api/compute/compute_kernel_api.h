@@ -34,10 +34,12 @@
 #ifdef TRISC_PACK
 #include "llk_pack_api.h"
 #include "llk_io_pack.h"
+#ifndef ARCH_QUASAR
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #include "llk_math_eltwise_unary_sfpu_tanh.h"
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_activations.h"
+#endif
 #define PACK(x) x
 #else
 #define PACK(x)
@@ -88,25 +90,6 @@ template <int vec_mode = (int)VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
 }
-
-// clang-format off
-/**
- * Performs SILU (same as Swish) operation on each element of a tile
- * in DST register at index tile_index. Uses the following implementation:
- * Silu[x] = x*Sigmoid[x]
- *
- * Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst))); }
-
-ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>())); }
 
 // clang-format off
 /**
