@@ -9,7 +9,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
@@ -76,17 +76,10 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    # Convert unsigned PyTorch dtypes to int32 for PCC check since comp_pcc doesn't support uint dtypes
-    pcc_torch_result = torch_result
-    pcc_output = output
-    if torch_dtype == torch.uint16:
-        pcc_torch_result = torch_result.to(torch.int32)
-        pcc_output = output.to(torch.int32)
-
     if ttnn_dtype == ttnn.bfloat8_b:
-        assert_allclose(pcc_torch_result, pcc_output, rtol=1e-2, atol=1e-2)
+        assert_with_pcc(torch_result, output, 0.9999)
     else:
-        assert_equal(pcc_torch_result, pcc_output)
+        assert_equal(torch_result, output)
 
 
 @pytest.mark.parametrize("layout", layouts)

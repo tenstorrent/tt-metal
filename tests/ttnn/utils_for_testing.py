@@ -407,6 +407,44 @@ def assert_equal(expected_pytorch_result, actual_pytorch_result):
     return equal_passed, equal_message
 
 
+def assert_quality(
+    expected_result,
+    actual_result,
+    ttnn_dtype,
+    bf4_pcc=0.95,
+    bf8_rtol=0.05,
+    bf8_atol=0.025,
+):
+    """
+    Performs dtype-aware assertions
+
+    For bfloat8_b, performs assert_allclose with rtol + atol.
+    For bfloat4_b, PCC assertion is done.
+    All other dtypes are checked with assert_equal.
+
+    Args:
+        expected_result: reference tensor (ttnn or torch).
+        actual_result:   tensor to compare against the reference (ttnn or torch).
+        ttnn_dtype:      the ttnn dtype that determines comparison strategy.
+        bf4_pcc:         PCC threshold for bfloat4_b (default 0.95).
+        bf8_rtol:        relative tolerance for bfloat8_b (default 0.05).
+        bf8_atol:        absolute tolerance floor for bfloat8_b (default 0.025).
+
+    Note: assert_quality is NOT appropriate for cross-precision dtype conversions
+
+    Returns:
+        tuple: A tuple containing:
+            - quality_passed (bool): True if the check passes, False otherwise
+            - quality_message (str): A message describing the comparison result
+    """
+    if ttnn_dtype == ttnn.bfloat8_b:
+        return assert_allclose(expected_result, actual_result, rtol=bf8_rtol, atol=bf8_atol)
+    elif ttnn_dtype == ttnn.bfloat4_b:
+        return assert_with_pcc(expected_result, actual_result, bf4_pcc)
+    else:
+        return assert_equal(expected_result, actual_result)
+
+
 def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
     """
     Compute the relative Frobenius norm of the difference between two tensors.

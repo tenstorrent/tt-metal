@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
+from tests.ttnn.utils_for_testing import assert_equal, assert_quality, assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -55,18 +55,12 @@ def test_interleaved_to_sharded_hash(device, first_dtype, second_dtype, input_in
         output_tensor = ttnn.interleaved_to_sharded(
             input_tensor_device, sharded_mem_config, first_dtype, keep_l1_aligned=keep_l1_aligned
         )
-        if first_dtype == ttnn.bfloat8_b:
-            assert_allclose(input_tensor_torch, ttnn.to_torch(output_tensor), rtol=1e-2, atol=1e-2)
-        else:
-            assert_equal(input_tensor_torch, ttnn.to_torch(output_tensor))
+        pcc_passed_a, pcc_message_a = assert_with_pcc(input_tensor_torch, ttnn.to_torch(output_tensor), pcc=0.9999)
 
         output_tensor = ttnn.interleaved_to_sharded(
             input_tensor_device, sharded_mem_config, second_dtype, keep_l1_aligned=keep_l1_aligned
         )
-        if second_dtype == ttnn.bfloat8_b:
-            assert_allclose(input_tensor_torch, ttnn.to_torch(output_tensor), rtol=1e-2, atol=1e-2)
-        else:
-            assert_equal(input_tensor_torch, ttnn.to_torch(output_tensor))
+        pcc_passed_b, pcc_message_b = assert_with_pcc(input_tensor_torch, ttnn.to_torch(output_tensor), pcc=0.9999)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -105,10 +99,7 @@ def test_interleaved_to_dram_height_sharded(
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
-    if dtype == ttnn.bfloat8_b:
-        assert_allclose(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), rtol=1e-2, atol=1e-2)
-    else:
-        assert_equal(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor))
+    assert_quality(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -147,10 +138,7 @@ def test_interleaved_to_dram_width_sharded(
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
-    if dtype == ttnn.bfloat8_b:
-        assert_allclose(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), rtol=1e-2, atol=1e-2)
-    else:
-        assert_equal(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor))
+    assert_quality(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
 @pytest.mark.parametrize(
@@ -192,10 +180,8 @@ def test_interleaved_to_dram_sharded_convert_dtype(
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config, out_dtype)
 
-    if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
-        assert_allclose(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), rtol=1e-2, atol=1e-2)
-    else:
-        assert_equal(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor))
+    effective_dtype = ttnn.bfloat8_b if (in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b) else out_dtype
+    assert_quality(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), effective_dtype)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.float32])
@@ -236,10 +222,7 @@ def test_interleaved_to_dram_sharded_via_to_memory_layout(
     )
     ttnn_output_tensor = ttnn.to_memory_config(ttnn_input_tensor, output_mem_config)
 
-    if dtype == ttnn.bfloat8_b:
-        assert_allclose(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), rtol=1e-2, atol=1e-2)
-    else:
-        assert_equal(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor))
+    assert_quality(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])

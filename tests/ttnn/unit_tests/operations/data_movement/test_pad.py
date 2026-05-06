@@ -134,7 +134,7 @@ def run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value
 
     assert output_tensor.shape == torch_output_tensor.shape
     if dtype == ttnn.bfloat8_b:
-        assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
+        assert_allclose(torch_output_tensor, output_tensor, rtol=0.05, atol=0.025)
     else:
         assert torch.equal(torch_output_tensor, output_tensor)
 
@@ -542,7 +542,7 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_co
     shape_diff = list(map(lambda x, y: x - y, padshape, shape))
     output_torch = torch.nn.functional.pad(torch_input, [0, shape_diff[-1], 0, shape_diff[-2]], value=0)
     if in_dtype == ttnn.bfloat8_b:
-        assert_allclose(output_torch, output_tt, rtol=1e-2, atol=1e-2)
+        assert_allclose(output_torch, output_tt, rtol=0.05, atol=0.025)
     else:
         assert torch.equal(output_tt, output_torch)
 

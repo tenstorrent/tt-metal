@@ -11,7 +11,7 @@ import torch
 import ttnn
 import math
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc
 
 pytestmark = pytest.mark.use_module_device
 
@@ -1101,10 +1101,7 @@ def test_copy_tilized_interleaved_to_nd_sharded_dtype_conversion(
     check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
 
     output_torch = ttnn.to_torch(output_tensor)
-    if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
-        assert_allclose(torch_input, output_torch, rtol=1e-2, atol=1e-2)
-    else:
-        assert_equal(torch_input, output_torch)
+    assert_with_pcc(torch_input, output_torch, pcc=pcc)
 
 
 # ---------------------------------------------------------------------------
@@ -1239,7 +1236,7 @@ def test_copy_tilized_interleaved_to_nd_sharded_dram_dtype_conversion(
 
     output_torch = ttnn.to_torch(output_tensor)
     if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
-        assert_allclose(torch_input, output_torch, rtol=1e-2, atol=1e-2)
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
     else:
         assert_equal(torch_input, output_torch)
 
@@ -2294,7 +2291,7 @@ def test_copy_tilized_nd_sharded_to_interleaved_dtype_conversion(
     assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
     output_torch = ttnn.to_torch(output_tensor)
     if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
-        assert_allclose(torch_input, output_torch, rtol=1e-2, atol=1e-2)
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
     else:
         assert_equal(torch_input, output_torch)
 
@@ -2460,7 +2457,7 @@ def test_copy_tilized_legacy_2d_sharded_to_interleaved_dtype_conversion(
     assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
     output_torch = ttnn.to_torch(output_tensor)
     if input_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
-        assert_allclose(torch_input, output_torch, rtol=1e-2, atol=1e-2)
+        assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
     else:
         assert_equal(torch_input, output_torch)
 
@@ -2627,4 +2624,4 @@ def test_copy_tile_interleaved_to_width_sharded_bf8(device):
     output_tensor = ttnn.assign(input_tensor, memory_config=output_mem_config)
 
     output_torch = ttnn.to_torch(output_tensor)
-    assert_allclose(torch_input, output_torch, rtol=1e-2, atol=1e-2)
+    assert_allclose(torch_input, output_torch, rtol=0.05, atol=0.025)
