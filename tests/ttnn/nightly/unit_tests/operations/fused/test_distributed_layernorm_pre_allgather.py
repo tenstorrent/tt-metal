@@ -703,15 +703,34 @@ def _create_recip_tensor(device, w):
     "inp_shape",
     [(1, 1, 32, 128), (1, 1, 32, 1024)],
 )
-def test_layernorm_pre_all_gather_welford_residual(device, inp_shape):
-    """Welford pre_all_gather with residual must match Welford on a pre-added input."""
-    torch.manual_seed(41512)
+@pytest.mark.parametrize(
+    "inp_dtype, stats_dtype",
+    [
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.float32, ttnn.float32),
+    ],
+    ids=["bf16_inp_bf16_stats", "fp32_inp_fp32_stats"],
+)
+def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype, stats_dtype):
+    """Welford pre_all_gather with residual: two assertions per parameterization.
+
+    1. Fused-pre-add output vs torch reference for variance. The fp32 case uses a tolerance
+       tight enough to catch e.g. the welford finalize buffer (cb_x2) being held in bfloat16
+       rather than desired float32; the bf16 case is loosened to the bf16 noise floor.
+    2. Fused-pre-add output vs manually-pre-added output. Catches fused-add-specific bugs
+       that might be hidden under the bf16 torch tolerance (the shared kernel/quantization
+       noise cancels between the two paths).
+    """
+    torch.manual_seed(0)
 
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
     w = inp_shape[-1]
+    torch_dtype = tt_dtype_to_torch_dtype[inp_dtype]
 
-    torch_inp = torch.randn(inp_shape, dtype=torch.bfloat16)
-    torch_res = torch.randn(inp_shape, dtype=torch.bfloat16)
+    # The two device inputs to compare: separate (input, residual) for the kernel-fused
+    # add path, and a single host-pre-added tensor for the non-fused path.
+    torch_inp = torch.randn(inp_shape, dtype=torch_dtype)
+    torch_res = torch.randn(inp_shape, dtype=torch_dtype)
     torch_combined = torch_inp + torch_res
 
     kernel_config = ttnn.init_device_compute_kernel_config(
@@ -723,14 +742,14 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape):
     )
 
     tt_inp = torch2tt_tensor(
-        torch_inp, tt_dtype=ttnn.bfloat16, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
+        torch_inp, tt_dtype=inp_dtype, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
     )
     tt_res = torch2tt_tensor(
-        torch_res, tt_dtype=ttnn.bfloat16, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
+        torch_res, tt_dtype=inp_dtype, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
     )
     tt_combined = torch2tt_tensor(
         torch_combined,
-        tt_dtype=ttnn.bfloat16,
+        tt_dtype=inp_dtype,
         tt_device=device,
         tt_layout=ttnn.TILE_LAYOUT,
         tt_memory_config=dram_memcfg,
@@ -739,28 +758,59 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape):
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
     recip_tensor = _create_recip_tensor(device, w)
 
+    # Passing residual_input_tensor causes the program factory to set the FUSE_PRE_ADD
+    # compile-time define, so the kernel is compiled with the in-kernel add path: it reads
+    # tt_inp and tt_res into separate CBs and adds them via add_tiles before the welford pass.
     stats_fused = ttnn.layer_norm_pre_all_gather(
         tt_inp,
         residual_input_tensor=tt_res,
-        dtype=ttnn.bfloat16,
+        dtype=stats_dtype,
         compute_kernel_config=kernel_config,
         program_config=program_config,
         memory_config=dram_memcfg,
         recip_tensor=recip_tensor,
     )
+    # No residual_input_tensor is passed, so the program factory does not set FUSE_PRE_ADD
+    # and the kernel is compiled without the in-kernel add path entirely. The kernel sees
+    # a single, already-summed input. Mathematically equivalent to stats_fused.
     stats_combined = ttnn.layer_norm_pre_all_gather(
         tt_combined,
-        dtype=ttnn.bfloat16,
+        dtype=stats_dtype,
         compute_kernel_config=kernel_config,
         program_config=program_config,
         memory_config=dram_memcfg,
         recip_tensor=recip_tensor,
     )
 
-    fused_host = tt2torch_tensor(stats_fused)
-    combined_host = tt2torch_tensor(stats_combined)
+    out_fused = tt2torch_tensor(stats_fused)
+    out_combined = tt2torch_tensor(stats_combined)
 
-    assert_numeric_metrics(combined_host, fused_host, rtol=1e-2, atol=1e-2, pcc_threshold=0.999)
+    # Welford output layout: per-row mean lives in tile 0 column 0,
+    # per-row variance in tile 1 column 0 (= overall column 32).
+    torch_combined_fp32 = torch_combined.float()
+    torch_mean = torch_combined_fp32.mean(dim=-1, keepdim=False)
+    torch_var = torch_combined_fp32.var(dim=-1, keepdim=False, unbiased=False)
+    fused_mean = out_fused[..., 0]
+    fused_var = out_fused[..., 32]
+    combined_mean = out_combined[..., 0]
+    combined_var = out_combined[..., 32]
+
+    # Fused-pre-add path (input + residual) vs torch reference for both welford outputs.
+    if stats_dtype == ttnn.float32:
+        atol = 0.002
+        rtol = 0.002
+    else:
+        atol = 0.01
+        rtol = 0.01
+    assert_numeric_metrics(torch_mean, fused_mean, rtol=rtol, atol=atol, pcc_threshold=0.999)
+    assert_numeric_metrics(torch_var, fused_var, rtol=rtol, atol=atol, pcc_threshold=0.999)
+
+    # Additionally, assert fused-pre-add output equals manually-pre-added output. This
+    # catches fused-add-specific bugs whose magnitude is below the bf16 torch tolerance
+    # above - the kernel/quantization noise that limits the bf16 torch tolerance cancels
+    # out between fused and combined since both share it.
+    assert_numeric_metrics(combined_mean, fused_mean, rtol=1e-2, atol=1e-2, pcc_threshold=0.999)
+    assert_numeric_metrics(combined_var, fused_var, rtol=1e-2, atol=1e-2, pcc_threshold=0.999)
 
 
 @pytest.mark.parametrize(

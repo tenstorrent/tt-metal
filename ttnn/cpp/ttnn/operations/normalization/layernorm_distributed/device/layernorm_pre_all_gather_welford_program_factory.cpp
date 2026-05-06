@@ -22,20 +22,6 @@ namespace ttnn::prim {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data = std::bit_cast<uint32_t>(float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-    // store lower 16 as 16-bit uint
-    return static_cast<uint16_t>(uint32_data);
-}
-
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return static_cast<uint32_t>(two_bfloats.first) | (static_cast<uint32_t>(two_bfloats.second) << 16);
-}
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -81,7 +67,7 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
     if (fuse_pre_add) {
@@ -165,9 +151,6 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
     compute_runtime_args.reserve(num_cores);
 
     uint32_t curr_row = 0;
-    float winv = 1.0f;
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -186,8 +169,6 @@ tt::tt_metal::ProgramDescriptor LayerNormPreAllGatherWelfordProgramFactory::crea
         std::vector<uint32_t> reader_args = {a_addr, num_tile_rows_per_core, Wt, in_tile_offset};
         if (fuse_pre_add) {
             reader_args.push_back(b_addr);
-        } else {
-            reader_args.push_back(packed_winv_value);
         }
         reader_runtime_args.emplace_back(core, std::move(reader_args));
         compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
