@@ -7,6 +7,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -58,18 +59,22 @@ void kernel_main() {
             enable_reload = true;
         }
 
-        // output * (1 / number_of_elements)
-        tile_regs_acquire();
-        cb_wait_front(cb_intermed0, onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
-        mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
-        tile_regs_commit();
-
-        cb_reserve_back(cb_out0, onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_out0);
-        tile_regs_release();
-        cb_push_back(cb_out0, onetile);
-        cb_pop_front(cb_intermed0, onetile);
+        // PARTIAL migration: output * (1 / number_of_elements).
+        //   migrated: BinaryFpu(Mul, Scalar) cb_intermed0 * cb_scalar -> cb_out0 + Pack.
+        //   skipped : enable_reload accumulator stage (held-DEST + in-place CB recurrence on cb_intermed0).
+        {
+            using namespace compute_kernel_lib;
+            using MulScalar = BinaryFpu<
+                cb_intermed0, cb_scalar, BinaryFpuOp::Mul, BroadcastDim::Scalar,
+                BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0,
+                0, 0, 0, cb_out0>;
+            eltwise_chain(
+                onetile,
+                MulScalar{},
+                PackTile<cb_out0, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+                         PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+        }
     }
 }

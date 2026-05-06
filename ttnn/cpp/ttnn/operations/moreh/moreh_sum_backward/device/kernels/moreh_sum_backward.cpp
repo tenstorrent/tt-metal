@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 void kernel_main() {
     // compile-time args
@@ -13,33 +14,39 @@ void kernel_main() {
     constexpr auto cb_in1 = tt::CBIndex::c_1;  // zero tile
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
 
     binary_op_init_common(cb_in1, cb_in0, cb_out0);
     cb_wait_front(cb_in1, onetile);
-    for (uint32_t i = 0; i < num_output_tiles; i++) {
-        tile_regs_acquire();
-        cb_wait_front(cb_in0, onetile);
-        if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_short(cb_in1, cb_in0);
-            add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (ht_need_bcast) {
-            add_bcast_rows_init_short(cb_in1, cb_in0);
-            add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
-        } else if (wt_need_bcast) {
-            add_bcast_cols_init_short(cb_in1, cb_in0);
-            add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
+
+    // PARTIAL migration: full main loop migrated as a single chain.
+    //   migrated: BinaryFpu(Add, Cols/Rows/Scalar) when bcast, or CopyTile when no bcast,
+    //             both followed by PackTile.
+    //   skipped : nothing — full main loop migrated.
+    {
+        using namespace compute_kernel_lib;
+        if constexpr (ht_need_bcast || wt_need_bcast) {
+            constexpr BroadcastDim BCAST_DIM =
+                (ht_need_bcast && wt_need_bcast) ? BroadcastDim::Scalar :
+                ht_need_bcast                    ? BroadcastDim::Row :
+                                                   BroadcastDim::Col;
+            using AddBcast = BinaryFpu<
+                cb_in1, cb_in0, BinaryFpuOp::Add, BCAST_DIM,
+                BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
+                CopyTilePolicy::NoWaitNoPop, CopyTilePolicy::WaitAndPop,
+                CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0,
+                0, 0, 0, cb_out0>;
+            eltwise_chain(
+                num_output_tiles,
+                AddBcast{},
+                PackTile<cb_out0, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
         } else {
-            copy_tile_to_dst_init_short(cb_in0);
-            copy_tile(cb_in0, 0, dst0);
+            // No-bcast path: just copy cb_in0 -> cb_out0 (cb_in1 unused per iteration).
+            eltwise_chain(
+                num_output_tiles,
+                CopyTile<cb_in0, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                PackTile<cb_out0, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
         }
-        tile_regs_commit();
-        cb_reserve_back(cb_out0, onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_out0);
-        tile_regs_release();
-        cb_push_back(cb_out0, onetile);
-        cb_pop_front(cb_in0, onetile);
     }
+
     cb_pop_front(cb_in1, onetile);
 }

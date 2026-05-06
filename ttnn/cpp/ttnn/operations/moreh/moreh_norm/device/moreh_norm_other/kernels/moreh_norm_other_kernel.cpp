@@ -68,20 +68,18 @@ void kernel_main() {
 
             // Add(|x|^p)
             if (inner_idx == 0) {
-                tile_regs_acquire();
-                cb_wait_front(cb_correct_xpow, onetile);
-                cb_reserve_back(cb_xpowadd, onetile);
-
-                copy_tile_init_with_dt(cb_correct_xpow);
-                copy_tile(cb_correct_xpow, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_xpowadd);
-                tile_regs_release();
-
-                cb_pop_front(cb_correct_xpow, onetile);
-                cb_push_back(cb_xpowadd, onetile);
+                // PARTIAL migration: seed cb_xpowadd with first cb_correct_xpow tile.
+#if defined FP32_DEST_ACC_EN
+                reconfig_data_format_srca(cb_correct_xpow);
+                pack_reconfig_data_format(cb_xpowadd);
+#endif
+                {
+                    using namespace compute_kernel_lib;
+                    eltwise_chain(
+                        onetile,
+                        CopyTile<cb_correct_xpow, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                        PackTile<cb_xpowadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                }
             } else {
                 tile_regs_acquire();
                 cb_wait_front(cb_correct_xpow, onetile);

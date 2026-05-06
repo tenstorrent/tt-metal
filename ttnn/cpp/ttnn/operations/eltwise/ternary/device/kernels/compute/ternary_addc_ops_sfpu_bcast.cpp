@@ -9,93 +9,49 @@
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
 
-ALWI void process_tile(
-    tt::CBIndex cb_in0,
-    tt::CBIndex cb_in1,
-    tt::CBIndex cb_in2,
-    tt::CBIndex cb_out,
-    uint32_t freq,
-    uint32_t tile_start,
-    uint32_t num_tiles_per_cycle,
-    uint32_t scalar_arg) {
-    using namespace ckernel;
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
 
-    // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
-#if BCAST_A
-    cb_wait_front(cb_in0, num_tiles_per_cycle);  // input_a is broadcast
-#endif
-#if BCAST_B
-    cb_wait_front(cb_in1, num_tiles_per_cycle);  // input_b is broadcast
-#endif
-#if BCAST_C
-    cb_wait_front(cb_in2, num_tiles_per_cycle);  // input_c is broadcast
-#endif
-
-    for (uint32_t j = tile_start; j < freq; ++j) {
-        // Wait for non-broadcast CBs inside loop
-#if !BCAST_A
-        cb_wait_front(cb_in0, num_tiles_per_cycle);
-#endif
-#if !BCAST_B
-        cb_wait_front(cb_in1, num_tiles_per_cycle);
-#endif
-#if !BCAST_C
-        cb_wait_front(cb_in2, num_tiles_per_cycle);
-#endif
-
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
-
-        tile_regs_acquire();
-
-        // Load all three inputs into DST registers
-        copy_tile_init(cb_in0);
-        copy_tile(cb_in0, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
-
-        copy_tile_init(cb_in1);
-        copy_tile(cb_in1, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
-
-        copy_tile_init(cb_in2);
-        copy_tile(cb_in2, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
-
-        // Use direct addcmul kernel: computes input_a + scalar_arg * input_b * input_c -> DST[0]
-        TERNARY_SFPU_OP_INIT();
-        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        // Pack the result from DST[0] to output
-        pack_tile(0, cb_out);
-
-        tile_regs_release();
-
-        cb_push_back(cb_out, num_tiles_per_cycle);
-
-        // Pop non-broadcast CBs inside loop
-#if !BCAST_A
-        cb_pop_front(cb_in0, num_tiles_per_cycle);
-#endif
-#if !BCAST_B
-        cb_pop_front(cb_in1, num_tiles_per_cycle);
-#endif
-#if !BCAST_C
-        cb_pop_front(cb_in2, num_tiles_per_cycle);
-#endif
+namespace {
+template <uint32_t Cb, compute_kernel_lib::Dst DstSlot>
+struct LocalLoadTile : compute_kernel_lib::CopyTileTag {
+    static constexpr uint32_t cb = Cb;
+    static constexpr uint32_t cb_a_id() { return Cb; }
+    static constexpr uint32_t cb_b_id() { return 0; }
+    static constexpr compute_kernel_lib::Dst dst_slot = DstSlot;
+    static constexpr compute_kernel_lib::CopyTilePolicy a_policy() {
+        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;
     }
+    static constexpr compute_kernel_lib::CopyTilePolicy b_policy() {
+        return compute_kernel_lib::CopyTilePolicy::NoWaitNoPop;
+    }
+    static constexpr bool is_upfront = false;
+    static constexpr bool clashes_with_fpu = true;
+    static constexpr uint32_t block_size = 1;
 
-    // Pop broadcast CBs outside loop
-#if BCAST_A
-    cb_pop_front(cb_in0, num_tiles_per_cycle);
-#endif
-#if BCAST_B
-    cb_pop_front(cb_in1, num_tiles_per_cycle);
-#endif
-#if BCAST_C
-    cb_pop_front(cb_in2, num_tiles_per_cycle);
-#endif
-}
+    static ALWI void init() { copy_tile_init(Cb); }
+    ALWI void wait_per_tile(uint32_t /*i*/) const {}
+    ALWI void wait_upfront(uint32_t /*n*/) const {}
+    ALWI void exec(uint32_t /*i*/) const { copy_tile(Cb, 0, compute_kernel_lib::to_u32(DstSlot)); }
+    ALWI void pop_per_tile(uint32_t /*i*/) const {}
+    ALWI void pop_upfront_end(uint32_t /*n*/) const {}
+};
+
+// Inherit FillTileTag — chain dispatcher routes Fill/Rand through `member exec(i)`,
+// which lets us carry runtime state (scalar_arg).
+struct LocalTernarySfpuStage : compute_kernel_lib::FillTileTag {
+    static constexpr bool is_upfront = false;
+    static constexpr bool clashes_with_fpu = false;
+    static constexpr uint32_t block_size = 1;
+    uint32_t scalar_arg = 0;
+    static ALWI void init() { TERNARY_SFPU_OP_INIT(); }
+    ALWI void exec(uint32_t /*i*/) const { TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg); }
+};
+}  // namespace
 
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
@@ -114,14 +70,71 @@ void kernel_main() {
 
     unary_op_init_common(cb_in0, cb_out);
 
+    using LoadA = LocalLoadTile<cb_in0, Dst::D0>;
+    using LoadB = LocalLoadTile<cb_in1, Dst::D1>;
+    using LoadC = LocalLoadTile<cb_in2, Dst::D2>;
+    using PackOut = PackTile<cb_out, Dst::D0, PackTilePolicy::NoReserveNoPush>;
+    LocalTernarySfpuStage tern_stage{};
+    tern_stage.scalar_arg = scalar_arg;
+
+    auto process_tile = [&](uint32_t freq, uint32_t start) {
+#if BCAST_A
+        cb_wait_front(cb_in0, num_tiles_per_cycle);
+#endif
+#if BCAST_B
+        cb_wait_front(cb_in1, num_tiles_per_cycle);
+#endif
+#if BCAST_C
+        cb_wait_front(cb_in2, num_tiles_per_cycle);
+#endif
+
+        for (uint32_t j = start; j < freq; ++j) {
+#if !BCAST_A
+            cb_wait_front(cb_in0, num_tiles_per_cycle);
+#endif
+#if !BCAST_B
+            cb_wait_front(cb_in1, num_tiles_per_cycle);
+#endif
+#if !BCAST_C
+            cb_wait_front(cb_in2, num_tiles_per_cycle);
+#endif
+
+            cb_reserve_back(cb_out, num_tiles_per_cycle);
+
+            // Migrated chain: load A/B/C → ternary SFPU → pack.
+            eltwise_chain(1u, LoadA{}, LoadB{}, LoadC{}, tern_stage, PackOut{});
+
+            cb_push_back(cb_out, num_tiles_per_cycle);
+
+#if !BCAST_A
+            cb_pop_front(cb_in0, num_tiles_per_cycle);
+#endif
+#if !BCAST_B
+            cb_pop_front(cb_in1, num_tiles_per_cycle);
+#endif
+#if !BCAST_C
+            cb_pop_front(cb_in2, num_tiles_per_cycle);
+#endif
+        }
+
+#if BCAST_A
+        cb_pop_front(cb_in0, num_tiles_per_cycle);
+#endif
+#if BCAST_B
+        cb_pop_front(cb_in1, num_tiles_per_cycle);
+#endif
+#if BCAST_C
+        cb_pop_front(cb_in2, num_tiles_per_cycle);
+#endif
+    };
+
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(cb_in0, cb_in1, cb_in2, cb_out, tile_freq, tile_start, num_tiles_per_cycle, scalar_arg);
+        process_tile(tile_freq, tile_start);
     }
-
     if (remaining_iterations > 0) {
-        process_tile(cb_in0, cb_in1, cb_in2, cb_out, remaining_iterations, tile_start, num_tiles_per_cycle, scalar_arg);
+        process_tile(remaining_iterations, tile_start);
     }
 }
