@@ -13,8 +13,10 @@ import ttnn
 from models.demos.gemma4.tt.moe import MoEBlock
 
 from ...tests.test_factory import (
+    PREFILL_BUCKETS,
     TestFactory,
     compare_tensors,
+    get_pcc_threshold,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
     skip_if_not_moe,
@@ -23,8 +25,8 @@ from ...tests.test_factory import (
 
 @skip_if_not_moe
 @parametrize_mesh_with_fabric()
-@parametrize_batch_seq(configs=[(1, 32)], ids=["prefill_32"])
-def test_moe(batch_size, seq_len, mesh_device, reset_seeds):
+@parametrize_batch_seq(configs=[(1, L) for L in PREFILL_BUCKETS])
+def test_moe(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test MoE end-to-end on device against HF reference.
 
     Uses HF routing for the reference, TT router+experts for the test.
@@ -89,5 +91,5 @@ def test_moe(batch_size, seq_len, mesh_device, reset_seeds):
         .float()[:seq_len]
     )
 
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=0.80)
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"MoE (tp={tp}) PCC too low: {pcc_msg}"

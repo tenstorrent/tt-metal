@@ -17,6 +17,7 @@ from models.demos.gemma4.tt.router import Gemma4Router
 from ...tests.test_factory import (
     TestFactory,
     compare_tensors,
+    get_pcc_threshold,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
     skip_if_not_moe,
@@ -26,7 +27,7 @@ from ...tests.test_factory import (
 @skip_if_not_moe
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
-def test_router(batch_size, seq_len, mesh_device, reset_seeds):
+def test_router(batch_size, seq_len, mesh_device, reset_seeds, request):
     """Test Router returns dense routing weights that match HF reference."""
     hf_text_config = TestFactory.create_hf_text_config(num_experts=8, top_k=4)
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0)
@@ -71,7 +72,5 @@ def test_router(batch_size, seq_len, mesh_device, reset_seeds):
         .float()
     )
 
-    # TODO: investigate low PCC on the MoE router and raise this back to 0.90.
-    pcc_thresh = 0.85 if seq_len > 1 else 0.5
-    passing, pcc_msg = compare_tensors(tt_dense_torch, ref_dense, pcc_threshold=pcc_thresh)
+    passing, pcc_msg = compare_tensors(tt_dense_torch, ref_dense, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"Router dense routing PCC too low: {pcc_msg}"
