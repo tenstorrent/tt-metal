@@ -73,6 +73,13 @@ public:
     // Check if a MetalContext for a given context id exists.
     static bool instance_exists(ContextId context_id = DEFAULT_CONTEXT_ID);
 
+    // Returns a pointer to any existing MetalContext instance, or nullptr if none exist.
+    // Prefers DEFAULT_CONTEXT_ID; otherwise returns the first non-null slot.
+    // IMPORTANT: Unlike instance(), this NEVER triggers implicit creation of the silicon
+    // default context. Use this from process-wide singletons (e.g. BuildEnvManager) that
+    // need read-only HAL/arch information without forcing a particular cluster to open.
+    static MetalContext* find_any_existing_instance();
+
     // Returns the id of this instance. The ID cannot be used to uniquely identify the context.
     // IDs are recycled after instances are destroyed.
     ContextId get_context_id() const { return context_id_; }

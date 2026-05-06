@@ -12,6 +12,8 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
+#include "impl/context/context_types.hpp"
+
 namespace tt::tt_metal {
 
 class Hal;
@@ -57,7 +59,11 @@ struct JitDeviceConfig {
 // descriptor for the given `device_id`; nothing is inferred from static
 // configuration files alone. Because of this, the device must be accessible at
 // call time.
-JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs);
+//
+// `context_id` selects which MetalContext instance to query. This must match the
+// context that owns `device_id`; passing the wrong (or default) id causes the
+// silicon context to be implicitly initialized when only a mock context exists.
+JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id);
 
 // TODO: Add a factory method to create JitDeviceConfig from a YAML profile
 

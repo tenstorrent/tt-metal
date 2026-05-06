@@ -41,4 +41,19 @@ bool is_mock_mode_registered();
 // Returns just the filename (e.g., "blackhole_P150.yaml"), caller prepends base path
 std::optional<std::string> get_mock_cluster_desc();
 
+// Get the cluster descriptor filename for a specific (arch, num_chips) pair.
+// Returns nullopt if the configuration is not supported.
+//
+// This is the recommended way to construct a MetalEnvDescriptor for a mock cluster
+// without going through the global configure_mock_mode() flag, e.g.:
+//
+//     MetalEnv mock_env(MetalEnvDescriptor(
+//         experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value()));
+//
+// Supported configurations (see implementation for the authoritative list):
+//   WORMHOLE_B0: 1, 2, 4, 8
+//   BLACKHOLE:   1, 2
+//   QUASAR:      1
+std::optional<std::string> get_mock_cluster_desc_name(tt::ARCH arch, uint32_t num_chips);
+
 }  // namespace tt::tt_metal::experimental

@@ -229,22 +229,16 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         std::vector<uint32_t> read_data;
         distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
 
-        // TODO: Uncomment this once CreateProgram and CreateKernel stop implicitly creating the physical metal context
-        // https://github.com/tenstorrent/tt-metal/issues/39849
-        // auto program = CreateProgram();
-        // distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
-        // auto core_grid = mock_device->compute_with_storage_grid_size();
-        // auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+        auto program = CreateProgram();
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
+        auto core_grid = mock_device->compute_with_storage_grid_size();
+        auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
 
-        // CreateKernelFromString(
-        //     program,
-        //     "void kernel_main() {}",
-        //     core_range,
-        //     DataMovementConfig{});
+        CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
 
-        // distributed::MeshWorkload workload;
-        // workload.add_program(device_range, std::move(program));
-        // distributed::EnqueueMeshWorkload(cq, workload, true);
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, true);
     }
 
     // Assert that we didn't implicitly create the physical metal context
@@ -279,6 +273,26 @@ TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {
 
     ASSERT_EQ(mock_mesh_device_bh_1->get_devices().size(), 1);
     ASSERT_EQ(mock_mesh_device_bh_2->get_devices().size(), 2);
+
+    // Run a no-op program on both the mock and silicon devices side-by-side. This exercises the
+    // full create-program / create-kernel / JIT-compile / enqueue-workload pipeline through both
+    // contexts in the same process to validate mock+silicon coexistence (issue #38445).
+    auto run_noop_program = [](distributed::MeshDevice& target, const std::string& label) {
+        auto program = CreateProgram();
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
+        auto core_grid = target.compute_with_storage_grid_size();
+        auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+
+        CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(target.mesh_command_queue(), workload, true);
+        log_info(tt::LogTest, "Successfully enqueued no-op program on {}", label);
+    };
+
+    run_noop_program(*mock_mesh_device_bh_1, "mock_mesh_device_bh_1");
+    run_noop_program(*mesh_device, "silicon_mesh_device");
 }
 
 // Same test as above but reverse the order to ensure no hangs due to unexpected internal objects created for the
@@ -309,6 +323,26 @@ TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDevice) {
 
     ASSERT_EQ(mock_mesh_device_bh_1->get_devices().size(), 1);
     ASSERT_EQ(mock_mesh_device_bh_2->get_devices().size(), 2);
+
+    // Run a no-op program on both the silicon and mock devices in this reversed-creation-order
+    // case to confirm the JIT/compile/enqueue pipeline does not depend on which context was
+    // opened first.
+    auto run_noop_program = [](distributed::MeshDevice& target, const std::string& label) {
+        auto program = CreateProgram();
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
+        auto core_grid = target.compute_with_storage_grid_size();
+        auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+
+        CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
+
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(target.mesh_command_queue(), workload, true);
+        log_info(tt::LogTest, "Successfully enqueued no-op program on {}", label);
+    };
+
+    run_noop_program(*mesh_device, "silicon_mesh_device");
+    run_noop_program(*mock_mesh_device_bh_1, "mock_mesh_device_bh_1");
 }
 
 TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
