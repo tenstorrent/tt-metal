@@ -258,6 +258,7 @@ jobs:
       version: ${{ steps.parse.outputs.version }}
       toolchain: ${{ steps.parse.outputs.toolchain }}
       enable-lto: ${{ steps.parse.outputs.enable-lto }}
+      python-version: ${{ steps.parse.outputs.python-version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -618,38 +619,15 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  # Determine Python version based on platform
-  determine-python-version:
-    needs: parse-platform
-    runs-on: ubuntu-latest
-    outputs:
-      python-version: ${{ steps.set-python-version.outputs.version }}
-    steps:
-      - id: set-python-version
-        run: |
-          # Get distro and version from parse-platform outputs (which handles both workflow_dispatch and workflow_call)
-          DISTRO="${{ needs.parse-platform.outputs.distro }}"
-          VERSION="${{ needs.parse-platform.outputs.version }}"
-
-          # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
-          if [ "$VERSION" = "24.04" ]; then
-            PYTHON_VERSION="3.12"
-          else
-            PYTHON_VERSION="3.10"
-          fi
-
-          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Determined Python version: $PYTHON_VERSION for distro=$DISTRO, version=$VERSION"
-
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
-    name: 🐍 Build wheel (Python ${{ needs.determine-python-version.outputs.python-version }})
+    name: 🐍 Build wheel (Python ${{ needs.parse-platform.outputs.python-version }})
     uses: ./.github/workflows/wheels.yaml
-    needs: [parse-platform, build-docker-image, determine-python-version]
+    needs: [parse-platform, build-docker-image]
     secrets: inherit
     with:
-      python-version: ${{ needs.determine-python-version.outputs.python-version }}
+      python-version: ${{ needs.parse-platform.outputs.python-version }}
       docker-image: >-
         ${{
           (inputs.manylinux-docker-image != '' &&
