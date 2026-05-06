@@ -40,6 +40,45 @@ Before starting, check if outputs from previous runs exist:
 
 If prior outputs exist, resume from the earliest phase with missing outputs. Never ask the human to choose a path — the pipeline decides based on what exists.
 
+If a `--patterns <tsv>` was supplied on resume, the TSV header is recorded in
+each artifact (`PATTERNS_HEADER:` line). Mismatch → discard catalog +
+investigation outputs and re-run from Phase 0. Pattern drift poisons every
+downstream phase.
+
+---
+
+## Patterns File (optional)
+
+If the orchestrator received `--patterns <path>`, the file is the **source
+of truth** for whatever data it carries. Replace mode, not augment. The
+schema is **not fixed** — different runs may pass different column sets,
+different formats, or even free-form summaries. Agents must read the
+top-of-file at runtime to learn the schema, then map the fields it
+actually contains onto the relevant phase outputs.
+
+**Consumers (schema-agnostic, best-effort)**:
+
+| Phase | What it pulls (if present in the file) |
+|-------|----------------------------------------|
+| 0 Catalog | Call-site locations for the Locator Results table. LLK signature enumeration grep still runs — the file is not assumed to carry signatures. |
+| 1 Investigation (USAGE) | Call-site list, chaining / sync / pairing / loop / parameter data — whatever fields exist. Whatever is NOT present, fall back to grep for that slice only. |
+| 1 Investigation (Encapsulation) | Loop / cross-iteration / parameter-independence data, when present. |
+| 3 Proposal | Consumed indirectly via investigation output. |
+
+Each consuming agent must record the file's header / first lines verbatim
+as `PATTERNS_HEADER:` in its output artifact, so resume runs can detect
+drift between the artifact and a re-supplied patterns file.
+
+If an agent cannot make sense of the file (unrecognized format, missing
+the field it needs for its phase), it MUST stop and emit
+`STAGE_INCOMPLETE: PATTERNS_FILE not interpretable for <phase>` rather
+than silently fall back. The user decides whether to drop the flag or
+regenerate the file.
+
+Pass the absolute path through to agents as the `{{PATTERNS_FILE}}`
+placeholder. When the placeholder resolves to an empty string, agents
+fall back to grep-driven discovery as before.
+
 ---
 
 ## Logging
@@ -64,8 +103,15 @@ All agents log breadcrumbs to `agent_logs/{category_slug}/`. See `tt_metal/third
 - Full op list with gap analysis
 - Group-to-ops assignment table
 - Locator results table (op -> file paths)
+- `PATTERNS_HEADER:` line + `Pattern Drift` table (only when `{{PATTERNS_FILE}}` is set)
 
 **Skip if**: Op list, groups, and file locations are already known.
+
+**Patterns hook**: when `{{PATTERNS_FILE}}` is provided, the catalog agent
+inspects the file's schema at runtime. If the file carries call-site
+locations, those rows replace the wide call-site grep for the Locator
+Results table. LLK signature enumeration (Phase 1A/1B) still runs — the
+file is not assumed to carry signatures.
 
 ---
 
@@ -88,6 +134,13 @@ Launch ONE investigation agent per functional group, all in parallel. Each agent
 | **Init Surface** | For each op group, determine whether the chain prologue genuinely needs `compute_kernel_hw_startup(...)`, or whether a minimal subset of `*_init` / `*_init_short` / `hw_configure_*` / `reconfig_data_format_*` reproduces the same hw state. Output: per-op recommendation + reasoning, to be written into the helper's `.hpp` doc-comment when the helper is implemented. |
 
 All seven focus areas are covered by a single agent per group. The agent's prompt specifies which focus areas to prioritize based on the category.
+
+**Patterns hook**: when `{{PATTERNS_FILE}}` is provided, the agent inspects
+the file's schema at runtime and uses whatever fields are present as the
+authoritative input for the matching investigation tables (call sites,
+chaining, sync/pairing, loop / cross-iteration state, parameter usage).
+For slices the file does NOT cover, fall back to grep on that slice only.
+The agent records `PATTERNS_HEADER:` in its output.
 
 **Output**: `{category}_investigation.md` (orchestrator consolidates per-group outputs)
 

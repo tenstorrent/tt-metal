@@ -15,6 +15,7 @@ Replace placeholders:
 - `{{LOCATOR_RESULTS}}` — locator table from Phase 0 (op -> file paths)
 - `{{CODEGEN_FILE}}` — path to op_utils (e.g. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`)
 - `{{FOCUS}}` — optional role-based focus directive to scope the analysis
+- `{{PATTERNS_FILE}}` — optional absolute path to a curated patterns file. Schema is **not fixed**; inspect the top of the file at runtime to learn its format. When non-empty, the file is the **source of truth** for whatever data it carries (call sites, chaining, sync, loop / cross-iteration, parameter usage). For slices it does NOT cover, fall back to grep on that slice only. Empty/unset → grep-driven discovery as before.
 
 ## Prompt Template
 
@@ -25,6 +26,26 @@ Investigate the {{GROUP_NAME}} group of {{LLK_CATEGORY}} operations: {{OPS_LIST}
 
 Use the locator results below to find files without searching:
 {{LOCATOR_RESULTS}}
+
+PATTERNS FILE: {{PATTERNS_FILE}}
+
+If {{PATTERNS_FILE}} is non-empty, before doing any grep:
+1. Read the top of the file (header / first lines) to learn its schema at
+   runtime. Record those lines verbatim as `PATTERNS_HEADER: <...>` in the
+   investigation output.
+2. Identify which slices of the investigation tables the file can populate
+   (call-site list, chaining patterns, sync / pairing, loop / cross-iteration
+   state, parameter usage — whatever fields exist).
+3. For every covered slice, the file is the source of truth — populate the
+   matching tables directly from it and SKIP the grep that would otherwise
+   build them.
+4. For slices the file does NOT cover, fall back to grep on that slice only.
+5. If the file's format is unrecognizable or you cannot map any field to an
+   investigation table, STOP and emit
+   `STAGE_INCOMPLETE: PATTERNS_FILE not interpretable for investigation`.
+   Do NOT silently fall back.
+
+If {{PATTERNS_FILE}} is empty/unset, do investigation entirely from grep as before.
 
 Log breadcrumbs to agent_logs/. See tt_metal/third_party/tt-agents/scripts/logging/ for format.
 
