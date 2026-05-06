@@ -1123,6 +1123,18 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
+            {
+                const metal_SocDescriptor& soc_desc = cluster_.get_soc_desc(device_id);
+                tt::umd::CoreCoord translated_coord =
+                    soc_desc.get_coord_at(tt_cxy_pair(device_id, virtual_core), CoordSystem::TRANSLATED);
+                tt::umd::RiscType reset_state =
+                    cluster_.get_driver()->get_risc_reset_state(device_id, translated_coord);
+                log_info(
+                    tt::LogMetal,
+                    "DRAM core {} reset state before init: {}",
+                    virtual_core.str(),
+                    reset_state);
+            }
             if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepAssertReset)) {
                 cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
             }
