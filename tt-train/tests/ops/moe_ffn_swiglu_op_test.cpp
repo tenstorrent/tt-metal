@@ -85,10 +85,10 @@ std::vector<ttml::autograd::TensorPtr> make_expert_weight_list(
     const std::size_t N = w3d.shape()[2];
     std::vector<ttml::autograd::TensorPtr> out;
     out.reserve(E);
+    const std::vector<std::size_t> shape4d{1U, 1U, K, N};
     for (std::size_t e = 0; e < E; ++e) {
-        std::vector<std::size_t> shape4d{1U, 1U, K, N};
         xt::xarray<float> w4d = xt::xarray<float>::from_shape(shape4d);
-        auto src = xt::view(w3d, e, xt::all(), xt::all());
+        const auto src = xt::view(w3d, e, xt::all(), xt::all());
         std::copy(src.cbegin(), src.cend(), w4d.begin());
         out.push_back(ttml::autograd::create_tensor(ttml::core::from_xtensor(w4d, device), /*requires_grad=*/true));
     }
@@ -118,7 +118,7 @@ void RunCase(const FfnCase& c) {
         }
         const std::array<std::size_t, 2U> slice_shape{
             static_cast<std::size_t>(c.counts[e]), static_cast<std::size_t>(c.H)};
-        auto slice = test_utils::make_uniform_xarray<float>(slice_shape, 0.0f, 1.0f, rng());
+        const auto slice = test_utils::make_uniform_xarray<float>(slice_shape, 0.0f, 1.0f, rng());
         xt::view(grouped, xt::range(offsets[e], offsets[e] + c.counts[e]), xt::all()) = slice;
     }
 
@@ -127,24 +127,25 @@ void RunCase(const FfnCase& c) {
         static_cast<std::size_t>(c.E), static_cast<std::size_t>(c.I), static_cast<std::size_t>(c.H)};
     const std::array<std::size_t, 3U> w_down_shape{
         static_cast<std::size_t>(c.E), static_cast<std::size_t>(c.H), static_cast<std::size_t>(c.I)};
-    auto w_gate = test_utils::make_uniform_xarray<float>(w_gate_up_shape, 0.0f, 1.0f, rng());
-    auto w_up = test_utils::make_uniform_xarray<float>(w_gate_up_shape, 0.0f, 1.0f, rng());
-    auto w_down = test_utils::make_uniform_xarray<float>(w_down_shape, 0.0f, 1.0f, rng());
+    const auto w_gate = test_utils::make_uniform_xarray<float>(w_gate_up_shape, 0.0f, 1.0f, rng());
+    const auto w_up = test_utils::make_uniform_xarray<float>(w_gate_up_shape, 0.0f, 1.0f, rng());
+    const auto w_down = test_utils::make_uniform_xarray<float>(w_down_shape, 0.0f, 1.0f, rng());
 
     auto* device = &autograd::ctx().get_device();
 
     // Materialize the rank-4 [1,1,T_cap,H] device tensor for `grouped`.
-    std::vector<std::size_t> grouped_4d_shape{1U, 1U, static_cast<std::size_t>(T_cap), static_cast<std::size_t>(c.H)};
+    const std::vector<std::size_t> grouped_4d_shape{
+        1U, 1U, static_cast<std::size_t>(T_cap), static_cast<std::size_t>(c.H)};
     xt::xarray<float> grouped_4d = xt::xarray<float>::from_shape(grouped_4d_shape);
     std::copy(grouped.begin(), grouped.end(), grouped_4d.begin());
-    auto t_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/true);
+    const auto t_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/true);
 
-    auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+    const auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         offsets, ttnn::Shape({static_cast<uint32_t>(offsets.size())}), device, ttnn::Layout::ROW_MAJOR);
 
-    auto t_wg = make_expert_weight_list(w_gate, device);
-    auto t_wu = make_expert_weight_list(w_up, device);
-    auto t_wd = make_expert_weight_list(w_down, device);
+    const auto t_wg = make_expert_weight_list(w_gate, device);
+    const auto t_wu = make_expert_weight_list(w_up, device);
+    const auto t_wd = make_expert_weight_list(w_down, device);
 
     const auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
     const xt::xarray<float> out_xt = core::to_xtensor(t_out->get_value());  // [1,1,T_cap,H]
@@ -238,26 +239,26 @@ TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
         }
         const std::array<std::size_t, 4U> slice_shape{
             1U, 1U, static_cast<std::size_t>(counts[e]), static_cast<std::size_t>(H)};
-        auto slice = test_utils::make_uniform_xarray<float>(slice_shape, 0.0f, 1.0f, rng());
+        const auto slice = test_utils::make_uniform_xarray<float>(slice_shape, 0.0f, 1.0f, rng());
         xt::view(grouped_4d, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all()) = xt::view(slice, 0, 0);
     }
 
     // [out, in] layout: w_gate/w_up are [E, I, H], w_down is [E, H, I].
-    auto w_gate = test_utils::make_uniform_xarray<float>(
+    const auto w_gate = test_utils::make_uniform_xarray<float>(
         std::array<std::size_t, 3U>{static_cast<std::size_t>(E), I, H}, 0.0f, 1.0f, rng());
-    auto w_up = test_utils::make_uniform_xarray<float>(
+    const auto w_up = test_utils::make_uniform_xarray<float>(
         std::array<std::size_t, 3U>{static_cast<std::size_t>(E), I, H}, 0.0f, 1.0f, rng());
-    auto w_down = test_utils::make_uniform_xarray<float>(
+    const auto w_down = test_utils::make_uniform_xarray<float>(
         std::array<std::size_t, 3U>{static_cast<std::size_t>(E), H, I}, 0.0f, 1.0f, rng());
 
     auto* device = &autograd::ctx().get_device();
 
-    auto t_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/true);
-    auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+    const auto t_grouped = autograd::create_tensor(core::from_xtensor(grouped_4d, device), /*requires_grad=*/true);
+    const auto t_offsets = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         offsets, ttnn::Shape({static_cast<uint32_t>(offsets.size())}), device, ttnn::Layout::ROW_MAJOR);
-    auto t_wg = make_expert_weight_list(w_gate, device);
-    auto t_wu = make_expert_weight_list(w_up, device);
-    auto t_wd = make_expert_weight_list(w_down, device);
+    const auto t_wg = make_expert_weight_list(w_gate, device);
+    const auto t_wu = make_expert_weight_list(w_up, device);
+    const auto t_wd = make_expert_weight_list(w_down, device);
 
     const auto t_out = ops::moe_ffn_swiglu_fw(t_grouped, t_offsets, t_wg, t_wu, t_wd);
     t_out->set_grad(core::ones_like(t_out->get_value()));
@@ -272,7 +273,7 @@ TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
                                       const std::string& name) {
         ASSERT_EQ(list.size(), E);
         for (uint32_t e = 0; e < E; ++e) {
-            auto g = core::to_xtensor(list[e]->get_grad());
+            const auto g = core::to_xtensor(list[e]->get_grad());
             EXPECT_EQ(g.shape(), expected_per_expert_shape) << name << "[" << e << "] shape mismatch";
             EXPECT_TRUE(xt::all(xt::isfinite(g))) << "non-finite " << name << "[" << e << "]";
         }
@@ -288,7 +289,7 @@ TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
         if (counts[e] == 0U) {
             continue;
         }
-        auto active = xt::view(dgrouped, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all());
+        const auto active = xt::view(dgrouped, 0, 0, xt::range(offsets[e], offsets[e] + counts[e]), xt::all());
         if (xt::amax(xt::abs(active))() > 0.0f) {
             any_active_nonzero = true;
             break;
@@ -303,7 +304,7 @@ TEST_F(MoeFfnSwigluBackwardTest, GradientsRunAndShapesMatch) {
         if (pad_hi == pad_lo) {
             continue;
         }
-        auto pad = xt::view(dgrouped, 0, 0, xt::range(pad_lo, pad_hi), xt::all());
+        const auto pad = xt::view(dgrouped, 0, 0, xt::range(pad_lo, pad_hi), xt::all());
         EXPECT_NEAR(xt::amax(xt::abs(pad))(), 0.0f, 1e-3f) << "non-zero dgrouped on pad rows for expert " << e;
     }
 
