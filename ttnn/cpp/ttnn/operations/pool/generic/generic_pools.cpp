@@ -1035,14 +1035,24 @@ static std::vector<Tensor> pool2d(
     // sharded input would force a sharded→interleaved + TILE↔ROW_MAJOR round-trip whose
     // overhead (~125us in the MobileNetV2 conv-head case) exceeds the win — the original
     // sliding-window pool kernel runs natively on the user's chosen sharded layout.
+    //
+    // Also gated off when the input is BFLOAT8_B/BFLOAT4_B in TILE layout. pool_sum requires
+    // ROW_MAJOR input to strip tile-padding garbage, but block-float dtypes cannot be
+    // ROW_MAJOR — to_layout(bf8 TILE → ROW_MAJOR) forces an untilize + typecast-to-bfloat16
+    // whose cost (~127us per call in the panoptic_deeplab ASPP global pool) exceeds the
+    // algorithmic win of the reduction. The original sliding-window pool runs natively on
+    // the block-float TILE input.
     std::array<uint32_t, 4> padding_check = sliding_window::get_pair_n4_padding(padding);
     uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
     uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
+    bool input_is_block_float_tile =
+        (input_tensor_4d.dtype() == DataType::BFLOAT8_B || input_tensor_4d.dtype() == DataType::BFLOAT4_B) &&
+        input_tensor_4d.layout() == Layout::TILE;
     bool is_global_pool =
         (kernel_size[0] == input_h && kernel_size[1] == input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0) &&
         (dilation_h == 1 && dilation_w == 1) && !input_tensor_4d.memory_config().is_sharded() &&
-        !applied_shard_scheme.has_value();
+        !applied_shard_scheme.has_value() && !input_is_block_float_tile;
 
     if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
         // Reduction needs interleaved input/output. The output is a tiny (1×1 spatial) tensor;
