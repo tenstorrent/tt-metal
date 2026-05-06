@@ -3,9 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
-import torch
-import torch.nn as nn
-
 import ttnn
 
 
@@ -57,7 +54,7 @@ def _maybe_get_state_dict_key(state_dict: dict, candidates: Tuple[str, ...]) -> 
     raise KeyError(f"None of the candidate keys were found in state_dict: {candidates}")
 
 
-class TtAceStepPatchEmbed1D(nn.Module):
+class TtAceStepPatchEmbed1D:
     """
     TTNN equivalent of HF's `proj_in` patch embedding in `AceStepDiTModel`.
 
@@ -78,14 +75,19 @@ class TtAceStepPatchEmbed1D(nn.Module):
         state_dict: dict,
         base_address: str,
         device: ttnn.Device,
-        activation_dtype: ttnn.DataType = ttnn.bfloat16,
-        weights_dtype: ttnn.DataType = ttnn.bfloat16,
+        activation_dtype: ttnn.DataType | None = None,
+        weights_dtype: ttnn.DataType | None = None,
         math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2,
         math_approx_mode: bool = False,
     ) -> None:
-        super().__init__()
         self.config = config
         self.device = device
+        if activation_dtype is None:
+            activation_dtype = getattr(ttnn, "bfloat16", None)
+        if weights_dtype is None:
+            weights_dtype = getattr(ttnn, "bfloat16", None)
+        if activation_dtype is None or weights_dtype is None:
+            raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
 
         self.patch_size = int(getattr(config, "patch_size"))
         self.in_channels = int(getattr(config, "in_channels"))
@@ -106,30 +108,28 @@ class TtAceStepPatchEmbed1D(nn.Module):
             ),
         )
 
-        torch_weight = state_dict[weight_key]  # [out_channels, in_channels, patch_size]
-        torch_bias = state_dict[bias_key]  # [out_channels]
+        weight_host = state_dict[weight_key]  # [out_channels, in_channels, patch_size]
+        bias_host = state_dict[bias_key]  # [out_channels]
 
-        if torch_weight.shape[0] != self.out_channels:
+        if weight_host.shape[0] != self.out_channels:
             raise ValueError(
-                f"Unexpected proj_in out_channels: got {torch_weight.shape[0]}, expected {self.out_channels}"
+                f"Unexpected proj_in out_channels: got {weight_host.shape[0]}, expected {self.out_channels}"
             )
-        if torch_weight.shape[1] != self.in_channels:
-            raise ValueError(
-                f"Unexpected proj_in in_channels: got {torch_weight.shape[1]}, expected {self.in_channels}"
-            )
-        if int(torch_weight.shape[2]) != self.patch_size:
-            raise ValueError(f"Unexpected proj_in kernel_size: got {torch_weight.shape[2]}, expected {self.patch_size}")
+        if weight_host.shape[1] != self.in_channels:
+            raise ValueError(f"Unexpected proj_in in_channels: got {weight_host.shape[1]}, expected {self.in_channels}")
+        if int(weight_host.shape[2]) != self.patch_size:
+            raise ValueError(f"Unexpected proj_in kernel_size: got {weight_host.shape[2]}, expected {self.patch_size}")
 
         # Host -> device transfer happens once here (allowed). Keep weights device-resident for all forwards.
-        self.weight = ttnn.from_torch(
-            torch_weight,
+        self.weight = ttnn.as_tensor(
+            weight_host,
             dtype=weights_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.bias = ttnn.from_torch(
-            torch_bias.reshape(1, 1, 1, -1),
+        self.bias = ttnn.as_tensor(
+            bias_host.reshape(1, 1, 1, -1),
             dtype=weights_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
@@ -212,7 +212,7 @@ class TtAceStepPatchEmbed1D(nn.Module):
         return out, meta
 
 
-class TtAceStepDePatchify1D(nn.Module):
+class TtAceStepDePatchify1D:
     """
     TTNN equivalent of HF's `proj_out` de-patchify in `AceStepDiTModel`.
 
@@ -233,12 +233,17 @@ class TtAceStepDePatchify1D(nn.Module):
         state_dict: dict,
         base_address: str,
         device: ttnn.Device,
-        activation_dtype: ttnn.DataType = ttnn.bfloat16,
-        weights_dtype: ttnn.DataType = ttnn.bfloat16,
+        activation_dtype: ttnn.DataType | None = None,
+        weights_dtype: ttnn.DataType | None = None,
     ) -> None:
-        super().__init__()
         self.config = config
         self.device = device
+        if activation_dtype is None:
+            activation_dtype = getattr(ttnn, "bfloat16", None)
+        if weights_dtype is None:
+            weights_dtype = getattr(ttnn, "bfloat16", None)
+        if activation_dtype is None or weights_dtype is None:
+            raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
 
         self.patch_size = int(getattr(config, "patch_size"))
         self.in_channels = int(getattr(config, "hidden_size"))
@@ -259,21 +264,19 @@ class TtAceStepDePatchify1D(nn.Module):
             ),
         )
 
-        torch_weight = state_dict[weight_key]  # ConvTranspose1d weight: [in_channels, out_channels, patch_size]
-        torch_bias = state_dict[bias_key]  # [out_channels]
+        weight_host = state_dict[weight_key]  # ConvTranspose1d weight: [in_channels, out_channels, patch_size]
+        bias_host = state_dict[bias_key]  # [out_channels]
 
-        if int(torch_weight.shape[0]) != self.in_channels:
+        if int(weight_host.shape[0]) != self.in_channels:
             raise ValueError(
-                f"Unexpected proj_out in_channels: got {torch_weight.shape[0]}, expected {self.in_channels}"
+                f"Unexpected proj_out in_channels: got {weight_host.shape[0]}, expected {self.in_channels}"
             )
-        if int(torch_weight.shape[1]) != self.out_channels:
+        if int(weight_host.shape[1]) != self.out_channels:
             raise ValueError(
-                f"Unexpected proj_out out_channels: got {torch_weight.shape[1]}, expected {self.out_channels}"
+                f"Unexpected proj_out out_channels: got {weight_host.shape[1]}, expected {self.out_channels}"
             )
-        if int(torch_weight.shape[2]) != self.patch_size:
-            raise ValueError(
-                f"Unexpected proj_out kernel_size: got {torch_weight.shape[2]}, expected {self.patch_size}"
-            )
+        if int(weight_host.shape[2]) != self.patch_size:
+            raise ValueError(f"Unexpected proj_out kernel_size: got {weight_host.shape[2]}, expected {self.patch_size}")
 
         # Build a linear weight matrix W2d of shape [out_features, in_features] where out_features = out_channels*patch.
         #
@@ -294,20 +297,23 @@ class TtAceStepDePatchify1D(nn.Module):
         # block of `out` outputs in the upsampled time axis.
         w_blocks = []
         for i in range(self.patch_size):
-            w_blocks.append(torch_weight[:, :, i])  # [in, out]
-        w_io_times_p = torch.cat(w_blocks, dim=1).contiguous()  # [in, out*p]
-        w2d = w_io_times_p.transpose(0, 1).contiguous()  # [out*p, in]
+            w_blocks.append(weight_host[:, :, i])  # [in, out]
+        # NOTE: avoid torch; `weight_host` is expected to be numpy-like (supports concatenate).
+        import numpy as np
+
+        w_io_times_p = np.concatenate(w_blocks, axis=1)  # [in, out*p]
+        w2d = np.ascontiguousarray(np.swapaxes(w_io_times_p, 0, 1))  # [out*p, in]
 
         # Host -> device transfer happens once here (allowed). Keep weights device-resident for all forwards.
-        self.weight = ttnn.from_torch(
+        self.weight = ttnn.as_tensor(
             w2d,
             dtype=weights_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.bias = ttnn.from_torch(
-            torch_bias.reshape(1, 1, 1, -1),
+        self.bias = ttnn.as_tensor(
+            bias_host.reshape(1, 1, 1, -1),
             dtype=activation_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,

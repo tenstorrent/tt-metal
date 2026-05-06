@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-import torch.nn as nn
-
 import ttnn
 from models.demos.ace_step_v1_5.ttnn_impl.patchify import (
     PatchifyMetadata,
@@ -20,7 +18,7 @@ def _state_key(base_address: str, suffix: str) -> str:
     return f"{base_address}.{suffix}" if base_address else suffix
 
 
-class TtAceStepDiTOutputHead(nn.Module):
+class TtAceStepDiTOutputHead:
     """
     TTNN equivalent of the final block in HF ``AceStepDiTModel`` (see
     ``acestep/models/*/modeling_acestep_v15_*.py``):
@@ -41,14 +39,19 @@ class TtAceStepDiTOutputHead(nn.Module):
         state_dict: dict,
         base_address: str,
         device: ttnn.Device,
-        activation_dtype: ttnn.DataType = ttnn.bfloat16,
-        weights_dtype: ttnn.DataType = ttnn.bfloat16,
+        activation_dtype: ttnn.DataType | None = None,
+        weights_dtype: ttnn.DataType | None = None,
     ) -> None:
-        super().__init__()
         self.device = device
         self.config = config
         self.hidden_size = int(getattr(config, "hidden_size"))
         self.eps = float(getattr(config, "rms_norm_eps", 1e-6))
+        if activation_dtype is None:
+            activation_dtype = getattr(ttnn, "bfloat16", None)
+        if weights_dtype is None:
+            weights_dtype = getattr(ttnn, "bfloat16", None)
+        if activation_dtype is None or weights_dtype is None:
+            raise RuntimeError("TTNN build missing bfloat16 dtype; pass activation_dtype/weights_dtype explicitly.")
         self.activation_dtype = activation_dtype
 
         norm_w_key = _maybe_get_state_dict_key(
@@ -66,35 +69,35 @@ class TtAceStepDiTOutputHead(nn.Module):
             ),
         )
 
-        torch_norm_w = state_dict[norm_w_key]
-        if int(torch_norm_w.shape[0]) != self.hidden_size:
+        norm_w_host = state_dict[norm_w_key]
+        if int(norm_w_host.shape[0]) != self.hidden_size:
             raise ValueError(
-                f"norm_out.weight length mismatch: got {torch_norm_w.shape[0]}, expected {self.hidden_size}"
+                f"norm_out.weight length mismatch: got {norm_w_host.shape[0]}, expected {self.hidden_size}"
             )
 
-        torch_sst = state_dict[sst_key]
-        if tuple(torch_sst.shape) != (1, 2, self.hidden_size):
+        sst_host = state_dict[sst_key]
+        if tuple(sst_host.shape) != (1, 2, self.hidden_size):
             raise ValueError(
-                f"scale_shift_table must be [1, 2, hidden_size], got {tuple(torch_sst.shape)} vs expected (1, 2, {self.hidden_size})"
+                f"scale_shift_table must be [1, 2, hidden_size], got {tuple(sst_host.shape)} vs expected (1, 2, {self.hidden_size})"
             )
 
-        self.norm_weight = ttnn.from_torch(
-            torch_norm_w,
+        self.norm_weight = ttnn.as_tensor(
+            norm_w_host,
             dtype=weights_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # Split so timestep broadcast matches HF: shift = sst[:,0:1], scale = sst[:,1:2], each + temb[:,None,:]
-        self.shift_table = ttnn.from_torch(
-            torch_sst[:, 0:1, :].contiguous(),
+        self.shift_table = ttnn.as_tensor(
+            sst_host[:, 0:1, :],
             dtype=weights_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.scale_table = ttnn.from_torch(
-            torch_sst[:, 1:2, :].contiguous(),
+        self.scale_table = ttnn.as_tensor(
+            sst_host[:, 1:2, :],
             dtype=weights_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
@@ -151,4 +154,4 @@ class TtAceStepDiTOutputHead(nn.Module):
         modulated = ttnn.add(ttnn.multiply(normed, one_plus_scale), shift_t)
         modulated_rm = ttnn.to_layout(modulated, ttnn.ROW_MAJOR_LAYOUT)
 
-        return self.depatchify(modulated_rm, meta)
+        return self.depatchify.forward(modulated_rm, meta)
