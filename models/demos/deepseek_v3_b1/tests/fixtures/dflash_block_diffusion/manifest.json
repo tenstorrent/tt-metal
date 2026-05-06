@@ -10,6 +10,28 @@
   },
   "block_size": 4,
   "acceptance_metric": "committed_tokens_per_verify_pass_including_anchor",
+  "stage_mapping": [
+    {
+      "stage": "pre_decoder_fused",
+      "fixture": "stage_pre_decoder_fused.json",
+      "generator": "generate_stage_fixtures.py"
+    },
+    {
+      "stage": "decoder_layer_0",
+      "fixture": "stage_decoder_layer_0.json",
+      "generator": "generate_stage_fixtures.py"
+    },
+    {
+      "stage": "decoder_layer_1",
+      "fixture": "stage_decoder_layer_1.json",
+      "generator": "generate_stage_fixtures.py"
+    },
+    {
+      "stage": "post_decoder_fused",
+      "fixture": "stage_post_decoder_fused.json",
+      "generator": "generate_stage_fixtures.py"
+    }
+  ],
   "trace_files": [
     {
       "path": "run_inference_trace.json",
