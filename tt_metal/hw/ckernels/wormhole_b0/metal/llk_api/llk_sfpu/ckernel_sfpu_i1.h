@@ -126,11 +126,25 @@ inline void calculate_i1() {
             sfpi::vFloat denom = PolynomialEvaluator::eval(
                 t, 1.0000000000e+00f, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
 #endif
+#ifdef INP_FLOAT32
             sfpi::dst_reg[0] = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
+#else
+            // SFPSTORE truncates FP32->BF16 (round-toward-zero). Explicit
+            // round-to-nearest-even halves the worst-case BF16 ULP error.
+            sfpi::dst_reg[0] = sfpi::float_to_fp16b(
+                numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom), sfpi::RoundMode::NearestEven);
+#endif
         }
 
         // ─── Asymptotic overwrite for OOD lanes (|x| > 10) ───────────────
-        v_if(abs_x > I1_THRESHOLD) { sfpi::dst_reg[0] = calculate_i1_asymptotic_<APPROXIMATION_MODE>(abs_x, x); }
+        v_if(abs_x > I1_THRESHOLD) {
+#ifdef INP_FLOAT32
+            sfpi::dst_reg[0] = calculate_i1_asymptotic_<APPROXIMATION_MODE>(abs_x, x);
+#else
+            sfpi::dst_reg[0] = sfpi::float_to_fp16b(
+                calculate_i1_asymptotic_<APPROXIMATION_MODE>(abs_x, x), sfpi::RoundMode::NearestEven);
+#endif
+        }
         v_endif;
 
         sfpi::dst_reg++;
