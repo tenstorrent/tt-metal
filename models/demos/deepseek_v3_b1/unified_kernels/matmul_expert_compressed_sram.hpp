@@ -137,23 +137,9 @@ struct MatmulExpertCompressedSRAM {
             constexpr uint32_t num_active_experts = CTArgs::num_active_experts;
 
             cb_wait_front(cb_in1, 1);
-            cb_wait_front(cb_index, 1);
-
-            // TRISC sync: after cb_wait_front(cb_index), only UNPACK has been
-            // gated on the producer. MATH/PACK can race ahead and read index_ptr
-            // before the gate kernel's L1 write is visible to them, leading to
-            // disagreement on is_sram_expert(raw_idx). One mailbox handshake
-            // here ensures all three TRISCs are past cb_wait_front before any
-            // of them reads index_ptr below — no per-iteration sync needed
-            // because index_ptr is only written once (by the gate kernel) and
-            // doesn't change for the rest of this Op invocation.
-            uint32_t sync_val = 0xffff;
-            UNPACK(({
-                mailbox_write(ckernel::ThreadId::MathThreadId, sync_val);
-                mailbox_write(ckernel::ThreadId::PackThreadId, sync_val);
-            }));
-            MATH(sync_val = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-            PACK(sync_val = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+            // NOTE: cb_wait_front(cb_index) + TRISC mailbox sync is performed
+            // ONCE globally in moe_kernel.cpp right after index_mcast (drives
+            // n_sram_active scan), so this kernel can read index_ptr directly.
 
             // Index tensor encodes SRAM/DRAM via bit 15: 1=SRAM, 0=DRAM.
             // Lower 15 bits hold the compact SRAM slot index (direct fmt table index).

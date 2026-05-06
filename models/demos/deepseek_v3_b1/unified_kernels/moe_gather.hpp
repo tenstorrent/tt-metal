@@ -97,18 +97,36 @@ struct MoeGather {
     // pop_src: whether to pop the source CB after sending
     // UsePerCoreSenderIdx: compile-time flag for scattered vs grid-based indexing
     // ========================================================================
-    template <bool IsSenderCore, bool IsReceiverCore, bool pop_src, bool UsePerCoreSenderIdx = false>
+    // IsSramExpert: when true, the per-core write count (BRISC) and total
+    //   received pages (NCRISC) are dynamic — caller passes n_per_core at
+    //   the call site. When false (default), the count comes from args's
+    //   compile-time fields (num_experts / dst_num_pages).
+    template <
+        bool IsSenderCore,
+        bool IsReceiverCore,
+        bool pop_src,
+        bool UsePerCoreSenderIdx = false,
+        bool IsSramExpert = false>
     class Op {
     public:
-        void operator()(const RTArgs& args) { impl(args); }
+        void operator()(const RTArgs& args, uint32_t n_per_core = 0) { impl(args, n_per_core); }
 
     private:
-        void impl([[maybe_unused]] const RTArgs& args) {
+        void impl([[maybe_unused]] const RTArgs& args, [[maybe_unused]] uint32_t n_per_core_runtime) {
+            // SRAM mode early-out: when n_per_core_runtime=0, nothing to send.
+            // Both sender and receiver skip — sem stays at 0 across the round
+            // so the next gather sees a clean slate.
+            if constexpr (IsSramExpert) {
+                if (n_per_core_runtime == 0) {
+                    return;
+                }
+            }
 #if defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC (Sender) - DataMovementProcessor.RISCV_0
             // ================================================================
             if constexpr (IsSenderCore) {
+                const uint32_t n_per_core = IsSramExpert ? n_per_core_runtime : args.num_experts;
                 // Compute per-core offset using compile-time branching
                 // For scattered cores (UsePerCoreSenderIdx=true), use the provided sender_idx
                 // For rectangular grids (UsePerCoreSenderIdx=false), compute from grid position
@@ -128,7 +146,6 @@ struct MoeGather {
 
                 // Wait for source CB data to be ready (all experts' pages)
                 cb_wait_front(args.src_cb, args.src_num_pages);
-
                 uint32_t input_data_addr = get_read_ptr(args.src_cb);
                 // Expert-major layout: core c's tiles interleaved per-expert.
                 // For core c, expert e: dst[e*expert_dst_stride + c*data_size_bytes].
@@ -138,7 +155,7 @@ struct MoeGather {
                 // Loop over experts: write each expert's tile at its expert-major position.
                 uint32_t src_off = 0;
                 uint32_t dst_off = base_dst_offset;
-                for (uint32_t e = 0; e < args.num_experts; e++) {
+                for (uint32_t e = 0; e < n_per_core; e++) {
                     uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_off);
                     noc_async_write_one_packet<true, true>(
                         input_data_addr + src_off, dst_data_noc_addr, args.data_size_bytes);
@@ -163,11 +180,13 @@ struct MoeGather {
                 volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
 
+                const uint32_t total_pages =
+                    IsSramExpert ? n_per_core_runtime * args.noc0_num_senders : args.dst_num_pages;
+
                 // Reserve space in destination CB
-                cb_reserve_back(args.dst_cb, args.dst_num_pages);
+                cb_reserve_back(args.dst_cb, total_pages);
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
-
                 if (args.noc1_num_senders > 0) {
                     volatile tt_l1_ptr uint32_t* noc1_receiver_semaphore_addr_ptr =
                         (volatile tt_l1_ptr uint32_t*)args.noc1_receiver_semaphore_addr;
@@ -176,7 +195,7 @@ struct MoeGather {
                 }
 
                 // Push to destination CB after data arrived
-                cb_push_back(args.dst_cb, args.dst_num_pages);
+                cb_push_back(args.dst_cb, total_pages);
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

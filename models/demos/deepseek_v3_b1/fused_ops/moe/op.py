@@ -81,7 +81,14 @@ class MoeSem:
     REDUCE_SYNC = 16
     REDUCE_AGG_SYNC = 17
     REDUCE_PERSISTENT_FABRIC_SIGNAL = 18
-    NUM_SEMAPHORES = 19
+    # Dedicated semaphores for SRAM gate/up gather. Cannot reuse AG_GATHER/
+    # BG_GATHER even though SRAM gather runs sequentially with shared gather:
+    # without atomic barriers between rounds, BRISC of fast a_cores can inc
+    # the shared sem before NCRISC has reset it after the SRAM round (or
+    # vice versa), causing lost increments.
+    SRAM_AG_GATHER = 19
+    SRAM_BG_GATHER = 20
+    NUM_SEMAPHORES = 21
 
 
 @dataclass
@@ -330,6 +337,27 @@ class _MoeRoutedExpertContext:
     sram_up_proj_params: dict = None
     sram_up_proj_cb_in1_descriptors_per_device: Any = None
     sram_up_proj_cb_out_descriptor: Any = None
+
+    # SRAM routed gate/up gather (step 3 of separate-pipeline plan).
+    # Each of the 64 a_cores (gate) / b_cores (up) sends num_active_experts
+    # tiles to the sender core. Dst CB is on sender, sized 8 experts × 64 tiles
+    # = 512 tiles. Layout: expert-major × N-major × K-within-N, so GatedReduce
+    # can read tiles_per_k=8 contiguous K-partials per N-tile.
+    sram_group1_cb: int = 0
+    sram_group2_cb: int = 0
+    sram_ag_dummy_tensor: Any = None  # sender-core L1 backing for sram_group1_cb
+    sram_bg_dummy_tensor: Any = None  # sender-core L1 backing for sram_group2_cb
+    sram_ag_receiver_data_addr: int = 0
+    sram_bg_receiver_data_addr: int = 0
+    sram_ag_sender_idx_core_values: list = None  # [(core, sender_idx), ...] for a_cores
+    sram_bg_sender_idx_core_values: list = None  # [(core, sender_idx), ...] for b_cores
+    sram_gather_data_size_bytes: int = 0  # per-tile bytes (1x32 bf16 = 64)
+    sram_gather_expert_dst_stride: int = 0  # 64 tiles × 64 bytes = 4096
+    sram_gather_total_tiles: int = 0  # 8 experts × 64 cores = 512
+    # Reuse AG_GATHER/BG_GATHER semaphores: SRAM gather runs sequentially
+    # before shared expert gather, each gather resets its sem to 0 at end.
+    sram_ag_receiver_semaphore_addr: int = 0
+    sram_bg_receiver_semaphore_addr: int = 0
 
 
 @dataclass
@@ -1272,6 +1300,11 @@ class MoeRoutedExpertOp:
         # = no SRAM up_proj; kernel skips via sram_up_proj_active=0.
         sram_up_proj_weights_tensor=None,
         sram_up_proj_out_tensor=None,
+        # SRAM gather destination tensors (sender-resident). Caller-provided
+        # so the test can read them via to_torch for PCC. Sized
+        # (num_active_experts × 64, 32) bf16, HEIGHT_SHARDED on sender_core.
+        sram_ag_dummy_tensor=None,
+        sram_bg_dummy_tensor=None,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
 
@@ -1422,6 +1455,10 @@ class MoeRoutedExpertOp:
         # both kernels can be live concurrently on their respective compute grids.
         sram_up_proj_cb_in1 = cb_id_context.get_cb_id(ttnn.bfloat4_b, TD_32x32_bfp4)
         sram_up_proj_out_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # SRAM gather destination CBs (sender core only). Sized for the gather
+        # output: num_active_experts × 64 cores = 512 tiles per device.
+        sram_group1_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        sram_group2_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
 
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
@@ -1784,6 +1821,50 @@ class MoeRoutedExpertOp:
             )
 
         # ==================================================================
+        # SRAM gate/up gather to sender (step 3 of separate-pipeline plan).
+        # Caller provides sram_ag_dummy_tensor / sram_bg_dummy_tensor (allocated
+        # via the same helper as shared expert's ag/bg dummies). Layout:
+        # expert-major × N-major × K-within-N (matches GatedReduce's
+        # tiles_per_k=8 contiguous-K-partials read pattern).
+        # ==================================================================
+        sram_ag_receiver_data_addr = 0
+        sram_bg_receiver_data_addr = 0
+        sram_ag_sender_idx_core_values = None
+        sram_bg_sender_idx_core_values = None
+        sram_gather_data_size_bytes = 0
+        sram_gather_expert_dst_stride = 0
+        sram_gather_total_tiles = 0
+        if sram_gate_proj_weights_tensor:
+            assert sram_ag_dummy_tensor is not None and sram_bg_dummy_tensor is not None, (
+                "sram_ag_dummy_tensor and sram_bg_dummy_tensor must be provided when "
+                "sram_gate_proj_weights_tensor is set (test fixture allocates these)."
+            )
+            sram_gather_data_size_bytes = tile_1x32_size  # 1 tile = 64 bytes
+            _sram_total_cores = 64  # a_cores = b_cores = 64
+            sram_gather_expert_dst_stride = _sram_total_cores * tile_1x32_size
+            sram_gather_total_tiles = gate_up_num_active_experts * _sram_total_cores
+
+            sram_ag_receiver_data_addr = sram_ag_dummy_tensor.buffer_address()
+            sram_bg_receiver_data_addr = sram_bg_dummy_tensor.buffer_address()
+
+            # Per-core sender_idx: offset within one expert's 64-tile slab.
+            # SRAM gate/up cores arranged as 8 K-slices × 8 N-slices row-major
+            # (lid // 8 = k_idx, lid % 8 = n_idx). GatedReduce reads K-major
+            # within N → sender_idx = n_idx * 8 + k_idx.
+            from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp as _SEO
+
+            _a_cores_for_gather, _b_cores_for_gather = _SEO.build_ab_grids()
+            _sram_n_parallel = 8
+            sram_ag_sender_idx_core_values = [
+                (core, (lid % _sram_n_parallel) * _sram_n_parallel + (lid // _sram_n_parallel))
+                for lid, core in enumerate(_a_cores_for_gather)
+            ]
+            sram_bg_sender_idx_core_values = [
+                (core, (lid % _sram_n_parallel) * _sram_n_parallel + (lid // _sram_n_parallel))
+                for lid, core in enumerate(_b_cores_for_gather)
+            ]
+
+        # ==================================================================
         # Eltwise Mul: silu(gate_proj) * up_proj [* expert_scale if routing]
         # ==================================================================
         mul_params = MoeRoutedExpertOp.setup_eltwise_mul(
@@ -1889,6 +1970,11 @@ class MoeRoutedExpertOp:
             for p in (gate_proj_params, up_proj_params, down_proj_params):
                 if "expert_offsets_l1_addr_per_device" in p:
                     p["index_l1_addr"] = index_l1_addr
+                    # sender_index_l1_addr: same pre-overlay address, NOT overwritten by
+                    # _overlap_cbs_with_sdpa_buffer. Used by the SRAM gather n_sram scan
+                    # on sender_core (which reads gate_output_indices's L1, not the
+                    # mcast-destination cb_index L1 used on receivers).
+                    p["sender_index_l1_addr"] = index_l1_addr
 
         # cb_fmt descriptors are now created inside _overlap_cbs_with_sdpa_buffer
         # (overlaid on kv_buf so the CB allocator sees the L1 region and won't stomp
@@ -2254,6 +2340,21 @@ class MoeRoutedExpertOp:
             sram_up_proj_params=sram_up_proj_params,
             sram_up_proj_cb_in1_descriptors_per_device=sram_up_proj_cb_in1_descriptors_per_device,
             sram_up_proj_cb_out_descriptor=sram_up_proj_cb_out_descriptor,
+            # SRAM gate/up gather (always-allocated CB IDs; data only when SRAM enabled).
+            # Dummy tensors are caller-provided (see test fixture).
+            sram_group1_cb=sram_group1_cb,
+            sram_group2_cb=sram_group2_cb,
+            sram_ag_dummy_tensor=sram_ag_dummy_tensor,
+            sram_bg_dummy_tensor=sram_bg_dummy_tensor,
+            sram_ag_receiver_data_addr=sram_ag_receiver_data_addr,
+            sram_bg_receiver_data_addr=sram_bg_receiver_data_addr,
+            sram_ag_sender_idx_core_values=sram_ag_sender_idx_core_values,
+            sram_bg_sender_idx_core_values=sram_bg_sender_idx_core_values,
+            sram_gather_data_size_bytes=sram_gather_data_size_bytes,
+            sram_gather_expert_dst_stride=sram_gather_expert_dst_stride,
+            sram_gather_total_tiles=sram_gather_total_tiles,
+            sram_ag_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_AG_GATHER],
+            sram_bg_receiver_semaphore_addr=sem_addrs[MoeSem.SRAM_BG_GATHER],
         )
 
     @staticmethod
@@ -2299,6 +2400,9 @@ class MoeRoutedExpertOp:
             ("gate_bias_cb", ctx.gate_params["bias_cb"] if ctx.enable_routing else 0),
             ("gate_input_indices_cb", ctx.gate_params["indices_cb"] if ctx.enable_routing else 0),
             ("gate_proj_cb_index", ctx.gate_proj_cb_index),
+            # NCRISC needs gate_output_indices_cb for the SRAM gather n_sram
+            # scan on sender_core (cb_wait_front on the gate's output CB).
+            ("gate_output_indices_cb", ctx.gate_params["output_indices_cb"] if ctx.enable_routing else 0),
             # Mul reader (setup mul_in1 buffer)
             ("mul_cb_in1", ctx.mul_cb_in1),
             ("mul_num_tiles", ctx.mul_num_tiles),
@@ -2750,6 +2854,92 @@ class MoeRoutedExpertOp:
         ncrisc_named_compile_time_args += sram_uniform_args
         trisc_named_compile_time_args += sram_uniform_args
 
+        # ---- SRAM gather (gate=A, up=B) CT args ----
+        # NCRISC receiver: noc0_num_senders, semaphore (reuses AG_GATHER/BG_GATHER —
+        #   SRAM gather runs sequentially before shared expert gather, semaphore resets at end),
+        #   dst_cb, dst_num_pages.
+        # BRISC sender:    dest_noc, data_size_bytes, semaphore, src_cb, src_num_pages,
+        #   receiver_data_addr, num_experts, src_page_size, expert_dst_stride.
+        # Per-core sender_idx is emitted via _build_core_descriptors below.
+        _sram_total_cores = 64
+        # NOTE: num_experts (sender) and dst_num_pages (receiver) are NOT CT args.
+        # They're set at runtime from n_sram_active (computed in moe_kernel.cpp
+        # right after index_mcast). The struct fields init to 0 and the gather
+        # call site overwrites them via apply_n_sram_to_gather_args().
+        sram_ag_ncrisc_args = [
+            ("sram_ag_noc0_num_senders", _sram_total_cores if ctx.sram_gather_total_tiles else 0),
+            ("sram_ag_noc0_receiver_semaphore_addr", ctx.sram_ag_receiver_semaphore_addr),
+            ("sram_ag_dst_cb", ctx.sram_group1_cb),
+        ]
+        sram_bg_ncrisc_args = [
+            ("sram_bg_noc0_num_senders", _sram_total_cores if ctx.sram_gather_total_tiles else 0),
+            ("sram_bg_noc0_receiver_semaphore_addr", ctx.sram_bg_receiver_semaphore_addr),
+            ("sram_bg_dst_cb", ctx.sram_group2_cb),
+        ]
+        # NOC physical coord of sender_core (gather destination). BRISC's
+        # get_noc_addr expects physical, not logical, coords.
+        _sender_noc = ctx.device.worker_core_from_logical_core(ctx.sender_core)
+        sram_ag_brisc_args = [
+            ("sram_ag_dest_noc_x", _sender_noc.x),
+            ("sram_ag_dest_noc_y", _sender_noc.y),
+            ("sram_ag_data_size_bytes", ctx.sram_gather_data_size_bytes),
+            ("sram_ag_receiver_semaphore_addr", ctx.sram_ag_receiver_semaphore_addr),
+            ("sram_ag_src_cb", ctx.sram_gate_proj_out_cb),
+            (
+                "sram_ag_src_num_pages",
+                ctx.sram_gather_total_tiles // _sram_total_cores if ctx.sram_gather_total_tiles else 0,
+            ),  # 8 pages per core (CB drain count)
+            ("sram_ag_receiver_data_addr", ctx.sram_ag_receiver_data_addr),
+            ("sram_ag_src_page_size", ctx.sram_gather_data_size_bytes),  # 64 bytes (1 tile)
+            ("sram_ag_expert_dst_stride", ctx.sram_gather_expert_dst_stride),  # 4096 bytes
+        ]
+        sram_bg_brisc_args = [
+            ("sram_bg_dest_noc_x", _sender_noc.x),
+            ("sram_bg_dest_noc_y", _sender_noc.y),
+            ("sram_bg_data_size_bytes", ctx.sram_gather_data_size_bytes),
+            ("sram_bg_receiver_semaphore_addr", ctx.sram_bg_receiver_semaphore_addr),
+            ("sram_bg_src_cb", ctx.sram_up_proj_out_cb),
+            (
+                "sram_bg_src_num_pages",
+                ctx.sram_gather_total_tiles // _sram_total_cores if ctx.sram_gather_total_tiles else 0,
+            ),
+            ("sram_bg_receiver_data_addr", ctx.sram_bg_receiver_data_addr),
+            ("sram_bg_src_page_size", ctx.sram_gather_data_size_bytes),
+            ("sram_bg_expert_dst_stride", ctx.sram_gather_expert_dst_stride),
+        ]
+        ncrisc_named_compile_time_args += sram_ag_ncrisc_args + sram_bg_ncrisc_args
+        brisc_named_compile_time_args += sram_ag_brisc_args + sram_bg_brisc_args
+
+        # Runtime n_sram scan: each RISC reads cb_index post-index_mcast,
+        # counts SRAM-flagged entries, uses that to drive gather num_experts /
+        # dst_num_pages. All RISCs need access to index_l1_addr + active count.
+        sgp_for_scan = ctx.sram_gate_proj_params or {}
+        # Sender-core scan uses gate_output_indices_tensor's L1 address (the
+        # gate kernel's output, computed in _setup_dimensions and stored on
+        # ctx). Receivers scan kv_buf-overlaid gate_proj_cb_index populated
+        # by mcast_index.
+        sram_gather_common = [
+            (
+                "sram_gather_index_l1_addr",
+                ctx.gate_proj_params.get("index_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+            (
+                "sram_gather_sender_index_l1_addr",
+                ctx.gate_proj_params.get("sender_index_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+            (
+                "sram_gather_num_active_experts",
+                sgp_for_scan.get("num_active_experts", 0),
+            ),
+            (
+                "sram_gather_cb_index",
+                ctx.gate_proj_cb_index if ctx.enable_routing else 0,
+            ),
+        ]
+        ncrisc_named_compile_time_args += sram_gather_common
+        brisc_named_compile_time_args += sram_gather_common
+        trisc_named_compile_time_args += sram_gather_common
+
         # ---- SRAM routed up_proj CT args (mirror of gate_proj) ----
         sup = ctx.sram_up_proj_params or {}
         sram_up_uniform_args = [
@@ -2806,6 +2996,12 @@ class MoeRoutedExpertOp:
             descriptors.append(ctx.sram_gate_proj_cb_out_descriptor)
         if ctx.sram_up_proj_cb_out_descriptor is not None:
             descriptors.append(ctx.sram_up_proj_cb_out_descriptor)
+        # SRAM gather dst CBs on sender — backed by dummy tensors so the test
+        # can read them via to_torch for PCC validation.
+        if ctx.sram_ag_dummy_tensor is not None:
+            descriptors.append(ttnn.cb_descriptor_from_sharded_tensor(ctx.sram_group1_cb, ctx.sram_ag_dummy_tensor))
+        if ctx.sram_bg_dummy_tensor is not None:
+            descriptors.append(ttnn.cb_descriptor_from_sharded_tensor(ctx.sram_group2_cb, ctx.sram_bg_dummy_tensor))
 
         if ctx.enable_routing:
             descriptors.append(ctx.gate_proj_cb_index_descriptor)
@@ -3078,6 +3274,25 @@ class MoeRoutedExpertOp:
             PerCoreCompileTimeDescriptor(
                 named_compile_time_arg="sram_up_proj_k_offset",
                 core_values=sram_k_offsets_up,
+                other_value=0,
+            ),
+        ]
+
+        # ---- SRAM gather per-core sender_idx (gate=A, up=B) ----
+        # Each of the 64 a_cores (b_cores) has a sender_idx telling MoeGather
+        # where to place its tile within an expert's 64-tile slab on the
+        # sender. Layout matches GatedReduce's contiguous-K-partials read.
+        sram_ag_idx = ctx.sram_ag_sender_idx_core_values or []
+        sram_bg_idx = ctx.sram_bg_sender_idx_core_values or []
+        per_core_compile_time_descriptors += [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_ag_sender_idx",
+                core_values=sram_ag_idx,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="sram_bg_sender_idx",
+                core_values=sram_bg_idx,
                 other_value=0,
             ),
         ]
@@ -5612,6 +5827,8 @@ class MoeOp:
         sram_gate_proj_out_tensor=None,
         sram_up_proj_weights_tensor=None,
         sram_up_proj_out_tensor=None,
+        sram_ag_dummy_tensor=None,
+        sram_bg_dummy_tensor=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -5666,6 +5883,8 @@ class MoeOp:
             sram_gate_proj_out_tensor=sram_gate_proj_out_tensor,
             sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
             sram_up_proj_out_tensor=sram_up_proj_out_tensor,
+            sram_ag_dummy_tensor=sram_ag_dummy_tensor,
+            sram_bg_dummy_tensor=sram_bg_dummy_tensor,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
@@ -6136,6 +6355,10 @@ class MoeOp:
         # SRAM routed up_proj weights/output — same contract as gate_proj.
         sram_up_proj_weights_tensor=None,
         sram_up_proj_out_tensor=None,
+        # SRAM gather destination tensors (sender-resident) — caller-provided so
+        # test can read them via to_torch for PCC. Shape (n_active*64, 32) bf16.
+        sram_ag_dummy_tensor=None,
+        sram_bg_dummy_tensor=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -6214,6 +6437,8 @@ class MoeOp:
             sram_gate_proj_out_tensor=sram_gate_proj_out_tensor,
             sram_up_proj_weights_tensor=sram_up_proj_weights_tensor,
             sram_up_proj_out_tensor=sram_up_proj_out_tensor,
+            sram_ag_dummy_tensor=sram_ag_dummy_tensor,
+            sram_bg_dummy_tensor=sram_bg_dummy_tensor,
         )
 
         # ==================================================================

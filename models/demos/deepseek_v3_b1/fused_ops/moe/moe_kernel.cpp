@@ -108,6 +108,35 @@ struct Core {
     static constexpr bool is_reduce_fabric_core = get_named_compile_time_arg_val("is_reduce_fabric_core") == 1;
 };
 
+// Count SRAM-flagged entries (bit-15) in the encoded TopK index array at
+// `l1_addr`, after waiting for `cb_id` to be ready. On TRISC, UNPACK does
+// the cb_wait + a mailbox handshake to MATH/PACK so all three threads observe
+// the same L1 contents before scanning. On BRISC/NCRISC the wait is single-
+// threaded.
+template <uint32_t cb_id, uint32_t l1_addr, uint32_t num_active>
+FORCE_INLINE uint32_t scan_n_sram_active() {
+#if defined(COMPILE_FOR_TRISC)
+    UNPACK(cb_wait_front(cb_id, 1));
+    uint32_t _sync = 0xffff;
+    UNPACK(({
+        mailbox_write(ckernel::ThreadId::MathThreadId, _sync);
+        mailbox_write(ckernel::ThreadId::PackThreadId, _sync);
+    }));
+    MATH(_sync = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(_sync = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+#else
+    cb_wait_front(cb_id, 1);
+#endif
+    uint32_t n = 0;
+    volatile tt_l1_ptr uint16_t* idx = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
+    for (uint32_t e = 0; e < num_active; e++) {
+        if (deepseek_b1_ops::is_sram_expert(static_cast<uint32_t>(idx[e]))) {
+            n++;
+        }
+    }
+    return n;
+}
+
 void kernel_main() {
 #if defined(RECONFIG_MOE_CBS)
     {
@@ -334,6 +363,26 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_up_proj_index_l1_addr"),
                 get_named_compile_time_arg_val("sram_up_proj_k_per_core"),
                 get_named_compile_time_arg_val("sram_up_proj_k_offset")>;
+
+            // SRAM gate gather (A) receiver (NCRISC) — sender_core only.
+            // dst_num_pages init=0; set at runtime to n_sram_active * total_cores.
+            deepseek_b1_ops::MoeGather::ReceiverArgs sram_ag_args{
+                get_named_compile_time_arg_val("sram_ag_noc0_num_senders"),
+                0,  // noc1_num_senders
+                get_named_compile_time_arg_val("sram_ag_noc0_receiver_semaphore_addr"),
+                0,  // noc1_receiver_semaphore_addr
+                get_named_compile_time_arg_val("sram_ag_dst_cb"),
+                0,  // dst_num_pages — runtime
+            };
+            // SRAM up gather (B) receiver (NCRISC).
+            deepseek_b1_ops::MoeGather::ReceiverArgs sram_bg_args{
+                get_named_compile_time_arg_val("sram_bg_noc0_num_senders"),
+                0,
+                get_named_compile_time_arg_val("sram_bg_noc0_receiver_semaphore_addr"),
+                0,
+                get_named_compile_time_arg_val("sram_bg_dst_cb"),
+                0,  // dst_num_pages — runtime
+            };
 
             // Eltwise Add (reader — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
@@ -651,6 +700,49 @@ void kernel_main() {
             using SramGateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
             // SRAM up_proj Matmul Expert (writer — empty, BRISC is no-op).
             using SramUpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
+
+            // SRAM gate gather (A) sender (BRISC). num_experts init=0; set at
+            // runtime to n_sram_active. src_page_size=64 (1 tile),
+            // expert_dst_stride=4096 (64 tiles).
+            // Field name `sram_ag_args` matches NCRISC ReceiverArgs so the Op
+            // call selects the right type via SelectByRISCV.
+            deepseek_b1_ops::MoeGather::SenderArgs sram_ag_args{
+                get_named_compile_time_arg_val("sram_ag_dest_noc_x"),
+                get_named_compile_time_arg_val("sram_ag_dest_noc_y"),
+                get_named_compile_time_arg_val("sram_ag_data_size_bytes"),
+                get_named_compile_time_arg_val("sram_ag_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("sram_ag_src_cb"),
+                get_named_compile_time_arg_val("sram_ag_src_num_pages"),
+                0,
+                0,
+                0,
+                0,  // sender_grid (unused with UsePerCoreSenderIdx)
+                0,  // row_major (unused)
+                get_named_compile_time_arg_val("sram_ag_receiver_data_addr"),
+                get_named_compile_time_arg_val("sram_ag_sender_idx"),
+                0,  // num_experts — runtime
+                get_named_compile_time_arg_val("sram_ag_src_page_size"),
+                get_named_compile_time_arg_val("sram_ag_expert_dst_stride"),
+            };
+            // SRAM up gather (B) sender (BRISC).
+            deepseek_b1_ops::MoeGather::SenderArgs sram_bg_args{
+                get_named_compile_time_arg_val("sram_bg_dest_noc_x"),
+                get_named_compile_time_arg_val("sram_bg_dest_noc_y"),
+                get_named_compile_time_arg_val("sram_bg_data_size_bytes"),
+                get_named_compile_time_arg_val("sram_bg_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("sram_bg_src_cb"),
+                get_named_compile_time_arg_val("sram_bg_src_num_pages"),
+                0,
+                0,
+                0,
+                0,
+                0,
+                get_named_compile_time_arg_val("sram_bg_receiver_data_addr"),
+                get_named_compile_time_arg_val("sram_bg_sender_idx"),
+                0,  // num_experts — runtime
+                get_named_compile_time_arg_val("sram_bg_src_page_size"),
+                get_named_compile_time_arg_val("sram_bg_expert_dst_stride"),
+            };
 
             // Eltwise Add (writer — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::WriterCTArgs;
@@ -994,6 +1086,9 @@ void kernel_main() {
 
             // down_proj Gather (compute — no-op)
             deepseek_b1_ops::MoeGather::ComputeArgs down_proj_gather_args{};
+            // SRAM gate/up gather (compute — no-op).
+            deepseek_b1_ops::MoeGather::ComputeArgs sram_ag_args{};
+            deepseek_b1_ops::MoeGather::ComputeArgs sram_bg_args{};
 
             // down_proj Mcast (compute — no-op)
             deepseek_b1_ops::Mcast::ComputeArgs down_proj_mcast_args{};
@@ -1408,11 +1503,20 @@ void kernel_main() {
         // primary_worker_cores + cores_per_dram_bank=2), so is_down_proj_streamer_core's
         // 16-core set IS the same set as is_gate_proj_streamer_core. Both gate/up matmul
         // (16 cores in K-split) and down (16 cores in gather) need the index for weight reads.
-        // Other grid cores just drain the semaphore (no CB ops).
+        // ─── Pre-mcast scan on sender_core ───────────────────────────────────
+        // sender_core has gate_output_indices_cb populated by the gate kernel
+        // before mcast_index pops it. Receivers don't have it yet — they
+        // scan after the mcast (below).
+        uint32_t n_sram_active = 0;
+        if constexpr (Core::Shared::is_gated_reduce_core) {
+            n_sram_active = scan_n_sram_active<
+                get_named_compile_time_arg_val("gate_output_indices_cb"),
+                get_named_compile_time_arg_val("sram_gather_sender_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_gather_num_active_experts")>();
+        }
+
         {
             DeviceZoneScopedN("MCAST_INDEX");
-            // Receiver set extended to include the 64 shared gate AND up compute
-            // cores (where SRAM routed gate_proj/up_proj run and read cb_index).
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
@@ -1423,6 +1527,16 @@ void kernel_main() {
                 /*ReceiverOnBrisc=*/true>
                 index_mcast;
             index_mcast(moe.routed.index_mcast_args);
+        }
+
+        // ─── Post-mcast scan on receivers ────────────────────────────────────
+        // a/b cores have gate_proj_cb_index populated by mcast_index — same
+        // L1 addr SRAM matmul reads.
+        if constexpr (Core::Shared::is_gate_compute_core || Core::Shared::is_up_compute_core) {
+            n_sram_active = scan_n_sram_active<
+                get_named_compile_time_arg_val("sram_gather_cb_index"),
+                get_named_compile_time_arg_val("sram_gather_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_gather_num_active_experts")>();
         }
 
         // 5b. Mcast Expert Scale: Broadcast expert scale to gate_proj cores
@@ -1459,7 +1573,7 @@ void kernel_main() {
                 /*pop_in0=*/false,
                 /*pop_in1=*/false,
                 /*pop_index=*/false,
-                /*pop_out=*/true>
+                /*pop_out=*/false>
                 sram_gate_proj;
             sram_gate_proj();
         }
@@ -1476,9 +1590,38 @@ void kernel_main() {
                 /*pop_in0=*/false,
                 /*pop_in1=*/false,
                 /*pop_index=*/false,
-                /*pop_out=*/true>
+                /*pop_out=*/false>
                 sram_up_proj;
             sram_up_proj();
+        }
+
+        // 5c''. SRAM gate gather (A): 64 a_cores → sender. Sends n_sram_active
+        //       tiles per core (densely packed at front of sram_gate_proj_out_cb).
+        //       Receiver dst layout: [e0_64tiles, e1_64tiles, ..., e_{n_sram-1}_64tiles].
+        //       IsSramExpert=true → BRISC and NCRISC use the n_sram_active arg
+        //       at the call site instead of args's CT-baked fields.
+        {
+            DeviceZoneScopedN("SRAM_GATE_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_gate_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                /*pop_src=*/true,
+                /*UsePerCoreSenderIdx=*/true,
+                /*IsSramExpert=*/true>
+                sram_ag;
+            sram_ag(moe.routed.sram_ag_args, n_sram_active);
+        }
+        // 5c'''. SRAM up gather (B): 64 b_cores → sender.
+        {
+            DeviceZoneScopedN("SRAM_UP_GATHER");
+            deepseek_b1_ops::MoeGather::Op<
+                Core::Shared::is_up_compute_core,
+                Core::Shared::is_gated_reduce_core,
+                /*pop_src=*/true,
+                /*UsePerCoreSenderIdx=*/true,
+                /*IsSramExpert=*/true>
+                sram_bg;
+            sram_bg(moe.routed.sram_bg_args, n_sram_active);
         }
 #endif  // ENABLE_ROUTING
 
