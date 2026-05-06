@@ -423,8 +423,8 @@ Tensor div(
             fast_and_approximate_mode,
             sub_core_grids);
     } else {
-        Tensor a = typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
-        Tensor b = typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+//         Tensor a = typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+//         Tensor b = typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
         result = ttnn::divide(
             a,
             b,
