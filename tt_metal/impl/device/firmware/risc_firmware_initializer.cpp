@@ -1137,6 +1137,16 @@ void RiscFirmwareInitializer::initialize_firmware(
             }
             if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepAssertReset)) {
                 cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+                const metal_SocDescriptor& soc_desc_post = cluster_.get_soc_desc(device_id);
+                tt::umd::CoreCoord translated_post =
+                    soc_desc_post.get_coord_at(tt_cxy_pair(device_id, virtual_core), CoordSystem::TRANSLATED);
+                tt::umd::RiscType reset_state_post =
+                    cluster_.get_driver()->get_risc_reset_state(device_id, translated_post);
+                log_info(
+                    tt::LogMetal,
+                    "DRAM core {} reset state after assert_reset: {}",
+                    virtual_core.str(),
+                    reset_state_post);
             }
             if (rtoptions_.dram_fw_init_step_enabled(kDramFwInitStepLoadBinaries) &&
                 not rtoptions_.get_skip_loading_fw()) {
