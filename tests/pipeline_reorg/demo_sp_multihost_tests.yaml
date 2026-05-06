@@ -73,13 +73,22 @@
       echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
 
       echo "--- Resetting cards with tt-smi ---"
-      mpirun --tag-output --pernode tt-smi -glx_reset
+      if ! mpirun --pernode --tag-output tt-smi -glx_reset; then
+        echo "WARNING: Reset failed on attempt $attempt"
+        if [ "$attempt" -eq "$MAX_RECOVERY_ATTEMPTS" ]; then
+          echo "ERROR: Reset failed on final attempt"
+          exit 1
+        fi
+        echo "Sleeping 30 seconds before retry..."
+        sleep 30
+        continue
+      fi
 
-      echo "--- Sleeping after reset ---"
-      sleep 300 # 5 minutes
+      echo "--- Sleeping 5 seconds after reset ---"
+      sleep 5
 
       echo "--- Running cluster validation ---"
-      if mpirun --tag-output \
+      if mpirun --pernode --tag-output \
         -x LD_LIBRARY_PATH=/home/user/tt-metal/build/lib \
         -x TT_METAL_RUNTIME_ROOT=/home/user/tt-metal \
         /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
@@ -104,6 +113,7 @@
     done
 
     PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+    echo "PIPELINE_HOSTS: $PIPELINE_HOSTS"
     PIPELINE_DIR=/ci/pipeline-${GITHUB_RUN_ID}
     mkdir -p $PIPELINE_DIR
 
