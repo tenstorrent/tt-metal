@@ -43,6 +43,13 @@ POLL_INTERVAL_SEC=5
 TRIAGE_TIMEOUT_SEC="${TRIAGE_TIMEOUT_SEC:-600}"
 TRIAGE_CMD=("./tools/tt-triage.py" "-vv")
 
+# A failed reset cannot leak into the next iteration — running pytest on a
+# half-reset mesh produces noise hangs that confuse triage. Retry the reset
+# until it succeeds; bail the whole run if the cap is exhausted because at
+# that point the HW state cannot be trusted.
+RESET_MAX_ATTEMPTS="${RESET_MAX_ATTEMPTS:-20}"
+RESET_RETRY_SLEEP_SEC="${RESET_RETRY_SLEEP_SEC:-5}"
+
 TEST_PATH="models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_attention_ag_isolated.py::test_ring_attention_ag_isolated"
 # Filter components held fixed across iterations. Test IDs from
 # @pytest.mark.parametrize on test_ring_attention_ag_isolated:
@@ -65,6 +72,39 @@ hang_log=""  # accumulating "iter<i>(<variant>)" tokens, one per hang
 
 log() { printf '%s\n' "$*" | tee -a "${LOG_FILE}"; }
 
+# Retry tt-smi -glx_reset until it succeeds. Each failed attempt bumps
+# reset_fail_count. If RESET_MAX_ATTEMPTS is exhausted, exits the whole
+# script (status 3) — refusing to run further pytest iterations on bad HW.
+reset_until_success() {
+    local context="$1"
+    local attempt=0
+    while (( attempt < RESET_MAX_ATTEMPTS )); do
+        attempt=$((attempt + 1))
+        log "tt-smi -glx_reset attempt ${attempt}/${RESET_MAX_ATTEMPTS} (${context})..."
+        tt-smi -glx_reset 2>&1 | tee -a "${LOG_FILE}"
+        local exit_code=${PIPESTATUS[0]}
+        if [[ ${exit_code} -eq 0 ]]; then
+            if (( attempt > 1 )); then
+                log "tt-smi -glx_reset OK after ${attempt} attempts (${context})"
+            else
+                log "tt-smi -glx_reset OK (${context})"
+            fi
+            return 0
+        fi
+        reset_fail_count=$((reset_fail_count + 1))
+        log "tt-smi -glx_reset FAILED (exit=${exit_code}, attempt ${attempt}/${RESET_MAX_ATTEMPTS}, ${context})"
+        if (( attempt < RESET_MAX_ATTEMPTS )); then
+            sleep "${RESET_RETRY_SLEEP_SEC}"
+        fi
+    done
+    log ""
+    log "############################################################"
+    log "### FATAL: tt-smi -glx_reset failed ${RESET_MAX_ATTEMPTS} times in a row"
+    log "### (${context}). Aborting stability run — HW state cannot be trusted."
+    log "############################################################"
+    exit 3
+}
+
 on_exit() {
     log ""
     log "=================================================="
@@ -86,6 +126,8 @@ log "Outer iterations:            ${NUM_ITERATIONS}"
 log "Pytest deadline (s):         ${PYTEST_TIMEOUT_SEC}"
 log "Triage deadline (s):         ${TRIAGE_TIMEOUT_SEC}"
 log "Triage command:              ${TRIAGE_CMD[*]}"
+log "Reset max attempts:          ${RESET_MAX_ATTEMPTS}"
+log "Reset retry sleep (s):       ${RESET_RETRY_SLEEP_SEC}"
 log "Test path:                   ${TEST_PATH}"
 log "Fixed filter:                ${TEST_FILTER_FIXED}"
 log "Fabric variants (alternated):${FABRIC_VARIANTS[*]}"
@@ -181,15 +223,7 @@ for (( i=1; i<=NUM_ITERATIONS; i++ )); do
         fi
         wait "${pytest_pid}" 2>/dev/null || true
 
-        log "Running tt-smi -glx_reset after hang..."
-        tt-smi -glx_reset 2>&1 | tee -a "${LOG_FILE}"
-        reset_exit=${PIPESTATUS[0]}
-        if [[ ${reset_exit} -ne 0 ]]; then
-            reset_fail_count=$((reset_fail_count + 1))
-            log "tt-smi -glx_reset FAILED (exit=${reset_exit}) — continuing anyway"
-        else
-            log "tt-smi -glx_reset OK"
-        fi
+        reset_until_success "after hang at iter ${i} (${variant})"
 
         # Continue to the next iteration (do not run the post-success
         # reset path below).
@@ -214,13 +248,5 @@ for (( i=1; i<=NUM_ITERATIONS; i++ )); do
 
     # Reset runs unconditionally after a clean pytest exit (pass or fail) -
     # stressing the reset path is the whole point of the loop.
-    log "Running tt-smi -glx_reset (unconditional after non-hang exit)..."
-    tt-smi -glx_reset 2>&1 | tee -a "${LOG_FILE}"
-    reset_exit=${PIPESTATUS[0]}
-    if [[ ${reset_exit} -ne 0 ]]; then
-        reset_fail_count=$((reset_fail_count + 1))
-        log "tt-smi -glx_reset FAILED (exit=${reset_exit})"
-    else
-        log "tt-smi -glx_reset OK"
-    fi
+    reset_until_success "post-${verdict} at iter ${i} (${variant})"
 done
