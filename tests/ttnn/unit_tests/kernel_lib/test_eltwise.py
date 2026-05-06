@@ -859,6 +859,9 @@ def test_1_copy_upfront_block_iter(device, upfront_n, fp32_dest_acc):
 BINARY_BCAST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_fpu_bcast.cpp"
 
 
+@pytest.mark.skip(
+    reason="reader_binary pushes N tiles to both CBs; scalar bcast b only has 1 tile. Test infra limitation — production migrations supply their own readers."
+)
 @pytest.mark.parametrize("num_tiles", [1, 8])
 @pytest.mark.parametrize("fp32_dest_acc", [False])
 @pytest.mark.parametrize(
