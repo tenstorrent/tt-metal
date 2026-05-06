@@ -338,6 +338,15 @@ jobs:
       # pipeline-perf fleet onto pipeline-functional. HF Hub provides config +
       # tokenizer at runtime; weights are never downloaded.
       - pipeline-functional
+    # Job-level env so the dummy-mode toggles are visible both inside the
+    # container (the runner passes them via docker exec -e on every step) AND
+    # to the step-level if: expressions further down (which read GHA's
+    # workflow/job env context, not container.env). The post-server steps
+    # gate output-validation on env.TT_DUMMY_WEIGHTS != '1', and that
+    # comparison only resolves correctly when the var lives at this level.
+    env:
+      TT_DUMMY_WEIGHTS: 1
+      TT_DUMMY_NUM_LAYERS: 1
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -348,14 +357,12 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         # Allow HF Hub fetches for config + tokenizer (a few MB / model).
-        # Weights are NOT downloaded — TT_DUMMY_WEIGHTS=1 routes the TT model
-        # builder to dummy_weights=True. TT_DUMMY_NUM_LAYERS=1 builds a
-        # 1-layer shell of every model: smoke-test only cares that the path
-        # runs, and warmup compile + weight upload scale with layer count, so
-        # this cuts cold-cache server-ready time by ~5-15x.
+        # Weights are NOT downloaded — TT_DUMMY_WEIGHTS=1 (set at job level
+        # above) routes the TT model builder to dummy_weights=True;
+        # TT_DUMMY_NUM_LAYERS=1 (also job level) builds a 1-layer shell of
+        # every model. Smoke-test only cares the path runs, and warmup
+        # compile + weight upload scale with layer count.
         HF_HUB_OFFLINE: 0
-        TT_DUMMY_WEIGHTS: 1
-        TT_DUMMY_NUM_LAYERS: 1
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         FILE_SERVER_PID: "./server.pid"
         FILE_INSTALL_LOG: "./output/vllm_install.log"
