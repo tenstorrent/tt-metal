@@ -39,15 +39,14 @@ void create_tensor_cb(
     const ttnn::Tensor& tensor,
     uint32_t buffering_factor,
     tt::CBIndex cb_id,
-    const std::string& tensor_name = "tensor",
-    std::optional<uint32_t> fp8_hidden_size = std::nullopt) {
+    const std::string& tensor_name = "tensor") {
     auto page_size = get_page_size(tensor);
     auto num_pages = detail::get_num_pages(tensor);
     auto aligned_page_size = get_aligned_page_size(tensor);
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-
-    if (fp8_hidden_size.has_value()) {
-        aligned_page_size = tt::round_up(*fp8_hidden_size, tt::tt_metal::hal::get_l1_alignment());
+    if (data_format == tt::DataFormat::UInt8) {
+        // TODO: remove once FP8 has a dedicated dtype. In this op, UINT8 tensors only appear
+        // on the FP8 dispatch path (DRAM is allocated as UINT8 but content is Fp8_e4m3).
         data_format = tt::DataFormat::Fp8_e4m3;
     }
 
@@ -284,8 +283,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         output_tensor,
         /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_11,
-        "idle_untilize_output",
-        operation_attributes.use_fp8_dispatch ? std::optional<uint32_t>(hidden_size) : std::nullopt);
+        "idle_untilize_output");
     // c_12: route table mailbox (sender writes before start_semaphore; writer reads after)
     // Layout: [entry_count u32] [entry_0..N × 6 u32s each]
     {
@@ -407,8 +405,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         output_tensor,
         /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_18,
-        "receive_untilized",
-        operation_attributes.use_fp8_dispatch ? std::optional<uint32_t>(hidden_size) : std::nullopt);
+        "receive_untilized");
     // c_19: route table scratch (sender builds local-expert route table here before NOC-writing to idle)
     {
         uint32_t max_route_entries = read_batch_size * operation_attributes.num_experts_per_tok;
@@ -1265,6 +1262,12 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     const GlobalSemaphore& cross_device_semaphore) {
     const bool is_tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
     log_info(tt::LogOp, "Prefill dispatch: input tensor is {} layout", is_tile_layout ? "TILE" : "ROW_MAJOR");
+    if (operation_attributes.use_fp8_dispatch) {
+        log_warning(
+            tt::LogOp,
+            "Prefill dispatch: FP8 path — output buffer is allocated as UINT8 but content is Fp8_e4m3. "
+            "CBs reinterpret UINT8 tensors as Fp8_e4m3 (temporary, until FP8 has a dedicated dtype).");
+    }
     if (is_tile_layout) {
         return create_at_tile_layout(
             operation_attributes,
