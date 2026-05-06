@@ -45,6 +45,8 @@ class UpconvConfiguration:
     padding: Tuple[int, int] = (0, 0)
     weight: ttnn.Tensor = None
     bias: ttnn.Tensor = None
+    act_block_h_override: int = 32
+    force_height_sharded: bool = False
 
 
 @dataclass
@@ -66,6 +68,7 @@ class AttentionGateConfiguration:
     in_channels: int
     gating_channels: int
     inter_channels: int
+    upsample_mode: str = "bilinear"
 
 
 @dataclass
@@ -349,8 +352,9 @@ class TtAttentionDenseUNetConfigBuilder:
         """
         Create Conv2dConfiguration from preprocessed parameters.
 
-        For Stage 1, we use simple DRAM memory configuration.
-        Stage 2 will add sharding optimizations.
+        Sharding follows `_select_conv_sharding_strategy` (stage2 uses height
+        sharding on larger feature maps). ReLU is fused on selected convs via
+        `activation` when BN is folded in preprocessing.
         """
         params = self.parameters
         for key in params_key.split("."):
@@ -363,6 +367,7 @@ class TtAttentionDenseUNetConfigBuilder:
             input_width=input_width,
             kernel_size=kernel_size,
             out_channels=out_channels,
+            params_key=params_key,
         )
         activation = None
         if (
@@ -398,7 +403,12 @@ class TtAttentionDenseUNetConfigBuilder:
         )
 
     def _select_conv_sharding_strategy(
-        self, input_height: int, input_width: int, kernel_size: Tuple[int, int], out_channels: int
+        self,
+        input_height: int,
+        input_width: int,
+        kernel_size: Tuple[int, int],
+        out_channels: int,
+        params_key: str = "",
     ):
         """
         Pick a sharding strategy based on optimization level and tensor geometry.
@@ -418,12 +428,22 @@ class TtAttentionDenseUNetConfigBuilder:
             return AutoShardedStrategyConfiguration()
 
         # Stage3: bias toward stronger spatial parallelism on larger maps.
-        if feature_area >= 64 * 64 and not is_pointwise:
+        is_decoder_path = (
+            params_key.startswith("decoder")
+            or params_key.startswith("upconv")
+            or params_key.startswith("attention")
+            or params_key.startswith("conv_out")
+        )
+        if is_decoder_path and feature_area >= 32 * 32 and not is_pointwise:
             return BlockShardedStrategyConfiguration(
                 reshard_if_not_optimal=True,
                 act_block_h_override=32,
                 act_block_w_div=2,
             )
+        if not is_decoder_path and feature_area >= 32 * 32:
+            # Keep encoder/early stem on safer height sharding to avoid L1
+            # circular-buffer pressure while still increasing parallelism vs auto.
+            return HeightShardedStrategyConfiguration(reshard_if_not_optimal=True, act_block_h_override=32)
         if feature_area >= 32 * 32 or out_channels >= 96:
             return HeightShardedStrategyConfiguration(reshard_if_not_optimal=True, act_block_h_override=32)
         return AutoShardedStrategyConfiguration()
@@ -447,6 +467,29 @@ class TtAttentionDenseUNetConfigBuilder:
             stride=(2, 2),
             padding=(0, 0),
         )
+
+    def _select_attention_gate_sharding_strategy(
+        self, input_height: int, input_width: int, out_channels: int, is_psi: bool = False
+    ):
+        """
+        Attention gate strategy:
+        - Stage1: auto
+        - Stage2: height-shard larger maps except tiny psi
+        - Stage3: block-shard larger gate maps for theta/phi/W and keep psi lighter.
+        """
+        if self.optimization_level == OptimizationLevel.STAGE1:
+            return AutoShardedStrategyConfiguration()
+
+        feature_area = input_height * input_width
+        if self.optimization_level == OptimizationLevel.STAGE2:
+            if not is_psi and feature_area >= 32 * 32:
+                return HeightShardedStrategyConfiguration(reshard_if_not_optimal=True, act_block_h_override=32)
+            return AutoShardedStrategyConfiguration()
+
+        # Stage3 keeps attention-gate conv sharding conservative; the gate path
+        # is memory-sensitive, so we focus Stage3 gains on decoder parallelism
+        # plus gate TM reduction in model.py (nearest upsample + deallocation).
+        return AutoShardedStrategyConfiguration()
 
     def _create_upconv_config(
         self,
@@ -475,6 +518,8 @@ class TtAttentionDenseUNetConfigBuilder:
             padding=(0, 0),
             weight=weight,
             bias=bias,
+            act_block_h_override=32,
+            force_height_sharded=False,
         )
 
     def _create_attention_gate_config(
@@ -490,6 +535,31 @@ class TtAttentionDenseUNetConfigBuilder:
         params = self.parameters
         for key in params_key.split("."):
             params = params[key]
+        theta_strategy = self._select_attention_gate_sharding_strategy(
+            input_height=input_height,
+            input_width=input_width,
+            out_channels=inter_channels,
+            is_psi=False,
+        )
+        phi_strategy = self._select_attention_gate_sharding_strategy(
+            input_height=input_height,
+            input_width=input_width,
+            out_channels=inter_channels,
+            is_psi=False,
+        )
+        psi_strategy = self._select_attention_gate_sharding_strategy(
+            input_height=input_height,
+            input_width=input_width,
+            out_channels=1,
+            is_psi=True,
+        )
+        w_strategy = self._select_attention_gate_sharding_strategy(
+            input_height=input_height,
+            input_width=input_width,
+            out_channels=in_channels,
+            is_psi=False,
+        )
+
         theta_conv = Conv2dConfiguration(
             input_height=input_height,
             input_width=input_width,
@@ -507,7 +577,7 @@ class TtAttentionDenseUNetConfigBuilder:
             packer_l1_acc=True,
             enable_weights_double_buffer=False,
             enable_act_double_buffer=False,
-            sharding_strategy=AutoShardedStrategyConfiguration(),
+            sharding_strategy=theta_strategy,
         )
         phi_conv = Conv2dConfiguration(
             input_height=input_height,
@@ -526,7 +596,7 @@ class TtAttentionDenseUNetConfigBuilder:
             packer_l1_acc=True,
             enable_weights_double_buffer=False,
             enable_act_double_buffer=False,
-            sharding_strategy=AutoShardedStrategyConfiguration(),
+            sharding_strategy=phi_strategy,
         )
         psi_conv = Conv2dConfiguration(
             input_height=input_height,
@@ -545,7 +615,7 @@ class TtAttentionDenseUNetConfigBuilder:
             packer_l1_acc=True,
             enable_weights_double_buffer=False,
             enable_act_double_buffer=False,
-            sharding_strategy=AutoShardedStrategyConfiguration(),
+            sharding_strategy=psi_strategy,
         )
         W_conv = Conv2dConfiguration(
             input_height=input_height,
@@ -564,7 +634,7 @@ class TtAttentionDenseUNetConfigBuilder:
             packer_l1_acc=True,
             enable_weights_double_buffer=False,
             enable_act_double_buffer=False,
-            sharding_strategy=AutoShardedStrategyConfiguration(),
+            sharding_strategy=w_strategy,
         )
 
         return AttentionGateConfiguration(
@@ -575,6 +645,7 @@ class TtAttentionDenseUNetConfigBuilder:
             in_channels=in_channels,
             gating_channels=gating_channels,
             inter_channels=inter_channels,
+            upsample_mode="nearest" if self.optimization_level == OptimizationLevel.STAGE3 else "bilinear",
         )
 
 
@@ -620,3 +691,4 @@ def create_configs_from_parameters(
     )
 
     return builder.build_configs()
+

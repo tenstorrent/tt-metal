@@ -95,11 +95,13 @@ def transpose_conv2d(
     """
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat8_b,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if input_tensor.is_sharded() else None,
+        shard_layout=(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if (input_tensor.is_sharded() or upconv_config.force_height_sharded) else None
+        ),
         deallocate_activation=True,
         enable_act_double_buffer=False,
         output_layout=ttnn.TILE_LAYOUT,
-        act_block_h_override=act_block_h_override,
+        act_block_h_override=upconv_config.act_block_h_override,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         input_tensor.device().arch(),
@@ -277,17 +279,22 @@ class TtAttentionGate:
             phi_g_rm = ttnn.upsample(
                 input_tensor=phi_g_rm,
                 scale_factor=[int(scale_h), int(scale_w)],
-                mode="bilinear",
+                mode=self.config.upsample_mode,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             phi_g = ttnn.to_layout(phi_g_rm, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
             ttnn.deallocate(phi_g_rm)
         f = ttnn.add(theta_x, phi_g)
+        ttnn.deallocate(theta_x)
+        ttnn.deallocate(phi_g)
         f = ttnn.relu(f)
         attention = self.psi(f)
+        ttnn.deallocate(f)
         attention = ttnn.sigmoid(attention)
         y = ttnn.mul(attention, x)
+        ttnn.deallocate(attention)
         output = self.W(y)
+        ttnn.deallocate(y)
         return output
 
 
@@ -417,3 +424,4 @@ def create_model_from_configs(configs: TtAttentionDenseUNetConfigs, device: ttnn
         TtAttentionDenseUNet instance
     """
     return TtAttentionDenseUNet(configs, device)
+
