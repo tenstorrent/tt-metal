@@ -14,7 +14,7 @@ Supported ``model_type``:
 
 - ``llama``    — any combination of DDP and TP (uses the ``"tp"`` mesh axis).
 - ``gpt2``     — DDP only; TP is rejected.
-- ``deepseek`` — single-device only.
+- ``deepseek`` — DDP only; TP is rejected. Optional MoE TP uses ``moe_tp_axis``.
 - ``qwen3``    — DDP only; TP is rejected.
 """
 
@@ -294,6 +294,13 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     2D mesh (both dims > 1): the number of enabled parallelisms must equal
     the number of mesh dims, and assignment order is DP -> TP. CP/PP are
     out of scope here.
+
+    Exception: some models (e.g. DeepSeek) do not implement the general
+    tensor-parallel model path (`enable_tp=true`), but still want a 2D mesh
+    for DDP + MoE-TP experimentation. In that case, allow `enable_ddp=true`
+    with `enable_tp=false` on a 2D mesh by naming axis 0 as "dp" and leaving
+    other axes unnamed; the caller may rename a remaining axis (e.g. to
+    "moe_tp") for MoE sharding.
     """
     shape = tuple(int(s) for s in device_config.mesh_shape)
     n = len(shape)
@@ -318,11 +325,18 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
         axis_names[active] = enabled_names[0]
     else:
         if len(enabled_names) != n:
-            raise ValueError(f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}")
-        # enabled_names is ordered ("dp", "tp") by construction above, matching
-        # the C++ assignment order in auto_context.cpp.
-        for i, name in enumerate(enabled_names):
-            axis_names[i] = name
+            # Allow DP-only on a 2D mesh (axis 0 becomes "dp").
+            if enabled_names == ("dp",):
+                axis_names[0] = "dp"
+            else:
+                raise ValueError(
+                    f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}"
+                )
+        else:
+            # enabled_names is ordered ("dp", "tp") by construction above, matching
+            # the C++ assignment order in auto_context.cpp.
+            for i, name in enumerate(enabled_names):
+                axis_names[i] = name
 
     return ttml.Mesh(shape, tuple(axis_names))
 
@@ -1379,7 +1393,7 @@ def main():
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
 
-    # Parse device config from YAML (mesh_shape, enable_ddp, enable_tp).
+    # Parse device config from YAML (mesh_shape, enable_ddp, enable_tp, moe_tp_axis).
     device_config = DeviceConfig(yaml_config)
 
     # Mirrors main.cpp:447-451 and lora_llama: TP-sharded parameters cannot be
@@ -1397,7 +1411,29 @@ def main():
     # (auto_context.cpp:140-195) so ttml.sync_gradients and axis_mapper("dp"|"tp", ...)
     # bind to the same physical axes the C++ trainer would.
     mesh = build_mesh(device_config)
-    if device_config.enable_ddp or device_config.enable_tp:
+
+    # Optional MoE tensor-parallel axis: YAML `moe_tp_axis` is an index into
+    # `mesh_shape`. `SparseMoETP` reads `DeepSeekConfig.moe_tp_axis_name` and
+    # looks up that name on the mesh. If `build_mesh` already named that
+    # dimension (e.g. "tp" for general tensor parallel), reuse it; otherwise
+    # replace the placeholder `_i` name with "moe_tp".
+    moe_ax = device_config.moe_tp_axis
+    if moe_ax != -1:
+        shape = tuple(int(s) for s in device_config.mesh_shape)
+        if not (0 <= moe_ax < len(shape)):
+            raise ValueError(
+                f"device_config.moe_tp_axis ({moe_ax}) is out of range for mesh_shape of length {len(shape)}"
+            )
+        names = list(mesh.axis_names)
+        logical = names[moe_ax]
+        if logical.startswith("_"):
+            names[moe_ax] = "moe_tp"
+            mesh = ttml.Mesh(mesh.shape, tuple(names))
+            model_config.moe_tp_axis_name = "moe_tp"
+        else:
+            model_config.moe_tp_axis_name = logical
+
+    if device_config.enable_ddp or device_config.enable_tp or device_config.moe_tp_axis != -1:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
     ttml.open_device_mesh(mesh, tuple(device_config.device_ids) if device_config.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
