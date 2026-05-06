@@ -8,6 +8,7 @@
 
 #include "ckernel_sfpu.h"
 #include "llk_defs.h"
+using namespace ckernel;
 using namespace ckernel::math;
 
 inline void _eltwise_binary_sfpu_configure_addrmod_()

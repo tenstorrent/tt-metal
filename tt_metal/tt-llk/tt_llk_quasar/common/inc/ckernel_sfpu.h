@@ -21,7 +21,10 @@
 #include "sfpu/ckernel_sfpu_typecast_fp16b_uint16.h"
 #include "sfpu/ckernel_sfpu_typecast_int32_fp32.h"
 
+namespace ckernel
+{
 using namespace ckernel::math;
+using namespace ckernel::trisc;
 
 /**
  * @brief Programs SFPU addrmods
@@ -46,7 +49,7 @@ inline void _sfpu_configure_addrmod_()
  */
 inline void _llk_math_sfpu_start_(const std::uint32_t tile_index)
 {
-    _set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(tile_index);
+    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_index);
     TTI_STALLWAIT(p_stall::STALL_SFPU, 0, 0, p_stall::MATH);
 }
 
@@ -99,7 +102,7 @@ inline void _llk_math_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, 
 {
     _llk_math_sfpu_start_(dst_tile_index);
 
-    for (std::uint32_t face = 0; face < ckernel::trisc::NUM_FACES; face++)
+    for (std::uint32_t face = 0; face < NUM_FACES; face++)
     {
         sfpu_func(std::forward<ARGS>(args)...);
 
@@ -109,3 +112,5 @@ inline void _llk_math_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, 
 
     _llk_math_sfpu_done_();
 }
+
+} // namespace ckernel
