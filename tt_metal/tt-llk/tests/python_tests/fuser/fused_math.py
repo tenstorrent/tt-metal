@@ -306,6 +306,15 @@ class ComputePipeline:
 
         return code
 
+    @staticmethod
+    def _pack_relu_config(operation: "FusedOperation"):
+        from helpers.golden_generators import PackGolden
+
+        relu_config = PackGolden.generate_relu_config(
+            operation.pack_relu, operation.relu_threshold, operation.output.data_format
+        )
+        return f"_llk_pack_relu_config_({relu_config});\n"
+
     def pack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = self._pack_constants(operation, config)
 
@@ -316,6 +325,7 @@ class ComputePipeline:
         code += config.sentinel.hw_configure_pack(config, operation)
         code += self._pack_reduce_mask_config()
         code += self.packer().init(operation, config, None, None)
+        code += self._pack_relu_config(operation)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
