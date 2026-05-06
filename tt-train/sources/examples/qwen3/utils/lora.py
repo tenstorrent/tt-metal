@@ -11,7 +11,7 @@ PEFT-style mixin pattern (mirrors HuggingFace PEFT BaseTunerLayer):
 traverses the module tree and replaces every attribute whose name appears
 in lora_config["targets"] with an appropriate LoRA wrapper:
 
-  LinearProjection       → LoRALinearProjection       (single-device)
+  LinearLayer            → LoRALinearProjection       (single-device)
   ColumnParallelLinear   → LoRAColumnParallelLinear    (tensor-parallel)
   RowParallelLinear      → LoRARowParallelLinear       (tensor-parallel)
 
@@ -59,7 +59,7 @@ LORA_TARGETS_ALL = [
 
 
 class LoRALinearProjection(AbstractModuleBase):
-    """LoRA wrapper for single-device LinearProjection.
+    """LoRA wrapper for single-device LinearLayer.
 
     Forward: base_layer(x) + lora_B(lora_A(x)) * scaling
     Dimensions inferred from base_layer.weight shape (1, 1, out, in).
@@ -164,7 +164,7 @@ class LoRARowParallelLinear(AbstractModuleBase):
 def _make_lora_wrapper(module, rank: int, alpha: float):
     """Create the appropriate LoRA wrapper for the given base module."""
     cls_name = type(module).__name__
-    if cls_name == "LinearProjection":
+    if cls_name == "LinearLayer":
         return LoRALinearProjection(module, rank, alpha)
     elif cls_name == "ColumnParallelLinear":
         return LoRAColumnParallelLinear(module, rank, alpha)
@@ -173,7 +173,7 @@ def _make_lora_wrapper(module, rank: int, alpha: float):
     else:
         raise ValueError(
             f"Cannot inject LoRA into module type '{cls_name}'. "
-            f"Supported: LinearProjection, ColumnParallelLinear, RowParallelLinear"
+            f"Supported: LinearLayer, ColumnParallelLinear, RowParallelLinear"
         )
 
 

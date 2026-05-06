@@ -49,6 +49,7 @@ class LoraConfig:
     is_bias_trainable: bool = False
     trainable_modules: list[str] = field(default_factory=list)
     lora_dropout: float = 0.0
+    verbose: bool = False
 
 
 def _create_lora_A(in_features: int, rank: int, mapper=None):
@@ -228,15 +229,42 @@ class LoraModel(AbstractModuleBase):
     def __init__(self, model: AbstractModuleBase, config: LoraConfig) -> None:
         super().__init__()
         self.model = model
+        verbose = config.verbose
 
+        if not config.target_modules:
+            raise ValueError("[LoRA] target_modules must not be empty")
+
+        if verbose:
+            print(
+                f"[LoRA] Config: rank={config.rank}, alpha={config.alpha}, "
+                f"targets={config.target_modules}, dropout={config.lora_dropout}, "
+                f"use_rslora={config.use_rslora}, is_bias_trainable={config.is_bias_trainable}"
+            )
+
+        if verbose:
+            print("[LoRA] Freezing weights")
         for _, tensor in model.named_parameters():
             tensor.set_requires_grad(False)
 
         patterns = [re.compile(p) for p in config.target_modules]
-        self._inject(model, "", patterns, config)
+        injected = self._inject(model, "", patterns, config)
+        if verbose:
+            print("[LoRA] Injecting LoRA")
+            for name in injected:
+                print(f"  - {name}")
+
+        unmatched = [p.pattern for p in patterns if not any(p.search(name) for name in injected)]
+        if unmatched:
+            raise ValueError(f"[LoRA] target_modules pattern(s) matched no LinearLayer in the model: {unmatched}")
 
         if config.trainable_modules:
             self._unfreeze_trainable(model, config.trainable_modules)
+
+        if verbose:
+            unfrozen = [name for name, t in model.parameters().items() if t.get_requires_grad()]
+            print("[LoRA] Unfreezing weights:")
+            for name in unfrozen:
+                print(f"  - {name}")
 
     def _inject(
         self,
@@ -270,7 +298,8 @@ class LoraModel(AbstractModuleBase):
                 else:
                     setattr(module, name, lora_layer)
             elif isinstance(child, AbstractModuleBase):
-                self._inject(child, full_name, patterns, config)
+                injected.extend(self._inject(child, full_name, patterns, config))
+        return injected
 
     @staticmethod
     def _unfreeze_trainable(model: AbstractModuleBase, trainable_modules: list[str]) -> None:
