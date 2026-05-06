@@ -122,8 +122,8 @@ ProgramSpec spec{
     .semaphores = {sem_1},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(spec);  // temporary free function
-//Program program = Program(spec);            // stable API form
+Program program = MakeProgramFromSpec(*mesh_device, spec);  // temporary free function
+//Program program = Program(mesh_device, spec);            // stable API form
 ```
 
 Two structural additions vs. `ProgramDescriptor`:
@@ -202,7 +202,7 @@ ProgramSpec spec{
     .kernels = {reader},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(spec);
+Program program = MakeProgramFromSpec(*mesh_device, spec);
 
 // ----- ProgramRunParams: argument values, set per execution -----
 ProgramRunParams params;
@@ -646,7 +646,7 @@ ProgramSpec spec{
         .target_nodes = node,
     }},
 };
-Program program = MakeProgramFromSpec(spec);
+Program program = MakeProgramFromSpec(*mesh_device, spec);
 
 ProgramRunParams params;
 params.kernel_run_params = {
@@ -729,7 +729,7 @@ ProgramSpec spec{
         .target_nodes = cores,  // 2×2 grid
     }},
 };
-Program program = MakeProgramFromSpec(spec);
+Program program = MakeProgramFromSpec(*mesh_device, spec);
 
 ProgramRunParams params;
 // One named_runtime_args entry per node where the kernel runs:

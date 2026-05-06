@@ -42,7 +42,7 @@ The temporary Quasar APIs are imperative builders based on the legacy `host_api.
      - `CreateSemaphore`
      - `SetRuntimeArgs`, ...)
 
-Metal 2.0 is a descriptor-based API: you populate a `ProgramSpec` data structure describing the entire program, then call `MakeProgramFromSpec(spec)` to build it.
+Metal 2.0 is a descriptor-based API: you populate a `ProgramSpec` data structure describing the entire program, then call `MakeProgramFromSpec(*mesh_device, spec)` to build it.
 
 ---
 
@@ -123,7 +123,7 @@ ProgramSpec spec{
     .semaphores = {sem},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(spec);  // (temporary free function)
+Program program = MakeProgramFromSpec(*mesh_device, spec);  // (temporary free function)
 
 ProgramRunParams params;
 params.kernel_run_params = { /* per-execution argument values */ };
@@ -195,7 +195,7 @@ ProgramSpec spec{
     .kernels = {reader},
     .work_units = {main_work_unit},
 };
-Program program = MakeProgramFromSpec(spec);  // temporary free function
+Program program = MakeProgramFromSpec(*mesh_device, spec);  // temporary free function
 
 // ----- ProgramRunParams: argument values, set per execution -----
 ProgramRunParams params;
@@ -624,7 +624,7 @@ ProgramSpec spec{
         .target_nodes = node,
     }},
 };
-Program program = MakeProgramFromSpec(spec);
+Program program = MakeProgramFromSpec(*mesh_device, spec);
 
 ProgramRunParams params;
 params.kernel_run_params = {
