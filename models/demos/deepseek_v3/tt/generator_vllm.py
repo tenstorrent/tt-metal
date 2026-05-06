@@ -64,6 +64,26 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             )
         tokenizer = load_tokenizer(model_path)
 
+        # vLLM passes a global DP-sized max batch. DeepseekGenerator expects
+        # per-row capacity, i.e. per-DP batch multiplied by mesh columns.
+        mesh_shape = tuple(getattr(mesh_device, "shape", (1, 1)))
+        if len(mesh_shape) < 2:
+            raise ValueError(f"Expected 2D mesh shape, got {mesh_shape}")
+        mesh_cols = int(mesh_shape[1])
+        global_dp_batch = int(max_batch_size)
+        dp_world = int(tt_data_parallel)
+        if dp_world <= 0:
+            raise ValueError(f"tt_data_parallel must be > 0, got {dp_world}")
+        if global_dp_batch % dp_world != 0:
+            raise ValueError(
+                f"Global max_batch_size {global_dp_batch} must be divisible by tt_data_parallel {dp_world}"
+            )
+        per_dp_batch = global_dp_batch // dp_world
+        batch_size_per_row = per_dp_batch * mesh_cols
+        logger.info(
+            f"Converted vLLM global max_batch_size={global_dp_batch} -> per_dp_batch={per_dp_batch} -> batch_size_per_row={batch_size_per_row} (mesh_cols={mesh_cols})"
+        )
+
         model = cls(
             hf_config=hf_config,
             mesh_device=mesh_device,
@@ -72,6 +92,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             tokenizer=tokenizer,
             max_seq_len=max_seq_len,
             vllm_context=True,
+            batch_size_per_row=batch_size_per_row,
         )
 
         return model
@@ -155,6 +176,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 )
                 # Device-sampling path emits token ids.
                 user_output = prefill_logits_sampled_host[0].to(torch.int64)
+                logger.info(f"Sample on device prefill output: {user_output.shape}")
             else:
                 assert isinstance(prefill_logits, torch.Tensor), "prefill_logits should be a torch.Tensor on host"
                 user_logits = prefill_logits.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
@@ -216,6 +238,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 decode_output = self._tokens_from_device(
                     decode_output, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                 )
+            logger.info(f"Sample on device decode output: {decode_output.shape}")
         else:
             assert isinstance(decode_step_output, torch.Tensor), "decode_step_output should be a torch.Tensor on host"
             # Normalize host decode logits to [B, V], then expose [B, 1, V] for vLLM.

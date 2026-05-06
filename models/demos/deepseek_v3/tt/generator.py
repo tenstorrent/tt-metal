@@ -310,6 +310,13 @@ class DeepseekGenerator(WarmupForwardMixin):
             device=self.mesh_device, batch_size_per_row=self.batch_size_per_row, hf_config=self.hf_config
         )
 
+        logger.info(f"batch_size_per_row: {self.batch_size_per_row}")
+        logger.info(f"batch_size: {self.batch_size}")
+        logger.info(f"dp_factor: {self.dp_factor}")
+        logger.info(f"max_seq_len: {self.hf_config.max_seq_len}")
+        logger.info(f"paged_config.block_size: {self.paged_config.block_size}")
+        logger.info(f"paged_config.max_num_blocks: {self.paged_config.max_num_blocks}")
+        logger.info(f"mesh_shape: {self.mesh_device.shape}")
         self._prepare_weight_configs(cache_dir)
         self._assert_mtp_available()
 
@@ -1892,6 +1899,26 @@ class DeepseekGenerator(WarmupForwardMixin):
             encoded: List[List[int]] = [list(map(int, seq)) for seq in pre_tokenized]
         else:
             encoded = [self._encode_prompt(p) for p in prompts]
+        truncate_prompts = False
+        if truncate_prompts:
+            model_max_seq_len = int(self.hf_config.max_seq_len)
+            if max_new_tokens < 0:
+                raise ValueError(f"max_new_tokens must be >= 0, got {max_new_tokens}")
+            if max_new_tokens > model_max_seq_len:
+                raise ValueError(f"max_new_tokens ({max_new_tokens}) exceeds model max seq len ({model_max_seq_len})")
+
+            # Reserve decode budget up front so prompt_len + max_new_tokens never exceeds max_seq_len.
+            prompt_token_budget = model_max_seq_len - max_new_tokens
+            original_lengths = [len(seq) for seq in encoded]
+            encoded = [seq[:prompt_token_budget] for seq in encoded]
+            truncated_users = sum(1 for length in original_lengths if length > prompt_token_budget)
+            if truncated_users:
+                logger.warning(
+                    "Truncated {}/{} prompts to prompt_token_budget={} "
+                    "(max_seq_len={} minus max_new_tokens={}) before padding.".format(
+                        truncated_users, len(encoded), prompt_token_budget, model_max_seq_len, max_new_tokens
+                    )
+                )
         tokens_batched, lengths = self._pad_batch(encoded, self.batch_size)  # [batch_size, seq_len]
         profiler.end("tokenizing")
 
@@ -3063,12 +3090,16 @@ class DeepseekGenerator(WarmupForwardMixin):
         else:
             sample_on_device_list = [sample_on_device]
 
+        logger.info(f"sample_on_device_list: {sample_on_device_list}")
+        logger.info(f"warmup_token_len list: {self._get_prefill_warmup_token_lens(min_token_len, max_token_len)}")
         for sample_on_device in sample_on_device_list:
             for token_len in self._get_prefill_warmup_token_lens(min_token_len, max_token_len):
+                logger.info(f"warmup_token_len: {token_len}")
                 vocab = int(getattr(self.hf_config, "vocab_size", 129280))
                 warmup_token_ids = [torch.randint(vocab, (token_len,), dtype=torch.int32).tolist()]
                 tokens, _ = self._pad_batch(warmup_token_ids, 1)
                 # TODO: MTP path warmup needed?
+                logger.info(f"tokens after padding: {tokens.shape}")
                 prefill_logits = self._prefill(
                     tokens=tokens,
                     user_id=user_id,
