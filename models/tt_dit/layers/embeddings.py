@@ -191,7 +191,7 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
             TimestepEmbedding(256, embedding_dim, bias=bias, mesh_device=mesh_device) if with_guidance else None
         )
         self.text_embedder = (
-            PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, bias=bias, mesh_device=mesh_device)
+            PixArtAlphaTextProjection(pooled_projection_dim, embedding_dim, bias=bias, mesh_device=mesh_device)
             if pooled_projection_dim != 0
             else None
         )
