@@ -109,31 +109,37 @@ struct Core {
 };
 
 // Count SRAM-flagged entries (bit-15) in the encoded TopK index array at
-// `l1_addr`, after waiting for `cb_id` to be ready. On TRISC, UNPACK does
-// the cb_wait + a mailbox handshake to MATH/PACK so all three threads observe
-// the same L1 contents before scanning. On BRISC/NCRISC the wait is single-
+// `l1_addr`, after waiting for `cb_id` to be ready. On TRISC, only UNPACK
+// scans (volatile L1 reads on MATH/PACK race against gate-kernel pushes
+// even after cb_wait_front returns) and broadcasts the final count to
+// MATH/PACK via the TRISC mailbox. On BRISC/NCRISC the scan is single-
 // threaded.
 template <uint32_t cb_id, uint32_t l1_addr, uint32_t num_active>
 FORCE_INLINE uint32_t scan_n_sram_active() {
+    uint32_t n = 0;
 #if defined(COMPILE_FOR_TRISC)
-    UNPACK(cb_wait_front(cb_id, 1));
-    uint32_t _sync = 0xffff;
     UNPACK(({
-        mailbox_write(ckernel::ThreadId::MathThreadId, _sync);
-        mailbox_write(ckernel::ThreadId::PackThreadId, _sync);
+        cb_wait_front(cb_id, 1);
+        volatile tt_l1_ptr uint16_t* idx = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
+        for (uint32_t e = 0; e < num_active; e++) {
+            if (deepseek_b1_ops::is_sram_expert(static_cast<uint32_t>(idx[e]))) {
+                n++;
+            }
+        }
+        mailbox_write(ckernel::ThreadId::MathThreadId, n);
+        mailbox_write(ckernel::ThreadId::PackThreadId, n);
     }));
-    MATH(_sync = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-    PACK(_sync = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    MATH(n = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(n = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 #else
     cb_wait_front(cb_id, 1);
-#endif
-    uint32_t n = 0;
     volatile tt_l1_ptr uint16_t* idx = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr);
     for (uint32_t e = 0; e < num_active; e++) {
         if (deepseek_b1_ops::is_sram_expert(static_cast<uint32_t>(idx[e]))) {
             n++;
         }
     }
+#endif
     return n;
 }
 
@@ -363,6 +369,10 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_up_proj_index_l1_addr"),
                 get_named_compile_time_arg_val("sram_up_proj_k_per_core"),
                 get_named_compile_time_arg_val("sram_up_proj_k_offset")>;
+
+            // SRAM extended GatedReduce (NCRISC no-op).
+            using SramGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ReaderCTArgs;
+            deepseek_b1_ops::GatedReduce::ReaderArgs sram_gated_reduce_args{};
 
             // SRAM gate gather (A) receiver (NCRISC) — sender_core only.
             // dst_num_pages init=0; set at runtime to n_sram_active * total_cores.
@@ -701,6 +711,14 @@ void kernel_main() {
             // SRAM up_proj Matmul Expert (writer — empty, BRISC is no-op).
             using SramUpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedSRAM::WriterCTArgs;
 
+            // SRAM extended GatedReduce (BRISC: per-expert scalar copy).
+            using SramGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs<
+                get_named_compile_time_arg_val("sram_gr_scalar_cb"),
+                get_named_compile_time_arg_val("sram_gr_scalar_src_l1_addr"),
+                get_named_compile_time_arg_val("sram_gather_sender_index_l1_addr"),
+                get_named_compile_time_arg_val("sram_gather_num_active_experts")>;
+            deepseek_b1_ops::GatedReduce::WriterArgs sram_gated_reduce_args{};
+
             // SRAM gate gather (A) sender (BRISC). num_experts init=0; set at
             // runtime to n_sram_active. src_page_size=64 (1 tile),
             // expert_dst_stride=4096 (64 tiles).
@@ -845,8 +863,8 @@ void kernel_main() {
                 0,  // expert_dst_stride (unused for num_experts=1)
             };
 
-            // Gated Reduce (writer — no-op for BRISC)
-            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs;
+            // Gated Reduce (writer — no-op for BRISC; defaults to all-zero CT)
+            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs<>;
             deepseek_b1_ops::GatedReduce::WriterArgs gated_reduce_args{};
 
             // Down Mcast — sender (reuse Routed::McastCTArgs: same grid, same persistent sender)
@@ -1171,6 +1189,20 @@ void kernel_main() {
                 get_named_compile_time_arg_val("sram_up_proj_k_offset"),
                 get_named_compile_time_arg_val("sram_up_proj_cb_out_sram")>;
 
+            // SRAM extended GatedReduce (compute, sender_core only).
+            // tiles_per_k = 8 K-partial faces per output face. k_num_tiles is
+            // runtime (n_sram_active). 0 here = unused for non-IsSramExpert path.
+            using SramGatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<
+                get_named_compile_time_arg_val("sram_gated_reduce_tiles_per_k"),
+                /*KNumTiles_unused_at_runtime=*/0>;
+            deepseek_b1_ops::GatedReduce::ComputeArgs sram_gated_reduce_args{
+                get_named_compile_time_arg_val("sram_gated_reduce_group1_cb"),
+                get_named_compile_time_arg_val("sram_gated_reduce_group2_cb"),
+                get_named_compile_time_arg_val("sram_gated_reduce_intermed_cb"),
+                get_named_compile_time_arg_val("sram_gated_reduce_out_cb"),
+                get_named_compile_time_arg_val("sram_gated_reduce_scalar_cb"),
+            };
+
             // Eltwise Add (compute)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
                 get_named_compile_time_arg_val("add_cb_in0"),
@@ -1247,6 +1279,7 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_gated_reduce_group2_cb"),
                 get_named_compile_time_arg_val("shared_gated_reduce_intermed_cb"),
                 get_named_compile_time_arg_val("shared_gated_reduce_mcast_src_cb"),
+                /*scalar_cb=*/0,  // unused on shared (non-SRAM) path
             };
 
             // Down Mcast — compute no-op
@@ -1595,11 +1628,16 @@ void kernel_main() {
             sram_up_proj();
         }
 
-        // 5c''. SRAM gate gather (A): 64 a_cores → sender. Sends n_sram_active
-        //       tiles per core (densely packed at front of sram_gate_proj_out_cb).
-        //       Receiver dst layout: [e0_64tiles, e1_64tiles, ..., e_{n_sram-1}_64tiles].
-        //       IsSramExpert=true → BRISC and NCRISC use the n_sram_active arg
-        //       at the call site instead of args's CT-baked fields.
+        // SRAM gather destination total pages: face pages per expert × n_sram_active.
+        // pages_per_expert = num_senders / n_parallel = 64 / 8 = 8 (since 8 sender
+        // [1,32]-tile writes pack into one [16,16] face).
+        constexpr uint32_t _sram_gather_pages_per_expert =
+            get_named_compile_time_arg_val("sram_gather_pages_per_expert");
+        const uint32_t _sram_gather_total_dst_pages = n_sram_active * _sram_gather_pages_per_expert;
+
+        // 5c''. SRAM gate gather (A): 64 a_cores → sender_core. IsSramExpert=true
+        //       → BRISC + NCRISC use n_sram_active and total_dst_pages at the
+        //       call site instead of args's CT-baked fields.
         {
             DeviceZoneScopedN("SRAM_GATE_GATHER");
             deepseek_b1_ops::MoeGather::Op<
@@ -1609,9 +1647,9 @@ void kernel_main() {
                 /*UsePerCoreSenderIdx=*/true,
                 /*IsSramExpert=*/true>
                 sram_ag;
-            sram_ag(moe.routed.sram_ag_args, n_sram_active);
+            sram_ag(moe.routed.sram_ag_args, n_sram_active, _sram_gather_total_dst_pages);
         }
-        // 5c'''. SRAM up gather (B): 64 b_cores → sender.
+        // 5c'''. SRAM up gather (B): 64 b_cores → sender_core.
         {
             DeviceZoneScopedN("SRAM_UP_GATHER");
             deepseek_b1_ops::MoeGather::Op<
@@ -1621,7 +1659,22 @@ void kernel_main() {
                 /*UsePerCoreSenderIdx=*/true,
                 /*IsSramExpert=*/true>
                 sram_bg;
-            sram_bg(moe.routed.sram_bg_args, n_sram_active);
+            sram_bg(moe.routed.sram_bg_args, n_sram_active, _sram_gather_total_dst_pages);
+        }
+
+        // 5c''''. SRAM extended GatedReduce on sender_core: silu(sum_K(gate)) * scale * sum_K(up)
+        //         per active SRAM expert. Outer loop = n_sram_active; inner reduces 8
+        //         K-partial faces from each gather CB into 1 output face per expert.
+        //         BRISC handles per-expert scalar copy (gate_output_scores → scalar_cb)
+        //         inside the kernel; TRISC chains the scale mul via DST reuse.
+        {
+            DeviceZoneScopedN("SRAM_GATED_REDUCE");
+            deepseek_b1_ops::GatedReduce::Op<
+                Moe::Routed::SramGatedReduceCTArgs,
+                Core::Shared::is_gated_reduce_core,
+                /*IsSramExpert=*/true>
+                sram_gated_reduce;
+            sram_gated_reduce(moe.routed.sram_gated_reduce_args, n_sram_active);
         }
 #endif  // ENABLE_ROUTING
 

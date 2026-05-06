@@ -71,6 +71,7 @@ class RoutedExpertTensors(NamedTuple):
     sram_up_proj_out_tensor: Any  # SRAM up_proj output, sharded on 64 cores
     sram_ag_dummy_tensor: Any  # SRAM gate gather dst, sender-resident
     sram_bg_dummy_tensor: Any  # SRAM up gather dst, sender-resident
+    sram_mcast_src_dummy_tensor: Any  # SRAM extended GatedReduce output, sender-resident
     final_output_tensor: Any
     gate_proj_expert_tensors: Any
     up_proj_expert_tensors: Any
@@ -525,6 +526,7 @@ def create_routed_expert_tensors(
     sram_up_proj_out_tensor = None
     sram_ag_dummy_tensor = None
     sram_bg_dummy_tensor = None
+    sram_mcast_src_dummy_tensor = None
     if sram_expert_ids and is_moe and enable_routing:
         from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
         from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RE
@@ -653,6 +655,28 @@ def create_routed_expert_tensors(
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
+        # SRAM extended GatedReduce output (sender-resident, single core).
+        # Shape: (num_active * FACE_HEIGHT, FACE_WIDTH) = (8*16, 16) = (128, 16)
+        # face tiles. One face per active SRAM expert.
+        FACE_HEIGHT_TILE = 16
+        FACE_WIDTH_TILE = 16
+        _mcast_src_total_h = _num_active * FACE_HEIGHT_TILE  # 128
+        _mcast_src_shard_spec = ttnn.ShardSpec(
+            sender_core_grid, (_mcast_src_total_h, FACE_WIDTH_TILE), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        _mcast_src_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _mcast_src_shard_spec
+        )
+        sram_mcast_src_dummy_tensor = ttnn.from_torch(
+            torch.zeros((_mcast_src_total_h, FACE_WIDTH_TILE), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_mcast_src_mem,
+            tile=ttnn.Tile([FACE_HEIGHT_TILE, FACE_WIDTH_TILE]),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+
     return RoutedExpertTensors(
         ttnn_residual_mcast_src=ttnn_residual_mcast_src,
         ttnn_rmsnorm_gamma=ttnn_rmsnorm_gamma,
@@ -671,6 +695,7 @@ def create_routed_expert_tensors(
         sram_up_proj_out_tensor=sram_up_proj_out_tensor,
         sram_ag_dummy_tensor=sram_ag_dummy_tensor,
         sram_bg_dummy_tensor=sram_bg_dummy_tensor,
+        sram_mcast_src_dummy_tensor=sram_mcast_src_dummy_tensor,
         final_output_tensor=final_output_tensor,
         gate_proj_expert_tensors=gate_proj_expert_tensors,
         up_proj_expert_tensors=up_proj_expert_tensors,
@@ -1267,6 +1292,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         sram_up_proj_out_tensor=r.sram_up_proj_out_tensor,
         sram_ag_dummy_tensor=r.sram_ag_dummy_tensor,
         sram_bg_dummy_tensor=r.sram_bg_dummy_tensor,
+        sram_mcast_src_dummy_tensor=r.sram_mcast_src_dummy_tensor,
     )
     ttnn.synchronize_device(submesh)
     logger.info(f"Fused MoE with reduce: {num_iterations} iterations completed (reconfig={reconfig_moe_cbs})")
@@ -1404,12 +1430,11 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
                     assert passing_sram, f"SRAM {label} dev={dev_idx} eid={eid} slot={slot} failed: {pcc_sram}"
 
     # ── SRAM gather destination PCC (sender-resident dummy tensors) ──
-    # After step 3 gather, sram_ag/bg_dummy_tensor holds K-partials for
-    # SRAM-flagged experts in expert-major × N-major × K-within-N layout:
-    #   slot s = expert_offset * 64 + n_idx * 8 + k_idx
+    # After step 3 gather, sram_ag/bg_dummy_tensor holds K-partials in
+    # expert-major × K-major × N-within-K layout (face-view layout):
+    #   slot s = expert_offset * 64 + k_idx * 8 + n_idx
     # K-reduce across the 8 K-slices for each n_idx → full N output for that
-    # expert. Compare against rmsnorm(x) @ weight_per_dev[eid]. Same value
-    # as the per-core PCC above — this is the gathered version on sender.
+    # expert. Compare against rmsnorm(x) @ weight_per_dev[eid].
     if r.sram_ag_dummy_tensor is not None and sram_expert_ids:
         for label, gather_tensor, weights_dict in [
             ("gate-gather", r.sram_ag_dummy_tensor, r.expert_weights_dict),
@@ -1423,7 +1448,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
                     for n_idx in range(_sram_n_parallel):
                         col_sum = torch.zeros((1, _tile_w), dtype=gather_torch.dtype)
                         for k_idx in range(_sram_k_parallel):
-                            tile_idx = expert_base_tile + n_idx * _sram_k_parallel + k_idx
+                            tile_idx = expert_base_tile + k_idx * _sram_n_parallel + n_idx
                             row_start = tile_idx * 1  # tile_h=1
                             col_sum = col_sum + gather_torch[row_start : row_start + 1, :]
                         reduced[..., n_idx * _tile_w : (n_idx + 1) * _tile_w] = col_sum
@@ -1433,6 +1458,33 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
                     passing_g, pcc_g = comp_pcc(expected, reduced.float(), 0.97)
                     logger.info(f"SRAM {label} dev={dev_idx} eid={eid} slot={slot_idx} PCC: {pcc_g}")
                     assert passing_g, f"SRAM {label} dev={dev_idx} eid={eid} slot={slot_idx} failed: {pcc_g}"
+
+    # ── SRAM extended GatedReduce output PCC ──
+    # sram_mcast_src_dummy_tensor holds n_active face tiles, one per placed
+    # SRAM expert. Each face = 256 bf16 elements packed as 8 N-tiles' worth
+    # of silu(sum_K(gate)) * scale[k] * sum_K(up). Scale = device gate score
+    # at the matching TopK position.
+    if r.sram_mcast_src_dummy_tensor is not None and sram_expert_ids:
+        device_gate_scores = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+        scores_top8 = device_gate_scores[0].flatten()[:8].float()
+        for dev_idx, gr_dev in enumerate(ttnn.get_device_tensors(r.sram_mcast_src_dummy_tensor)):
+            gr_torch = ttnn.to_torch(gr_dev)  # shape (n_active*16, 16)
+            for slot_idx, eid in enumerate(sram_expert_ids):
+                face = gr_torch[slot_idx * 16 : (slot_idx + 1) * 16, :].contiguous()
+                gr_out = face.flatten().view(1, _N_per_dev)
+                # Find eid's TopK position to get its score (the scale).
+                k_pos = (tt_top8_decoded == eid).nonzero(as_tuple=True)[0].item()
+                scale = scores_top8[k_pos].item()
+                gate_w_full = r.expert_weights_dict[eid].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
+                up_w_full = r.up_proj_weights_dict[eid].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
+                gate_w = gate_w_full[:, dev_idx * _N_per_dev : (dev_idx + 1) * _N_per_dev].float()
+                up_w = up_w_full[:, dev_idx * _N_per_dev : (dev_idx + 1) * _N_per_dev].float()
+                gate_proj = (_normed_input @ gate_w).bfloat16().float()
+                up_proj = (_normed_input @ up_w).bfloat16().float()
+                expected = torch.nn.functional.silu(gate_proj) * scale * up_proj
+                passing_gr, pcc_gr = comp_pcc(expected, gr_out.float(), 0.97)
+                logger.info(f"SRAM gated-reduce dev={dev_idx} eid={eid} slot={slot_idx} PCC: {pcc_gr}")
+                assert passing_gr, f"SRAM gated-reduce dev={dev_idx} eid={eid} slot={slot_idx} failed: {pcc_gr}"
 
     # --- Reference model comparison ---
     num_experts_in_state_dict = sum(1 for k in state_dict if ".mlp.experts." in k and "gate_proj" in k)

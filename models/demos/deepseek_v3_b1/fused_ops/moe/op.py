@@ -347,6 +347,18 @@ class _MoeRoutedExpertContext:
     sram_group2_cb: int = 0
     sram_ag_dummy_tensor: Any = None  # sender-core L1 backing for sram_group1_cb
     sram_bg_dummy_tensor: Any = None  # sender-core L1 backing for sram_group2_cb
+    # SRAM extended GatedReduce CBs (sender_core only).
+    sram_intermed_cb: int = 0
+    sram_mcast_src_cb: int = 0
+    sram_gr_scalar_cb: int = 0
+    sram_intermed_cb_descriptor: Any = None
+    sram_mcast_src_cb_descriptor: Any = None
+    sram_gr_scalar_cb_descriptor: Any = None
+    sram_mcast_src_dummy_tensor: Any = None  # sender-core L1 backing for sram_mcast_src_cb
+    # Face-tile descriptor + size (= [16, 16] face) — shared by all SRAM
+    # gather-output and gated-reduce CBs so they all use face_view.
+    face_tile_desc: Any = None
+    face_tile_size: int = 0
     sram_ag_receiver_data_addr: int = 0
     sram_bg_receiver_data_addr: int = 0
     sram_ag_sender_idx_core_values: list = None  # [(core, sender_idx), ...] for a_cores
@@ -1305,6 +1317,10 @@ class MoeRoutedExpertOp:
         # (num_active_experts × 64, 32) bf16, HEIGHT_SHARDED on sender_core.
         sram_ag_dummy_tensor=None,
         sram_bg_dummy_tensor=None,
+        # SRAM extended GatedReduce output tensor (sender-resident). Sized
+        # (num_active_experts × FACE_HEIGHT, FACE_WIDTH) bf16, HEIGHT_SHARDED on
+        # sender_core. Holds n_active output faces (one per placed SRAM expert).
+        sram_mcast_src_dummy_tensor=None,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values.
 
@@ -1459,6 +1475,17 @@ class MoeRoutedExpertOp:
         # output: num_active_experts × 64 cores = 512 tiles per device.
         sram_group1_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
         sram_group2_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
+        # SRAM extended GatedReduce intermediate + output CBs (sender core only).
+        # Output is [16,16] face tiles, one per active SRAM expert (each face
+        # holds 8 N-tiles' worth of post-silu*up*scale data).
+        sram_intermed_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
+        sram_mcast_src_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
+        # SRAM extended GatedReduce scalar CB (sender_core only). One 16x16
+        # face tile per active expert (matches intermed/out CBs so the FPU
+        # mul op sees consistent tile shapes). BRISC writes scalar at [0,0];
+        # TRISC reads via mul_tiles_bcast_scalar (BroadcastType::SCALAR
+        # uses [0,0] only — the rest of the tile is unused).
+        sram_gr_scalar_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
 
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
@@ -1849,20 +1876,66 @@ class MoeRoutedExpertOp:
 
             # Per-core sender_idx: offset within one expert's 64-tile slab.
             # SRAM gate/up cores arranged as 8 K-slices × 8 N-slices row-major
-            # (lid // 8 = k_idx, lid % 8 = n_idx). GatedReduce reads K-major
-            # within N → sender_idx = n_idx * 8 + k_idx.
+            # (lid // 8 = k_idx, lid % 8 = n_idx). Face-view GatedReduce
+            # expects K-major × N-within-K so each face packs one K-slice's
+            # 8 N-tiles → sender_idx = k_idx * 8 + n_idx = lid.
             from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp as _SEO
 
             _a_cores_for_gather, _b_cores_for_gather = _SEO.build_ab_grids()
-            _sram_n_parallel = 8
-            sram_ag_sender_idx_core_values = [
-                (core, (lid % _sram_n_parallel) * _sram_n_parallel + (lid // _sram_n_parallel))
-                for lid, core in enumerate(_a_cores_for_gather)
-            ]
-            sram_bg_sender_idx_core_values = [
-                (core, (lid % _sram_n_parallel) * _sram_n_parallel + (lid // _sram_n_parallel))
-                for lid, core in enumerate(_b_cores_for_gather)
-            ]
+            sram_ag_sender_idx_core_values = [(core, lid) for lid, core in enumerate(_a_cores_for_gather)]
+            sram_bg_sender_idx_core_values = [(core, lid) for lid, core in enumerate(_b_cores_for_gather)]
+
+        # SRAM extended GatedReduce CBs (sender_core only). Face-tile size
+        # shared across all SRAM gather/reduce CBs.
+        face_tile = ttnn.Tile([FACE_HEIGHT, FACE_WIDTH])
+        face_tile_desc = ttnn.TileDescriptor(FACE_HEIGHT, FACE_WIDTH, False)
+        face_tile_size = face_tile.get_tile_size(data_format)  # 256 * 2 = 512 bytes for bf16
+
+        sram_intermed_cb_descriptor = None
+        sram_mcast_src_cb_descriptor = None
+        if sram_gate_proj_weights_tensor:
+            # intermed_cb: 2 face tiles, scratch space (no tensor backing needed).
+            sram_intermed_cb_descriptor = ttnn.CBDescriptor(
+                total_size=2 * face_tile_size,
+                core_ranges=sender_core_grid,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=sram_intermed_cb,
+                        data_format=data_format,
+                        page_size=face_tile_size,
+                        tile=face_tile_desc,
+                    )
+                ],
+            )
+            # mcast_src_cb: n_active face tiles, output of extended GatedReduce.
+            # Backed by caller-provided sram_mcast_src_dummy_tensor for PCC readback.
+            assert (
+                sram_mcast_src_dummy_tensor is not None
+            ), "sram_mcast_src_dummy_tensor required when sram_gate_proj_weights_tensor is provided"
+            sram_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                sram_mcast_src_cb, sram_mcast_src_dummy_tensor
+            )
+            sram_mcast_src_cb_descriptor.format_descriptors[0].tile = face_tile_desc
+            sram_mcast_src_cb_descriptor.format_descriptors[0].page_size = face_tile_size
+
+        # SRAM GatedReduce scalar CB descriptor (sender_core only). One 16x16
+        # face tile per active expert (only [0,0] used at runtime via SCALAR
+        # broadcast); matches intermed/out CB tile shape so FPU mul sees
+        # consistent operand sizes.
+        sram_gr_scalar_cb_descriptor = None
+        if sram_gate_proj_weights_tensor:
+            sram_gr_scalar_cb_descriptor = ttnn.CBDescriptor(
+                total_size=gate_up_num_active_experts * face_tile_size,
+                core_ranges=sender_core_grid,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=sram_gr_scalar_cb,
+                        data_format=data_format,
+                        page_size=face_tile_size,
+                        tile=face_tile_desc,
+                    )
+                ],
+            )
 
         # ==================================================================
         # Eltwise Mul: silu(gate_proj) * up_proj [* expert_scale if routing]
@@ -1975,6 +2048,10 @@ class MoeRoutedExpertOp:
                     # on sender_core (which reads gate_output_indices's L1, not the
                     # mcast-destination cb_index L1 used on receivers).
                     p["sender_index_l1_addr"] = index_l1_addr
+            # Top-K scores L1 base — sender_core's source for the per-expert
+            # scale; SRAM GatedReduce BRISC reads scalar[k] from here.
+            if gate_output_scores_tensor is not None:
+                gate_proj_params["scores_l1_addr"] = _fused_base_addr(gate_output_scores_tensor)
 
         # cb_fmt descriptors are now created inside _overlap_cbs_with_sdpa_buffer
         # (overlaid on kv_buf so the CB allocator sees the L1 region and won't stomp
@@ -2346,6 +2423,16 @@ class MoeRoutedExpertOp:
             sram_group2_cb=sram_group2_cb,
             sram_ag_dummy_tensor=sram_ag_dummy_tensor,
             sram_bg_dummy_tensor=sram_bg_dummy_tensor,
+            # SRAM extended GatedReduce CBs + descriptors.
+            sram_intermed_cb=sram_intermed_cb,
+            sram_mcast_src_cb=sram_mcast_src_cb,
+            sram_gr_scalar_cb=sram_gr_scalar_cb,
+            sram_intermed_cb_descriptor=sram_intermed_cb_descriptor,
+            sram_mcast_src_cb_descriptor=sram_mcast_src_cb_descriptor,
+            sram_gr_scalar_cb_descriptor=sram_gr_scalar_cb_descriptor,
+            sram_mcast_src_dummy_tensor=sram_mcast_src_dummy_tensor,
+            face_tile_desc=face_tile_desc,
+            face_tile_size=face_tile_size,
             sram_ag_receiver_data_addr=sram_ag_receiver_data_addr,
             sram_bg_receiver_data_addr=sram_bg_receiver_data_addr,
             sram_ag_sender_idx_core_values=sram_ag_sender_idx_core_values,
@@ -2935,10 +3022,37 @@ class MoeRoutedExpertOp:
                 "sram_gather_cb_index",
                 ctx.gate_proj_cb_index if ctx.enable_routing else 0,
             ),
+            # Face pages per active expert: num_senders / n_parallel = 64 / 8 = 8.
+            # 8 sender writes (1×32 tiles) → 1 face (16×16). Used by gather call
+            # to compute total_dst_pages = n_sram_active * sram_gather_pages_per_expert.
+            ("sram_gather_pages_per_expert", 8),
         ]
         ncrisc_named_compile_time_args += sram_gather_common
         brisc_named_compile_time_args += sram_gather_common
         trisc_named_compile_time_args += sram_gather_common
+
+        # SRAM extended GatedReduce CT args (TRISC compute on sender_core).
+        sram_gated_reduce_args = [
+            ("sram_gated_reduce_tiles_per_k", 8),  # 8 K-partial faces per output face
+            ("sram_gated_reduce_group1_cb", ctx.sram_group1_cb),
+            ("sram_gated_reduce_group2_cb", ctx.sram_group2_cb),
+            ("sram_gated_reduce_intermed_cb", ctx.sram_intermed_cb),
+            ("sram_gated_reduce_out_cb", ctx.sram_mcast_src_cb),
+            ("sram_gated_reduce_scalar_cb", ctx.sram_gr_scalar_cb),
+        ]
+        trisc_named_compile_time_args += sram_gated_reduce_args
+
+        # SRAM scalar copy on sender_core BRISC: reads top-K scores from
+        # gate_output_scores_tensor's L1, writes one scalar per active expert
+        # to sram_gr_scalar_cb (at byte 0 of each face tile).
+        sram_gr_scalar_brisc_args = [
+            ("sram_gr_scalar_cb", ctx.sram_gr_scalar_cb),
+            (
+                "sram_gr_scalar_src_l1_addr",
+                ctx.gate_proj_params.get("scores_l1_addr", 0) if ctx.enable_routing else 0,
+            ),
+        ]
+        brisc_named_compile_time_args += sram_gr_scalar_brisc_args
 
         # ---- SRAM routed up_proj CT args (mirror of gate_proj) ----
         sup = ctx.sram_up_proj_params or {}
@@ -2997,11 +3111,28 @@ class MoeRoutedExpertOp:
         if ctx.sram_up_proj_cb_out_descriptor is not None:
             descriptors.append(ctx.sram_up_proj_cb_out_descriptor)
         # SRAM gather dst CBs on sender — backed by dummy tensors so the test
-        # can read them via to_torch for PCC validation.
+        # can read them via to_torch for PCC validation. Tile shape overridden
+        # to [16, 16] face so GatedReduce reads each K-slice's 8 N-tiles as
+        # one face (face_view: 8x faster than per-tile reduce on [1,32]).
         if ctx.sram_ag_dummy_tensor is not None:
-            descriptors.append(ttnn.cb_descriptor_from_sharded_tensor(ctx.sram_group1_cb, ctx.sram_ag_dummy_tensor))
+            _ag_desc = ttnn.cb_descriptor_from_sharded_tensor(ctx.sram_group1_cb, ctx.sram_ag_dummy_tensor)
+            _ag_desc.format_descriptors[0].tile = ctx.face_tile_desc
+            _ag_desc.format_descriptors[0].page_size = ctx.face_tile_size
+            descriptors.append(_ag_desc)
         if ctx.sram_bg_dummy_tensor is not None:
-            descriptors.append(ttnn.cb_descriptor_from_sharded_tensor(ctx.sram_group2_cb, ctx.sram_bg_dummy_tensor))
+            _bg_desc = ttnn.cb_descriptor_from_sharded_tensor(ctx.sram_group2_cb, ctx.sram_bg_dummy_tensor)
+            _bg_desc.format_descriptors[0].tile = ctx.face_tile_desc
+            _bg_desc.format_descriptors[0].page_size = ctx.face_tile_size
+            descriptors.append(_bg_desc)
+        # SRAM extended GatedReduce intermediate CB (2 face tiles, sender_core).
+        if ctx.sram_intermed_cb_descriptor is not None:
+            descriptors.append(ctx.sram_intermed_cb_descriptor)
+        # SRAM extended GatedReduce output CB (sender_core, n_active face tiles).
+        if ctx.sram_mcast_src_cb_descriptor is not None:
+            descriptors.append(ctx.sram_mcast_src_cb_descriptor)
+        # SRAM GatedReduce scalar CB (sender_core, n_active face tiles).
+        if ctx.sram_gr_scalar_cb_descriptor is not None:
+            descriptors.append(ctx.sram_gr_scalar_cb_descriptor)
 
         if ctx.enable_routing:
             descriptors.append(ctx.gate_proj_cb_index_descriptor)
@@ -5829,6 +5960,7 @@ class MoeOp:
         sram_up_proj_out_tensor=None,
         sram_ag_dummy_tensor=None,
         sram_bg_dummy_tensor=None,
+        sram_mcast_src_dummy_tensor=None,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -5885,6 +6017,7 @@ class MoeOp:
             sram_up_proj_out_tensor=sram_up_proj_out_tensor,
             sram_ag_dummy_tensor=sram_ag_dummy_tensor,
             sram_bg_dummy_tensor=sram_bg_dummy_tensor,
+            sram_mcast_src_dummy_tensor=sram_mcast_src_dummy_tensor,
         )
 
         device_tensor = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0]
@@ -6359,6 +6492,9 @@ class MoeOp:
         # test can read them via to_torch for PCC. Shape (n_active*64, 32) bf16.
         sram_ag_dummy_tensor=None,
         sram_bg_dummy_tensor=None,
+        # SRAM extended GatedReduce output tensor (sender-resident).
+        # Shape (n_active*FACE_HEIGHT, FACE_WIDTH) bf16.
+        sram_mcast_src_dummy_tensor=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -6439,6 +6575,7 @@ class MoeOp:
             sram_up_proj_out_tensor=sram_up_proj_out_tensor,
             sram_ag_dummy_tensor=sram_ag_dummy_tensor,
             sram_bg_dummy_tensor=sram_bg_dummy_tensor,
+            sram_mcast_src_dummy_tensor=sram_mcast_src_dummy_tensor,
         )
 
         # ==================================================================

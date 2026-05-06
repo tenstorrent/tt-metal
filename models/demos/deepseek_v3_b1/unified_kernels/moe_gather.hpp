@@ -109,10 +109,20 @@ struct MoeGather {
         bool IsSramExpert = false>
     class Op {
     public:
-        void operator()(const RTArgs& args, uint32_t n_per_core = 0) { impl(args, n_per_core); }
+        // n_per_core: BRISC per-core write count (tiles per sender per gather round).
+        // total_dst_pages: NCRISC total pages reserved in dst CB (in dst-CB tile
+        //   units). Decoupled from n_per_core because dst CB tile size can differ
+        //   from sender data_size (e.g. face_view: dst = [16,16] face = 8 sender
+        //   writes per face).
+        void operator()(const RTArgs& args, uint32_t n_per_core = 0, uint32_t total_dst_pages = 0) {
+            impl(args, n_per_core, total_dst_pages);
+        }
 
     private:
-        void impl([[maybe_unused]] const RTArgs& args, [[maybe_unused]] uint32_t n_per_core_runtime) {
+        void impl(
+            [[maybe_unused]] const RTArgs& args,
+            [[maybe_unused]] uint32_t n_per_core_runtime,
+            [[maybe_unused]] uint32_t total_dst_pages_runtime) {
             // SRAM mode early-out: when n_per_core_runtime=0, nothing to send.
             // Both sender and receiver skip — sem stays at 0 across the round
             // so the next gather sees a clean slate.
@@ -180,8 +190,7 @@ struct MoeGather {
                 volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
 
-                const uint32_t total_pages =
-                    IsSramExpert ? n_per_core_runtime * args.noc0_num_senders : args.dst_num_pages;
+                const uint32_t total_pages = IsSramExpert ? total_dst_pages_runtime : args.dst_num_pages;
 
                 // Reserve space in destination CB
                 cb_reserve_back(args.dst_cb, total_pages);
