@@ -18,6 +18,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler.hpp"
+#include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -98,6 +99,9 @@ constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 constexpr uint32_t is_d_variant = IS_D_VARIANT;
 constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
+constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
+constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
+
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -153,6 +157,12 @@ using RelayClientType =
     CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>;
 
 RelayClientType relay_client;
+
+using DispatchTelemetryBlockGuard =
+    TelemetryBlockGuard<tt::tt_metal::DispatchTelemetry, dispatch_telemetry_base, telemetry_enabled>;
+void init_dispatch_telemetry() {
+    init_telemetry<tt::tt_metal::DispatchTelemetry, dispatch_telemetry_base, telemetry_enabled>();
+}
 
 // Release policies are TU-local so we can use the local relay_client instance
 struct NocReleasePolicy {
@@ -236,29 +246,29 @@ FORCE_INLINE volatile uint32_t* get_dispatch_progress_ptr() {
     return reinterpret_cast<volatile uint32_t*>(dev_dispatch_progress_ptr);
 }
 
+FORCE_INLINE uint32_t get_completion_queue_available_space() {
+    invalidate_l1_cache();
+    uint32_t completion_rd_ptr_and_toggle = *get_cq_completion_read_ptr();
+    uint32_t completion_rd_ptr = completion_rd_ptr_and_toggle & 0x7fffffff;
+    uint32_t completion_rd_toggle = completion_rd_ptr_and_toggle >> 31;
+    return completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle
+            ? completion_rd_ptr - cq_write_interface.completion_fifo_wr_ptr
+            : (completion_queue_size_16B - (cq_write_interface.completion_fifo_wr_ptr - completion_rd_ptr));
+}
+
 FORCE_INLINE
 void completion_queue_reserve_back(uint32_t num_pages) {
     WAYPOINT("QRBW");
     // Transfer pages are aligned
     uint32_t data_size_16B = num_pages * completion_queue_page_size_16B;
-    uint32_t completion_rd_ptr_and_toggle;
-    uint32_t completion_rd_ptr;
-    uint32_t completion_rd_toggle;
-    uint32_t available_space;
-    do {
-        invalidate_l1_cache();
-        completion_rd_ptr_and_toggle = *get_cq_completion_read_ptr();
-        completion_rd_ptr = completion_rd_ptr_and_toggle & 0x7fffffff;
-        completion_rd_toggle = completion_rd_ptr_and_toggle >> 31;
-        // Toggles not equal means write ptr has wrapped but read ptr has not
-        // so available space is distance from write ptr to read ptr
-        // Toggles are equal means write ptr is ahead of read ptr
-        // so available space is total space minus the distance from read to write ptr
-        available_space =
-            completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle
-                ? completion_rd_ptr - cq_write_interface.completion_fifo_wr_ptr
-                : (completion_queue_size_16B - (cq_write_interface.completion_fifo_wr_ptr - completion_rd_ptr));
-    } while (data_size_16B > available_space);
+    uint32_t available_space = get_completion_queue_available_space();
+
+    if (data_size_16B > available_space) {
+        DispatchTelemetryBlockGuard telemetry_blocked;
+        do {
+            available_space = get_completion_queue_available_space();
+        } while (data_size_16B > available_space);
+    }
 
     WAYPOINT("QRBD");
 }
@@ -1433,6 +1443,8 @@ void kernel_main() {
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
+
+    init_dispatch_telemetry();
 
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);

@@ -41,6 +41,18 @@ FORCE_INLINE T round_up_pow2(T v, uint32_t pow2_size) {
 FORCE_INLINE
 uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
 
+// Copy a datatype that can be divisible by uint32_t to L1 memory
+template <typename T>
+FORCE_INLINE volatile tt_l1_ptr T* write_to_l1(uint32_t dst_addr, const T& src_object) {
+    static_assert(sizeof(T) % sizeof(uint32_t) == 0);
+    auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+    const auto* src = reinterpret_cast<const uint32_t*>(&src_object);
+    for (uint32_t i = 0; i < sizeof(T) / sizeof(uint32_t); ++i) {
+        dst[i] = src[i];
+    }
+    return reinterpret_cast<volatile tt_l1_ptr T*>(dst_addr);
+}
+
 FORCE_INLINE
 uint32_t wrap_ge(uint32_t a, uint32_t b) {
     // Careful below: have to take the signed diff for 2s complement to handle the wrap

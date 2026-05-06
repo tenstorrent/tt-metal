@@ -22,6 +22,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_prefetch.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
+#include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 #include "api/debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
@@ -122,6 +123,12 @@ constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
 constexpr uintptr_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uintptr_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
+
+constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
+constexpr uint32_t prefetch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
+
+constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
+constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 constexpr uint32_t scratch_db_end = scratch_db_base + scratch_db_size;
 constexpr uint32_t ringbuffer_end = scratch_db_base + ringbuffer_size;
 
@@ -257,6 +264,11 @@ static uint32_t router_direction;
 
 CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>
     relay_client;
+
+using PrefetchTelemetryBlockGuard = TelemetryBlockGuard<tt::tt_metal::PrefetchTelemetry, prefetch_telemetry_base, telemetry_enabled>;
+FORCE_INLINE void init_prefetch_telemetry() {
+    init_telemetry<tt::tt_metal::PrefetchTelemetry, prefetch_telemetry_base, telemetry_enabled>();
+}
 
 // Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
 static enum class StallState : uint32_t { STALLED = 1U, NOT_STALLED = 0U } stall_state = StallState::NOT_STALLED;
@@ -736,9 +748,13 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 // Nothing to fetch, nothing pending, nothing available, stall on host
                 WAYPOINT("HQW");
                 uint32_t heartbeat = 0U;
-                while ((fetch_size = *prefetch_q_rd_ptr) == 0U) {
-                    invalidate_l1_cache();
-                    IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+
+                if((fetch_size = *prefetch_q_rd_ptr) == 0U) {
+                    PrefetchTelemetryBlockGuard prefetch_telemetry_blocked;
+                    do {
+                        invalidate_l1_cache();
+                        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+                    } while ((fetch_size = *prefetch_q_rd_ptr) == 0U);
                 }
                 // Host has work now; restart without recursion.
                 continue;
@@ -2096,8 +2112,12 @@ bool process_cmd(
             // 4));
             WAYPOINT("!CMD");
             ASSERT(0);
+            return done;
     }
 
+    if constexpr (telemetry_enabled) {
+        get_telemetry_ptr<tt::tt_metal::PrefetchTelemetry, prefetch_telemetry_base>()->command_count++;
+    }
     return done;
 }
 
@@ -2689,6 +2709,7 @@ void kernel_main() {
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
+    init_prefetch_telemetry();
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
