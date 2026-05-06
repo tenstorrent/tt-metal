@@ -5,6 +5,8 @@ on:
     # Run every night at 3AM UTC
     - cron: '0 3 * * *'
   workflow_dispatch:
+  push:
+    branches: ["brain/rename-llk-nightly-perf-workflow"]
 
 permissions:
   checks: write
