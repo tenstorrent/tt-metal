@@ -813,7 +813,7 @@ class TTNNQwen3MoE(TTNNMoE):
 
         # 2. MoE gate routing
         if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         if x.dtype != ttnn.float32:
             x_f32 = ttnn.typecast(x, ttnn.float32)
         else:
@@ -821,9 +821,9 @@ class TTNNQwen3MoE(TTNNMoE):
         router_logits_f32 = ttnn.linear(
             x_f32,
             self._gate_weight_tt,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
@@ -902,7 +902,7 @@ class TTNNQwen3MoE(TTNNMoE):
             num_links=1,
             cluster_axis=1,
             topology=ttnn.Topology.Ring,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # 5. Add shared experts output with gating
@@ -913,21 +913,21 @@ class TTNNQwen3MoE(TTNNMoE):
             # Compute gate values: sigmoid(linear(x_gathered, gate_weight))
             x_for_gate = ttnn.squeeze(x, 1)  # Remove experts dimension added earlier
             if x_for_gate.layout != ttnn.TILE_LAYOUT:
-                x_for_gate = ttnn.to_layout(x_for_gate, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                x_for_gate = ttnn.to_layout(x_for_gate, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
             gate_logits = ttnn.linear(
                 x_for_gate,
                 self._shared_expert_gate_tt,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             gate_values = ttnn.sigmoid(gate_logits)
             ttnn.deallocate(gate_logits)
             # Gate the shared expert output - broadcast gate_values (shape [..., 1]) to shared_output shape
             shared_output_gated = ttnn.mul(shared_output, gate_values)
             ttnn.deallocate(gate_values)
-            output = ttnn.add(routed_output, shared_output_gated)
+            output = ttnn.add_(routed_output, shared_output_gated)
             ttnn.deallocate(shared_output_gated)
         else:
-            output = ttnn.add(routed_output, shared_output)
+            output = ttnn.add_(routed_output, shared_output)
 
         output = ttnn.squeeze(output, 1)  # Remove experts dimension
 

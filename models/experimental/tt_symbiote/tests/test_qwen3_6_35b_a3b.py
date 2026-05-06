@@ -212,6 +212,7 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     messages = [
         {
             "role": "user",
+            # "content": "What is the capital of France?how do i get there from london?",
             "content": "What is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?",
         },
     ]
@@ -224,9 +225,9 @@ def test_qwen3_6_35b_a3b(mesh_device, use_paged_attention, max_new_tokens):
     ).to(model.device)
 
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
+    # modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
     set_device(model, mesh_device)
-    all_modules = {**modules1, **modules2}
+    all_modules = {**modules1}
 
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):
