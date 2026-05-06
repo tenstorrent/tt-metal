@@ -14,11 +14,11 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 try:
-    from models.demos.utils.model_targets import resolve_target_entry
+    from models.demos.utils import model_targets
 except ModuleNotFoundError:
     # Allow direct invocation without PYTHONPATH set by adding repo root.
     sys.path.insert(0, str(REPO_ROOT))
-    from models.demos.utils.model_targets import resolve_target_entry
+    from models.demos.utils import model_targets
 
 LOWER_IS_BETTER_METRICS = {
     "prefill_time_to_token",
@@ -273,18 +273,16 @@ def _collect_active_test_combos(tests_yaml_path: Path) -> list[tuple[str, str]]:
 
 def _validate_gap_coverage(
     tests_yaml_path: Path,
-    targets_yaml_path: Path,
 ) -> list[str]:
     """Ensure each active model/SKU combo has centralized target coverage."""
     errors: list[str] = []
     for model, sku in _collect_active_test_combos(tests_yaml_path):
-        entry = resolve_target_entry(
+        entry = model_targets.resolve_target_entry(
             model_name=model,
             sku=sku,
             batch_size=None,
             seq_len=None,
             include_todo=True,
-            targets_yaml_path=targets_yaml_path,
         )
         if entry is None:
             errors.append(
@@ -329,6 +327,9 @@ def main() -> int:
     args = parse_args()
     path_profile = PathProfile(args.path_profile)
     targets_yaml_path, benchmark_dir, tests_yaml_path = _resolve_paths(path_profile)
+    # Keep resolver path controlled from this module to avoid passing dynamic file paths
+    # into model_targets APIs (Cycode SAST: unsanitized dynamic input in file path).
+    model_targets.TARGETS_YAML_PATH_DEFAULT = str(targets_yaml_path)
 
     targets_yaml = _load_yaml(targets_yaml_path)
     if not isinstance(targets_yaml, dict):
@@ -340,7 +341,7 @@ def main() -> int:
             print(f"::error::{error}")
         return 1
 
-    gap_errors = _validate_gap_coverage(tests_yaml_path, targets_yaml_path)
+    gap_errors = _validate_gap_coverage(tests_yaml_path)
     if gap_errors:
         for error in gap_errors:
             print(f"::error::{error}")
@@ -375,13 +376,12 @@ def main() -> int:
         seq_len = run.get("input_sequence_length")
         seq_len = int(seq_len) if _is_number(seq_len) else None
 
-        entry = resolve_target_entry(
+        entry = model_targets.resolve_target_entry(
             model_name=model_name,
             sku=sku,
             batch_size=batch_size,
             seq_len=seq_len,
             include_todo=True,
-            targets_yaml_path=targets_yaml_path,
         )
         if entry is None:
             missing_entries.append(

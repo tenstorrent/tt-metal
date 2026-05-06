@@ -40,9 +40,9 @@ def normalize_sku(sku: Any) -> str:
     return token
 
 
-def load_model_targets(targets_yaml_path: str | Path | None = None) -> dict[str, Any]:
-    """Load centralized targets YAML from an optional explicit path."""
-    path = Path(targets_yaml_path) if targets_yaml_path is not None else Path(TARGETS_YAML_PATH_DEFAULT)
+def load_model_targets() -> dict[str, Any]:
+    """Load centralized targets YAML from the configured default path."""
+    path = Path(TARGETS_YAML_PATH_DEFAULT)
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
@@ -94,10 +94,9 @@ def resolve_target_entry(
     batch_size: int | None = None,
     seq_len: int | None = None,
     include_todo: bool = False,
-    targets_yaml_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
     """Resolve the best matching centralized target entry for model and SKU."""
-    targets_doc = load_model_targets(targets_yaml_path=targets_yaml_path)
+    targets_doc = load_model_targets()
     targets = targets_doc.get("targets", {})
     sku_norm = normalize_sku(sku)
 
@@ -129,7 +128,6 @@ def resolve_perf_targets(
     sku: str,
     batch_size: int | None = None,
     seq_len: int | None = None,
-    targets_yaml_path: str | Path | None = None,
 ) -> dict[str, float] | None:
     """Resolve only the perf metrics for a given model/SKU combo."""
     entry = resolve_target_entry(
@@ -138,7 +136,6 @@ def resolve_perf_targets(
         batch_size=batch_size,
         seq_len=seq_len,
         include_todo=False,
-        targets_yaml_path=targets_yaml_path,
     )
     if not entry:
         return None
@@ -151,7 +148,6 @@ def resolve_accuracy_targets(
     sku: str,
     batch_size: int | None = None,
     seq_len: int | None = None,
-    targets_yaml_path: str | Path | None = None,
 ) -> dict[str, float] | None:
     """Resolve only the accuracy metrics for a given model/SKU combo."""
     entry = resolve_target_entry(
@@ -160,7 +156,6 @@ def resolve_accuracy_targets(
         batch_size=batch_size,
         seq_len=seq_len,
         include_todo=False,
-        targets_yaml_path=targets_yaml_path,
     )
     if not entry:
         return None
