@@ -153,9 +153,22 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
         // Validate named CRTAs: every user-declared name set, no extras.
         // Implicit reserved-prefix CRTAs (e.g., __ta_addr_<name> for TensorAccessor bindings) are
         // not part of the user-facing named-CRTA contract; they're filled from TensorRunParams at
-        // dispatch time. Validation:
-        //   - Skip implicit names when checking which user values are required.
-        //   - Reject any user-supplied CRTA name with a reserved prefix (collision with implicits).
+        // dispatch time. Validation order matters:
+        //   1. Reject any user-supplied name with the reserved prefix (else it could only show
+        //      up via collision-with-declared-name path, which the count/contains checks below
+        //      foreclose first — leaving the reserved-prefix assertion unreachable).
+        //   2. Skip implicit names when checking which user values are required.
+        //   3. No-extras count check.
+        for (const auto& [user_name, _value] : kernel_params.named_common_runtime_args) {
+            (void)_value;
+            TT_FATAL(
+                !std::string_view(user_name).starts_with(kTensorAccessorAddrCrtaPrefix),
+                "Kernel '{}' named CRTA '{}' uses a reserved prefix ('{}') that is managed by the "
+                "TensorAccessor binding machinery. Choose a different name.",
+                kernel_name,
+                user_name,
+                kTensorAccessorAddrCrtaPrefix);
+        }
         const auto& named_crta_names = schema->named_common_runtime_args;
         size_t expected_user_crta_count = 0;
         for (const auto& name : named_crta_names) {
@@ -175,16 +188,6 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             kernel_name,
             expected_user_crta_count,
             kernel_params.named_common_runtime_args.size());
-        for (const auto& [user_name, _value] : kernel_params.named_common_runtime_args) {
-            (void)_value;
-            TT_FATAL(
-                !std::string_view(user_name).starts_with(kTensorAccessorAddrCrtaPrefix),
-                "Kernel '{}' named CRTA '{}' uses a reserved prefix ('{}') that is managed by the "
-                "TensorAccessor binding machinery. Choose a different name.",
-                kernel_name,
-                user_name,
-                kTensorAccessorAddrCrtaPrefix);
-        }
     }
 
     // Validate that all registered kernels have parameters

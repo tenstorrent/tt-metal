@@ -37,6 +37,7 @@
 #include <tt-metalium/experimental/host_api.hpp>  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -2071,6 +2072,167 @@ TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate KernelSpec name")));
+}
+
+// ============================================================================
+// SECTION 9: TensorBinding Validation Tests (Gen1 / WH)
+// ============================================================================
+// Spec-level validation for the Metal 2.0 TensorAccessor binding feature. These tests exercise
+// CollectSpecData paths only — they do not need a MeshTensor at enqueue (those run-params paths
+// are covered in test_program_run_params.cpp). Hardware-agnostic; using the Gen1 fixture for
+// lower-likelihood-of-unrelated-mock-issues per Audrey's guidance.
+
+using test_helpers::BindTensorAccessorToKernel;
+using test_helpers::MakeMinimalTensorBinding;
+
+TEST_F(ProgramSpecTestGen1, DuplicateTensorBindingNameFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    auto binding_a = MakeMinimalTensorBinding("input_tensor");
+    auto binding_b = MakeMinimalTensorBinding("input_tensor");  // duplicate!
+    spec.tensor_bindings = {binding_a, binding_b};
+
+    // Bind one of them to a kernel so the "every binding must be bound" check is satisfied;
+    // the duplicate-name check fires first regardless.
+    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Duplicate TensorBinding name 'input_tensor'")));
+}
+
+TEST_F(ProgramSpecTestGen1, KernelReferencesUnknownTensorBindingFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    // Reference a TensorBinding that doesn't exist in the program.
+    BindTensorAccessorToKernel(spec.kernels[0], "nonexistent_tensor", "input_ta");
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("references unknown TensorBinding 'nonexistent_tensor'")));
+}
+
+TEST_F(ProgramSpecTestGen1, UnboundTensorBindingFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    // Declare a TensorBinding but don't bind it to any kernel.
+    spec.tensor_bindings = {MakeMinimalTensorBinding("orphan_tensor")};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("TensorBinding 'orphan_tensor' is defined but not bound by any kernel")));
+}
+
+TEST_F(ProgramSpecTestGen1, DuplicateTensorAccessorNameWithinKernelFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.tensor_bindings = {
+        MakeMinimalTensorBinding("input_tensor"),
+        MakeMinimalTensorBinding("output_tensor"),
+    };
+    // Two bindings on the same kernel under the same accessor_name — illegal.
+    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "same_accessor");
+    BindTensorAccessorToKernel(spec.kernels[0], "output_tensor", "same_accessor");
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("has duplicate tensor accessor_name 'same_accessor'")));
+}
+
+TEST_F(ProgramSpecTestGen1, InvalidTensorAccessorNameFails) {
+    // Smoke-tests the IsValidCppIdentifier check on tensor accessor names. The check is the
+    // same one DFB / Semaphore use; one bad name here is sufficient (full coverage lives in
+    // the DFB version of this test).
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.tensor_bindings = {MakeMinimalTensorBinding("input_tensor")};
+    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "has-dash");  // not a valid identifier
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("tensor accessor_name 'has-dash' must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) {
+    // DFB / Semaphore / TensorAccessor accessor names live in separate namespaces (each gets
+    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, ta::). Reusing
+    // the same identifier across categories within one kernel must be allowed.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.tensor_bindings = {MakeMinimalTensorBinding("input_tensor")};
+    // The minimal program already has a DFB binding under accessor_name "input_dfb". Add a
+    // semaphore and a tensor accessor, both also named "input_dfb" — the same string at a
+    // C++ level — which should pass because they're in different namespaces.
+    SemaphoreSpec sem;
+    sem.unique_id = "sem_0";
+    sem.target_nodes = NodeCoord{0, 0};
+    spec.semaphores = {sem};
+    spec.kernels[0].semaphore_bindings = {
+        KernelSpec::SemaphoreBinding{.semaphore_spec_name = "sem_0", .accessor_name = "input_dfb"}};
+    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "input_dfb");
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorBindingSucceeds) {
+    // Positive baseline: a program with one TensorBinding bound to one kernel constructs
+    // successfully. Exercises CollectSpecData validation, the host-side resolution helper
+    // (TensorSpec → CTA payload using mesh_device.allocator() + virtual_core_from_logical_core),
+    // implicit __ta_addr_ CRTA injection, kernel ctor plumbing, and ProgramImpl registration.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.tensor_bindings = {MakeMinimalTensorBinding("input_tensor")};
+    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// ============================================================================
+// SECTION 10: TensorBinding JIT Smoke Tests (Gen1 / WH)
+// ============================================================================
+// Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
+// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `ta::` namespace)
+// must be syntactically valid and compose correctly with the rest of the kernel build. Doesn't
+// validate runtime behavior — catches regressions in codegen string-formatting, token type alias
+// generation, and include-path resolution.
+//
+// DM-only by design: tensor_accessor.h pulls in NoC-using headers (dataflow_api_addrgen.h,
+// pages_address_iterator.h with ASSERT) that don't compile on TRISC. There are no compute-kernel
+// uses of TensorAccessor in the wild; the device-side library was built for DM kernels.
+// Compute-kernel TensorAccessor bindings are unsupported in this PR; making them work would
+// require restructuring tensor_accessor.h to isolate the constexpr-only parts.
+
+TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
+    // DM kernel uses make_tensor_accessor + a NoC-using method on the resulting accessor.
+    // Exercises: ta:: namespace token, type alias <name>_t, factory function, CTAD on the
+    // existing (args, addr) deduction guide, get_common_arg_val for the implicit base address.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "ta_smoke_dm";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    auto accessor = make_tensor_accessor(ta::input_tensor);
+    auto noc_addr = accessor.get_noc_addr(0);
+    (void)noc_addr;
+}
+)"};
+
+    spec.kernels = {dm_kernel};
+    spec.tensor_bindings = {MakeMinimalTensorBinding("input_tensor")};
+    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "input_tensor");
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
 }  // namespace
