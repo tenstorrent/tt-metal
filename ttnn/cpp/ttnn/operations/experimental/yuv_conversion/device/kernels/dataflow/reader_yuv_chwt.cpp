@@ -2,22 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Reader for CHWT bfloat16 input → YUV conversion (degenerate-tile approach).
+// Reader for CHWT bfloat16 input → YUV uint8 output (pure RISC-V, multicore).
 //
-// Pushes individual T-chunks (32 bf16 values = 64 bytes) to three CBs.
-// Compute kernel processes one chunk triplet (R, G, B) → one uint8 chunk.
+// All color-space math (linear combination, clamp, uint8 cast) runs in
+// scalar float arithmetic on BRISC.  No compute kernel is needed.
 //
-// Y pass:  reads sticks sequentially for all H×W positions.
-// UV pass: reads 4 corner sticks per UV position, averages element-wise in
-//          RISC-V float arithmetic, pushes pre-averaged chunk.
-//          Runs twice (for Cb and Cr) to let compute apply different coefficients.
+// Each core handles a contiguous slice of spatial positions for all 3 planes.
+// Three sequential passes push uint8 chunks into cb_out:
+//   Y  — full resolution (per-core slice)
+//   Cb — half resolution with 2×2 spatial averaging (per-core slice)
+//   Cr — half resolution with 2×2 spatial averaging (per-core slice)
 //
 // Compile-time args:
-//   [0] cb_R, [1] cb_G, [2] cb_B
-//   [3] num_full_chunks, [4] has_partial, [5] full_chunk_bytes, [6] partial_bytes
-//   [7] H, [8] W, [9] T, [10] H2, [11] W2
-//   [12..] TensorAccessorArgs for input
-// Runtime args: [0] src_addr
+//   [0] cb_R, [1] cb_G, [2] cb_B  — staging CBs (reader-only L1 scratch)
+//   [3] cb_out                     — output CB (shared with writer)
+//   [4] num_full_chunks, [5] has_partial
+//   [6] full_chunk_bytes, [7] partial_bytes
+//   [8] H, [9] W, [10] T, [11] H2, [12] W2
+//   [13..] TensorAccessorArgs for input
+//
+// Runtime args:
+//   [0]     src_addr
+//   [1..4]  Y  coefficients: w_r, w_g, w_b, offset  (float32 bit patterns)
+//   [5..8]  Cb coefficients
+//   [9..12] Cr coefficients
+//   [13] y_start   — first Y spatial index for this core
+//   [14] y_count   — number of Y spatial positions
+//   [15] uv_start  — first UV spatial index for this core
+//   [16] uv_count  — number of UV spatial positions
 
 #include "api/dataflow/dataflow_api.h"
 
@@ -30,11 +42,11 @@ inline float bf16_to_float(uint16_t b) {
     return f;
 }
 
-inline uint16_t float_to_bf16(float f) {
-    uint32_t u;
-    __builtin_memcpy(&u, &f, 4);
-    uint32_t rounding_bias = 0x7FFFu + ((u >> 16) & 1u);
-    return (uint16_t)((u + rounding_bias) >> 16);
+inline float arg_to_float(uint32_t idx) {
+    uint32_t bits = get_arg_val<uint32_t>(idx);
+    float f;
+    __builtin_memcpy(&f, &bits, 4);
+    return f;
 }
 
 void kernel_main() {
@@ -43,112 +55,167 @@ void kernel_main() {
     constexpr uint32_t cb_R = get_compile_time_arg_val(0);
     constexpr uint32_t cb_G = get_compile_time_arg_val(1);
     constexpr uint32_t cb_B = get_compile_time_arg_val(2);
-    constexpr uint32_t num_full_chunks = get_compile_time_arg_val(3);
-    constexpr uint32_t has_partial = get_compile_time_arg_val(4);
-    constexpr uint32_t full_chunk_bytes = get_compile_time_arg_val(5);  // 64
-    constexpr uint32_t partial_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t H = get_compile_time_arg_val(7);
-    constexpr uint32_t W = get_compile_time_arg_val(8);
-    constexpr uint32_t T = get_compile_time_arg_val(9);
-    constexpr uint32_t H2 = get_compile_time_arg_val(10);
-    constexpr uint32_t W2 = get_compile_time_arg_val(11);
-    constexpr auto src_tensor_args = TensorAccessorArgs<12>();
+    constexpr uint32_t cb_out = get_compile_time_arg_val(3);
+    constexpr uint32_t num_full_chunks = get_compile_time_arg_val(4);
+    constexpr uint32_t has_partial = get_compile_time_arg_val(5);
+    constexpr uint32_t full_chunk_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t partial_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t H = get_compile_time_arg_val(8);
+    constexpr uint32_t W = get_compile_time_arg_val(9);
+    constexpr uint32_t T = get_compile_time_arg_val(10);
+    constexpr uint32_t H2 = get_compile_time_arg_val(11);
+    constexpr uint32_t W2 = get_compile_time_arg_val(12);
+    constexpr auto src_tensor_args = TensorAccessorArgs<13>();
 
     constexpr uint32_t HW = H * W;
-    constexpr uint32_t HW2 = H2 * W2;
     constexpr uint32_t num_chunks = num_full_chunks + has_partial;
-    constexpr uint32_t CHUNK_ELEMS = 32;  // elements per CB page
+    constexpr uint32_t CHUNK_ELEMS = 32;
 
     const auto src = TensorAccessor(src_tensor_args, src_addr);
-    const uint32_t cbs[3] = {cb_R, cb_G, cb_B};
 
-    // Push one chunk from stick `row_id` at `chunk` to `cb_id`.
-    // Zero-pads the CB page for partial chunks (partial_bytes < full_chunk_bytes).
-    auto push_chunk = [&](uint32_t cb_id, uint32_t row_id, uint32_t chunk) {
-        const bool is_partial = has_partial && (chunk == num_full_chunks);
-        const uint32_t read_bytes = is_partial ? partial_bytes : full_chunk_bytes;
-        const uint32_t byte_off = chunk * full_chunk_bytes;
-
-        cb_reserve_back(cb_id, 1);
-        uint32_t l1 = get_write_ptr(cb_id);
-
-        if (is_partial) {
-            // Zero-fill the page first, then overwrite with real data.
-            volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(l1);
-            for (uint32_t i = 0; i < full_chunk_bytes / 4; i++) {
-                p[i] = 0;
-            }
-        }
-
-        noc_async_read(src.get_noc_addr(row_id, byte_off), l1, read_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_id, 1);
-    };
-
-    // -----------------------------------------------------------------------
-    // Y pass: push sticks sequentially for all H×W positions.
-    // Order: for each spatial position, push all T-chunks for R, then G, then B.
-    // Compute kernel reads one (R,G,B) chunk triplet at a time.
-    // -----------------------------------------------------------------------
-    for (uint32_t spatial = 0; spatial < HW; spatial++) {
-        for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-            for (uint32_t c = 0; c < 3; c++) {
-                push_chunk(cbs[c], c * HW + spatial, chunk);
-            }
-        }
+    // Decode coefficients from runtime args (float32 stored as uint32 bits).
+    float coeff_wr[3], coeff_wg[3], coeff_wb[3], coeff_off[3];
+    for (uint32_t p = 0; p < 3; p++) {
+        uint32_t base = 1 + p * 4;
+        coeff_wr[p] = arg_to_float(base + 0);
+        coeff_wg[p] = arg_to_float(base + 1);
+        coeff_wb[p] = arg_to_float(base + 2);
+        coeff_off[p] = arg_to_float(base + 3);
     }
 
-    // -----------------------------------------------------------------------
-    // UV passes (×2 for Cb and Cr): push spatially averaged chunks.
-    // For each UV position (h_uv, w_uv), the four corner sticks are read and
-    // averaged element-wise in RISC-V float arithmetic.
-    // -----------------------------------------------------------------------
-    for (uint32_t uv_pass = 0; uv_pass < 2; uv_pass++) {
-        for (uint32_t uv_idx = 0; uv_idx < HW2; uv_idx++) {
-            uint32_t h_uv = uv_idx / W2, w_uv = uv_idx % W2;
-            uint32_t h0 = 2 * h_uv, h1 = h0 + 1;
-            uint32_t w0 = 2 * w_uv, w1 = w0 + 1;
+    // Per-core work bounds.
+    const uint32_t y_start = get_arg_val<uint32_t>(13);
+    const uint32_t y_count = get_arg_val<uint32_t>(14);
+    const uint32_t uv_start = get_arg_val<uint32_t>(15);
+    const uint32_t uv_count = get_arg_val<uint32_t>(16);
+
+    // Reserve staging CB pages once and reuse their L1 addresses throughout.
+    // These CBs have no consumer — they are pure scratch for NOC reads.
+    cb_reserve_back(cb_R, 1);
+    uint32_t l1_r = get_write_ptr(cb_R);
+    cb_reserve_back(cb_G, 1);
+    uint32_t l1_g = get_write_ptr(cb_G);
+    cb_reserve_back(cb_B, 1);
+    uint32_t l1_b = get_write_ptr(cb_B);
+
+    const uint32_t y_end = y_start + y_count;
+    const uint32_t uv_end = uv_start + uv_count;
+
+    // -------------------------------------------------------------------
+    // Y pass: full resolution (this core's slice)
+    // -------------------------------------------------------------------
+    {
+        const float wr = coeff_wr[0], wg = coeff_wg[0], wb = coeff_wb[0], off = coeff_off[0];
+
+        for (uint32_t spatial = y_start; spatial < y_end; spatial++) {
+            const uint32_t r_row = 0 * HW + spatial;
+            const uint32_t g_row = 1 * HW + spatial;
+            const uint32_t b_row = 2 * HW + spatial;
 
             for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
                 const bool is_partial = has_partial && (chunk == num_full_chunks);
                 const uint32_t read_bytes = is_partial ? partial_bytes : full_chunk_bytes;
-                const uint32_t byte_off = chunk * full_chunk_bytes;
                 const uint32_t n_elems = read_bytes / 2;
+                const uint32_t byte_off = chunk * full_chunk_bytes;
 
-                for (uint32_t c = 0; c < 3; c++) {
-                    uint32_t c_base = c * HW;
-                    uint32_t rows[4] = {
-                        c_base + h0 * W + w0,
-                        c_base + h0 * W + w1,
-                        c_base + h1 * W + w0,
-                        c_base + h1 * W + w1,
-                    };
+                noc_async_read(src.get_noc_addr(r_row, byte_off), l1_r, read_bytes);
+                noc_async_read(src.get_noc_addr(g_row, byte_off), l1_g, read_bytes);
+                noc_async_read(src.get_noc_addr(b_row, byte_off), l1_b, read_bytes);
+                noc_async_read_barrier();
 
-                    cb_reserve_back(cbs[c], 1);
-                    uint32_t l1_out = get_write_ptr(cbs[c]);
+                const uint16_t* rp = reinterpret_cast<const uint16_t*>(l1_r);
+                const uint16_t* gp = reinterpret_cast<const uint16_t*>(l1_g);
+                const uint16_t* bp = reinterpret_cast<const uint16_t*>(l1_b);
 
-                    // Accumulate 4 corners in RISC-V float, write averaged bf16.
-                    float acc[32] = {};
-                    for (uint32_t corner = 0; corner < 4; corner++) {
-                        noc_async_read(src.get_noc_addr(rows[corner], byte_off), l1_out, read_bytes);
-                        noc_async_read_barrier();
-                        const uint16_t* s = reinterpret_cast<const uint16_t*>(l1_out);
-                        for (uint32_t i = 0; i < n_elems; i++) {
-                            acc[i] += bf16_to_float(s[i]);
-                        }
+                cb_reserve_back(cb_out, 1);
+                uint8_t* out = reinterpret_cast<uint8_t*>(get_write_ptr(cb_out));
+
+                for (uint32_t i = 0; i < n_elems; i++) {
+                    float val = wr * bf16_to_float(rp[i]) + wg * bf16_to_float(gp[i]) + wb * bf16_to_float(bp[i]) + off;
+                    if (val < 0.0f) {
+                        val = 0.0f;
                     }
-
-                    uint16_t* out = reinterpret_cast<uint16_t*>(l1_out);
-                    for (uint32_t i = 0; i < n_elems; i++) {
-                        out[i] = float_to_bf16(acc[i] * 0.25f);
+                    if (val > 255.0f) {
+                        val = 255.0f;
                     }
-                    // Zero-pad remaining elements in the page.
-                    for (uint32_t i = n_elems; i < full_chunk_bytes / 2; i++) {
-                        out[i] = 0;
-                    }
-
-                    cb_push_back(cbs[c], 1);
+                    out[i] = (uint8_t)val;
                 }
+                for (uint32_t i = n_elems; i < CHUNK_ELEMS; i++) {
+                    out[i] = 0;
+                }
+                cb_push_back(cb_out, 1);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Cb and Cr passes: half resolution with 2×2 spatial averaging
+    // -------------------------------------------------------------------
+    for (uint32_t pass = 1; pass <= 2; pass++) {
+        const float wr = coeff_wr[pass], wg = coeff_wg[pass];
+        const float wb = coeff_wb[pass], off = coeff_off[pass];
+
+        for (uint32_t uv_idx = uv_start; uv_idx < uv_end; uv_idx++) {
+            const uint32_t h_uv = uv_idx / W2, w_uv = uv_idx % W2;
+            const uint32_t h0 = 2 * h_uv, h1 = h0 + 1;
+            const uint32_t w0 = 2 * w_uv, w1 = w0 + 1;
+
+            const uint32_t corner_rows[4] = {
+                h0 * W + w0,
+                h0 * W + w1,
+                h1 * W + w0,
+                h1 * W + w1,
+            };
+
+            for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+                const bool is_partial = has_partial && (chunk == num_full_chunks);
+                const uint32_t read_bytes = is_partial ? partial_bytes : full_chunk_bytes;
+                const uint32_t n_elems = read_bytes / 2;
+                const uint32_t byte_off = chunk * full_chunk_bytes;
+
+                float avg_r[CHUNK_ELEMS] = {};
+                float avg_g[CHUNK_ELEMS] = {};
+                float avg_b[CHUNK_ELEMS] = {};
+
+                for (uint32_t corner = 0; corner < 4; corner++) {
+                    const uint32_t base_row = corner_rows[corner];
+
+                    noc_async_read(src.get_noc_addr(0 * HW + base_row, byte_off), l1_r, read_bytes);
+                    noc_async_read(src.get_noc_addr(1 * HW + base_row, byte_off), l1_g, read_bytes);
+                    noc_async_read(src.get_noc_addr(2 * HW + base_row, byte_off), l1_b, read_bytes);
+                    noc_async_read_barrier();
+
+                    const uint16_t* rp = reinterpret_cast<const uint16_t*>(l1_r);
+                    const uint16_t* gp = reinterpret_cast<const uint16_t*>(l1_g);
+                    const uint16_t* bp = reinterpret_cast<const uint16_t*>(l1_b);
+
+                    for (uint32_t i = 0; i < n_elems; i++) {
+                        avg_r[i] += bf16_to_float(rp[i]);
+                        avg_g[i] += bf16_to_float(gp[i]);
+                        avg_b[i] += bf16_to_float(bp[i]);
+                    }
+                }
+
+                cb_reserve_back(cb_out, 1);
+                uint8_t* out = reinterpret_cast<uint8_t*>(get_write_ptr(cb_out));
+
+                for (uint32_t i = 0; i < n_elems; i++) {
+                    float r = avg_r[i] * 0.25f;
+                    float g = avg_g[i] * 0.25f;
+                    float b = avg_b[i] * 0.25f;
+                    float val = wr * r + wg * g + wb * b + off;
+                    if (val < 0.0f) {
+                        val = 0.0f;
+                    }
+                    if (val > 255.0f) {
+                        val = 255.0f;
+                    }
+                    out[i] = (uint8_t)val;
+                }
+                for (uint32_t i = n_elems; i < CHUNK_ELEMS; i++) {
+                    out[i] = 0;
+                }
+                cb_push_back(cb_out, 1);
             }
         }
     }
