@@ -10,7 +10,7 @@ on:
       issue-repo:
         description: "Repository to create issues in"
         type: string
-        default: "ebanerjeeTT/issue_dump"
+        default: "tenstorrent/tt-metal"
       target-repo:
         description: "Repository to analyze workflow data from"
         type: string
