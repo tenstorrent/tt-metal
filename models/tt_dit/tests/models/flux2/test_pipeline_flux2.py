@@ -47,7 +47,7 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
             1,  # num_links
             "1x8tp1",
             False,  # is_fsdp
-            True,  # dynamic_load
+            True,  # dynamic_loadm  ;.ohl
             id="1x8tp1",
         ),
         pytest.param(
@@ -76,6 +76,19 @@ from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
             False,  # dynamic_load
             id="bh_4x8",
         ),
+        # pytest.param(
+        #     (4, 8),  # mesh_device
+        #     (4, 0),  # sp
+        #     (8, 1),  # tp
+        #     (8, 1),  # encoder_tp
+        #     (32, 1),  # vae_tp
+        #     ttnn.Topology.Linear,
+        #     2,  # num_links
+        #     "bh_4x8_v32",
+        #     False,  # is_fsdp
+        #     False,  # dynamic_load
+        #     id="bh_4x8_v32",
+        # )
     ],
     indirect=["mesh_device"],
 )
