@@ -520,7 +520,9 @@ jobs:
             exit 1
           fi
       - name: 📐 Run structured output benchmark
-        if: ${{ matrix.test-group.structured-output }}
+        # Skip when running with random weights — model output is gibberish
+        # and JSON-schema validation always reports correct_rate(%) ≈ 0.
+        if: ${{ matrix.test-group.structured-output && env.TT_DUMMY_WEIGHTS != '1' }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
           if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
@@ -559,7 +561,10 @@ jobs:
           fi
 
       - name: 🖼️ Run multimodal test
-        if: ${{ matrix.test-group.multimodal }}
+        # Skip when running with random weights — the assertion greps the
+        # response for the word "cat" (image is a cat); random weights
+        # never produce that token.
+        if: ${{ matrix.test-group.multimodal && env.TT_DUMMY_WEIGHTS != '1' }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
           curl http://localhost:8000/v1/chat/completions \
@@ -602,7 +607,9 @@ jobs:
             exit 1
           fi
       - name: 🧪 Run sampling tests
-        if: ${{ matrix.test-group.sampling-tests }}
+        # Skip when running with random weights — these pytests validate
+        # token-distribution properties that don't hold for random outputs.
+        if: ${{ matrix.test-group.sampling-tests && env.TT_DUMMY_WEIGHTS != '1' }}
         timeout-minutes: 10
         run: |
           {
