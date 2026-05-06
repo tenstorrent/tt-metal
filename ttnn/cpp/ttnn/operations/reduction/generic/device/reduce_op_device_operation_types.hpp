@@ -28,8 +28,9 @@ struct ReduceParams {
     // kernel, gated by the REDUCE_POST_MUL define. When `post_mul_scaler == 1.0f`, the
     // post-multiplication path is disabled and the existing reduce-only flow runs unchanged.
     float post_mul_scaler{1.0f};
-    // Dense row-major path for W-reduce on 4D tensors: input/output avoid tile face padding by
-    // tilizing per row inside compute (see ReduceMultiCoreWRmProgramFactory).
+    // Dense row-major path for **mean only** (generic_reductions dispatches AVG over W): host enables only when
+    // constraints match tilized mean (4D, BF16/FLOAT32, interleaved I/O); AVG is lowered to SUM + scaler before
+    // launch. Other ROW_MAJOR reductions tilize and use the standard tile kernels.
     bool row_major_w_dense_path{false};
 };
 

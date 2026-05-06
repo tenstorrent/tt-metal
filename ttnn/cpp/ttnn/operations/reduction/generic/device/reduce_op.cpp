@@ -109,26 +109,21 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
-    const bool use_rm_dense_w = reduce_dim == tt::tt_metal::ReduceOpDim::W &&
-                                input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-                                input_tensor.logical_shape().rank() == 4 &&
-                                (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-                                 input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32);
-
-    TT_FATAL(
-        !(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && !use_rm_dense_w),
-        "ROW_MAJOR input is only supported for 4D W-reduce on BFLOAT16/FLOAT32 (dense path). "
-        "Use TILE layout for other reduction modes.");
-
-    if (input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        TT_FATAL(reduce_dim == tt::tt_metal::ReduceOpDim::W, "ROW_MAJOR dense path only implements W-dim reduce");
-    }
+    // Dense row-major W mean (same shapes as tilized mean): require 4D [N,C,H,W], mean along last dim, BF16/FLOAT32,
+    // and interleaved buffers. Other ROW_MAJOR cases (sum/max/min, other dims, dtypes, sharded I/O) fall back to
+    // tilize + tile reduce — matching default tiled coverage from generic_reductions.
+    const bool use_rm_dense_w =
+        reduce_dim == tt::tt_metal::ReduceOpDim::W && reduce_math == tt::tt_metal::ReduceOpMath::AVG &&
+        input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR && input_tensor.logical_shape().rank() == 4 &&
+        (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
+        !input_tensor.memory_config().is_sharded() && !output_mem_config.is_sharded();
 
     // High-level mean uses AVG with scaler (1/N). On the tiled path, GMPOOL AVG matches that intent. On the dense
     // row-major W path we tilize one logical row at a time from a narrow RM page; AVG applies an extra normalization
     // for full tile faces that does not match torch.mean together with partial-row tilize. Use SUM + the same scaler.
     tt::tt_metal::ReduceOpMath prim_reduce_math = reduce_math;
-    if (use_rm_dense_w && reduce_math == tt::tt_metal::ReduceOpMath::AVG) {
+    if (use_rm_dense_w) {
         prim_reduce_math = tt::tt_metal::ReduceOpMath::SUM;
     }
 
