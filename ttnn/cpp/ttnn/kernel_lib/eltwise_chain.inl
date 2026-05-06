@@ -679,16 +679,22 @@ ALWI void elem_init() { E::init(); }
 
 // Compute-phase exec (everything except Pack*).
 // Runs between `tile_regs_acquire()` and `tile_regs_commit()`.
+// For FPU-clash patterns each element's init() runs immediately before its exec —
+// this matches production kernels (`copy_tile_init; copy_tile; sfpu_init; sfpu_tile;
+// binary_dest_reuse_init; binary_dest_reuse_tiles`) and avoids state-clobbering when
+// multiple chain elements reconfigure the unpacker.
 template <class E>
 ALWI void elem_compute_exec(const E& e, uint32_t i) {
     if constexpr (is_pack_tile_op_v<E>) {
         // Pack runs in the pack phase, not compute. Skip here.
         (void)e; (void)i;
     } else if constexpr (is_dest_only_op_v<E> && !is_fill_tile_op_v<E> && !is_rand_tile_op_v<E>) {
-        // Pure SFPU op via CRTP base — static exec().
+        // Pure SFPU op via CRTP base — init then static exec().
+        E::init();
         E::exec();
     } else {
-        // CB-bound element OR Fill/Rand (carry runtime payload via member).
+        // CB-bound element OR Fill/Rand — init then member exec(i).
+        E::init();
         e.exec(i);
     }
 }
@@ -698,6 +704,12 @@ ALWI void elem_compute_exec(const E& e, uint32_t i) {
 template <class E>
 ALWI void elem_pack_exec(const E& e, uint32_t i) {
     if constexpr (is_pack_tile_op_v<E>) e.exec(i);
+}
+
+// Pack-phase init (Pack* only — pack_reconfig_data_format if Reconfig != None).
+template <class E>
+ALWI void elem_pack_init() {
+    if constexpr (is_pack_tile_op_v<E>) E::init();
 }
 
 }  // namespace detail
@@ -791,11 +803,15 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
         (detail::elem_reserve_upfront(elts, block_n), ...);
 
         for (uint32_t i = 0; i < n_tiles; ++i) {
-            (detail::elem_init<Es>(), ...);
             tile_regs_acquire();
+            // Per-element init+exec: each element's init runs immediately before its
+            // exec, mirroring production kernels and avoiding state clobber across the
+            // FPU-clash chain.
             (detail::elem_compute_exec(elts, i), ...);
             tile_regs_commit();
             tile_regs_wait();
+            // Pack-side init runs once per pack element (idempotent reconfig).
+            (detail::elem_pack_init<Es>(), ...);
             (detail::elem_pack_exec(elts, i), ...);
             tile_regs_release();
         }
@@ -808,12 +824,11 @@ ALWI void eltwise_chain(uint32_t n_tiles, Es... elts) {
             (detail::elem_wait_per_tile(elts, i), ...);
             (detail::elem_reserve_per_tile(elts, i), ...);
 
-            (detail::elem_init<Es>(), ...);
-
             tile_regs_acquire();
             (detail::elem_compute_exec(elts, i), ...);
             tile_regs_commit();
             tile_regs_wait();
+            (detail::elem_pack_init<Es>(), ...);
             (detail::elem_pack_exec(elts, i), ...);
             tile_regs_release();
 

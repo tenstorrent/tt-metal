@@ -589,11 +589,28 @@ def test_14_5_copy_exp_sqrt_pack(device, num_tiles, fp32_dest_acc):
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="DestReuseBinary CopyTile→DestReuseBinary chain composition hangs even single-core; needs deeper init-ordering investigation."
+@pytest.mark.parametrize("num_tiles", [1, 8])
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+@pytest.mark.parametrize(
+    "op_name,torch_op,pcc",
+    [
+        ("Mul", lambda x: x * x, 0.999),
+        ("Add", lambda x: x + x, 0.9999),
+        ("Sub", lambda x: torch.zeros_like(x), 0.9999),
+    ],
 )
-def test_8_dest_reuse_binary():
-    pass
+@pytest.mark.parametrize("reuse_type", ["DEST_TO_SRCA", "DEST_TO_SRCB"])
+def test_8_dest_reuse_binary(device, num_tiles, fp32_dest_acc, op_name, torch_op, pcc, reuse_type):
+    out, golden = _run_unary_chain(
+        device, num_tiles,
+        kernel_path="ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/dest_reuse.cpp",
+        torch_op=torch_op,
+        input_range=(-2.0, 2.0),
+        defines={"DEST_REUSE_OP": op_name, "DEST_REUSE_TYPE": reuse_type},
+        fp32_dest_acc=fp32_dest_acc,
+        single_core=True,
+    )
+    _check_pcc(out, golden, pcc, f"dest_reuse {op_name}/{reuse_type} n={num_tiles}")
 
 
 # =============================================================================
