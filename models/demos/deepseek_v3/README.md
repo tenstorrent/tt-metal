@@ -310,7 +310,6 @@ export PYTHON_ENV_DIR=$TT_METAL_HOME/build/python_env_vllm
 source $VLLM_DIR/tt_metal/setup-metal.sh
 source $PYTHON_ENV_DIR/bin/activate
 
-export VLLM_TARGET_DEVICE="tt"
 export ARCH_NAME=wormhole_b0
 export HF_HOME=<hugging face home directory>
 export HF_MODEL="deepseek-ai/DeepSeek-R1-0528"

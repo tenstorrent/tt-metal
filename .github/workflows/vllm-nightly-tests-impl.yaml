@@ -323,7 +323,6 @@ jobs:
       env:
         TT_METAL_HOME: /work
         vllm_dir: /work/vllm
-        VLLM_TARGET_DEVICE: "tt"
         PYTHONPATH: /work:/work/vllm
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
