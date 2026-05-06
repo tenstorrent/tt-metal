@@ -102,7 +102,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
 
     sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x7f800000 in paper
-    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
+    sfpi::vInt zif = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x007fffff in paper
 
     // Compute formula in Horner form
     sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
@@ -175,7 +175,7 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
     sfpi::vFloat p = PolynomialEvaluator::eval(
         r, sfpi::vConst1, sfpi::vConst1, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
 
-    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp_nodebias(p) + k_int);
+    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::NoDebias) + k_int);
 
     // Handle overflow
     v_if(z >= 128.0f) { result = std::numeric_limits<float>::infinity(); }

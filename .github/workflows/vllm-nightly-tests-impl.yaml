@@ -646,7 +646,7 @@ jobs:
         with:
           config: |
             {
-              "model": "anthropic/claude-sonnet-4-6",
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["output"],
               "output_dir": "ai_summaries"
@@ -686,7 +686,7 @@ jobs:
         with:
           config: |
             {
-              "model": "anthropic/claude-sonnet-4-6",
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE",
               "input_dir": "ai_job_summaries",
               "output_dir": "ai_run_summaries"
@@ -704,6 +704,7 @@ jobs:
         run: |
           if [ -f "$REPORT_FILE" ]; then
             cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::warning::Report file not found: $REPORT_FILE"
           fi

@@ -81,7 +81,7 @@ inline void calculate_lgamma_adjusted(
             result = sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven);
         } else {
             sfpi::vInt exp = sfpi::exexp(in);
-            sfpi::vInt man = sfpi::exman9(in);
+            sfpi::vInt man = sfpi::exman(in);
             v_if(exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
             v_endif;
         }

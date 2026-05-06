@@ -27,7 +27,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
@@ -327,7 +327,7 @@ bool run_sfpu_all_same_buffer(
 
 }  // namespace unit_tests::compute::sfpu
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
-    : public MeshDeviceFixture,
+    : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
     size_t num_tiles = std::get<0>(GetParam());
@@ -373,7 +373,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "sign")));
 
 class SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture
-    : public MeshDeviceFixture,
+    : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) {
