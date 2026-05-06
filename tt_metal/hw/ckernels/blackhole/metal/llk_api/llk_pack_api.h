@@ -107,17 +107,12 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
     LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
 
-#ifdef ARCH_BLACKHOLE
     // For pack with tilize enabled, check if the original input format is 8-bit.
     // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
     const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
     const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
     _llk_pack_init_<untilize, zero_output, tilize>(
         pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
-#else
-    _llk_pack_init_<untilize, zero_output, tilize>(
-        pack_src_format[output_id], face_r_dim, tile_c_dim, num_faces, num_tiles);
-#endif
 }
 
 template <bool out_of_order_output, bool untilize>

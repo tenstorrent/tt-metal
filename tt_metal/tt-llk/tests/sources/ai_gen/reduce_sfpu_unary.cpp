@@ -119,6 +119,7 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 // -----------------------------------------------------------------------------
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -126,17 +127,12 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false, false>();
-#else
-    _llk_pack_init_<false, false>(formats.pack_dst);
-#endif
-
-#ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #else
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 #endif
 
+    _llk_pack_init_<false, false>(formats.pack_dst);
     _llk_pack_reduce_mask_config_<false, REDUCE_DIM>();
 
 #ifdef ARCH_BLACKHOLE

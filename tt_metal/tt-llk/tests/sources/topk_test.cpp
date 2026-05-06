@@ -396,6 +396,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // ============================================================================
 
 #ifdef LLK_TRISC_PACK
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
@@ -483,11 +484,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
                     }
 
-#ifdef ARCH_BLACKHOLE
-                    _llk_pack_init_<false, false>();
-#else
-                    _llk_pack_init_<false, false>(pack_dst_format);
-#endif
+                    _llk_pack_init_wrapper_<false, false>(pack_dst_format);
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 

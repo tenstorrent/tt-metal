@@ -64,6 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -83,11 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_untilize_init_<ct_dim>(formats.pack_dst, FACE_R_DIM, 4);
 #endif
     _llk_packer_wait_for_math_done_();
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_untilize_<ct_dim>(L1_ADDRESS(params.buffer_Res[0]), 4, 0);
-#else
-    _llk_pack_untilize_<ct_dim>(L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, FACE_R_DIM, 0);
-#endif
+    _llk_pack_untilize_wrapper_<ct_dim>(L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, FACE_R_DIM, 4, 0);
     _llk_pack_dest_section_done_<sync, is_fp32_dest_acc_en>();
 }
 

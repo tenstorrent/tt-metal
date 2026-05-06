@@ -115,6 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -145,11 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, params.TILE_SIZE_PACK);
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<false, false>();
-#else
-    _llk_pack_init_<false, false>(formats_array[run].pack_dst);
-#endif
+    _llk_pack_init_wrapper_<false, false>(formats_array[run].pack_dst);
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
