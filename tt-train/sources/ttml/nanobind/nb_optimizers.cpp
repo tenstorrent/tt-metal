@@ -155,11 +155,20 @@ void py_module(nb::module_& m) {
         py_optimizer_base.def(
             "set_state_dict",
             [](OptimizerBase& self, nb::dict d) {
+                const auto& schema = self.get_state_dict_schema();
                 serialization::StateDict cpp_dict;
                 for (auto [key_obj, val_obj] : d) {
                     std::string key = nb::cast<std::string>(key_obj);
-                    if (key == "steps") {
-                        cpp_dict.emplace(std::move(key), serialization::ValueType{nb::cast<size_t>(val_obj)});
+                    auto it = schema.find(key);
+                    if (it != schema.end()) {
+                        // For ValueType keys, the optimizer should specify their required type in the schema.
+                        serialization::ValueType typed_val = std::visit(
+                            [&val_obj](const auto& sentinel) -> serialization::ValueType {
+                                using T = std::decay_t<decltype(sentinel)>;
+                                return serialization::ValueType{nb::cast<T>(val_obj)};
+                            },
+                            it->second);
+                        cpp_dict.emplace(std::move(key), std::move(typed_val));
                     } else {
                         cpp_dict.emplace(std::move(key), nb::cast<serialization::SerializableType>(val_obj));
                     }

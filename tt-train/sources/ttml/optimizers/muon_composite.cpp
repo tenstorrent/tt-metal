@@ -14,6 +14,8 @@ namespace ttml::optimizers {
 
 MuonComposite::MuonComposite(ttml::serialization::NamedParameters parameters, const MuonConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    m_state_dict_schema = {{"steps", size_t{0}}};
+
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_momentum_buffer.emplace(

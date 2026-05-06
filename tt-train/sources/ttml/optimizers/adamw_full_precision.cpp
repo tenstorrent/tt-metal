@@ -21,6 +21,8 @@ std::string AdamWFullPrecision::get_name() const {
 AdamWFullPrecision::AdamWFullPrecision(
     ttml::serialization::NamedParameters parameters, const AdamWFullPrecisionConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    m_state_dict_schema = {{"steps", size_t{0}}, {"amsgrad", bool{false}}};
+
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             // Create fp32 master weights from the initial bf16 weights

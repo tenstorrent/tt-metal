@@ -10,6 +10,7 @@
 namespace ttml::optimizers {
 
 NoOp::NoOp(ttml::serialization::NamedParameters parameters) : OptimizerBase(std::move(parameters)) {
+    m_state_dict_schema = {{"steps", size_t{0}}};
 }
 
 void NoOp::zero_grad() {
