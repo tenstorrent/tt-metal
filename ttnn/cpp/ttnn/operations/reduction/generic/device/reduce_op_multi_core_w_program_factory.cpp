@@ -35,6 +35,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
+#include "reduce_metal2_factory_helpers.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 namespace ttnn::prim {
@@ -43,73 +44,21 @@ namespace m2 = tt::tt_metal::experimental::metal2_host_api;
 
 namespace {
 
-// ---------------------------------------------------------------------------
-// Names used for kernels, DFBs and named arguments. Kept in one place so the
-// host code and kernel sources (via kernel_args_generated.h / kernel_bindings_generated.h)
-// stay in lock-step.
-// ---------------------------------------------------------------------------
-
-// KernelSpec ids
-constexpr const char* READER_KERNEL = "reduce_w_reader";
-constexpr const char* WRITER_KERNEL = "reduce_w_writer";
-constexpr const char* COMPUTE_KERNEL = "reduce_w_compute";
-
-// DFB ids
-constexpr const char* INPUT_DFB = "input";
-constexpr const char* SCALER_DFB = "scaler";
-constexpr const char* OUTPUT_DFB = "output";
-constexpr const char* ACC_DFB = "acc";    // negate-only
-constexpr const char* INEG_DFB = "ineg";  // negate-only
-
-// WorkUnitSpec id
-constexpr const char* WORK_UNIT = "all_workers";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-m2::DataflowBufferSpec MakeDFB(
-    const std::string& name,
-    uint32_t entry_size,
-    uint32_t num_entries,
-    tt::DataFormat data_format,
-    const tt::tt_metal::Tile& tile) {
-    m2::DataflowBufferSpec dfb;
-    dfb.unique_id = name;
-    dfb.entry_size = entry_size;
-    dfb.num_entries = num_entries;
-    dfb.data_format_metadata = data_format;
-    dfb.tile_format_metadata = tile;
-    return dfb;
-}
-
-void BindDFB(
-    m2::KernelSpec& kernel,
-    const std::string& dfb_name,
-    const std::string& accessor_name,
-    m2::KernelSpec::DFBEndpointType endpoint_type) {
-    kernel.dfb_bindings.push_back(m2::KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
-        .endpoint_type = endpoint_type,
-        .access_pattern = m2::DFBAccessPattern::STRIDED,
-    });
-}
-
-m2::KernelSpec::CompilerOptions::Defines DefinesFromMap(const std::map<std::string, std::string>& src) {
-    m2::KernelSpec::CompilerOptions::Defines out;
-    out.reserve(src.size());
-    for (const auto& [k, v] : src) {
-        out.emplace_back(k, v);
-    }
-    return out;
-}
+// KernelSpec / WorkUnitSpec ids — kept local with a `W_` prefix so the symbols
+// don't clash with the HW factory's analogues under Unity builds (which merge
+// anonymous namespaces from different .cpp files into one TU). DFB ids and the
+// MakeDFB / BindDFB / DefinesFromMap helpers are shared and live in
+// reduce_metal2_factory_helpers.hpp.
+constexpr const char* W_READER_KERNEL = "reduce_w_reader";
+constexpr const char* W_WRITER_KERNEL = "reduce_w_writer";
+constexpr const char* W_COMPUTE_KERNEL = "reduce_w_compute";
+constexpr const char* W_WORK_UNIT = "all_workers";
 
 // Determine the work distribution across cores. Mirrors the legacy factory; lifted
 // into a helper because both create() and override_runtime_arguments() consume it
 // (create uses it to build the spec; override uses the cached snapshot in
 // shared_variables to re-emit RTAs).
-struct WorkDistribution {
+struct WWorkDistribution {
     uint32_t num_cores = 0;
     tt::tt_metal::CoreRangeSet all_cores;
     tt::tt_metal::CoreRangeSet core_group_1;
@@ -119,7 +68,7 @@ struct WorkDistribution {
     std::vector<CoreCoord> cores;
 };
 
-WorkDistribution ComputeWorkDistribution(const ReduceParams& attrs, const tt::tt_metal::Tensor& input) {
+WWorkDistribution ComputeWWorkDistribution(const ReduceParams& attrs, const tt::tt_metal::Tensor& input) {
     using namespace tt::tt_metal;
 
     const auto& shape = input.padded_shape();
@@ -136,7 +85,7 @@ WorkDistribution ComputeWorkDistribution(const ReduceParams& attrs, const tt::tt
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_rows = (shape[1] * shape[0]) * Ht;
 
-    WorkDistribution wd;
+    WWorkDistribution wd;
     if (attrs.sub_core_grids.has_value()) {
         std::tie(
             wd.num_cores,
@@ -184,13 +133,13 @@ m2::ProgramRunParams BuildRunParams(
     TT_FATAL(out_dim_divider != 0, "Wt cached in shared_variables must be non-zero");
 
     m2::ProgramRunParams::KernelRunParams reader_params;
-    reader_params.kernel_spec_name = READER_KERNEL;
+    reader_params.kernel_spec_name = W_READER_KERNEL;
 
     m2::ProgramRunParams::KernelRunParams writer_params;
-    writer_params.kernel_spec_name = WRITER_KERNEL;
+    writer_params.kernel_spec_name = W_WRITER_KERNEL;
 
     m2::ProgramRunParams::KernelRunParams compute_params;
-    compute_params.kernel_spec_name = COMPUTE_KERNEL;
+    compute_params.kernel_spec_name = W_COMPUTE_KERNEL;
 
     uint32_t num_tiles_read = 0;
     for (const auto& core : shared.cores) {
@@ -288,7 +237,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     const uint32_t dst_single_tile_size = tile_size(dst_cb_data_format);
 
     // Work distribution across cores.
-    const WorkDistribution wd = ComputeWorkDistribution(operation_attributes, a);
+    const WWorkDistribution wd = ComputeWWorkDistribution(operation_attributes, a);
 
     // For MAX/MIN with non-unity scalar, GMPOOL only respects the scaler's exponent, so the
     // high-level reduce() in reduce_op.cpp has already swapped scaler→1.0 and stashed the user
@@ -340,10 +289,10 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     // -- Reader kernel --
     m2::KernelSpec reader;
-    reader.unique_id = READER_KERNEL;
+    reader.unique_id = W_READER_KERNEL;
     reader.source = m2::KernelSpec::SourceFilePath{
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-        "reader_unary_reduce_universal_start_id_metal2.cpp"};
+        "reader_unary_reduce_universal_start_id.cpp"};
     reader.num_threads = 1;
     reader.compile_time_arg_bindings = {
         {"scaler_bits", scaler_bits},
@@ -370,9 +319,9 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     // -- Writer kernel --
     m2::KernelSpec writer;
-    writer.unique_id = WRITER_KERNEL;
+    writer.unique_id = W_WRITER_KERNEL;
     writer.source = m2::KernelSpec::SourceFilePath{
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_unary_interleaved_metal2.cpp"};
+        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_unary_interleaved.cpp"};
     writer.num_threads = 1;
     writer.compile_time_arg_bindings = {
         {"is_dram", dst_is_dram},
@@ -393,11 +342,11 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     // -- Compute kernel --
     const std::string compute_kernel_path =
         operation_attributes.negate
-            ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w_neg_metal2.cpp"
-            : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_metal2.cpp";
+            ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w_neg.cpp"
+            : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp";
 
     m2::KernelSpec compute;
-    compute.unique_id = COMPUTE_KERNEL;
+    compute.unique_id = W_COMPUTE_KERNEL;
     compute.source = m2::KernelSpec::SourceFilePath{compute_kernel_path};
     compute.num_threads = 1;
     compute.compile_time_arg_bindings = {
@@ -430,8 +379,8 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     // -- Single work unit covering all worker cores --
     m2::WorkUnitSpec work_unit;
-    work_unit.unique_id = WORK_UNIT;
-    work_unit.kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_KERNEL};
+    work_unit.unique_id = W_WORK_UNIT;
+    work_unit.kernels = {W_READER_KERNEL, W_WRITER_KERNEL, W_COMPUTE_KERNEL};
     work_unit.target_nodes = wd.all_cores;
 
     // -- Assemble the spec --

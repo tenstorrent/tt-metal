@@ -12,7 +12,7 @@
 //   - Buffer sync (wait/pop) goes through `experimental::DataflowBuffer`, which is
 //     arch-agnostic.
 //
-// Arch coverage caveat: see the header of `reader_unary_reduce_universal_start_id_metal2.cpp`.
+// Arch coverage caveat: see the header of `reader_unary_reduce_universal_start_id.cpp`.
 // The address generator and `noc_async_write_tile` are Gen1-only; Quasar support for the
 // data path is blocked on the same TensorAccessor / Metal 2.0 CTA framework issue.
 

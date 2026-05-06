@@ -2,20 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Welford HW-dimension reduction kernel (compute side).
+// Metal 2.0 Welford HW-dimension reduction compute kernel (compute side).
 //
-// Phase 1 (per output): For each of reduce_batch_size NC slices,
-// H-reduces each of Wt columns using the Welford LLK, finalizes to
-// row format (welford_finalize_to_row) and packs the mean+var tile
-// pair to cb_partial for the writer kernel to W-combine using the
-// parallel Welford merge formula.
-//
-// Phase 2 (per output): Reads the combined Float32 scalar tile from
-// cb_combined (produced by the writer after W-combining all partials
-// and applying Bessel's correction), applies sqrt_tile when computing
-// std, and re-packs to cb_out in the output data format.  This ensures
-// the packer hardware handles format conversion (required for
-// BFLOAT8_B and for matching the output dtype to the input dtype).
+// Phase 1 (per output): For each of reduce_batch_size NC slices, H-reduces each
+// of Wt columns using the Welford LLK, finalizes to row format and packs the
+// mean+var tile pair to cb_partial for the writer kernel to W-combine.
+// Phase 2 (per output): Reads the combined Float32 scalar tile from cb_combined
+// (produced by the writer after W-combining all partials and applying Bessel's
+// correction), applies sqrt_tile when computing std, and re-packs to cb_out in
+// the output data format.
 
 #include <cstdint>
 
@@ -25,37 +20,34 @@
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "experimental/circular_buffer.h"
+#include "experimental/dataflow_buffer.h"
 
 void kernel_main() {
-    // Runtime arg: total number of NC slices this core must process.
-    uint32_t NC_per_core = get_arg_val<uint32_t>(0);
+    // Runtime arg: total NC slices this core must process.
+    const uint32_t NC_per_core = get_arg(args::NC_per_core);
 
-    // Compile-time args:
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t H = get_compile_time_arg_val(1);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr bool do_scale = get_compile_time_arg_val(4) != 0;
-    constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(5);
-    constexpr bool is_std = get_compile_time_arg_val(6) != 0;
+    // Compile-time args.
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t H = get_arg(args::H);
+    constexpr uint32_t tile_height = get_arg(args::tile_height);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr bool do_scale = get_arg(args::do_scale) != 0;
+    constexpr uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
+    constexpr bool is_std = get_arg(args::is_std) != 0;
 
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_scalar = tt::CBIndex::c_2;
-    // Final output CB (output data format), consumed by the writer for NOC write.
-    constexpr auto cb_out = tt::CBIndex::c_16;
-    // Intermediate CB for mean+var tile pairs, consumed by writer kernel.
-    constexpr auto cb_partial = tt::CBIndex::c_21;
-    // Combined scalar result from the writer kernel (Float32).
-    constexpr auto cb_combined = tt::CBIndex::c_22;
+    experimental::DataflowBuffer cb_in_obj(dfb::input);
+    experimental::DataflowBuffer cb_scalar_obj(dfb::scaler);
+    experimental::DataflowBuffer cb_out_obj(dfb::output);
+    experimental::DataflowBuffer cb_partial_obj(dfb::partial);
+    experimental::DataflowBuffer cb_combined_obj(dfb::combined);
 
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_scalar_obj(cb_scalar);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_partial_obj(cb_partial);
-    experimental::CircularBuffer cb_combined_obj(cb_combined);
+    const uint32_t cb_in = cb_in_obj.get_id();
+    const uint32_t cb_scalar = cb_scalar_obj.get_id();
+    const uint32_t cb_out = cb_out_obj.get_id();
+    const uint32_t cb_partial = cb_partial_obj.get_id();
+    const uint32_t cb_combined = cb_combined_obj.get_id();
 
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
@@ -77,71 +69,20 @@ void kernel_main() {
     uint32_t num_outputs = NC_per_core / reduce_batch_size;
 
     for (uint32_t out = 0; out < num_outputs; ++out) {
-        // --- Phase 1: H-reduce all columns for reduce_batch_size NC slices ---
-        // Restore unpacker to cb_in's format after Phase 2 set it to
-        // cb_combined (Float32).
+        // Phase 1: H-reduce all columns for reduce_batch_size NC slices.
+        // Restore unpacker to cb_in's format after Phase 2 set it to cb_combined (Float32).
         reconfig_data_format_srca(cb_in);
         for (uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 // H-reduce one column of Ht tiles.
-
-                // start_N is the cumulative row count across tiles processed so far;
-                // passed to the Welford LLK so it can compute the correct 1/(N+1) reciprocal
-                // for each row's running-mean update.
                 uint32_t start_N = 0;
                 welford_init();
 
-                // Process one tile-column along H while keeping a single running Welford state.
-                // Welford's running accumulators (mean in LREG4, M2 in LREG5)
-                // live in SFPU local registers (LREGs), which are separate
-                // from the DST register file.  This means the Welford state survives
-                // across tile_regs_release/acquire cycles -- only DST contents are
-                // affected by the handshake, not the SFPU accumulators.
-                //
-                // DST/tile_regs flow:
-                // - tile_regs_acquire() gives the MATH thread ownership of the DST tile registers.
-                // - tile_regs_commit() -- MATH signals it is done writing DST.
-                // - tile_regs_wait() lets the PACK thread safely see those DST tiles.
-                // - tile_regs_release() releases the PACK side of DST ownership.
-                // - do_scale path mixes two incompatible operation types each iteration:
-                //   1. mul_tiles_bcast_scalar  -- an FPU operation
-                //   2. welford_update          -- an SFPU operation
-                //   In this path, we do a full acquire/commit/wait/release on non-final iterations
-                //   even though nothing is packed. That handshake is used to leave the scalar-mul
-                //   configuration in a clean, fully closed state before the next iteration reconfigures
-                //   the compute engines for another scaled input.
-                // - In the !do_scale path, only SFPU-compatible operations are used
-                //   (copy_tile + welford_update), so no configuration conflict exists
-                //   and the entire loop can run in a single DST window (one acquire
-                //   before the loop, one commit after the last tile).
-                //   Only the final iteration needs to expose result tiles to PACK.
-                //
-                // Init/reinit flow:
-                // - welford_init() is the full Welford setup. It programs the Welford SFPU path and
-                //   clears any previous running mean/M2 state, so it must be done once before the loop,
-                //   not inside the loop.
-                // - mul_tiles_bcast_scalar_init_short reconfigures for FPU scalar multiply.
-                // - welford_reinit(cb_in) restores UNPACK+MATH after the mul (llk_math_welfords_sfpu_reinit).
-                // - In the !do_scale path we use copy_tile_to_dst_init_short once, then copy_tile per tile.
-                //
-                // Per iteration:
-                // - For all non-last H tiles, welford_update(input_dst, start_N, ...) consumes the full
-                //   tile and updates the running mean/M2 using start_N as the global element offset.
-                // - For the last H tile, welford_update_rows(..., last_tile_rows, ...) ignores padded
-                //   rows so only valid elements participate in the statistics.
-                // - welford_finalize_to_row(mean_dst, scale_idx, ...) converts M2 into variance and
-                //   writes final mean/variance tiles into DST.
-                // - If is_std, sqrt_tile() turns variance into standard deviation in place.
-                // - start_N advances by one tile height each iteration so Welford sees the correct
-                //   element count / divisor progression across the whole H reduction.
                 if constexpr (!do_scale) {
                     copy_tile_to_dst_init_short(cb_in);
                     tile_regs_acquire();
                 }
 
-                // Welford SFPU state (running mean in LREG4, M2 in LREG5)
-                // persists across DST cycles because LREGs are separate from
-                // the DST register file managed by tile_regs_acquire/release.
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
                     if constexpr (do_scale) {
                         cb_in_obj.wait_front(onetile);
@@ -149,9 +90,6 @@ void kernel_main() {
                         mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                         mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
                         cb_in_obj.pop_front(1);
-
-                        // Reconfigure the compute setup from scalar-multiply mode back to the
-                        // SFPU state that Welford expects.
                         welford_reinit(cb_in);
                     } else {
                         cb_in_obj.wait_front(onetile);
@@ -162,27 +100,15 @@ void kernel_main() {
                     if (ht < (Ht - 1)) {
                         welford_update<0>(input_dst, start_N, {});
                         if constexpr (do_scale) {
-                            // Even on non-final iterations we must complete the full DST handshake here.
-                            // We are not producing a packed output tile yet; this commit/wait/release is
-                            // only to fully close out the current DST and compute-engine state after
-                            // mul_tiles_bcast_scalar, before the next iteration reconfigures UNPACK+MATH
-                            // for another scaled input. Without this handshake, the next iteration can
-                            // inherit stale DST or UNPACK+MATH configuration.
                             tile_regs_commit();
                             tile_regs_wait();
                             tile_regs_release();
                         }
                     } else {
-                        // Last tile: process only valid rows, then finalize.
                         welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
-                        // Finalize to row format: 32 per-column (mean, var) values
-                        // stored in tile row 0 (across Face 0 and Face 1).
-                        // welford_finalize_to_row applies SFPTRANSP to convert from
-                        // SFPU lane order to tile column order; the "raw face" variant
-                        // (welford_finalize_to_face) skips this and stores in lane
-                        // order, which is NOT the same as tile column order.
-                        // Population variance (scale_idx = H-1); Bessel's correction
-                        // is applied by the writer kernel after W-combine.
+                        // welford_finalize_to_row applies SFPTRANSP to convert from SFPU
+                        // lane order to tile column order. Population variance (scale_idx
+                        // = H-1); Bessel's correction is applied by the writer after W-combine.
                         welford_finalize_to_row<0>(mean_dst, scale_idx, {});
                         tile_regs_commit();
                     }
@@ -199,16 +125,10 @@ void kernel_main() {
             }
         }
 
-        // --- Phase 2: Read combined scalar from writer, apply sqrt if std, repack ---
-        // The writer W-combines all per-column partials from Phase 1 into a
-        // single Float32 scalar tile in cb_combined (with Bessel's correction
-        // already applied).  We unpack it, apply sqrt_tile for std, and
-        // re-pack into cb_out using the packer, which converts to the output
-        // data format (handles BFLOAT8_B and all other formats).
+        // Phase 2: Read combined scalar from writer, apply sqrt if std, repack.
         cb_combined_obj.wait_front(onetile);
-        // Explicit srca reconfig is required because the unpacker was last
-        // configured for cb_in's format (e.g. Float16_b) during Phase 1.
-        // cb_combined uses Float32, so the unpacker must be reconfigured.
+        // Explicit srca reconfig: unpacker was last configured for cb_in's format
+        // (Float16_b) during Phase 1; cb_combined uses Float32, so reconfigure.
         reconfig_data_format_srca(cb_combined);
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_combined);

@@ -1,7 +1,9 @@
-## Metal 2.0 Migration Guide — Shortcomings Discovered During the Reduction W Factory Port
+## Metal 2.0 Migration Guide — Shortcomings Discovered During the Reduction Factory Ports
 
 Targets the version of `metal2_migration_guide.md` on `origin/akertesz/metal2-documentation`
-(commit-resolved at port time). The reference port for comparison is
+(commit-resolved at port time). Originally scoped to the multi-core W reduction port; the H,
+HW (single-core), and Welford (W/H/HW) factory ports landed in the same series and surfaced
+new shortcomings — added as sections 15–20 below. The reference port for comparison is
 `origin/bbradel-41067_sum_quasar`, which targeted the *predecessor* DFB API
 (`tt_metal::experimental::dfb::*`), not Metal 2.0 — it remains useful for
 contrasting cache-hit override patterns and for surfacing which guide gaps fall
@@ -70,15 +72,36 @@ that impression. Recommended additions:
 
 `split_work_to_cores` produces two core groups with different per-core work
 counts. The legacy factory creates *two distinct compute KernelDescriptors*,
-one per group, each with its own `Ht` CTA. Metal 2.0 has *one* `KernelSpec`
+one per group, each with its own per-group CTA. Metal 2.0 has *one* `KernelSpec`
 per kernel, so there is no host-side mechanism to give group 1 a CTA value
-of `Ht1` and group 2 a CTA value of `Ht2`.
+of `X1` and group 2 a CTA value of `X2`.
 
 `WorkUnitSpec` solves placement, but the guide's "kernel in multiple
 WorkUnitSpecs" example does not address per-WU CTA values. The only Metal 2.0
-escape hatch today is to demote per-group CTAs to per-node RTAs (which is what
-this port does — `Ht` is now a named RTA), at the cost of losing compile-time
-loop unrolling.
+escape hatch today is to demote per-group CTAs to per-node RTAs, at the cost
+of losing compile-time loop unrolling on the demoted dimension.
+
+This pattern recurred across every reduction factory port:
+
+| Factory | Work split axis | Per-group CTA → RTA |
+|---|---|---|
+| W (multi-core)    | along `H` rows           | `Ht` → runtime |
+| H (multi-core)    | along `W` columns        | `Wt` → runtime |
+| HW (single-core)  | none                     | n/a (single core, single CTA set) |
+| Welford W         | along `NC * Ht`          | `NCHt` → runtime |
+| Welford H         | along `NC * Wt`          | `NCWt` → runtime |
+| Welford HW        | along `NC / batch_size`  | `NC_per_core` → runtime |
+
+The general rule fell out the same way each time: the dimension whose value
+varies between core groups is the one demoted to RTA; everything else stays
+compile-time.
+
+A subtle consequence: when two factories share a compute kernel source
+(`reduce.cpp` is shared by W and HW non-negate paths) and *disagree* on which
+CTA was demoted, they can't actually share the source. The W factory promotes
+`Ht` to runtime, but H promotes `Wt` to runtime — and the kernel signature
+can't satisfy both. We added a separate `reduce_h.cpp` for H non-negate. See
+section 20.
 
 The guide should:
 - Add a short section on "split_work_to_cores → Metal 2.0".
@@ -437,6 +460,217 @@ duplicate `unique_id`s within a spec, but the guide doesn't say:
 
 A short "naming and uniqueness" subsection would help.
 
+### 15. Unity-build collisions in anonymous namespaces (cross-cpp)
+
+The reduction CMake target uses Unity builds: multiple `.cpp` files are
+concatenated into a single `unity_*.cxx` translation unit. C++ rules: each
+translation unit has *one* unnamed namespace, so all `namespace { … }` blocks
+inside that TU merge into the same scope. As soon as two factory cpps each
+declare an anonymous-namespace symbol with the same name, the unity TU rejects
+the duplicate.
+
+This bit me three times in the same series:
+
+1. **DFB id strings** (`INPUT_DFB`, `SCALER_DFB`, …) and helper functions
+   (`MakeDFB`, `BindDFB`, `DefinesFromMap`) were duplicated verbatim across the
+   W and HW factories — same name, same definition, different cpp files.
+   Compile error: "redefinition of 'MakeDFB'".
+
+2. **Kernel-spec / work-unit constants** (`READER_KERNEL`, `WRITER_KERNEL`,
+   `COMPUTE_KERNEL`, `WORK_UNIT`) — same name across factories but *different*
+   string values. Same redefinition error, with the added hazard that whichever
+   `.cpp` was concatenated first won the symbol and the others silently used the
+   wrong string at runtime if the redefinition error were suppressed.
+
+3. **Per-factory structs and helper functions** (`WorkDistribution`,
+   `ComputeWorkDistribution`) — different field names per factory (W uses
+   `num_rows_per_core_group_*`, H uses `num_cols_per_core_group_*`), so the
+   first definition won and the *second* factory's accesses were rejected as
+   "no member named 'num_rows_per_core_group_1' in 'WorkDistribution'".
+
+Patterns that worked:
+
+- Hoist truly identical declarations into a shared header
+  (`reduce_metal2_factory_helpers.hpp`) with `inline` (functions) /
+  `inline constexpr` (constants) linkage. This is where DFB id strings,
+  `MakeDFB`, `BindDFB`, and `DefinesFromMap` now live.
+- Prefix per-factory anonymous-namespace constants with the factory name
+  (`W_READER_KERNEL`, `H_READER_KERNEL`, `HW_READER_KERNEL`,
+  `WELFORD_READER_KERNEL`).
+- Rename per-factory structs / helper functions with the same prefix
+  (`WWorkDistribution`, `HWorkDistribution`).
+- Function overloads with a unique first-parameter type are fine: the
+  factories' `BuildRunParams(const ReduceMultiCoreWSharedVariables&, …)` /
+  `BuildRunParams(const ReduceMultiCoreHSharedVariables&, …)` /
+  `BuildRunParams(const ReduceSingleCoreHwSharedVariables&, …)` /
+  `BuildRunParams(const WelfordReduceSharedVariables&, …)` coexist as overloads
+  in the merged anon namespace.
+
+The guide should:
+- Add a "Unity build hygiene" troubleshooting bullet describing this class of
+  failure and the prefix / shared-header patterns.
+- Note that `metal2_migration_guide.md`-style code that uses generic anonymous-
+  namespace constant names will silently break the second time it's adopted
+  inside a unity-build target.
+
+### 16. DFB capacity must be a multiple of 2 on Quasar (implicit-sync DFB scheduling)
+
+Quasar's implicit-sync DFB scheduling allocates 2 transaction IDs per side and
+asserts `capacity % num_txn_ids == 0`. So *every* DFB needs `num_entries ≥ 2`
+and even. On Gen1 a 1-tile DFB happens to work for "produce-once, consume-once"
+buffers (e.g., the scaler tile) but the same spec lowered to Quasar fails the
+runtime assertion.
+
+Pragmatic patterns used by the reduction factories:
+
+- The simple cases (`INPUT`, `SCALER`, `OUTPUT`, single-tile scratch) just
+  hardcode `kNumInputEntries = 2`, etc. Cheap on L1.
+- The non-trivial case is the H factory's negate path. The compute kernel
+  pushes `ntiles` tiles per inner-loop iteration where `ntiles ∈ {chunk_size,
+  Wt_per_core % chunk_size, Wt_per_core when Wt_per_core < chunk_size}`. The
+  CB / DFB capacity has to be a common multiple of every push size that
+  actually occurs across all core groups, *and* a multiple of 2.
+  `ComputeNegateScratchEntries` in
+  `reduce_op_multi_core_h_program_factory.cpp` walks both core groups, takes
+  the LCM of the realized push sizes, then rounds up to a multiple of 2 if
+  needed. The same logic appeared in the original Gen1 factory (modulo the
+  Quasar even-multiple constraint), so this isn't pure metal2 cost — but the
+  even-multiple round-up is.
+
+The guide should:
+- Document the even-multiple-of-2 capacity rule, attribute it to Quasar
+  implicit-sync, and recommend `kNum*Entries = 2` as the safe default.
+- For variable-push-size scratch DFBs, describe the LCM-of-push-sizes pattern.
+
+### 17. Always-bind-then-gate-with-`if constexpr` for optional DFBs
+
+When a DFB is only used on some kernel paths (negate-only ACC/INEG; W-Welford
+`cb_scaled` only when `do_scale=true`; HW-Welford `partial`/`combined` only
+present in the HW variant), the host has a binary choice:
+
+a. Bind the DFB unconditionally on the host. The kernel uses
+   `if constexpr (cond) { … cb.wait_front(…); … }` to gate runtime use; the
+   wrapper construction (`experimental::DataflowBuffer cb_x_obj(dfb::x);`)
+   sits in the outer scope.
+b. Bind the DFB only when the path is taken. The kernel needs an `#ifdef`
+   to skip the wrapper declaration, because `dfb::x` simply isn't generated
+   when the host doesn't bind it.
+
+Option (a) — what the reduction factories chose — costs ~1 tile of L1 per
+core when the optional path isn't taken (`cb_scaled` for non-`do_scale`
+W-Welford). Option (b) is more invasive on the kernel side and bifurcates the
+source.
+
+A subtlety with option (a): `if constexpr (false) { … cb_x_obj.wait_front(…) … }`
+discards the entire branch at parse time, so even though the wrapper exists,
+the compiler never resolves names inside the discarded block — so it doesn't
+matter whether the LLK calls inside reference the unused buffer. The wrapper
+*declaration* itself, though, is parsed and *does* require `dfb::x` to exist.
+That's the binding constraint.
+
+The guide should:
+- State that "the wrapper construction is what requires the host-side
+  binding to exist", so authors know option (a) and option (b) are real
+  alternatives with different cost.
+- If the framework grows truly-optional bindings (`OptionalDFBBinding` or
+  similar), point to that instead.
+
+### 18. Recent API change: `MakeProgramFromSpec` now requires a `MeshDevice&`
+
+Mid-port, `tt_metal/api/tt-metalium/experimental/metal2_host_api/program.hpp`
+changed signatures from
+
+```cpp
+Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = false);
+```
+
+to
+
+```cpp
+Program MakeProgramFromSpec(
+    const distributed::MeshDevice& mesh_device,
+    const ProgramSpec& spec,
+    bool skip_validation = false);
+```
+
+Any in-flight metal2 ports with the old signature get a compile error
+("too few arguments to function call, expected at least 2"). Standard fix:
+pass `*tensor_args.device()` from the factory's `create()` — TTNN's
+`Tensor::device()` returns `distributed::MeshDevice*`, so
+
+```cpp
+Program program = m2::MakeProgramFromSpec(*a.device(), spec);
+```
+
+is the universal patch.
+
+The guide should:
+- Surface this signature on the very first `MakeProgramFromSpec` example
+  (the legacy 1-arg signature is dead).
+- Add a Troubleshooting bullet: "too few arguments to function call,
+  expected at least 2, have 1".
+
+### 19. Multi-variant factories: one `create()`, multiple ProgramSpecs
+
+The W-port doc treats `create()` as building a single ProgramSpec. The Welford
+factory builds three: one per `reduce_dim` (W, H, HW). Each variant has its
+own kernels (sequential reader vs column-partitioned reader; generic writer
+vs Welford-specific writer; one of three compute kernels), its own DFB set
+(W needs `var` + `scaled`; HW needs `partial` + `combined`), and its own RTA
+schema (`NCHt` for W, `NCWt` for H, `NC_per_core` for HW).
+
+Patterns that worked:
+
+- Branch on the variant inside `create()` to choose kernel paths and CTA
+  bindings. There's no factory-class indirection — the variant is a
+  configuration, not a class hierarchy.
+- Capture the variant in `shared_variables_t` (the Welford
+  `WelfordReduceSharedVariables` carries `reduce_dim`) so
+  `override_runtime_arguments` can rebuild the right per-core RTA shape on
+  cache hit. Without this, the override path would have to re-derive the
+  variant from `operation_attributes`, which is also fine but adds a layer.
+- Per-variant DFB ids declared as factory-local constants, not in the shared
+  helpers header — they're only meaningful to one factory.
+- Per-variant kernel-side DFB declarations: the kernel for variant X expects
+  `dfb::partial` to exist; the host for variant X is the only path that binds
+  it. As long as the host's variant selection matches the kernel source's
+  hardcoded DFB references, this works without `#ifdef`s in the kernel.
+
+The guide should:
+- Add a short "multi-variant factory" example (Welford is a clean reference).
+- Describe how `shared_variables_t` interacts with variant selection: the
+  variant is captured at miss-time and reused at cache-hit time, so
+  `override_runtime_arguments` doesn't need to re-derive it.
+
+### 20. Shared compute kernels disagree when factories disagree on which CTA gets demoted
+
+This is a corollary of section 3. `reduce.cpp` is the unified non-negate
+compute kernel for the reduction primitive; the Gen1 version took
+`(Ht, Wt, NC)` as compile-time args. Metal 2.0 forces a choice for any
+multi-core factory: which of those becomes the per-node RTA?
+
+- The W factory promotes `Ht` to RTA (work split varies `Ht` per core).
+- The H factory promotes `Wt` to RTA (work split varies `Wt` per core).
+- The HW factory has a single core, so all three stay compile-time, but it
+  *uses* the W-style kernel and just supplies `Ht` as a constant runtime arg.
+
+W and HW can share `reduce.cpp` (`Ht` runtime, `Wt`/`NC` compile-time, HW
+passes the constant `Ht` runtime). H cannot reuse the same source — it would
+need `Wt` runtime and `Ht` compile-time, which the W-style signature can't
+express. The H factory therefore uses a dedicated `reduce_h.cpp` with the
+swapped runtime/compile-time classification.
+
+The general rule: if two factories share a kernel source, they must agree on
+which CTAs are demoted to RTAs. When they don't agree, accept the second
+kernel source — it's cheaper than threading both axes as runtime in a single
+"super-kernel", which loses compile-time loop unrolling on whichever axis a
+given factory could otherwise hold constant.
+
+The guide should:
+- Note this as the natural consequence of demote-to-RTA: when factories with
+  different work-split axes share a non-negate kernel, separate sources are
+  the right answer.
+
 ---
 
 ### Summary table
@@ -457,3 +691,9 @@ A short "naming and uniqueness" subsection would help.
 | 12 | Helper libraries hard-coded to Gen1 CBs; needed buffer-type abstraction for Quasar | **High — blocks Quasar port of any helper-using kernel** |
 | 13 | `kernel_lib` helpers reference Gen1-only `DataFormat` enumerators and Gen1-only `_with_dt` LLKs in non-template / eagerly-checked template bodies | **High — blocks compilation of any `compute_kernel_lib::reduce`-using kernel on Quasar** |
 | 14 | `unique_id` / `program_id` naming/uniqueness rules unstated | Low |
+| 15 | Unity-build collisions in anonymous namespaces (cross-cpp helpers, constants, structs) | Medium — hits any second factory in the same target |
+| 16 | DFB capacity must be a multiple of 2 on Quasar (implicit-sync) | Medium — silent runtime assertion |
+| 17 | Optional / conditional DFBs require always-bind + `if constexpr` gating | Low — pattern, not a defect |
+| 18 | `MakeProgramFromSpec` API change: now requires `MeshDevice&` (#43589) | Medium — breaks every in-flight port |
+| 19 | Multi-variant factories (one `create()`, multiple ProgramSpecs) undocumented | Low — pattern not in guide |
+| 20 | Shared compute kernels disagree when factories disagree on which CTA gets demoted | Low — corollary of #3 |

@@ -2,6 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 compute kernel for the multi-core H reduction primitive *with negation*.
+//
+// Migration notes (mirrors reduce_h.cpp):
+//   - Wt is bound as a per-node runtime arg because the H factory's split_work_to_cores
+//     produces two core groups with different per-core column counts.
+//   - Ht, NC and post_mul_scaler_bits are compile-time.
+//   - Local DataflowBuffers are bound by name (dfb::input, dfb::scaler, dfb::output,
+//     dfb::acc_w/dfb::acc_r, dfb::ineg_w/dfb::ineg_r). The accumulator and
+//     intermediate-negation buffers are produced AND consumed by this same kernel,
+//     so each has two host-side bindings (*_w PRODUCER, *_r CONSUMER) with distinct
+//     local_accessor_names; on Gen1 they resolve to the same underlying CB.
+
 #include <cstdint>
 
 #include "api/compute/reduce.h"
@@ -9,7 +21,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
-#include "experimental/circular_buffer.h"
+#include "experimental/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 #ifdef REDUCE_POST_MUL
@@ -17,30 +29,32 @@
 #endif
 
 void kernel_main() {
-    uint32_t Ht = get_compile_time_arg_val(0);
-    uint32_t Wt = get_compile_time_arg_val(1);
-    uint32_t NC = get_compile_time_arg_val(2);
+    const uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t NC = get_arg(args::NC);
 #ifdef REDUCE_POST_MUL
     // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
-    constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+    constexpr uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
 #endif
     constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
 
-    // Circular buffers:
-    constexpr uint32_t cb_input = tt::CBIndex::c_0;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_output = tt::CBIndex::c_3;
-    constexpr uint32_t cb_acc = tt::CBIndex::c_4;
-    constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
+    experimental::DataflowBuffer input_buf(dfb::input);
+    experimental::DataflowBuffer scaler_buf(dfb::scaler);
+    experimental::DataflowBuffer output_buf(dfb::output);
+    experimental::DataflowBuffer acc_writer(dfb::acc_w);
+    experimental::DataflowBuffer acc_reader(dfb::acc_r);
+    experimental::DataflowBuffer ineg_writer(dfb::ineg_w);
+    experimental::DataflowBuffer ineg_reader(dfb::ineg_r);
 
-    experimental::CircularBuffer cb_input_obj(cb_input);
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
-    experimental::CircularBuffer cb_output_obj(cb_output);
-    experimental::CircularBuffer cb_acc_obj(cb_acc);
-    experimental::CircularBuffer cb_ineg_obj(cb_ineg);
+    // LLK calls take raw buffer ids.
+    const uint32_t input_id = input_buf.get_id();
+    const uint32_t scaler_id = scaler_buf.get_id();
+    const uint32_t output_id = output_buf.get_id();
+    const uint32_t acc_id = acc_writer.get_id();    // == acc_reader.get_id()
+    const uint32_t ineg_id = ineg_writer.get_id();  // == ineg_reader.get_id()
 
-    compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
-    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+    compute_kernel_hw_startup(input_id, scaler_id, output_id);
+    scaler_buf.wait_front(1);  // scaler tile from the reader
 
     constexpr int onetile = 1;
 
@@ -64,75 +78,75 @@ void kernel_main() {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 reduce_dst_idx = 0;
                 tile_regs_acquire();
-                cb_input_obj.wait_front(ntiles);
+                input_buf.wait_front(ntiles);
 
-                reconfig_data_format_srca(cb_input);
-                copy_tile_init(cb_input);
+                reconfig_data_format_srca(input_id);
+                copy_tile_init(input_id);
                 negative_tile_init();
                 // Partial chunk (ntiles < row_chunk): the input CB depth matches row_chunk, but only consume ntiles
                 // tiles. Indexed reads plus a bulk pop of ntiles do not advance the CB head during reads, leaving
                 // trailing slots effectively stale; the next pass can index into those offsets and read stale L1 data.
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     // Read from index 0 and pop_front(1) per tile to keep the CB head in sync and avoid stale data.
-                    copy_tile(cb_input, 0, i);
-                    cb_input_obj.pop_front(1);
+                    copy_tile(input_id, 0, i);
+                    input_buf.pop_front(1);
                     negative_tile(i);
                 }
 
                 tile_regs_commit();
-                cb_ineg_obj.reserve_back(ntiles);
+                ineg_writer.reserve_back(ntiles);
                 tile_regs_wait();
-                pack_reconfig_data_format(cb_ineg);
+                pack_reconfig_data_format(ineg_id);
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    pack_tile(i, cb_ineg);
+                    pack_tile(i, ineg_id);
                 }
                 tile_regs_release();
-                cb_ineg_obj.push_back(ntiles);
+                ineg_writer.push_back(ntiles);
 
                 tile_regs_acquire();
 
                 if (ht > 0) {
-                    cb_acc_obj.wait_front(ntiles);
+                    acc_reader.wait_front(ntiles);
                 }
 
-                cb_ineg_obj.wait_front(ntiles);
+                ineg_reader.wait_front(ntiles);
 
                 if (ht > 0) {
-                    reconfig_data_format_srca(cb_acc);
-                    copy_tile_init(cb_acc);
+                    reconfig_data_format_srca(acc_id);
+                    copy_tile_init(acc_id);
                     for (uint32_t i = 0; i < ntiles; ++i) {
-                        copy_tile(cb_acc, i, i);
+                        copy_tile(acc_id, i, i);
                     }
                 }
-                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
-                pack_reconfig_data_format(cb_acc);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(ineg_id, scaler_id, acc_id);
+                pack_reconfig_data_format(acc_id);
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, i, 0, i);
+                    reduce_tile<REDUCE_OP, REDUCE_DIM>(ineg_id, scaler_id, i, 0, i);
                 }
-                reduce_uninit(cb_ineg);
+                reduce_uninit(ineg_id);
                 tile_regs_commit();
-                cb_ineg_obj.pop_front(ntiles);
+                ineg_reader.pop_front(ntiles);
 
                 if (ht > 0) {
-                    cb_acc_obj.pop_front(ntiles);
+                    acc_reader.pop_front(ntiles);
                 }
-                cb_acc_obj.reserve_back(ntiles);
+                acc_writer.reserve_back(ntiles);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    pack_tile(i, cb_acc);
+                    pack_tile(i, acc_id);
                 }
                 tile_regs_release();
-                cb_acc_obj.push_back(ntiles);
+                acc_writer.push_back(ntiles);
             }
 
             tile_regs_acquire();
 
-            cb_acc_obj.wait_front(ntiles);
+            acc_reader.wait_front(ntiles);
 
-            reconfig_data_format_srca(cb_acc);
-            copy_tile_init(cb_acc);
+            reconfig_data_format_srca(acc_id);
+            copy_tile_init(acc_id);
             for (uint32_t i = 0; i < ntiles; ++i) {
-                copy_tile(cb_acc, i, i);
+                copy_tile(acc_id, i, i);
             }
             negative_tile_init();
             for (uint32_t i = 0; i < ntiles; ++i) {
@@ -150,15 +164,15 @@ void kernel_main() {
 #endif
 
             tile_regs_commit();
-            cb_acc_obj.pop_front(ntiles);
-            cb_output_obj.reserve_back(ntiles);
+            acc_reader.pop_front(ntiles);
+            output_buf.reserve_back(ntiles);
             tile_regs_wait();
-            pack_reconfig_data_format(cb_output);
+            pack_reconfig_data_format(output_id);
             for (uint32_t i = 0; i < ntiles; ++i) {
-                pack_tile(i, cb_output);
+                pack_tile(i, output_id);
             }
             tile_regs_release();
-            cb_output_obj.push_back(ntiles);
+            output_buf.push_back(ntiles);
         }
     }
 }

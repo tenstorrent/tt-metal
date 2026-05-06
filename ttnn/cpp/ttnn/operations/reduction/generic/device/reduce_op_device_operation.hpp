@@ -9,7 +9,9 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include "reduce_op_device_operation_types.hpp"
+#include "reduce_op_multi_core_h_program_factory.hpp"
 #include "reduce_op_multi_core_w_program_factory.hpp"
+#include "reduce_op_single_core_hw_program_factory.hpp"
 #include "tt_stl/reflection.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
@@ -22,24 +24,13 @@ struct ReduceDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct ReduceSingleCoreHwProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
-    struct ReduceMultiCoreHProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
-    // Multi-core W factory has been migrated to the Metal 2.0 host API. It uses
-    // ProgramFactoryConcept (create + override_runtime_arguments) rather than the
-    // ProgramDescriptor-based create_descriptor() path. The framework's variant
-    // adapter dispatches each alternative based on which concept it satisfies.
+    // The single-core HW factory and the multi-core H and W factories have all been
+    // migrated to the Metal 2.0 host API. They use ProgramFactoryConcept (create +
+    // override_runtime_arguments) rather than the ProgramDescriptor-based
+    // create_descriptor() path. The framework's variant adapter dispatches each
+    // alternative based on which concept it satisfies.
+    using ReduceSingleCoreHwProgramFactory = ::ttnn::prim::ReduceSingleCoreHwProgramFactory;
+    using ReduceMultiCoreHProgramFactory = ::ttnn::prim::ReduceMultiCoreHProgramFactory;
     using ReduceMultiCoreWProgramFactory = ::ttnn::prim::ReduceMultiCoreWProgramFactory;
 
     using program_factory_t =

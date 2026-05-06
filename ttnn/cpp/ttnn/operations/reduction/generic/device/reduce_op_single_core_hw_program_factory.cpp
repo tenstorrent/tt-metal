@@ -1,227 +1,368 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "reduce_op_device_operation.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+// Single-core HW reduction program factory, migrated to the Metal 2.0 host API.
+//
+// HW reduces both H and W axes on a single worker core. Because there is no work split,
+// the program contains exactly one WorkUnitSpec targeting the chosen core.
+
+#include "reduce_op_single_core_hw_program_factory.hpp"
+
 #include <bit>
 #include <cmath>
+#include <cstdint>
 #include <map>
+#include <string>
+#include <vector>
+
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/host_api.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+
+#include "reduce_metal2_factory_helpers.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+namespace m2 = tt::tt_metal::experimental::metal2_host_api;
+
+namespace {
+
+// KernelSpec / WorkUnitSpec ids — kept local with an `HW_` prefix so the symbols
+// don't clash with the W factory's analogues under Unity builds. DFB ids and the
+// MakeDFB / BindDFB / DefinesFromMap helpers are shared and live in
+// reduce_metal2_factory_helpers.hpp.
+constexpr const char* HW_READER_KERNEL = "reduce_hw_reader";
+constexpr const char* HW_WRITER_KERNEL = "reduce_hw_writer";
+constexpr const char* HW_COMPUTE_KERNEL = "reduce_hw_compute";
+constexpr const char* HW_WORK_UNIT = "single_core";
+
+m2::ProgramRunParams BuildRunParams(
+    const ReduceSingleCoreHwSharedVariables& shared, bool negate, uint32_t Ht, uint32_t src_addr, uint32_t dst_addr) {
+    m2::ProgramRunParams params;
+
+    m2::ProgramRunParams::KernelRunParams reader_params;
+    reader_params.kernel_spec_name = HW_READER_KERNEL;
+    reader_params.named_runtime_args.push_back(m2::ProgramRunParams::KernelRunParams::NodeNamedRTAs{
+        .node = shared.core,
+        .args =
+            {
+                {"src_addr", src_addr},
+                {"num_tiles", shared.num_tensor_tiles},
+                {"start_id", 0u},
+            },
+    });
+
+    m2::ProgramRunParams::KernelRunParams writer_params;
+    writer_params.kernel_spec_name = HW_WRITER_KERNEL;
+    writer_params.named_runtime_args.push_back(m2::ProgramRunParams::KernelRunParams::NodeNamedRTAs{
+        .node = shared.core,
+        .args =
+            {
+                {"dst_addr", dst_addr},
+                {"num_pages", shared.num_tensor_tiles / shared.out_dim_divider},
+                {"start_id", 0u},
+            },
+    });
+
+    m2::ProgramRunParams::KernelRunParams compute_params;
+    compute_params.kernel_spec_name = HW_COMPUTE_KERNEL;
+    if (!negate) {
+        // Non-negate kernel (reduce.cpp) takes Ht as a per-node runtime arg so a single
+        // KernelSpec can serve both the W factory (varying per-core Ht) and the HW factory
+        // (constant Ht). The negate kernel (reduce_hw_neg.cpp) takes Ht as compile-time.
+        compute_params.named_runtime_args.push_back(m2::ProgramRunParams::KernelRunParams::NodeNamedRTAs{
+            .node = shared.core,
+            .args = {{"Ht", Ht}},
+        });
+    }
+
+    params.kernel_run_params = {std::move(reader_params), std::move(writer_params), std::move(compute_params)};
+    return params;
+}
+
+}  // namespace
+
+ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFactory::create(
+    const ReduceParams& operation_attributes,
+    const tt::tt_metal::Tensor& tensor_args,
+    tt::tt_metal::Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+
     const auto& a = tensor_args;
     auto& output = tensor_return_value;
+
+    // The Metal 2.0 reader/writer kernels rely on InterleavedAddrGenFast — sharded buffers
+    // aren't supported on this path. Match the W factory's stance.
+    TT_FATAL(
+        !a.memory_config().is_sharded(),
+        "ReduceSingleCoreHwProgramFactory (Metal 2.0): only interleaved input buffers are supported (got "
+        "memory_config = {})",
+        a.memory_config());
+    TT_FATAL(
+        !output.memory_config().is_sharded(),
+        "ReduceSingleCoreHwProgramFactory (Metal 2.0): only interleaved output buffers are supported (got "
+        "memory_config = {})",
+        output.memory_config());
+
     const auto& shape = a.padded_shape();
-    uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
+    const uint32_t W = shape[3];
+    const uint32_t H = shape[2];
+    const uint32_t NC = shape[1] * shape[0];
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
-
-    uint32_t Wt = W / tile_width;
-    uint32_t Ht = H / tile_height;
+    const uint32_t Wt = W / tile_width;
+    const uint32_t Ht = H / tile_height;
     TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={}, H={}, W={})", Ht, Wt, H, W);
     TT_FATAL(
         operation_attributes.dim == ReduceOpDim::HW,
         "ReduceSingleCoreHwProgramFactory supports HW dim only, got dim enum value {}",
         static_cast<int>(operation_attributes.dim));
-
-    // The single-core HW path uses REDUCE_SCALAR mode, which applies the
-    // scaler twice internally (once per dimension). Here we compensate with
-    // sqrt(scaler). However, sqrt of a negative number is NaN, so negative scalers
-    // must not reach this code path. Instead negative scalers are handled via the two-step
-    // W-then-H path where the scaler is applied once (see the reduce function in reduce_op.cpp).
-    TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
-    float scaler = std::sqrt(operation_attributes.scaler);
-
     TT_FATAL(
-        H % tile_height == 0 && W % tile_width == 0, "Reduce HW expects tile-aligned padded shape H={}, W={}", H, W);
-    uint32_t num_tensor_tiles = NC * H * W / tile_hw;
-    const uint32_t num_tensor_tiles_ht_wt = NC * Ht * Wt;
-    TT_FATAL(
-        num_tensor_tiles == num_tensor_tiles_ht_wt,
-        "Reduce HW tile count mismatch: tile_hw path={} vs Ht*Wt path={}",
-        num_tensor_tiles,
-        num_tensor_tiles_ht_wt);
+        H % tile_height == 0 && W % tile_width == 0,
+        "Reduce HW expects tile-aligned padded shape H={}, W={}",
+        H,
+        W);
 
-    CoreCoord selected_core_coord = {0, 0};
-    if (operation_attributes.sub_core_grids.has_value() && !operation_attributes.sub_core_grids->ranges().empty()) {
-        const auto& r = operation_attributes.sub_core_grids->ranges().front();
-        selected_core_coord = r.start_coord;
+    const uint32_t num_tensor_tiles = NC * H * W / tile_hw;
+    const uint32_t out_dim_divider = Ht * Wt;
+    {
+        const uint32_t num_tensor_tiles_ht_wt = NC * Ht * Wt;
         TT_FATAL(
-            operation_attributes.sub_core_grids->contains(selected_core_coord),
-            "Selected core {} must be contained in provided sub_core_grids {}",
-            selected_core_coord,
-            *operation_attributes.sub_core_grids);
+            num_tensor_tiles == num_tensor_tiles_ht_wt,
+            "Reduce HW tile count mismatch: tile_hw path={} vs Ht*Wt path={}",
+            num_tensor_tiles,
+            num_tensor_tiles_ht_wt);
     }
-    CoreRange core(selected_core_coord, selected_core_coord);
-    CoreRangeSet core_set(core);
-
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-
-    tt::DataFormat scaler_cb_data_format =
-        src0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
-
-    tt_metal::Buffer* src0_buffer = a.buffer();
-
-    // This should allocate a DRAM buffer on the device
-    tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
-
-    ProgramDescriptor desc;
-
-    uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = 2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * src0_single_tile_size,
-        .core_ranges = core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = src0_cb_data_format,
-            .page_size = src0_single_tile_size,
-        }}},
-    });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scaler_single_tile_size,
-        .core_ranges = core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
-            .data_format = scaler_cb_data_format,
-            .page_size = scaler_single_tile_size,
-        }}},
-    });
-
-    uint32_t output_cb_index = tt::CBIndex::c_3;
-    uint32_t num_output_tiles = 2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * dst_single_tile_size,
-        .core_ranges = core_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = dst_cb_data_format,
-            .page_size = dst_single_tile_size,
-        }}},
-    });
-
-    // For min/max with non-unity scalar, the GMPOOL hardware path only respects the scaler's
-    // exponent, so the device reduces with scaler=1.0 and the user scalar is applied after the
-    // reduction via SFPU mul_unary_tile inside the compute kernel.
-    const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
-    uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
-
-    std::vector<uint32_t> reader_compile_time_args = {std::bit_cast<uint32_t>(scaler)};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-
-    if (operation_attributes.negate) {
-        uint32_t acc_cb_index = tt::CBIndex::c_4;
-        uint32_t num_acc_tiles = 1;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = num_acc_tiles * dst_single_tile_size,
-            .core_ranges = core_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(acc_cb_index),
-                .data_format = dst_cb_data_format,
-                .page_size = dst_single_tile_size,
-            }}},
-        });
-
-        uint32_t inv_cb_index = tt::CBIndex::c_5;
-        uint32_t num_inv_tiles = 1;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = num_inv_tiles * dst_single_tile_size,
-            .core_ranges = core_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(inv_cb_index),
-                .data_format = dst_cb_data_format,
-                .page_size = dst_single_tile_size,
-            }}},
-        });
-    }
-
-    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    std::map<std::string, std::string> reduce_defines =
-        reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::HW);
-    if (use_post_mul) {
-        reduce_defines["REDUCE_POST_MUL"] = "1";
-    }
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-        "reader_unary_reduce_universal_start_id.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_set;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.defines = {reduce_defines.begin(), reduce_defines.end()};
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core_set;
-    writer_desc.compile_time_args = writer_compile_time_args;
-    writer_desc.config = WriterConfigDescriptor{};
-
-    std::vector<uint32_t> compute_kernel_args = {
-        Ht,                    // Ht
-        Wt,                    // Wt
-        NC,                    // NC
-        post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
-    };
-
-    const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
-        (operation_attributes.negate ? "_hw_neg" : "") + ".cpp";
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = compute_kernel;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_set;
-    compute_desc.compile_time_args = compute_kernel_args;
-    compute_desc.defines = {reduce_defines.begin(), reduce_defines.end()};
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-    };
-
-    reader_desc.emplace_runtime_args(selected_core_coord, {a.buffer(), num_tensor_tiles, 0u});
-
-    TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={}, H={}, W={})", Ht, Wt, H, W);
-    uint32_t out_dim_divider = Ht * Wt;
     TT_FATAL(
-        num_tensor_tiles % out_dim_divider == 0,
+        out_dim_divider != 0 && num_tensor_tiles % out_dim_divider == 0,
         "Reduce HW per-core input tiles {} must be divisible by Ht*Wt={}",
         num_tensor_tiles,
         out_dim_divider);
 
-    writer_desc.emplace_runtime_args(selected_core_coord, {output.buffer(), num_tensor_tiles / out_dim_divider, 0u});
+    // The single-core HW path uses REDUCE_SCALAR mode, which applies the scaler twice
+    // internally (once per dimension). Compensate with sqrt(scaler). sqrt of a negative
+    // number is NaN, so negative scalers are routed through the two-step W-then-H path
+    // upstream (see reduce_op.cpp).
+    TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
+    const float scaler = std::sqrt(operation_attributes.scaler);
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    CoreCoord core_coord{0, 0};
+    if (operation_attributes.sub_core_grids.has_value() && !operation_attributes.sub_core_grids->ranges().empty()) {
+        const auto& r = operation_attributes.sub_core_grids->ranges().front();
+        core_coord = r.start_coord;
+        TT_FATAL(
+            operation_attributes.sub_core_grids->contains(core_coord),
+            "Selected core {} must be contained in provided sub_core_grids {}",
+            core_coord,
+            *operation_attributes.sub_core_grids);
+    }
+    const CoreRange core_range(core_coord, core_coord);
+    const CoreRangeSet core_set(core_range);
 
-    return desc;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
+    (void)math_approx_mode;
+    (void)packer_l1_acc;
+    (void)dst_full_sync_en;
+
+    const tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    const uint32_t src0_single_tile_size = tile_size(src0_cb_data_format);
+    const tt::DataFormat scaler_cb_data_format =
+        src0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t scaler_single_tile_size = tile_size(scaler_cb_data_format);
+    const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const uint32_t dst_single_tile_size = tile_size(dst_cb_data_format);
+
+    // Buffer addressing setup.
+    const Buffer* src_buffer = a.buffer();
+    const Buffer* dst_buffer = output.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
+    const uint32_t src_is_dram = src_buffer->is_dram() ? 1u : 0u;
+    const uint32_t dst_is_dram = dst_buffer->is_dram() ? 1u : 0u;
+    const uint32_t src_aligned_page_size = src_buffer->aligned_page_size();
+    const uint32_t dst_aligned_page_size = dst_buffer->aligned_page_size();
+
+    const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
+    const uint32_t scaler_bits = std::bit_cast<uint32_t>(scaler);
+    const uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
+
+    // ---- DFBs ----
+    // Quasar's implicit-sync DFB scheduling allocates 2 transaction IDs per side and
+    // requires capacity to be a multiple of 2; we standardize on 2 entries here.
+    constexpr uint32_t kNumInputEntries = 2;
+    constexpr uint32_t kNumScalerEntries = 2;
+    constexpr uint32_t kNumOutputEntries = 2;
+    constexpr uint32_t kNumScratchEntries = 2;
+
+    std::vector<m2::DataflowBufferSpec> dataflow_buffers;
+    dataflow_buffers.push_back(
+        MakeDFB(INPUT_DFB, src0_single_tile_size, kNumInputEntries, src0_cb_data_format, a.tensor_spec().tile()));
+    dataflow_buffers.push_back(
+        MakeDFB(SCALER_DFB, scaler_single_tile_size, kNumScalerEntries, scaler_cb_data_format, a.tensor_spec().tile()));
+    dataflow_buffers.push_back(
+        MakeDFB(OUTPUT_DFB, dst_single_tile_size, kNumOutputEntries, dst_cb_data_format, output.tensor_spec().tile()));
+    if (operation_attributes.negate) {
+        dataflow_buffers.push_back(MakeDFB(
+            ACC_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()));
+        dataflow_buffers.push_back(MakeDFB(
+            INEG_DFB, dst_single_tile_size, kNumScratchEntries, dst_cb_data_format, output.tensor_spec().tile()));
+    }
+
+    const std::map<std::string, std::string> reduce_defines_map =
+        reduce_op_utils::get_defines(operation_attributes.math_op, ReduceOpDim::HW);
+    const auto reduce_defines = DefinesFromMap(reduce_defines_map);
+
+    // ---- Reader ----
+    m2::KernelSpec reader;
+    reader.unique_id = HW_READER_KERNEL;
+    reader.source = m2::KernelSpec::SourceFilePath{
+        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+        "reader_unary_reduce_universal_start_id.cpp"};
+    reader.num_threads = 1;
+    reader.compile_time_arg_bindings = {
+        {"scaler_bits", scaler_bits},
+        {"is_dram", src_is_dram},
+        {"aligned_page_size", src_aligned_page_size},
+    };
+    reader.runtime_arguments_schema.named_runtime_args = {"src_addr", "num_tiles", "start_id"};
+    reader.compiler_options.defines = reduce_defines;
+    reader.config_spec = m2::DataMovementConfiguration{
+        .gen1_data_movement_config =
+            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+            },
+        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
+    };
+    BindDFB(reader, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFB(reader, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::PRODUCER);
+
+    // ---- Writer ----
+    m2::KernelSpec writer;
+    writer.unique_id = HW_WRITER_KERNEL;
+    writer.source = m2::KernelSpec::SourceFilePath{
+        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_unary_interleaved.cpp"};
+    writer.num_threads = 1;
+    writer.compile_time_arg_bindings = {
+        {"is_dram", dst_is_dram},
+        {"aligned_page_size", dst_aligned_page_size},
+    };
+    writer.runtime_arguments_schema.named_runtime_args = {"dst_addr", "num_pages", "start_id"};
+    writer.compiler_options.defines = reduce_defines;
+    writer.config_spec = m2::DataMovementConfiguration{
+        .gen1_data_movement_config =
+            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+            },
+        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{},
+    };
+    BindDFB(writer, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::CONSUMER);
+
+    // ---- Compute ----
+    // Non-negate uses the shared reduce.cpp (Ht is runtime so the same source
+    // serves both the W and HW factories). Negate uses the HW-specific reduce_hw_neg.cpp,
+    // which takes all dims as compile-time arguments.
+    const std::string compute_kernel_path =
+        operation_attributes.negate
+            ? "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw_neg.cpp"
+            : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp";
+
+    m2::KernelSpec compute;
+    compute.unique_id = HW_COMPUTE_KERNEL;
+    compute.source = m2::KernelSpec::SourceFilePath{compute_kernel_path};
+    compute.num_threads = 1;
+    if (operation_attributes.negate) {
+        compute.compile_time_arg_bindings = {
+            {"Ht", Ht},
+            {"Wt", Wt},
+            {"NC", NC},
+            {"post_mul_scaler_bits", post_mul_scaler_bits},
+        };
+        // No runtime args for the negate kernel.
+    } else {
+        compute.compile_time_arg_bindings = {
+            {"Wt", Wt},
+            {"NC", NC},
+            {"post_mul_scaler_bits", post_mul_scaler_bits},
+        };
+        compute.runtime_arguments_schema.named_runtime_args = {"Ht"};
+    }
+    auto compute_defines = reduce_defines;
+    if (use_post_mul) {
+        compute_defines.emplace_back("REDUCE_POST_MUL", "1");
+    }
+    compute.compiler_options.defines = std::move(compute_defines);
+    compute.config_spec = m2::ComputeConfiguration{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+    };
+    BindDFB(compute, INPUT_DFB, "input", m2::KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFB(compute, SCALER_DFB, "scaler", m2::KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFB(compute, OUTPUT_DFB, "output", m2::KernelSpec::DFBEndpointType::PRODUCER);
+    if (operation_attributes.negate) {
+        BindDFB(compute, ACC_DFB, "acc_w", m2::KernelSpec::DFBEndpointType::PRODUCER);
+        BindDFB(compute, ACC_DFB, "acc_r", m2::KernelSpec::DFBEndpointType::CONSUMER);
+        BindDFB(compute, INEG_DFB, "ineg_w", m2::KernelSpec::DFBEndpointType::PRODUCER);
+        BindDFB(compute, INEG_DFB, "ineg_r", m2::KernelSpec::DFBEndpointType::CONSUMER);
+    }
+
+    // ---- Single-core work unit ----
+    m2::WorkUnitSpec work_unit;
+    work_unit.unique_id = HW_WORK_UNIT;
+    work_unit.kernels = {HW_READER_KERNEL, HW_WRITER_KERNEL, HW_COMPUTE_KERNEL};
+    work_unit.target_nodes = core_set;
+
+    // ---- Assemble the spec ----
+    m2::ProgramSpec spec;
+    spec.program_id = "ttnn::reduce_single_core_hw";
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    spec.dataflow_buffers = std::move(dataflow_buffers);
+    spec.work_units = {std::move(work_unit)};
+
+    // ---- Build and parameterize ----
+    Program program = m2::MakeProgramFromSpec(*a.device(), spec);
+
+    shared_variables_t shared{
+        .core = core_coord,
+        .num_tensor_tiles = num_tensor_tiles,
+        .out_dim_divider = out_dim_divider,
+    };
+
+    auto run_params =
+        BuildRunParams(shared, operation_attributes.negate, Ht, src_buffer->address(), dst_buffer->address());
+    m2::SetProgramRunParameters(program, run_params);
+
+    return cached_program_t{std::move(program), std::move(shared)};
+}
+
+void ReduceSingleCoreHwProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const ReduceParams& operation_attributes,
+    const tt::tt_metal::Tensor& tensor_args,
+    tt::tt_metal::Tensor& tensor_return_value) {
+    const auto* src_buffer = tensor_args.buffer();
+    const auto* dst_buffer = tensor_return_value.buffer();
+
+    const auto& shape = tensor_args.padded_shape();
+    const uint32_t H = shape[2];
+    const uint32_t tile_height = tensor_args.tensor_spec().tile().get_height();
+    const uint32_t Ht = H / tile_height;
+
+    auto run_params = BuildRunParams(
+        cached_program.shared_variables, operation_attributes.negate, Ht, src_buffer->address(), dst_buffer->address());
+    m2::SetProgramRunParameters(cached_program.program, run_params);
 }
 
 }  // namespace ttnn::prim
