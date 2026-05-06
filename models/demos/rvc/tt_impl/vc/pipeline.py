@@ -39,24 +39,15 @@ bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)
 def _interpolate_1d(
     x: ttnn.Tensor,
     scale_factor: int | float,
-    mode: str = "nearest",
 ) -> ttnn.Tensor:
-    # 1D upsample for [N, L, C] via 2D NHWC upsample with height fixed to 1.
-    if mode not in ("nearest", "linear"):
-        raise ValueError(f"Unsupported 1D interpolate mode: {mode}")
-    upsample_mode = "nearest"  # if mode == "nearest" else "bilinear"
     x_nhwc = ttnn.unsqueeze(x, dim=1)
     y_nhwc = ttnn.upsample(
         x_nhwc,
         [1, scale_factor],
-        mode=upsample_mode,
+        mode="nearest",
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     return ttnn.squeeze(y_nhwc, dim=1)
-
-    x_torch = ttnn.to_torch(x)
-    x_torch = F.interpolate(x_torch.permute(0, 2, 1), scale_factor=scale_factor).permute(0, 2, 1)
-    return ttnn.from_torch(x_torch, dtype=x.dtype, device=x.device())
 
 
 def _load_hubert(config, hubert_path: str, hubert_cfg_path: str, device):

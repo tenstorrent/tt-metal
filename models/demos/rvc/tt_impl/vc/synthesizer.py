@@ -45,18 +45,9 @@ def ttnn_randn_fallback(shape, dtype, device, cache, mesh_mapper="auto") -> ttnn
 def _interpolate_1d(
     x: ttnn.Tensor,
     scale_factor: int | float,
-    mode: str = "nearest",
 ) -> ttnn.Tensor:
-    # 1D upsample for [N, L, C] via 2D NHWC upsample with height fixed to 1.
-    if mode not in ("nearest", "linear"):
-        raise ValueError(f"Unsupported 1D interpolate mode: {mode}")
-    upsample_mode = "nearest" if mode == "nearest" else "bilinear"
     x_nhwc = ttnn.unsqueeze(ttnn.unsqueeze(x, dim=1), dim=3)
-    y_nhwc = ttnn.upsample(
-        x_nhwc,
-        [1, scale_factor],
-        mode=upsample_mode,
-    )
+    y_nhwc = ttnn.upsample(x_nhwc, [1, scale_factor], mode="nearest")
     return ttnn.squeeze(y_nhwc, dim=1)
 
 
@@ -121,8 +112,8 @@ class MultiHeadAttention:
         )
         self.emb_rel_k: ttnn.Tensor | None = None
         self.emb_rel_v: ttnn.Tensor | None = None
-        self.relative_position_cache: dict[int : ttnn.Tensor] = {}
-        self.index_cache: dict[int : ttnn.Tensor] = {}
+        self.relative_position_cache: dict[int, ttnn.Tensor] = {}
+        self.index_cache: dict[int, ttnn.Tensor] = {}
         self.absolute_position_cache = {}
         self.index_and_mask_cache = {}
 
@@ -859,7 +850,7 @@ class SineGen:
         batch_size, length = f0.shape
         # f0: [B, T]
         # Upsample f0 to full resolution first using TTNN wrapper.
-        f0_up = _interpolate_1d(f0, scale_factor=upp, mode="nearest")
+        f0_up = _interpolate_1d(f0, scale_factor=upp)
         # f0_up = ttnn.pad(f0_up, ((0, 0), (0, (32 - f0_up.shape[1] % 32) % 32), (0, 0)), value=0)
         f0_up = ttnn.reshape(f0_up, (batch_size, int(f0_up.shape[1] / 32), 32))
         f0_up = ttnn.to_layout(f0_up, ttnn.TILE_LAYOUT)
@@ -1112,6 +1103,7 @@ class SynthesizerTrnMsNSF:
             upsample_kernel_sizes,
             gin_channels=gin_channels,
             sr=sr,
+            validation=validation,
         )
         self.flow = ResidualCouplingBlock(device, inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
         self.embedding = Embedding(device, spk_embed_dim, gin_channels)

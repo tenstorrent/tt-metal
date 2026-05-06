@@ -235,7 +235,6 @@ def main() -> None:
     else:
         torch_input_tensor = runner.ttnn_pipeline.prepare_audio_input()
     _, audio_length = torch_input_tensor.shape
-    print(f"Prepared input audio tensor shape: {torch_input_tensor.shape}, dtype: {torch_input_tensor.dtype}")
     if not args.batch_run:
         torch_input_tensor = torch_input_tensor.expand(effective_batch_size, audio_length)
 
