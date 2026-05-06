@@ -864,53 +864,43 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
     const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::DistributedHostBuffer& input_buffer) {
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
+    } else if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
+        // FP8_E4M3 is currently only produced as the row-major output of the DeepSeek V3
+        // prefill combine op and consumed bit-for-bit by the Python dlpack path. No host-side
+        // conversion to/from other dtypes is supported. Add it explicitly when a use case appears.
+        TT_THROW("to_dtype: cross-type conversion involving FP8_E4M3 is not supported");
+        return input_buffer;  // unreachable, satisfies return type
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
-        if constexpr (std::is_same_v<SrcType, float8_e4m3>) {
-            // FP8_E4M3 is ROW_MAJOR-only; BFLOAT8_B/BFLOAT4_B require TILE. The combination
-            // is meaningless — caller must convert via float explicitly. Discarding the bfp
-            // pack path here also prevents instantiation of pack_as_bfpX_tiles<float8_e4m3>.
-            TT_THROW(
-                "to_dtype: FP8_E4M3 → BFLOAT8_B/BFLOAT4_B not supported (incompatible layouts). "
-                "Convert FP8_E4M3 → FLOAT32 → BFLOAT8_B/BFLOAT4_B explicitly.");
-            return input_buffer;  // unreachable, satisfies return type
-        } else {
-            auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
-                ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
-                std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
-                if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
-                    tilized_data = tensor_impl::to_tile_major_layout(
-                        input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
-                    data = ttsl::make_const_span(tilized_data);
+        auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
+            ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
+            std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
+            if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
+                tilized_data = tensor_impl::to_tile_major_layout(
+                    input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
+                data = ttsl::make_const_span(tilized_data);
+            }
+
+            auto float_packed_data = [&]() {
+                constexpr bool row_major_input = false;
+                constexpr bool is_exp_a = false;
+                if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
+                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
+                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                } else {
+                    static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
+            }();
+            return tt::tt_metal::HostBuffer(std::move(float_packed_data));
+        };
 
-                auto float_packed_data = [&]() {
-                    constexpr bool row_major_input = false;
-                    constexpr bool is_exp_a = false;
-                    if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                        return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
-                    } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                        return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
-                    } else {
-                        static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
-                    }
-                }();
-                return tt::tt_metal::HostBuffer(std::move(float_packed_data));
-            };
-
-            return input_buffer.transform(transform_fn);
-        }  // closes the SrcType != float8_e4m3 else
+        return input_buffer.transform(transform_fn);
     } else {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             auto data = buffer.view_as<const SrcType>();
             std::vector<DstType> output_vector(data.size());
             std::transform(data.begin(), data.end(), output_vector.begin(), [](SrcType value) {
-                // float8_e4m3 only knows how to convert to/from float, so route any fp8
-                // ↔ {bfloat16, integer, ...} conversion through float as the common type.
-                if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
-                    return static_cast<DstType>(static_cast<float>(value));
-                } else {
-                    return static_cast<DstType>(value);
-                }
+                return static_cast<DstType>(value);
             });
             return tt::tt_metal::HostBuffer(std::move(output_vector));
         };
