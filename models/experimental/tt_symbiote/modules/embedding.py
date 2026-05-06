@@ -94,7 +94,7 @@ class TTNNBailingPaddedEmbedding(TTNNModule):
         new_layer.embedder = TTNNEmbedding.from_torch(embedding)
         return new_layer
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(self, input_ids):
         rank = len(input_ids.shape)
         seq_dim = rank - 1  # sequence length is always second-to-last
@@ -204,7 +204,7 @@ class TTNNBailingRotaryEmbedding(TTNNModule):
             layout=ttnn.TILE_LAYOUT,
         )
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(self, hidden_states: ttnn.Tensor, position_ids: ttnn.Tensor):
         # Replicate HF BailingMoeV2RotaryEmbedding.forward in TTNN:
         #   freqs = inv_freq_expanded @ position_ids_expanded  -> [batch, seq, rotary_dim/2]
