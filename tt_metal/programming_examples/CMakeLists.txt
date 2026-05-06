@@ -14,7 +14,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/distributed)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_compute)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/core_map)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_riscv)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eltwise_sfpu)

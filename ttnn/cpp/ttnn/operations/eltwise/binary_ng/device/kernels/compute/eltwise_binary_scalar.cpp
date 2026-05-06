@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
+
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 

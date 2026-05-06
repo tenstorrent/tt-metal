@@ -457,12 +457,10 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT:
-
             return {
                 "binary_shift_tile_init();",
                 fmt::format("binary_left_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
         case RIGHT_SHIFT:
-
             return {
                 "binary_shift_tile_init();",
                 fmt::format("binary_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
@@ -471,7 +469,6 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 "binary_shift_tile_init();",
                 fmt::format("binary_logical_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
         case BITWISE_AND:
-
             return {
                 "binary_bitwise_tile_init();",
                 fmt::format("bitwise_and_binary_tile<DataFormat::{}>", int_data_format.value_or("UInt16"))};
