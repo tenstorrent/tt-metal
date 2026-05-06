@@ -1134,6 +1134,25 @@ void RiscFirmwareInitializer::initialize_firmware(
                         auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
+
+                        const auto& build_cfg =
+                            hal_.get_jit_build_config(core_type_idx, processor_class, drisc_id);
+                        binary_mem.process_spans([&](std::vector<uint32_t>::const_iterator,
+                                                     uint64_t addr,
+                                                     uint32_t len_words) {
+                            uint64_t relo_addr =
+                                hal_.relocate_dev_addr(addr, build_cfg.local_init_addr, false);
+                            relo_addr += build_cfg.l1_noc_offset;
+                            uint32_t size_bytes = len_words * sizeof(uint32_t);
+                            log_info(
+                                tt::LogMetal,
+                                "DRAM core {} load_binaries: writing 0x{:x}..0x{:x} ({} bytes)",
+                                virtual_core.str(),
+                                relo_addr,
+                                relo_addr + size_bytes,
+                                size_bytes);
+                        });
+
                         cluster_.l1_barrier(device_id);
                         cluster_.dram_barrier(device_id);
                         llrt::test_load_write_read_risc_binary(
