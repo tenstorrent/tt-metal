@@ -592,6 +592,7 @@ class Transformer(LightweightModule):
             # forward call rather than threading the kwarg through Generator's
             # many ttnn_prefill_forward call sites. Pick it up here when set.
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         return self.forward(
             x,
             current_pos=None,
@@ -607,6 +608,34 @@ class Transformer(LightweightModule):
             batch_size=batch_size,
             page_tables_per_layer=page_tables_per_layer,
         )
+
+    def _page_tables_to_ttnn(self, page_tables_per_layer):
+        """Convert a per-layer list of ``torch.Tensor`` page tables to ttnn
+        tensors on this model's mesh, mirroring the single-``page_table``
+        conversion in :meth:`prepare_prefill_inputs_host`. The plugin passes
+        the per-layer list as torch tensors because the routing kwarg is
+        opaque to ``Generator``'s pre-existing host→device conversion paths;
+        do the conversion here so attention layers always see ttnn tensors.
+        Already-ttnn entries pass through unchanged so callers that did the
+        conversion themselves aren't double-converted.
+        """
+        if page_tables_per_layer is None:
+            return None
+        converted = []
+        for pt in page_tables_per_layer:
+            if pt is None or isinstance(pt, ttnn.Tensor):
+                converted.append(pt)
+                continue
+            converted.append(
+                ttnn.from_torch(
+                    pt,
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            )
+        return converted
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
@@ -636,6 +665,7 @@ class Transformer(LightweightModule):
             # See ttnn_prefill_forward: hybrid bridges stash the per-layer list
             # on the model when active, since Generator doesn't thread the kwarg.
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
 
         tt_logits = self.forward(
             x_embed,

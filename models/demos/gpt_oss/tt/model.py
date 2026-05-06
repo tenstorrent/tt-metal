@@ -422,6 +422,31 @@ class Model:
 
         return logits
 
+    def _page_tables_to_ttnn(self, page_tables_per_layer):
+        """Convert a per-layer list of ``torch.Tensor`` page tables to ttnn
+        tensors on this model's mesh. The vLLM hybrid bridge passes torch
+        tensors because the routing kwarg is opaque to ``Generator``'s
+        existing host→device plumbing; do the conversion here so attention
+        layers always see ttnn tensors. Already-ttnn entries pass through.
+        """
+        if page_tables_per_layer is None:
+            return None
+        converted = []
+        for pt in page_tables_per_layer:
+            if pt is None or isinstance(pt, ttnn.Tensor):
+                converted.append(pt)
+                continue
+            converted.append(
+                ttnn.from_torch(
+                    pt,
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            )
+        return converted
+
     def ttnn_decode_forward(
         self,
         tokens,
@@ -439,6 +464,7 @@ class Model:
             # generator's many internal ttnn_decode_forward sites can't all
             # plumb the new kwarg cleanly. Pick it up here when present.
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         """
         Decode forward pass - processes single tokens.
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
@@ -501,6 +527,7 @@ class Model:
             # on the model when in vLLM hybrid mode, since Generator's prefill
             # path doesn't thread the kwarg.
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
         """Prefill forward pass - processes full sequences"""
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
         seq_len = x.shape[-2]
