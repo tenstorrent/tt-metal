@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "approach": "dflash_block_diffusion",
+  "target_model": "moonshotai/Kimi-K2.5",
+  "draft_model": "z-lab/Kimi-K2.5-DFlash",
+  "golden_reference": {
+    "implementation": "golden_dflash_block_diffusion_agent_23",
+    "manager": "golden_dflash.spec_decode.SpecDecodeManager",
+    "draft_runtime": "golden_dflash.spec_decode.TorchDFlashRuntime"
+  },
+  "block_size": 4,
+  "acceptance_metric": "committed_tokens_per_verify_pass_including_anchor",
+  "trace_files": [
+    {
+      "path": "lossless_block_trace.json",
+      "description": "Synthetic lossless DFlash block replay with partial acceptance and target correction."
+    }
+  ]
+}

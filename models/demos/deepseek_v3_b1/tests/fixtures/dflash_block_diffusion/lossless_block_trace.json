@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "name": "dflash_lossless_block_commit_smoke",
+  "approach": "dflash_block_diffusion",
+  "target_model": "moonshotai/Kimi-K2.5",
+  "draft_model": "z-lab/Kimi-K2.5-DFlash",
+  "params": {
+    "prompt_token_ids": [101, 102],
+    "max_new_tokens": 7,
+    "block_size": 4,
+    "temperature": 0.0,
+    "top_k": 1,
+    "top_p": 1.0,
+    "mask_token_id": 999999
+  },
+  "prefill": {
+    "target_next_token_id": 201,
+    "target_hidden_layer_ids": [0, 1]
+  },
+  "rounds": [
+    {
+      "anchor_pos": 2,
+      "block_input_token_ids": [201, 202, 203, 999],
+      "target_posterior_token_ids": [202, 203, 204, 205],
+      "expected_committed_tokens": 3,
+      "expected_next_anchor_token_id": 204
+    },
+    {
+      "anchor_pos": 5,
+      "block_input_token_ids": [204, 205, 998, 997],
+      "target_posterior_token_ids": [205, 206, 207, 208],
+      "expected_committed_tokens": 2,
+      "expected_next_anchor_token_id": 206
+    },
+    {
+      "anchor_pos": 7,
+      "block_input_token_ids": [206, 207, 996, 995],
+      "target_posterior_token_ids": [207, 208, 209, 210],
+      "expected_committed_tokens": 2,
+      "expected_next_anchor_token_id": 208
+    }
+  ],
+  "expected": {
+    "output_token_ids": [101, 102, 201, 202, 203, 204, 205, 206, 207],
+    "acceptance_lengths": [3, 2, 2],
+    "average_committed_tokens": 2.3333333333333335,
+    "accepted_draft_tokens": 4,
+    "host_writes": [
+      {
+        "token_id": 201,
+        "token_type": "BASE",
+        "position_id": 2,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 202,
+        "token_type": "SPEC",
+        "position_id": 3,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 203,
+        "token_type": "SPEC",
+        "position_id": 4,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 999,
+        "token_type": "SPEC",
+        "position_id": 5,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 204,
+        "token_type": "BASE",
+        "position_id": 5,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 205,
+        "token_type": "SPEC",
+        "position_id": 6,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 998,
+        "token_type": "SPEC",
+        "position_id": 7,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 997,
+        "token_type": "SPEC",
+        "position_id": 8,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 206,
+        "token_type": "BASE",
+        "position_id": 7,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 207,
+        "token_type": "SPEC",
+        "position_id": 8,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 996,
+        "token_type": "SPEC",
+        "position_id": 9,
+        "user_id": 0,
+        "prefill_token_id": -1
+      },
+      {
+        "token_id": 995,
+        "token_type": "SPEC",
+        "position_id": 10,
+        "user_id": 0,
+        "prefill_token_id": -1
+      }
+    ]
+  }
+}
