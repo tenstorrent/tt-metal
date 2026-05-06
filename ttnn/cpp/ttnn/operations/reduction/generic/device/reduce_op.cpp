@@ -124,6 +124,14 @@ Tensor reduce(
         TT_FATAL(reduce_dim == tt::tt_metal::ReduceOpDim::W, "ROW_MAJOR dense path only implements W-dim reduce");
     }
 
+    // High-level mean uses AVG with scaler (1/N). On the tiled path, GMPOOL AVG matches that intent. On the dense
+    // row-major W path we tilize one logical row at a time from a narrow RM page; AVG applies an extra normalization
+    // for full tile faces that does not match torch.mean together with partial-row tilize. Use SUM + the same scaler.
+    tt::tt_metal::ReduceOpMath prim_reduce_math = reduce_math;
+    if (use_rm_dense_w && reduce_math == tt::tt_metal::ReduceOpMath::AVG) {
+        prim_reduce_math = tt::tt_metal::ReduceOpMath::SUM;
+    }
+
     // Reduce only works with tile layout on the classic path; dense path keeps row-major input.
     Tensor tilized_input = input_tensor;
     if (!use_rm_dense_w) {
@@ -218,7 +226,7 @@ Tensor reduce(
 
     return ttnn::prim::reduce(
         tilized_input,
-        reduce_math,
+        prim_reduce_math,
         reduce_dim,
         reduce_scaler,
         output_mem_config,
