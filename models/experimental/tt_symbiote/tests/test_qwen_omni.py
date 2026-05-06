@@ -49,55 +49,41 @@ from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import (
     TTNNConv1d,
     TTNNConv3d,
     TTNNConvTranspose1d,
+    TTNNQwen3Attention,
+    TTNNQwen3OmniAttention,
     TTNNQwen3OmniMoeAudioEncoderConvOutLinear,
+    TTNNQwen3OmniMoeCausalConvNet,
+    TTNNQwen3OmniMoeCausalTransConvNet,
+    TTNNQwen3OmniMoeCode2WavAttention,
+    TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
+    TTNNQwen3OmniMoeConvNeXtBlock,
+    TTNNQwen3OmniMoeRotaryEmbedding,
+    TTNNQwen3OmniMoeTalkerRotaryEmbedding,
+    TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
+    TTNNQwen3OmniMoeVisionRotaryEmbedding,
+    TTNNQwen3OmniTalkerResizeMLP,
+    TTNNQwen3OmniThinkerMoE,
+    TTNNQwen3OmniVisionMLP,
     TTNNQwen3TalkerMoE,
+    TTNNQwen3VLMoeVisionAttention,
+    TTNNQwenAudioAttention,
+    TTNNQwenLayerNorm,
     TTNNQwenOmniConv2dNHWC,
     TTNNQwenOmniDistributedRMSNorm,
     TTNNQwenOmniLinear,
+    TTNNQwenOmniThinkerLmHead,
     TTNNSnakeBeta,
-)
-from models.experimental.tt_symbiote.modules.qwen_omni_moe import (
-    TTNNQwen3OmniThinkerMoE,
+    replace_code_predictor_lm_head_with_ttnn,
+    replace_talker_codec_head_with_ttnn,
+    replace_thinker_lm_head_with_ttnn,
 )
 from models.experimental.tt_symbiote.models.qwen_omni import (
     QwenOmniDeviceInit,
     apply_qwen3_omni_talker_prepare_inputs_fix,
 )
-from models.experimental.tt_symbiote.modules.qwen_omni_attention import (
-    TTNNQwen3Attention,
-    TTNNQwen3OmniAttention,
-    TTNNQwen3OmniMoeCode2WavAttention,
-    TTNNQwen3VLMoeVisionAttention,
-    TTNNQwenAudioAttention,
-)
 from models.experimental.tt_symbiote.modules.embedding import TTNNQwen3OmniMoeCodecPredictorEmbedding
 from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu
-from models.experimental.tt_symbiote.modules.qwen_omni_normalization import TTNNQwenLayerNorm
-from models.experimental.tt_symbiote.modules.qwen_omni_decoder import (
-    TTNNQwen3OmniMoeCausalConvNet,
-    TTNNQwen3OmniMoeCausalTransConvNet,
-    TTNNQwen3OmniMoeCode2WavDecoderResidualUnit,
-    TTNNQwen3OmniMoeConvNeXtBlock,
-)
-
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
-from models.experimental.tt_symbiote.modules.qwen_omni_mlp import (
-    TTNNQwen3OmniTalkerResizeMLP,
-    TTNNQwen3OmniVisionMLP,
-)
-from models.experimental.tt_symbiote.modules.qwen_omni_lm_head import (
-    TTNNQwenOmniThinkerLmHead,
-    replace_code_predictor_lm_head_with_ttnn,
-    replace_talker_codec_head_with_ttnn,
-    replace_thinker_lm_head_with_ttnn,
-)
-
-from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
-    TTNNQwen3OmniMoeRotaryEmbedding,
-    TTNNQwen3OmniMoeTalkerRotaryEmbedding,
-    TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
-    TTNNQwen3OmniMoeVisionRotaryEmbedding,
-)
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict

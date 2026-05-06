@@ -33,6 +33,7 @@ from models.experimental.tt_symbiote.models.qwen_omni.distributed_config import 
 from models.experimental.tt_symbiote.modules.attention import (
     TTNNBailingMoEAttention,
     TTNNPagedAttentionKVCache,
+    TTNNSDPAAttention,
 )
 from models.experimental.tt_symbiote.modules.conv import NHWCConvPytorch, TTNNConv2dNHWC
 from models.experimental.tt_symbiote.modules.linear import (
@@ -40,6 +41,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearSilu,
     TTNNLinearIColShardedWRowSharded,
     TTNNLinearIColShardedWAllReduced,
+    TTNNLinearIReplicatedWColSharded,
 )
 from models.experimental.tt_symbiote.modules.moe import (
     TTNNMoE,
@@ -49,8 +51,10 @@ from models.experimental.tt_symbiote.modules.moe import (
     TTNNGlm4MoeMLP,
     even_int_div,
     _safe_repeat,
+    _to_torch_any,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
+from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
 from models.experimental.tt_symbiote.modules.tensor import TTNNReshape
 
 
@@ -1570,6 +1574,2751 @@ class TTNNQwenOmniConv2dNHWC(TTNNConv2dNHWC):
         return out
 
 
+# ========================================================================
+# Merged from modules/qwen_omni_rotary.py
+# ========================================================================
+
+
+def _x_dtype(x) -> torch.dtype:
+    if isinstance(x, TorchTTNNTensor):
+        if x.elem is not None:
+            return x.elem.dtype
+        return torch.bfloat16
+    if isinstance(x, torch.Tensor):
+        return x.dtype
+    return torch.bfloat16
+
+
+def _is_host_ttnn_tensor_obj(x) -> bool:
+    """True for mesh-backed ``ttnn`` tensors that may not pass ``isinstance(..., ttnn.Tensor)``."""
+    if x is None or isinstance(x, (torch.Tensor, TorchTTNNTensor)):
+        return False
+    if isinstance(x, ttnn.Tensor):
+        return True
+    cls = type(x)
+    mod = getattr(cls, "__module__", "") or ""
+    return cls.__name__ == "Tensor" and ("ttnn" in mod or "_ttnn" in mod)
+
+
+def _replicated_mesh_config(mesh_device):
+    return qwen_omni_replicated_concat_dim0_tensor_config(mesh_device)
+
+
+def _set_rotary_outputs_replicated(module: TTNNModule, output_tensors):
+    """RoPE outputs are fully replicated; avoid ``get_tensor_config_for_tensor`` shard heuristics + log spam."""
+    cfg = _replicated_mesh_config(module.device)
+    if cfg is None:
+        return TTNNModule.set_output_tensors_config_impl(module, output_tensors)
+
+    def apply(e):
+        if isinstance(e, TorchTTNNTensor):
+            e.set_distributed_tensor_config(cfg)
+        return e
+
+    return tree_map(apply, output_tensors)
+
+
+def _ttnn_replicated_to_torch(mesh_device, tensor: ttnn.Tensor, *, leading_dim: int) -> torch.Tensor:
+    """Host readback for tensors uploaded with ``ReplicateTensorToMesh`` (see ``attention.py`` / ``linear.py``)."""
+    if mesh_device is None or mesh_device.get_num_devices() <= 1:
+        return ttnn.to_torch(tensor)
+    mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    out = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+    # Replicated logical tensor is stacked once per device along dim 0; keep a single copy.
+    if out.shape[0] != leading_dim and out.shape[0] >= leading_dim:
+        out = out[:leading_dim]
+    return out
+
+
+def _position_ids_torch(position_ids, mesh_device=None) -> torch.Tensor:
+    """Return ``position_ids`` as a host ``torch.long`` tensor (HF MRoPE layout).
+
+    Symbiote may pass a raw ``ttnn.Tensor`` on the mesh, a ``TorchTTNNTensor``, or PyTorch tensors.
+    ``torch.as_tensor`` cannot ingest ``ttnn.Tensor`` — convert with ``ttnn.to_torch`` + mesh composer.
+    """
+
+    def _ttnn_to_torch_long(raw) -> torch.Tensor:
+        ld = int(raw.shape[0])
+        if mesh_device is not None and mesh_device.get_num_devices() > 1 and ld > 0:
+            t = _ttnn_replicated_to_torch(mesh_device, raw, leading_dim=ld)
+        else:
+            t = ttnn.to_torch(raw)
+        return t.long()
+
+    if isinstance(position_ids, ttnn.Tensor) or _is_host_ttnn_tensor_obj(position_ids):
+        return _ttnn_to_torch_long(position_ids)
+
+    if isinstance(position_ids, TorchTTNNTensor):
+        t = position_ids.elem if position_ids.elem is not None else None
+        if t is None and position_ids.ttnn_tensor is not None:
+            t = _ttnn_to_torch_long(position_ids.ttnn_tensor)
+        elif isinstance(t, ttnn.Tensor) or _is_host_ttnn_tensor_obj(t):
+            t = _ttnn_to_torch_long(t)
+        position_ids = t
+
+    if isinstance(position_ids, torch.Tensor):
+        return position_ids.long()
+    if _is_host_ttnn_tensor_obj(position_ids):
+        return _ttnn_to_torch_long(position_ids)
+    return torch.as_tensor(position_ids, dtype=torch.long)
+
+
+def _apply_interleaved_mrope_torch(
+    freqs: torch.Tensor,
+    mrope_section: list[int],
+) -> torch.Tensor:
+    """Match HF ``Qwen3OmniMoeThinkerTextRotaryEmbedding.apply_interleaved_mrope``."""
+    freqs_t = freqs[0].clone()
+    for dim, offset in enumerate((1, 2), start=1):
+        length = mrope_section[dim] * 3
+        idx = slice(offset, length, 3)
+        freqs_t[..., idx] = freqs[dim, ..., idx]
+    return freqs_t
+
+
+def _cos_sin_ttnn(emb: torch.Tensor, attention_scaling: float, device, out_dtype: torch.dtype):
+    """Compute ``cos(emb)``, ``sin(emb)`` in torch and return host tensors.
+
+    Audio/text output is mathematically unchanged: this matches HF's reference path
+    (``emb.cos() * attention_scaling``, ``emb.sin() * attention_scaling``) and ``emb`` is
+    already float32 from the caller. The previous implementation uploaded ``emb`` to the
+    mesh, ran ``ttnn.cos/sin`` in float32, and read back to host, after which downstream
+    attention modules re-uploaded ``cos/sin`` with their own layout/mesh strategy. That
+    round-trip only added latency / PCIe pressure on every layer's RoPE call.
+    ``device`` is intentionally unused (kept for signature compatibility with callers).
+    """
+    if emb.ndim != 3:
+        raise ValueError(f"_cos_sin_ttnn expects [batch, seq, dim], got {tuple(emb.shape)}")
+    cos = emb.cos() * attention_scaling
+    sin = emb.sin() * attention_scaling
+    return cos.to(dtype=out_dtype), sin.to(dtype=out_dtype)
+
+
+class TTNNQwen3OmniMoeThinkerTextRotaryEmbedding(TTNNModule):
+    """MRoPE for thinker text / talker text (same logic as HF ``Qwen3OmniMoeThinkerTextRotaryEmbedding``)."""
+
+    def __init__(self):
+        super().__init__()
+        self._inv_freq_cpu: torch.Tensor | None = None
+        self.attention_scaling = 1.0
+        self.mrope_section: list[int] = [24, 20, 20]
+        self.rope_type: str = "default"
+        self.config = None
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        m = cls()
+        m._fallback_torch_layer = torch_layer
+        m._inv_freq_cpu = torch_layer.inv_freq.detach().float().contiguous().clone()
+        m.attention_scaling = float(getattr(torch_layer, "attention_scaling", 1.0))
+        m.mrope_section = list(getattr(torch_layer, "mrope_section", [24, 20, 20]))
+        m.rope_type = getattr(torch_layer, "rope_type", "default")
+        m.config = getattr(torch_layer, "config", None)
+        return m
+
+    def preprocess_weights_impl(self):
+        return self
+
+    def move_weights_to_device_impl(self):
+        return self
+
+    def deallocate_weights_impl(self):
+        return self
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        return _set_rotary_outputs_replicated(self, output_tensors)
+
+    def forward(self, x, position_ids):
+        if self._fallback_torch_layer is not None and self.rope_type != "default":
+            return self._fallback_torch_layer(x, position_ids)
+
+        position_ids = _position_ids_torch(position_ids, self.device)
+        out_dtype = _x_dtype(x)
+
+        if position_ids.ndim == 2:
+            position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
+
+        inv_freq = self._inv_freq_cpu.to(device=position_ids.device, dtype=torch.float32)
+        bs = int(position_ids.shape[1])
+        seq = int(position_ids.shape[2])
+        d_half = int(inv_freq.shape[0])
+
+        inv_freq_expanded = inv_freq.view(1, 1, d_half, 1).expand(3, bs, d_half, 1)
+        position_ids_expanded = position_ids[:, :, None, :].float()
+        freqs = torch.matmul(inv_freq_expanded, position_ids_expanded).transpose(2, 3)
+        freqs_t = _apply_interleaved_mrope_torch(freqs, self.mrope_section)
+        emb = torch.cat((freqs_t, freqs_t), dim=-1)
+
+        if self.device is None:
+            cos = emb.cos() * self.attention_scaling
+            sin = emb.sin() * self.attention_scaling
+            return cos.to(dtype=out_dtype), sin.to(dtype=out_dtype)
+
+        cos, sin = _cos_sin_ttnn(emb, self.attention_scaling, self.device, out_dtype)
+        return cos, sin
+
+
+class TTNNQwen3OmniMoeTalkerRotaryEmbedding(TTNNQwen3OmniMoeThinkerTextRotaryEmbedding):
+    """Same implementation as thinker text RoPE (HF uses an empty subclass)."""
+
+
+class TTNNQwen3OmniMoeRotaryEmbedding(TTNNModule):
+    """Standard 1D RoPE ``(cos, sin)`` for ``talker.code_predictor`` (HF ``Qwen3OmniMoeRotaryEmbedding``)."""
+
+    def __init__(self):
+        super().__init__()
+        self._inv_freq_cpu: torch.Tensor | None = None
+        self.attention_scaling = 1.0
+        self.rope_type: str = "default"
+        self.config = None
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        m = cls()
+        m._fallback_torch_layer = torch_layer
+        m._inv_freq_cpu = torch_layer.inv_freq.detach().float().contiguous().clone()
+        m.attention_scaling = float(getattr(torch_layer, "attention_scaling", 1.0))
+        m.rope_type = getattr(torch_layer, "rope_type", "default")
+        m.config = getattr(torch_layer, "config", None)
+        return m
+
+    def preprocess_weights_impl(self):
+        return self
+
+    def move_weights_to_device_impl(self):
+        return self
+
+    def deallocate_weights_impl(self):
+        return self
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        return _set_rotary_outputs_replicated(self, output_tensors)
+
+    def forward(self, x, position_ids):
+        if self._fallback_torch_layer is not None and self.rope_type != "default":
+            return self._fallback_torch_layer(x, position_ids)
+
+        position_ids = _position_ids_torch(position_ids, self.device)
+        out_dtype = _x_dtype(x)
+
+        inv_freq = self._inv_freq_cpu.to(device=position_ids.device, dtype=torch.float32)
+        batch = int(position_ids.shape[0])
+        seq = int(position_ids.shape[1])
+        d_half = int(inv_freq.shape[0])
+
+        inv_freq_expanded = inv_freq[None, :, None].expand(batch, -1, 1).float()
+        position_ids_expanded = position_ids[:, None, :].float()
+        freqs = torch.matmul(inv_freq_expanded, position_ids_expanded).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+
+        if self.device is None:
+            cos = emb.cos() * self.attention_scaling
+            sin = emb.sin() * self.attention_scaling
+            return cos.to(dtype=out_dtype), sin.to(dtype=out_dtype)
+
+        cos, sin = _cos_sin_ttnn(emb, self.attention_scaling, self.device, out_dtype)
+        return cos, sin
+
+
+class TTNNQwen3OmniMoeVisionRotaryEmbedding(TTNNModule):
+    """Vision freq table ``(seq_len, dim//2)`` matching HF ``Qwen3OmniMoeVisionRotaryEmbedding.forward``."""
+
+    def __init__(self):
+        super().__init__()
+        self.dim = 0
+        self.theta = 10000.0
+        self._inv_freq_cpu: torch.Tensor | None = None
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        m = cls()
+        m._fallback_torch_layer = torch_layer
+        m.dim = int(torch_layer.dim)
+        m.theta = float(torch_layer.theta)
+        m._inv_freq_cpu = torch_layer.inv_freq.detach().float().contiguous().clone()
+        return m
+
+    def preprocess_weights_impl(self):
+        return self
+
+    def move_weights_to_device_impl(self):
+        return self
+
+    def deallocate_weights_impl(self):
+        return self
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        return _set_rotary_outputs_replicated(self, output_tensors)
+
+    def forward(self, seqlen: int):
+        # Same math as HF reference: torch.outer(arange, inv_freq). The previous TTNN matmul
+        # path uploaded both 1D operands and read the tiny result back, so it only added
+        # host-device round-trips with no kernel benefit.
+        inv_freq = self._inv_freq_cpu
+        seq = torch.arange(seqlen, device=inv_freq.device, dtype=torch.float32)
+        freqs = torch.outer(seq, inv_freq)
+        return freqs.to(dtype=inv_freq.dtype)
+
+
+# ========================================================================
+# Merged from modules/qwen_omni_normalization.py
+# ========================================================================
+
+
+class TTNNQwenLayerNorm(TTNNModule):
+    """HF ``nn.LayerNorm`` → ``ttnn.layer_norm`` (single device) or distributed pre/all_gather/post (mesh)."""
+
+    @staticmethod
+    def _normalized_numel(normalized_shape) -> int:
+        if isinstance(normalized_shape, int):
+            return int(normalized_shape)
+        n = 1
+        for d in normalized_shape:
+            n *= int(d)
+        return n
+
+    @property
+    def _is_distributed(self) -> bool:
+        return self.device is not None and self.device.get_num_devices() > 1
+
+    def __init__(
+        self,
+        normalized_shape,
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+        bias: bool = True,
+        use_row_major_workaround: bool = False,
+    ):
+        super().__init__()
+        if isinstance(normalized_shape, int):
+            self.normalized_shape = (normalized_shape,)
+        else:
+            self.normalized_shape = tuple(normalized_shape)
+        self.embedding_dim = self._normalized_numel(self.normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        self.use_bias = elementwise_affine and bias
+        self.use_row_major_workaround = use_row_major_workaround
+        self.compute_kernel_config = None
+        self.tt_weight = None
+        self.tt_bias = None
+        self.weight_distributed = None
+        self.bias_distributed = None
+        # Mesh: True when (emb//32) % mesh_width != 0 — use all_gather + full-width replicated LN (vision 1152 on 1×8).
+        self._distributed_gather_layernorm = False
+        if self.embedding_dim % 32 != 0:
+            raise ValueError(
+                f"TTNNQwenLayerNorm: embedding_dim ({self.embedding_dim}) must be divisible by 32 for TTNN tile ops"
+            )
+        if self.elementwise_affine:
+            self.torch_weight = nn.Parameter(torch.ones(self.normalized_shape))
+            self.torch_bias = nn.Parameter(torch.zeros(self.normalized_shape)) if self.use_bias else None
+        else:
+            self.torch_weight = None
+            self.torch_bias = None
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Col-sharded last dim on mesh, or replicated full hidden when using gather + full ``layer_norm``."""
+
+        def set_gather_output_config(e):
+            """Replicated mesh: ConcatMeshToTensor(dim=0) for host unwrap."""
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and self.device is not None:
+                e.set_distributed_tensor_config(
+                    DistributedTensorConfig(
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                        mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                    )
+                )
+            return e
+
+        def materialize_merger_ln_q_one_replica(e):
+            """Merger ln_q: one replica torch elem for HF view (same slice-after-concat idea as TTNNQwen3OmniVisionMLP)."""
+            if not isinstance(e, TorchTTNNTensor) or e.ttnn_tensor is None:
+                return e
+            t = e.ttnn_tensor
+            n = int(t.shape[0])
+            pt = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            if pt.shape[0] > n:
+                pt = pt[:n]
+            e.elem = pt.contiguous()
+            e.ttnn_tensor = None
+            if getattr(e, "_distributed_tensor_config", None) is not None:
+                e._distributed_tensor_config = None
+            return e
+
+        def set_col_sharded_config(e):
+            if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
+                if self._is_distributed and self.device is not None:
+                    mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
+                    mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=-1)
+
+                    def logical_shape_for_col_sharded(shape):
+                        shape_list = list(shape)
+                        num_devices = self.device.get_num_devices()
+                        shape_list[-1] = shape_list[-1] * num_devices
+                        return tuple(shape_list)
+
+                    e.set_distributed_tensor_config(
+                        DistributedTensorConfig(
+                            mesh_mapper=mesh_mapper,
+                            mesh_composer=mesh_composer,
+                            logical_shape_fn=logical_shape_for_col_sharded,
+                        )
+                    )
+            return e
+
+        if not self._is_distributed:
+            return super().set_output_tensors_config_impl(output_tensors)
+        if getattr(self, "_distributed_gather_layernorm", False) or getattr(
+            self, "_force_replicated_input_layernorm", False
+        ):
+            name = self.module_name or ""
+            # Do not dim-0-shard LN out: vision rotary needs full seq; sharding breaks q*cos broadcast.
+            if "merger" in name and "ln_q" in name:
+                return tree_map(materialize_merger_ln_q_one_replica, output_tensors)
+            return tree_map(set_gather_output_config, output_tensors)
+        return tree_map(set_col_sharded_config, output_tensors)
+
+    @classmethod
+    def from_torch(cls, layer_norm: nn.LayerNorm, use_row_major_workaround: bool = False):
+        """Symbiote calls ``from_torch(hf_module)`` only — use ``set_device`` for the mesh."""
+        if not layer_norm.elementwise_affine:
+            return layer_norm
+        emb = cls._normalized_numel(layer_norm.normalized_shape)
+        if emb % 32 != 0:
+            return layer_norm
+        new_layer = cls(
+            normalized_shape=layer_norm.normalized_shape,
+            eps=layer_norm.eps,
+            elementwise_affine=layer_norm.elementwise_affine,
+            bias=layer_norm.bias is not None,
+            use_row_major_workaround=use_row_major_workaround,
+        )
+        if layer_norm.weight is not None:
+            new_layer.torch_weight = nn.Parameter(layer_norm.weight.data.clone())
+        if layer_norm.bias is not None:
+            new_layer.torch_bias = nn.Parameter(layer_norm.bias.data.clone())
+        new_layer._fallback_torch_layer = layer_norm
+        return new_layer
+
+    def preprocess_weights_impl(self):
+        if not self.elementwise_affine:
+            self.tt_weight = None
+            self.tt_bias = None
+            return
+        # Mesh: sharded ROW_MAJOR gamma in ``move_weights_to_device_impl``, or TILE + replicate when ntiles % width != 0.
+        if self.device is not None and self.device.get_num_devices() > 1:
+            ncol = int(list(self.device.shape)[-1])
+            ntiles = self.embedding_dim // 32
+            # Audio tower: replicated activations — avoid layer_norm_post_all_gather + per-shard gamma (wrong local dim).
+            if getattr(self, "_force_replicated_input_layernorm", False) or ntiles % ncol != 0:
+                self._distributed_gather_layernorm = True
+                # Host TT tensors; move_weights uses from_torch(..., mesh_mapper=...) (to_device has no mesh_mapper).
+                self.tt_weight = None
+                self.tt_bias = None
+                self.weight_distributed = None
+                self.bias_distributed = None
+                return
+            self._distributed_gather_layernorm = False
+            self.tt_weight = None
+            self.tt_bias = None
+            return
+        weight = self.torch_weight
+        bias = self.torch_bias
+        if self.use_row_major_workaround:
+            layout = ttnn.ROW_MAJOR_LAYOUT
+            weight_reshaped = weight.reshape(-1, 32)
+            bias_reshaped = bias.reshape(-1, 32) if bias is not None else None
+        else:
+            layout = ttnn.TILE_LAYOUT
+            weight_reshaped = weight.reshape(1, -1)
+            bias_reshaped = bias.reshape(1, -1) if bias is not None else None
+        self.tt_weight = ttnn.from_torch(weight_reshaped, dtype=ttnn.bfloat16, layout=layout)
+        if bias_reshaped is not None:
+            self.tt_bias = ttnn.from_torch(bias_reshaped, dtype=ttnn.bfloat16, layout=layout)
+        else:
+            self.tt_bias = None
+
+    def _build_sharded_gamma_beta_row_major(self):
+        """``[1,1,ntiles,32]`` + ``ShardTensor2dMesh`` on tile dim — matches ``TTNNDistributedRMSNorm``."""
+        emb = self.embedding_dim
+        mesh_shape = list(self.device.shape)
+        ncol = int(mesh_shape[-1])
+        ntiles = emb // 32
+        assert ntiles % ncol == 0, "gather path should not call _build_sharded_gamma_beta_row_major"
+        w_bf16 = self.torch_weight.reshape(-1).to(torch.bfloat16)
+        relayout_w = w_bf16.view(1, 1, ntiles, 32)
+        mesh_mapper = ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=mesh_shape)
+        self.weight_distributed = ttnn.as_tensor(
+            relayout_w,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+        )
+        self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
+        if self.use_bias and self.torch_bias is not None:
+            b_bf16 = self.torch_bias.reshape(-1).to(torch.bfloat16)
+            relayout_b = b_bf16.view(1, 1, ntiles, 32)
+            self.bias_distributed = ttnn.as_tensor(
+                relayout_b,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+            self.bias_distributed = ttnn.to_device(self.bias_distributed, self.device)
+        else:
+            z = torch.zeros(emb, dtype=torch.bfloat16)
+            relayout_z = z.view(1, 1, ntiles, 32)
+            self.bias_distributed = ttnn.as_tensor(
+                relayout_z,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+            self.bias_distributed = ttnn.to_device(self.bias_distributed, self.device)
+
+    def move_weights_to_device_impl(self):
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        if not self.elementwise_affine:
+            return
+        if self.device.get_num_devices() > 1:
+            if getattr(self, "_distributed_gather_layernorm", False) or getattr(
+                self, "_force_replicated_input_layernorm", False
+            ):
+                self._distributed_gather_layernorm = True
+                rep = ttnn.ReplicateTensorToMesh(self.device)
+                w = self.torch_weight.reshape(1, -1).to(torch.bfloat16)
+                self.tt_weight = ttnn.from_torch(
+                    w,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    mesh_mapper=rep,
+                )
+                if self.use_bias and self.torch_bias is not None:
+                    b = self.torch_bias.reshape(1, -1).to(torch.bfloat16)
+                    self.tt_bias = ttnn.from_torch(
+                        b,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        mesh_mapper=rep,
+                    )
+                else:
+                    self.tt_bias = None
+                return
+            self._build_sharded_gamma_beta_row_major()
+            return
+        if self.tt_weight is not None:
+            self.tt_weight = ttnn.to_device(self.tt_weight, self.device)
+        if self.tt_bias is not None:
+            self.tt_bias = ttnn.to_device(self.tt_bias, self.device)
+
+    def _forward_distributed(self, x: ttnn.Tensor, original_shape: tuple) -> ttnn.Tensor:
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rank = len(original_shape)
+        if rank == 2:
+            x = ttnn.unsqueeze(x, 0)
+            x = ttnn.unsqueeze(x, 0)
+        elif rank == 3:
+            x = ttnn.unsqueeze(x, 1)
+        elif rank != 4:
+            raise RuntimeError(f"TTNNQwenLayerNorm: expected rank 2–4 activations, got rank {rank}")
+
+        tt_stats = ttnn.layer_norm_pre_all_gather(
+            x,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        tt_stats = ttnn.all_gather(
+            tt_stats,
+            dim=-1,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+        tt_out = ttnn.layer_norm_post_all_gather(
+            x,
+            tt_stats,
+            epsilon=self.eps,
+            weight=self.weight_distributed,
+            bias=self.bias_distributed,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        tt_stats.deallocate(True)
+
+        if rank == 3 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+        elif rank == 2 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [int(tt_out.shape[2]), int(tt_out.shape[3])])
+        return tt_out
+
+    def _forward_distributed_gather_ln(self, x: ttnn.Tensor, original_shape: tuple) -> ttnn.Tensor:
+        """Col-shard width does not tile-shard evenly on mesh (e.g. vision 1152 on 8 devices): gather, full LN, replicate out."""
+        emb = self.embedding_dim
+        n_dev = int(self.device.get_num_devices())
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        wloc = int(x.shape[-1])
+        if wloc * n_dev == emb:
+            x = ttnn.all_gather(
+                x,
+                dim=-1,
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+        elif wloc != emb:
+            raise RuntimeError(
+                f"TTNNQwenLayerNorm gather path: need col-shard {emb}/{n_dev} or full width {emb}, got last dim {wloc}"
+            )
+
+        rank = len(original_shape)
+        if rank == 2:
+            x = ttnn.unsqueeze(ttnn.unsqueeze(x, 0), 0)
+        elif rank == 3:
+            x = ttnn.unsqueeze(x, 1)
+        elif rank != 4:
+            raise RuntimeError(f"TTNNQwenLayerNorm: gather path expected rank 2–4 activations, got rank {rank}")
+
+        tt_out = ttnn.layer_norm(
+            x,
+            weight=self.tt_weight,
+            bias=self.tt_bias,
+            epsilon=self.eps,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        if rank == 3 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+        elif rank == 2 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [int(tt_out.shape[2]), int(tt_out.shape[3])])
+        return tt_out
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        original_shape = tuple(int(d) for d in x.shape)
+        if self._is_distributed and self.elementwise_affine:
+            if getattr(self, "_distributed_gather_layernorm", False) or getattr(
+                self, "_force_replicated_input_layernorm", False
+            ):
+                return self._forward_distributed_gather_ln(x, original_shape)
+            return self._forward_distributed(x, original_shape)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.layer_norm(
+            x,
+            weight=self.tt_weight,
+            bias=self.tt_bias,
+            epsilon=self.eps,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+
+# ========================================================================
+# Merged from modules/qwen_omni_attention.py
+# ========================================================================
+
+_VISION_ATTN_SEQ_CHUNK = 4096
+
+
+class TTNNQwen3VLMoeVisionAttention(TTNNModule):
+    """TTNN implementation of Qwen3VLMoeVisionAttention (image / video frames in the vision tower)."""
+
+    def __init__(self):
+        super().__init__()
+
+        self.hidden_size = None
+        self.num_heads = None
+        self.head_dim = None
+        self.scaling = None
+
+        self.qkv = None
+        self.proj = None
+
+        self.sdpa = TTNNSDPAAttention()
+        self.is_causal = False
+        self.core_grid = ttnn.CoreGrid(y=8, x=8)
+
+    @classmethod
+    def from_torch(cls, torch_attn):
+        new_attn = cls()
+        new_attn._fallback_torch_layer = torch_attn
+
+        config = torch_attn.config
+
+        new_attn.hidden_size = config.hidden_size
+        new_attn.num_heads = config.num_heads
+        new_attn.head_dim = config.hidden_size // config.num_heads
+        new_attn.scaling = new_attn.head_dim**-0.5
+
+        new_attn.qkv = TTNNLinear.from_torch(torch_attn.qkv)
+        new_attn.proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.proj)
+
+        return new_attn
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+
+        if self.sdpa.program_config is None:
+            self.sdpa.program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+
+            self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _to_ttnn(self, tensor):
+        return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+
+    def _maybe_all_gather(self, tensor):
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
+    @staticmethod
+    def _last_hidden_dim(hidden_states) -> int:
+        return int(hidden_states.shape[-1])
+
+    def _leading_seq_len(self, hidden_states) -> int:
+        t = self._to_ttnn(hidden_states)
+        shape = t.shape
+        hs = self.hidden_size
+        if len(shape) == 2:
+            return int(shape[0])
+        if len(shape) == 3:
+            last = int(shape[-1])
+            if hs is not None and last == hs:
+                return int(shape[1])
+            if int(shape[0]) == 1:
+                return int(shape[1])
+        return int(shape[0])
+
+    def rotate_half(self, x):
+        d = x.shape[-1] // 2
+        x1 = x[..., :d]
+        x2 = x[..., d:]
+        return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+
+    def apply_rotary_pos_emb_vision(self, q, k, cos, sin):
+        cos = ttnn.unsqueeze(cos, -2)
+        sin = ttnn.unsqueeze(sin, -2)
+
+        q_embed = (q * cos) + (self.rotate_half(q) * sin)
+        k_embed = (k * cos) + (self.rotate_half(k) * sin)
+
+        return q_embed, k_embed
+
+    @staticmethod
+    def _to_raw_ttnn(tensor, max_unwrap=5):
+        for _ in range(max_unwrap):
+            if type(tensor).__name__ != "TorchTTNNTensor":
+                return tensor
+            raw = getattr(tensor, "ttnn_tensor", None)
+            if raw is None:
+                raw = tensor.to_ttnn
+            tensor = raw
+        return tensor
+
+    def _slice_along_seq(self, tensor, s: int, e: int):
+        t = self._to_ttnn(tensor)
+        rank = len(t.shape)
+        last = int(t.shape[-1])
+        if rank == 2:
+            return ttnn.slice(t, (s, 0), (e, last))
+        if rank == 3 and int(t.shape[0]) == 1:
+            return ttnn.slice(t, (0, s, 0), (1, e, last))
+        if rank == 4:
+            d1, d2, d3 = int(t.shape[1]), int(t.shape[2]), int(t.shape[3])
+            return ttnn.slice(t, (s, 0, 0, 0), (e, d1, d2, d3))
+        return ttnn.slice(t, (s, 0), (e, last))
+
+    def _slice_rotary(self, cos_or_sin, s: int, e: int):
+        t = self._to_ttnn(cos_or_sin)
+        last = int(t.shape[-1])
+        return ttnn.slice(t, (s, 0), (e, last))
+
+    def _forward_chunk(
+        self,
+        hidden_states,
+        position_embeddings,
+        seq_len: int,
+    ):
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(
+                hidden_states,
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        qkv = self.qkv(hidden_states)
+        qkv = ttnn.reshape(
+            self._to_raw_ttnn(qkv),
+            (seq_len, 3, self.num_heads, self.head_dim),
+        )
+
+        q = qkv[:, 0]
+        k = qkv[:, 1]
+        v = qkv[:, 2]
+
+        cos, sin = position_embeddings
+
+        q, k = self.apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+        q = ttnn.permute(q, (1, 0, 2))
+        k = ttnn.permute(k, (1, 0, 2))
+        v = ttnn.permute(v, (1, 0, 2))
+
+        q = ttnn.unsqueeze(q, 0)
+        k = ttnn.unsqueeze(k, 0)
+        v = ttnn.unsqueeze(v, 0)
+
+        head_dim_padded = ((self.head_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        if head_dim_padded != self.head_dim:
+            pad_size = head_dim_padded - self.head_dim
+            q = ttnn.pad(q, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
+            k = ttnn.pad(k, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
+            v = ttnn.pad(v, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
+
+        attn_output = self.sdpa(
+            self,
+            q,
+            k,
+            v,
+            attention_mask=None,
+            dropout=0.0,
+            scaling=self.scaling,
+            is_causal=False,
+            transpose_output=True,
+        )
+
+        attn_output = self._to_raw_ttnn(attn_output)
+        if head_dim_padded != self.head_dim:
+            attn_output = attn_output[:, :, :, : self.head_dim]
+
+        attn_output = self._to_ttnn(attn_output)
+        if self._is_distributed and int(attn_output.shape[-1]) != self.head_dim:
+            attn_output = self._maybe_all_gather(attn_output)
+
+        attn_output = ttnn.reshape(
+            self._to_raw_ttnn(attn_output),
+            (seq_len, self.hidden_size),
+        )
+
+        return self.proj(attn_output)
+
+    def forward(self, hidden_states, cu_seqlens, rotary_pos_emb=None, position_embeddings=None, **kwargs):
+        expected_hidden = self.hidden_size
+        if self._last_hidden_dim(self._to_ttnn(hidden_states)) != expected_hidden and self._is_distributed:
+            hidden_states = self._maybe_all_gather(hidden_states)
+
+        hidden_states = self._to_ttnn(hidden_states)
+        if len(hidden_states.shape) == 3 and int(hidden_states.shape[0]) == 1:
+            hidden_states = ttnn.squeeze(hidden_states, 0)
+
+        seq_len = self._leading_seq_len(hidden_states)
+
+        cos, sin = position_embeddings
+
+        if seq_len <= _VISION_ATTN_SEQ_CHUNK:
+            cos_sin = (self._maybe_all_gather(cos), self._maybe_all_gather(sin))
+            return self._forward_chunk(hidden_states, cos_sin, seq_len)
+
+        out_chunks = []
+        for s in range(0, seq_len, _VISION_ATTN_SEQ_CHUNK):
+            e = min(s + _VISION_ATTN_SEQ_CHUNK, seq_len)
+            chunk_len = e - s
+            hs_chunk = self._slice_along_seq(hidden_states, s, e)
+            cos_chunk = self._slice_rotary(cos, s, e)
+            sin_chunk = self._slice_rotary(sin, s, e)
+            cos_sin = (self._maybe_all_gather(cos_chunk), self._maybe_all_gather(sin_chunk))
+            out_chunks.append(self._forward_chunk(hs_chunk, cos_sin, chunk_len))
+
+        if len(out_chunks) == 1:
+            return out_chunks[0]
+        raw_chunks = [self._to_raw_ttnn(c) for c in out_chunks]
+        return ttnn.concat(raw_chunks, dim=0)
+
+
+class TTNNQwen3OmniAttention(TTNNModule):
+    """Qwen3-Omni thinker attention (no sliding window) on TTNN."""
+
+    def __init__(self):
+        super().__init__()
+        self.sdpa = TTNNSDPAAttention()
+        self.rope = TTNNRotaryPositionEmbedding()
+        self.core_grid = ttnn.CoreGrid(y=8, x=8)
+
+    def init_parameters(self):
+        self.q_proj = TTNNLinear.from_torch(self.torch_layer.q_proj)
+        self.k_proj = TTNNLinear.from_torch(self.torch_layer.k_proj)
+        self.v_proj = TTNNLinear.from_torch(self.torch_layer.v_proj)
+        self.o_proj = TTNNLinearIReplicatedWColSharded.from_torch(self.torch_layer.o_proj)
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        new_attn = cls()
+        new_attn._fallback_torch_layer = torch_layer
+        new_attn.head_dim = torch_layer.head_dim
+        new_attn.scaling = torch_layer.scaling
+        new_attn.is_causal = torch_layer.is_causal
+        new_attn.num_key_value_groups = getattr(torch_layer, "num_key_value_groups", 1)
+        new_attn.init_parameters()
+        return new_attn
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+
+        if self.sdpa.program_config is None:
+            self.sdpa.program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+            self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        q_norm = self.torch_layer.q_norm
+        self._q_norm_weight = ttnn.from_torch(
+            q_norm.weight.unsqueeze(0).expand(32, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._q_norm_eps = q_norm.variance_epsilon
+
+        k_norm = self.torch_layer.k_norm
+        self._k_norm_weight = ttnn.from_torch(
+            k_norm.weight.unsqueeze(0).expand(32, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._k_norm_eps = k_norm.variance_epsilon
+
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _is_symbiote_replicated(self, tensor) -> bool:
+        """True if TorchTTNNTensor uses ReplicateTensorToMesh (skip dim=-1 AG on cos/sin or RoPE breaks)."""
+        if isinstance(tensor, TorchTTNNTensor):
+            cfg = tensor.ttnn_distributed_tensor_config
+            if cfg is not None and cfg.mesh_mapper is not None:
+                return "Replicate" in type(cfg.mesh_mapper).__name__
+        return False
+
+    def _to_ttnn(self, tensor):
+        return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+
+    def _maybe_all_gather(self, tensor):
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
+    def _maybe_all_gather_if_col_sharded(self, tensor):
+        """All-gather column-sharded activations; pass through replicated tensors unchanged."""
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        if self._is_symbiote_replicated(tensor):
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
+    def forward(
+        self,
+        hidden_states,
+        position_embeddings=None,
+        attention_mask=None,
+        past_key_values=None,
+        **kwargs,
+    ):
+        expected_hidden = self.q_proj.in_features
+        if hidden_states.shape[-1] != expected_hidden and self._is_distributed:
+            hidden_states = self._maybe_all_gather(hidden_states)
+
+        query_states = self._to_ttnn(self.q_proj(hidden_states))
+        key_states = self._to_ttnn(self.k_proj(hidden_states))
+        value_states = self._to_ttnn(self.v_proj(hidden_states))
+
+        batch_size = query_states.shape[0]
+        seq_length = query_states.shape[1]
+        num_q_heads = query_states.shape[-1] // self.head_dim
+        num_kv_heads = key_states.shape[-1] // self.head_dim
+
+        query_states = ttnn.reshape(query_states, (batch_size, seq_length, num_q_heads, self.head_dim))
+        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
+
+        key_states = ttnn.reshape(key_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
+        key_states = ttnn.permute(key_states, (0, 2, 1, 3))
+
+        value_states = ttnn.reshape(value_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
+        value_states = ttnn.permute(value_states, (0, 2, 1, 3))
+
+        query_states = ttnn.rms_norm(query_states, weight=self._q_norm_weight, epsilon=self._q_norm_eps)
+        key_states = ttnn.rms_norm(key_states, weight=self._k_norm_weight, epsilon=self._k_norm_eps)
+
+        cos, sin = position_embeddings
+        cos = self._maybe_all_gather_if_col_sharded(cos)
+        sin = self._maybe_all_gather_if_col_sharded(sin)
+
+        query_states, key_states = self.rope(query_states, key_states, cos, sin)
+        query_states = self._to_ttnn(query_states)
+        key_states = self._to_ttnn(key_states)
+
+        if past_key_values is not None:
+            mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if self._is_distributed else None
+            k_torch = ttnn.to_torch(key_states, mesh_composer=mesh_composer)
+            v_torch = ttnn.to_torch(value_states, mesh_composer=mesh_composer)
+            if self._is_distributed:
+                k_torch = k_torch[:1]
+                v_torch = v_torch[:1]
+
+            k_torch, v_torch = past_key_values.update(
+                k_torch,
+                v_torch,
+                self.torch_layer.layer_idx,
+            )
+
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self._is_distributed else None
+            key_states = ttnn.from_torch(
+                k_torch.contiguous(),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            value_states = ttnn.from_torch(
+                v_torch.contiguous(),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        attn_output = self.sdpa(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0,
+            scaling=self.scaling,
+            is_causal=self.is_causal,
+            transpose_output=False,
+        )
+
+        attn_output = ttnn.experimental.nlp_concat_heads(self._to_ttnn(attn_output))
+        attn_output = ttnn.squeeze(attn_output, 1)
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, None
+
+
+class TTNNQwen3Attention(TTNNModule):
+    """
+    TTNN implementation of Qwen3 Attention with sliding-window support
+    """
+
+    def __init__(self):
+        super().__init__()
+
+        self.sdpa = TTNNSDPAAttention()
+        self.rope = TTNNRotaryPositionEmbedding()
+
+        self.core_grid = ttnn.CoreGrid(y=8, x=8)
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+
+        if self.sdpa.program_config is None:
+            self.sdpa.program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+
+            self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self._is_distributed else None
+        q_norm = self.torch_layer.q_norm
+        self._q_norm_weight = ttnn.from_torch(
+            q_norm.weight.unsqueeze(0).expand(32, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._q_norm_eps = q_norm.variance_epsilon
+
+        k_norm = self.torch_layer.k_norm
+        self._k_norm_weight = ttnn.from_torch(
+            k_norm.weight.unsqueeze(0).expand(32, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._k_norm_eps = k_norm.variance_epsilon
+
+    def init_parameters(self):
+        self.q_proj = TTNNLinear.from_torch(self.torch_layer.q_proj)
+        self.k_proj = TTNNLinear.from_torch(self.torch_layer.k_proj)
+        self.v_proj = TTNNLinear.from_torch(self.torch_layer.v_proj)
+        # Use mesh-safe output projection (same pattern as thinker attention).
+        self.o_proj = TTNNLinearIReplicatedWColSharded.from_torch(self.torch_layer.o_proj)
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        new_attn = cls()
+
+        new_attn._fallback_torch_layer = torch_layer
+
+        new_attn.num_key_value_groups = getattr(torch_layer, "num_key_value_groups", 1)
+
+        new_attn.head_dim = torch_layer.head_dim
+        new_attn.scaling = torch_layer.scaling
+        new_attn.is_causal = torch_layer.is_causal
+
+        new_attn.sliding_window = getattr(torch_layer, "sliding_window", None)
+
+        new_attn.init_parameters()
+
+        return new_attn
+
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _to_ttnn(self, tensor):
+        return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+
+    def _maybe_all_gather(self, tensor):
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
+    def forward(
+        self,
+        hidden_states,
+        position_embeddings=None,
+        attention_mask=None,
+        past_key_values=None,
+        **kwargs,
+    ):
+        expected_hidden = self.q_proj.in_features
+        if hidden_states.shape[-1] != expected_hidden and self._is_distributed:
+            hidden_states = self._maybe_all_gather(hidden_states)
+
+        query_states = self._to_ttnn(self.q_proj(hidden_states))
+        key_states = self._to_ttnn(self.k_proj(hidden_states))
+        value_states = self._to_ttnn(self.v_proj(hidden_states))
+
+        batch_size = query_states.shape[0]
+        seq_length = query_states.shape[1]
+        num_q_heads = query_states.shape[-1] // self.head_dim
+        num_kv_heads = key_states.shape[-1] // self.head_dim
+
+        query_states = ttnn.reshape(query_states, (batch_size, seq_length, num_q_heads, self.head_dim))
+        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
+
+        key_states = ttnn.reshape(key_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
+        key_states = ttnn.permute(key_states, (0, 2, 1, 3))
+
+        value_states = ttnn.reshape(value_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
+        value_states = ttnn.permute(value_states, (0, 2, 1, 3))
+
+        query_states = ttnn.rms_norm(query_states, weight=self._q_norm_weight, epsilon=self._q_norm_eps)
+        key_states = ttnn.rms_norm(key_states, weight=self._k_norm_weight, epsilon=self._k_norm_eps)
+
+        cos, sin = position_embeddings
+        cos = self._maybe_all_gather(cos)
+        sin = self._maybe_all_gather(sin)
+
+        query_states, key_states = self.rope(
+            query_states,
+            key_states,
+            cos,
+            sin,
+        )
+        query_states = self._to_ttnn(query_states)
+        key_states = self._to_ttnn(key_states)
+
+        if past_key_values is not None:
+            mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if self._is_distributed else None
+            k_torch = ttnn.to_torch(key_states, mesh_composer=mesh_composer)
+            v_torch = ttnn.to_torch(value_states, mesh_composer=mesh_composer)
+            if self._is_distributed:
+                k_torch = k_torch[:1]
+                v_torch = v_torch[:1]
+
+            k_torch, v_torch = past_key_values.update(
+                k_torch,
+                v_torch,
+                self.torch_layer.layer_idx,
+            )
+
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self._is_distributed else None
+            key_states = ttnn.from_torch(
+                k_torch.contiguous(),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            value_states = ttnn.from_torch(
+                v_torch.contiguous(),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        attn_output = self.sdpa(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0,
+            scaling=self.scaling,
+            is_causal=self.is_causal,
+            transpose_output=False,
+        )
+
+        attn_output_tt = getattr(attn_output, "to_ttnn", attn_output)
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output_tt)
+        attn_output = ttnn.squeeze(attn_output, 1)
+        attn_output = self.o_proj(attn_output)
+        return attn_output, None
+
+
+class TTNNQwen3OmniMoeCode2WavAttention(TTNNModule):
+    """TTNN implementation of Qwen3OmniMoeCode2WavAttention (code2wav in the code2wav tower)."""
+
+    def __init__(self):
+        super().__init__()
+
+        self.sdpa = TTNNSDPAAttention()
+        self.rope = TTNNRotaryPositionEmbedding()
+        self.core_grid = ttnn.CoreGrid(y=8, x=8)
+
+        self.num_heads = None
+        self.num_kv_heads = None
+        self.num_kv_groups = None
+        self.head_dim = None
+        self.hidden_size = None
+
+        self.scaling = None
+        self.sliding_window = None
+
+        self.use_windowed_attention = False
+
+    @classmethod
+    def from_torch(cls, torch_attn):
+        new_attn = cls()
+        new_attn._fallback_torch_layer = torch_attn
+
+        config = torch_attn.config
+
+        new_attn.hidden_size = config.hidden_size
+        new_attn.num_heads = config.num_attention_heads
+        new_attn.num_kv_heads = config.num_key_value_heads
+        new_attn.num_kv_groups = new_attn.num_heads // new_attn.num_kv_heads
+        new_attn.head_dim = torch_attn.head_dim
+
+        new_attn.scaling = torch_attn.scaling
+        new_attn.sliding_window = config.sliding_window
+
+        # projections
+        new_attn.q_proj = TTNNLinear.from_torch(torch_attn.q_proj)
+        new_attn.k_proj = TTNNLinear.from_torch(torch_attn.k_proj)
+        new_attn.v_proj = TTNNLinear.from_torch(torch_attn.v_proj)
+        new_attn.o_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.o_proj)
+
+        return new_attn
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+
+        if self.sdpa.program_config is None:
+            self.sdpa.program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+            self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _to_ttnn(self, tensor):
+        """Extract raw ttnn tensor (bypass TorchTTNNTensor shard metadata)."""
+        return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+
+    def _maybe_all_gather(self, tensor):
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
+    def _is_symbiote_replicated(self, tensor) -> bool:
+        """Replicated cos/sin must not be all-gathered on dim=-1 (concat breaks RoPE last dim)."""
+        if isinstance(tensor, TorchTTNNTensor):
+            cfg = tensor.ttnn_distributed_tensor_config
+            if cfg is not None and cfg.mesh_mapper is not None:
+                return "Replicate" in type(cfg.mesh_mapper).__name__
+        return False
+
+    def _maybe_all_gather_if_col_sharded(self, tensor):
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        if self._is_symbiote_replicated(tensor):
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
+    def _prepare_code2wav_rotary_cos_sin(self, cos, sin, seq_len: int):
+        """Full sequence on every chip for RoPE; skip dim=-1 gather on replicated cos (breaks head dim)."""
+        if not self._is_distributed or self.device.get_num_devices() <= 1:
+            return self._maybe_all_gather_if_col_sharded(cos), self._maybe_all_gather_if_col_sharded(sin)
+
+        nd = int(self.device.get_num_devices())
+        cos_t = self._to_ttnn(cos)
+        sin_t = self._to_ttnn(sin)
+        gather_dim = None
+        for d in range(len(cos_t.shape)):
+            sl = int(cos_t.shape[d])
+            if sl != seq_len and sl * nd == seq_len:
+                gather_dim = d
+                break
+        if gather_dim is not None:
+            cos_t = ttnn.experimental.all_gather_async(
+                cos_t,
+                dim=gather_dim,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+            )
+            sin_t = ttnn.experimental.all_gather_async(
+                sin_t,
+                dim=gather_dim,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+            )
+            return cos_t, sin_t
+
+        if self._is_symbiote_replicated(cos):
+            return cos_t, sin_t
+        return self._maybe_all_gather_if_col_sharded(cos), self._maybe_all_gather_if_col_sharded(sin)
+
+    @staticmethod
+    def _to_raw_ttnn(tensor):
+        """Unwrap TorchTTNNTensor to raw ttnn.Tensor for ttnn ops that don't accept the wrapper."""
+        if hasattr(tensor, "ttnn_tensor"):
+            return tensor.ttnn_tensor
+        return tensor
+
+    def repeat_kv(self, x):
+        if self.num_kv_groups == 1:
+            return x
+
+        x = self._to_raw_ttnn(x)
+        B, H, S, D = x.shape
+
+        x = ttnn.reshape(x, (B, H, 1, S, D))
+        x = ttnn.repeat(x, (1, 1, self.num_kv_groups, 1, 1))
+        x = ttnn.reshape(x, (B, H * self.num_kv_groups, S, D))
+
+        return x
+
+    def build_sliding_mask(self, seq_len):
+        W = self.sliding_window
+
+        mask = torch.full((seq_len, seq_len), float("-inf"))
+        for i in range(seq_len):
+            start = max(0, i - W)
+            mask[i, start : i + 1] = 0
+
+        mask = mask.unsqueeze(0).unsqueeze(0).to(torch.bfloat16)  # [1,1,S,S]
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self._is_distributed else None
+        return ttnn.from_torch(
+            mask,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _mesh_replicate_full_attention_mask(self, attention_mask, seq_len: int):
+        t = self._to_ttnn(attention_mask)
+        if not self._is_distributed:
+            if t.dtype != ttnn.bfloat16:
+                return ttnn.typecast(t, ttnn.bfloat16)
+            return t
+
+        if int(t.shape[-1]) == int(t.shape[-2]) == seq_len:
+            if t.dtype != ttnn.bfloat16:
+                return ttnn.typecast(t, ttnn.bfloat16)
+            return attention_mask
+
+        mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=-1)
+        torch_m = ttnn.to_torch(t, mesh_composer=mesh_composer)
+        if torch_m.dtype in (torch.uint8, torch.bool):
+            tf = torch_m.to(torch.float32)
+            torch_m = torch.where(tf > 0, 0.0, float("-inf")).to(torch.bfloat16)
+        else:
+            torch_m = torch_m.to(torch.bfloat16)
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+        return ttnn.from_torch(
+            torch_m.contiguous(),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        position_embeddings,
+        attention_mask=None,
+        past_key_values=None,
+        **kwargs,
+    ):
+        expected_hidden = self.q_proj.in_features
+        if hidden_states.shape[-1] != expected_hidden and self._is_distributed:
+            hidden_states = self._maybe_all_gather(hidden_states)
+
+        hs = self._to_ttnn(hidden_states)
+        B, S, _ = hs.shape
+
+        query = self._to_ttnn(self.q_proj(hidden_states))
+        key = self._to_ttnn(self.k_proj(hidden_states))
+        value = self._to_ttnn(self.v_proj(hidden_states))
+
+        query = ttnn.reshape(query, (B, S, self.num_heads, self.head_dim))
+        key = ttnn.reshape(key, (B, S, self.num_kv_heads, self.head_dim))
+        value = ttnn.reshape(value, (B, S, self.num_kv_heads, self.head_dim))
+
+        query = ttnn.permute(query, (0, 2, 1, 3))
+        key = ttnn.permute(key, (0, 2, 1, 3))
+        value = ttnn.permute(value, (0, 2, 1, 3))
+
+        cos, sin = position_embeddings
+        cos, sin = self._prepare_code2wav_rotary_cos_sin(cos, sin, S)
+        query, key = self.rope(query, key, cos, sin)
+        query = self._to_ttnn(query)
+        key = self._to_ttnn(key)
+
+        if past_key_values is not None:
+            mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if self._is_distributed else None
+            k_torch = ttnn.to_torch(key, mesh_composer=mesh_composer)
+            v_torch = ttnn.to_torch(value, mesh_composer=mesh_composer)
+            if self._is_distributed:
+                k_torch = k_torch[:1]
+                v_torch = v_torch[:1]
+
+            k_torch, v_torch = past_key_values.update(
+                k_torch,
+                v_torch,
+                self._fallback_torch_layer.layer_idx,
+            )
+
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self._is_distributed else None
+            key = ttnn.from_torch(
+                k_torch.contiguous(),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            value = ttnn.from_torch(
+                v_torch.contiguous(),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        key = self.repeat_kv(key)
+        value = self.repeat_kv(value)
+
+        if self.use_windowed_attention and past_key_values is None and S % self.sliding_window == 0:
+            W = self.sliding_window
+            num_windows = S // W
+
+            query_w = ttnn.view(query, (B, self.num_heads, num_windows, W, self.head_dim))
+            key_w = ttnn.view(key, (B, self.num_heads, num_windows, W, self.head_dim))
+            value_w = ttnn.view(value, (B, self.num_heads, num_windows, W, self.head_dim))
+
+            query_w = ttnn.reshape(query_w, (B * num_windows, self.num_heads, W, self.head_dim))
+            key_w = ttnn.reshape(key_w, (B * num_windows, self.num_heads, W, self.head_dim))
+            value_w = ttnn.reshape(value_w, (B * num_windows, self.num_heads, W, self.head_dim))
+
+            attn_output = self.sdpa(
+                self,
+                query_w,
+                key_w,
+                value_w,
+                None,
+                dropout=0.0,
+                scaling=self.scaling,
+                is_causal=True,
+                transpose_output=True,
+            )
+
+            attn_output = ttnn.reshape(
+                self._to_raw_ttnn(attn_output),
+                (B, num_windows, W, self.num_heads, self.head_dim),
+            )
+            attn_output = ttnn.permute(attn_output, (0, 3, 1, 2, 4))
+            attn_output = ttnn.reshape(attn_output, (B, self.num_heads, S, self.head_dim))
+
+        else:
+            if attention_mask is None:
+                attention_mask = self.build_sliding_mask(S)
+            am = self._to_ttnn(attention_mask)
+            if self._is_distributed and int(am.shape[-1]) != int(am.shape[-2]):
+                attention_mask = self._mesh_replicate_full_attention_mask(attention_mask, S)
+
+            attn_output = self.sdpa(
+                self,
+                query,
+                key,
+                value,
+                attention_mask,
+                dropout=0.0,
+                scaling=self.scaling,
+                is_causal=False,
+                transpose_output=True,
+            )
+
+        attn_output = ttnn.reshape(self._to_raw_ttnn(attn_output), (B, S, self.hidden_size))
+        output = self.o_proj(attn_output)
+
+        return output, None
+
+
+class TTNNQwenAudioAttention(TTNNModule):
+    """TTNN implementation of Qwen3AudioAttentionOptimized (audio attention in the audio tower)."""
+
+    def __init__(self):
+        super().__init__()
+
+        self.embed_dim = None
+        self.num_heads = None
+        self.head_dim = None
+        self.scaling = None
+
+        self.qkv_proj = None
+        self.out_proj = None
+
+        self.sdpa = TTNNSDPAAttention()
+        self.core_grid = ttnn.CoreGrid(y=8, x=8)
+
+        self.is_causal = False
+
+    @classmethod
+    def from_torch(cls, torch_attn):
+        new_attn = cls()
+        new_attn._fallback_torch_layer = torch_attn
+
+        new_attn.embed_dim = torch_attn.embed_dim
+        new_attn.num_heads = torch_attn.num_heads
+        new_attn.head_dim = torch_attn.head_dim
+        new_attn.scaling = torch_attn.scaling
+
+        # ---- fuse QKV weights ----
+
+        qkv_weight = torch.cat(
+            [
+                torch_attn.q_proj.weight,
+                torch_attn.k_proj.weight,
+                torch_attn.v_proj.weight,
+            ],
+            dim=0,
+        )
+
+        q_bias = torch_attn.q_proj.bias
+        k_bias = torch_attn.k_proj.bias
+        v_bias = torch_attn.v_proj.bias
+
+        qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
+
+        fused_qkv = torch.nn.Linear(
+            torch_attn.embed_dim,
+            torch_attn.embed_dim * 3,
+            bias=True,
+        )
+
+        fused_qkv.weight = torch.nn.Parameter(qkv_weight)
+        fused_qkv.bias = torch.nn.Parameter(qkv_bias)
+
+        new_attn.qkv_proj = TTNNLinear.from_torch(fused_qkv)
+        new_attn.out_proj = TTNNLinearIReplicatedWColSharded.from_torch(torch_attn.out_proj)
+
+        return new_attn
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+
+        if self.sdpa.program_config is None:
+            self.sdpa.program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                q_chunk_size=256,
+                k_chunk_size=256,
+                exp_approx_mode=False,
+            )
+
+            self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _to_ttnn(self, tensor):
+        return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+
+    def _maybe_all_gather(self, tensor):
+        t = self._to_ttnn(tensor)
+        if not self._is_distributed:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Ring,
+        )
+
+    @staticmethod
+    def _last_hidden_dim(hidden_states) -> int:
+        return int(hidden_states.shape[-1])
+
+    def _leading_seq_len(self, hidden_states) -> int:
+        shape = hidden_states.shape
+        ed = self.embed_dim
+        if len(shape) == 2:
+            return int(shape[0])
+        if len(shape) == 3:
+            last = int(shape[-1])
+            if ed is not None and last == ed:
+                return int(shape[1])
+            if int(shape[0]) == 1:
+                return int(shape[1])
+        return int(shape[0])
+
+    def _to_torch_mesh_concat(self, tensor):
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        if isinstance(tensor, torch.Tensor) and not isinstance(tensor, TorchTTNNTensor):
+            return tensor
+        if isinstance(tensor, TorchTTNNTensor):
+            return tensor.to_torch
+        mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if self._is_distributed else None
+        return ttnn.to_torch(self._to_ttnn(tensor), mesh_composer=mesh_composer)
+
+    def _cu_seqlens_to_torch_int64(self, cu_seqlens):
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        if cu_seqlens is None:
+            return None
+        if isinstance(cu_seqlens, TorchTTNNTensor):
+            cu = self._to_torch_mesh_concat(cu_seqlens)
+        elif isinstance(cu_seqlens, torch.Tensor):
+            return cu_seqlens.detach().cpu().flatten().to(torch.int64)
+        else:
+            cu = self._to_torch_mesh_concat(cu_seqlens)
+        if self._is_distributed:
+            n = self.device.get_num_devices()
+            if cu.dim() == 2 and int(cu.shape[0]) == n:
+                cu = cu[0]
+        return cu.flatten().to(torch.int64)
+
+    @staticmethod
+    def _cu_seqlens_allows_ttnn_from_flat(cu_flat: torch.Tensor | None, seq_len: int) -> bool:
+        if cu_flat is None:
+            return True
+        if cu_flat.numel() < 2:
+            return True
+        n_seg = cu_flat.numel() - 1
+        if n_seg > 1:
+            return False
+        return int(cu_flat[0].item()) == 0 and int(cu_flat[-1].item()) == seq_len
+
+    @staticmethod
+    def _varlen_additive_mask_torch(cu_flat: torch.Tensor, seq_len: int, dtype: torch.dtype) -> torch.Tensor:
+        mask = torch.full((1, 1, seq_len, seq_len), torch.finfo(dtype).min, dtype=dtype)
+        cu = cu_flat.flatten().to(torch.int64)
+        for i in range(1, cu.numel()):
+            a = int(cu[i - 1].item())
+            b = int(cu[i].item())
+            if a < b and b <= seq_len:
+                mask[..., a:b, a:b] = 0
+        return mask
+
+    def _additive_mask_torch_to_ttnn(self, mask_torch: torch.Tensor) -> ttnn.Tensor:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self._is_distributed else None
+        return ttnn.from_torch(
+            mask_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        attention_mask: ttnn.Tensor | None = None,
+        cu_seqlens=None,
+        **kwargs,
+    ):
+        cu_flat = self._cu_seqlens_to_torch_int64(cu_seqlens)
+        if cu_flat is not None and cu_flat.numel() >= 2:
+            seq_len = int(cu_flat[-1].item())
+        else:
+            seq_len = self._leading_seq_len(hidden_states)
+
+        allows_single_segment = self._cu_seqlens_allows_ttnn_from_flat(cu_flat, seq_len)
+
+        sdpa_attn_mask = attention_mask
+        if cu_flat is not None and cu_flat.numel() >= 2 and not allows_single_segment:
+            sdpa_attn_mask = self._additive_mask_torch_to_ttnn(
+                self._varlen_additive_mask_torch(cu_flat, seq_len, torch.bfloat16)
+            )
+
+        expected_hidden = self.embed_dim
+        if self._last_hidden_dim(hidden_states) != expected_hidden and self._is_distributed:
+            hidden_states = self._maybe_all_gather(hidden_states)
+
+        if len(hidden_states.shape) == 3 and int(hidden_states.shape[0]) == 1:
+            hidden_states = ttnn.squeeze(hidden_states, 0)
+
+        hidden_states = self._to_ttnn(hidden_states)
+
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(
+                hidden_states,
+                ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        hidden_states = ttnn.unsqueeze(hidden_states, 0)
+        if len(hidden_states.shape) == 3:
+            hidden_states = ttnn.unsqueeze(hidden_states, 1)
+
+        qkv_out = self.qkv_proj(hidden_states)
+        if hasattr(qkv_out, "to_ttnn"):
+            qkv = qkv_out.to_ttnn
+        elif getattr(qkv_out, "ttnn_tensor", None) is not None:
+            qkv = qkv_out.ttnn_tensor
+        else:
+            qkv = qkv_out
+
+        qkv = ttnn.to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG)
+
+        query, key, value = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_heads,
+            transpose_k_heads=False,
+        )
+
+        ttnn.deallocate(qkv)
+
+        attn_output = self.sdpa(
+            self,
+            query,
+            key,
+            value,
+            sdpa_attn_mask,
+            dropout=0.0,
+            scaling=self.scaling,
+            is_causal=False,
+            transpose_output=False,
+        )
+
+        attn_output_tt = getattr(attn_output, "to_ttnn", attn_output)
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output_tt)
+
+        attn_output = ttnn.squeeze(attn_output, 0)
+
+        attn_output = self.out_proj(attn_output)
+
+        return attn_output
+
+
+# ========================================================================
+# Merged from modules/qwen_omni_mlp.py
+# ========================================================================
+
+
+def _normalize_qwen_omni_vision_act(torch_mlp) -> str:
+    """Map HF ACT2FN to gelu vs silu (use class name for nn.Module; __name__ alone was wrong for GELUTanh)."""
+    act_fn = getattr(torch_mlp, "act_fn", None)
+    if act_fn is None:
+        return "silu"
+    if isinstance(act_fn, nn.Module):
+        cn = act_fn.__class__.__name__.lower()
+        if "gelu" in cn:
+            return "gelu"
+        if "silu" in cn or "swish" in cn:
+            return "silu"
+    name = (getattr(act_fn, "__name__", None) or type(act_fn).__name__ or "").lower()
+    if "gelu" in name:
+        return "gelu"
+    if "silu" in name or "swish" in name:
+        return "silu"
+    return "silu"
+
+
+class TTNNQwen3OmniVisionMLP(TTNNModule):
+    """TTNN implementation of Qwen3OmniMoeVisionMLP (fc1 -> act -> fc2)."""
+
+    def __init__(self):
+        super().__init__()
+        self.hidden_size = None
+        self.intermediate_size = None
+
+        self.linear_fc1 = None
+        self.linear_fc2 = None
+
+        # Normalized: "gelu" | "silu" (see _normalize_qwen_omni_vision_act).
+        self.act_fn = None
+
+    @classmethod
+    def from_torch(cls, torch_mlp):
+        module = cls()
+        module._fallback_torch_layer = torch_mlp
+
+        module.hidden_size = torch_mlp.hidden_size
+        module.intermediate_size = torch_mlp.intermediate_size
+
+        # TP MLP: fc1 col-shard intermediate; fc2 all-reduce to replicated output.
+        module.linear_fc1 = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.linear_fc1)
+        module.linear_fc2 = TTNNQwenOmniIColShardedWAllReduced.from_torch(torch_mlp.linear_fc2)
+
+        module.act_fn = _normalize_qwen_omni_vision_act(torch_mlp)
+
+        return module
+
+    def preprocess_weights_impl(self):
+        self.linear_fc1.preprocess_weights()
+        self.linear_fc2.preprocess_weights()
+
+    def move_weights_to_device_impl(self):
+        self.linear_fc1.move_weights_to_device()
+        self.linear_fc2.move_weights_to_device()
+
+    def deallocate_weights_impl(self):
+        self.linear_fc1.deallocate_weights()
+        self.linear_fc2.deallocate_weights()
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """After FC2: materialize one [N,hidden] replica on elem (avoid dim=-1 concat vs residual); see post_process_ttnn_module_output."""
+        if self.device_state is None or self.device is None or self.device.get_num_devices() <= 1:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def _materialize_one_replica(e):
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+            if not isinstance(e, TorchTTNNTensor) or e.ttnn_tensor is None:
+                return e
+            t = e.ttnn_tensor
+            n = int(t.shape[0])
+            h = int(self.hidden_size)
+            # Replicated per device: concat on batch dim, then take first replica (MoE-style).
+            pt = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            if pt.shape[0] > n:
+                pt = pt[:n]
+            if pt.shape[-1] > h:
+                pt = pt[..., :h]
+            e.elem = pt.contiguous()
+            e.ttnn_tensor = None
+            if getattr(e, "_distributed_tensor_config", None) is not None:
+                e._distributed_tensor_config = None
+            return e
+
+        return tree_map(_materialize_one_replica, output_tensors)
+
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, hidden_states):
+        # Most TTNN paths already provide a ttnn.Tensor; keep this conversion as a safety net.
+        if not isinstance(hidden_states, ttnn.Tensor):
+            hidden_states = ttnn.from_torch(
+                hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+
+        # Full hidden width: AG if sharded; slice if concat width > hidden (mesh artifacts).
+        in_width = int(hidden_states.shape[-1])
+        if in_width > int(self.hidden_size):
+            rank = len(hidden_states.shape)
+            starts = [0] * rank
+            ends = [int(s) for s in hidden_states.shape]
+            ends[-1] = int(self.hidden_size)
+            hidden_states = ttnn.slice(hidden_states, starts, ends)
+        elif in_width < int(self.hidden_size):
+            hidden_states = ttnn.all_gather(
+                hidden_states,
+                dim=-1,
+                cluster_axis=1,
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        hidden_states = self.linear_fc1(hidden_states)
+
+        # HF vision ACT2FN (often GELUTanh).
+        if self.act_fn == "gelu":
+            hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            hidden_states = ttnn.silu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        hidden_states = self.linear_fc2(hidden_states)
+
+        # Slice FC2 output if width > hidden (concat semantics).
+        out_width = int(hidden_states.shape[-1])
+        if out_width > int(self.hidden_size):
+            rank = len(hidden_states.shape)
+            starts = [0] * rank
+            ends = [int(s) for s in hidden_states.shape]
+            ends[-1] = int(self.hidden_size)
+            hidden_states = ttnn.slice(hidden_states, starts, ends)
+
+        return hidden_states
+
+
+class TTNNQwen3OmniTalkerResizeMLP(TTNNModule):
+    """TalkerResizeMLP: same TP as TTNNQwen3OmniVisionMLP (fc1 col-shard, fc2 all-reduce); thinker_hidden → text hidden."""
+
+    def __init__(self):
+        super().__init__()
+        self.input_hidden_size = None
+        self.intermediate_size = None
+        self.output_hidden_size = None
+        self.linear_fc1 = None
+        self.linear_fc2 = None
+        self.act_fn = None
+
+    @classmethod
+    def from_torch(cls, torch_mlp):
+        module = cls()
+        module._fallback_torch_layer = torch_mlp
+        module.input_hidden_size = int(torch_mlp.linear_fc1.in_features)
+        module.intermediate_size = int(torch_mlp.linear_fc1.out_features)
+        module.output_hidden_size = int(torch_mlp.linear_fc2.out_features)
+        module.linear_fc1 = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.linear_fc1)
+        module.linear_fc2 = TTNNQwenOmniIColShardedWAllReduced.from_torch(torch_mlp.linear_fc2)
+        module.act_fn = _normalize_qwen_omni_vision_act(torch_mlp)
+        return module
+
+    def preprocess_weights_impl(self):
+        self.linear_fc1.preprocess_weights()
+        self.linear_fc2.preprocess_weights()
+
+    def move_weights_to_device_impl(self):
+        self.linear_fc1.move_weights_to_device()
+        self.linear_fc2.move_weights_to_device()
+
+    def deallocate_weights_impl(self):
+        self.linear_fc1.deallocate_weights()
+        self.linear_fc2.deallocate_weights()
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        if self.device_state is None or self.device is None or self.device.get_num_devices() <= 1:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def _materialize_one_replica(e):
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+            if not isinstance(e, TorchTTNNTensor) or e.ttnn_tensor is None:
+                return e
+            t = e.ttnn_tensor
+            n = int(t.shape[0])
+            h = int(self.output_hidden_size)
+            pt = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            if pt.shape[0] > n:
+                pt = pt[:n]
+            if pt.shape[-1] > h:
+                pt = pt[..., :h]
+            e.elem = pt.contiguous()
+            e.ttnn_tensor = None
+            if getattr(e, "_distributed_tensor_config", None) is not None:
+                e._distributed_tensor_config = None
+            return e
+
+        return tree_map(_materialize_one_replica, output_tensors)
+
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, hidden_states):
+        if not isinstance(hidden_states, ttnn.Tensor):
+            hidden_states = ttnn.from_torch(
+                hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+
+        in_w = int(hidden_states.shape[-1])
+        if in_w > int(self.input_hidden_size):
+            rank = len(hidden_states.shape)
+            starts = [0] * rank
+            ends = [int(s) for s in hidden_states.shape]
+            ends[-1] = int(self.input_hidden_size)
+            hidden_states = ttnn.slice(hidden_states, starts, ends)
+        elif in_w < int(self.input_hidden_size):
+            hidden_states = ttnn.all_gather(
+                hidden_states,
+                dim=-1,
+                cluster_axis=1,
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        hidden_states = self.linear_fc1(hidden_states)
+        if self.act_fn == "gelu":
+            hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            hidden_states = ttnn.silu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states = self.linear_fc2(hidden_states)
+
+        out_w = int(hidden_states.shape[-1])
+        if out_w > int(self.output_hidden_size):
+            rank = len(hidden_states.shape)
+            starts = [0] * rank
+            ends = [int(s) for s in hidden_states.shape]
+            ends[-1] = int(self.output_hidden_size)
+            hidden_states = ttnn.slice(hidden_states, starts, ends)
+
+        return hidden_states
+
+
+# ========================================================================
+# Merged from modules/qwen_omni_decoder.py (code2wav conv helpers + classes;
+# shared mesh/readback/upload helpers are defined once at top of this file.)
+# ========================================================================
+
+
+def _code2wav_bct_replicated_mesh_config(mesh_device):
+    """code2wav ``[B, C, T]`` activations are replicated per mesh device (see ``TTNNQwenOmniConv2dNHWC``)."""
+    return qwen_omni_replicated_concat_dim0_tensor_config(mesh_device)
+
+
+def _ensure_code2wav_bct_full_t(out, mesh_device, expected_t: int):
+    """Stitch width-sharded BCT conv shards on time and re-upload with ReplicateTensorToMesh; no-op if each device already has full T."""
+    if mesh_device is None or not hasattr(mesh_device, "get_num_devices"):
+        return out
+    nd = int(mesh_device.get_num_devices())
+    if nd <= 1:
+        return out
+
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    tt = None
+    if isinstance(out, TorchTTNNTensor):
+        tt = out.ttnn_tensor if out.ttnn_tensor is not None else None
+    elif isinstance(out, ttnn.Tensor):
+        tt = out
+    if tt is None:
+        return out
+
+    shards = ttnn.get_device_tensors(tt)
+    if len(shards) != nd:
+        return out
+    shard_t = int(shards[0].shape[-1])
+    if shard_t == expected_t:
+        return out
+    if shard_t * nd != expected_t:
+        return out
+
+    parts = [ttnn.to_torch(s).contiguous() for s in shards]
+    full = torch.cat(parts, dim=-1)
+    return ttnn.from_torch(
+        full,
+        dtype=torch_dtype_to_ttnn_dtype(full.dtype),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _upload_bct_replicated(x_t: torch.Tensor, mesh_device):
+    """Upload a host ``[B, C, T]`` torch tensor to TTNN with ``ReplicateTensorToMesh``."""
+    mesh_mapper = None
+    if mesh_device is not None and hasattr(mesh_device, "get_num_devices") and mesh_device.get_num_devices() > 1:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    return ttnn.from_torch(
+        x_t.contiguous(),
+        dtype=torch_dtype_to_ttnn_dtype(x_t.dtype),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=mesh_mapper,
+    )
+
+
+def _materialize_code2wav_bct_from_ttnn(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
+    """One logical [B,C,T] on host; prefer one replica readback (dim=0 compose can truncate T on mismatched mesh metadata)."""
+    return _ttnn_mesh_to_torch_one_replica(tt_tensor, mesh_device)
+
+
+def _materialize_code2wav_chain_output(x, mesh_device) -> torch.Tensor:
+    """Convert symbiote / TTNN activations after conv to plain ``torch`` for ``+ residual``."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    if isinstance(x, TorchTTNNTensor):
+        if x.ttnn_tensor is not None:
+            return _materialize_code2wav_bct_from_ttnn(x.ttnn_tensor, mesh_device)
+        return x.elem.contiguous()
+    if isinstance(x, ttnn.Tensor):
+        return _materialize_code2wav_bct_from_ttnn(x, mesh_device)
+    return x.contiguous()
+
+
+class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
+    """HF ``Qwen3OmniMoeCausalConvNet``: causal padding on host ``torch``, convolution via :class:`TTNNConv1d`."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = None
+        self.stride = None
+        self.kernel_size = None
+        self.dilation = None
+        self.padding = None
+
+    @classmethod
+    def from_torch(cls, m, *args, **kwargs):
+        from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNConv1d
+
+        new = cls()
+        new._fallback_torch_layer = m
+        new.stride = m.stride
+        new.kernel_size = m.kernel_size
+        new.dilation = m.dilation
+        new.padding = m.padding
+        new.conv = TTNNConv1d.from_torch(m.conv)
+        return new
+
+    @staticmethod
+    def _causal_conv_host_time_threshold() -> int:
+        """Above this padded T, run HF nn.Conv1d on host (TTNN conv OOMs on very long code2wav). Env: TT_SYMBIOTE_CODE2WAV_CAUSAL_CONV_HOST_T (default 8192)."""
+        raw = os.environ.get("TT_SYMBIOTE_CODE2WAV_CAUSAL_CONV_HOST_T", "8192")
+        try:
+            v = int(raw)
+        except ValueError:
+            v = 8192
+        return max(512, v)
+
+    def _get_extra_padding_for_conv1d(self, hidden_state: torch.Tensor) -> int:
+        length = hidden_state.shape[-1]
+        n_frames = (length - self.kernel_size + self.padding) / self.stride + 1
+        ideal_length = (math.ceil(n_frames) - 1) * self.stride + (self.kernel_size - self.padding)
+        return ideal_length - length
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        if self.conv is not None:
+            return self.conv.set_output_tensors_config_impl(output_tensors)
+        return super().set_output_tensors_config_impl(output_tensors)
+
+    def forward(self, hidden_state):
+        x_t = _materialize_code2wav_chain_output(hidden_state, self.device)
+        extra_padding = self._get_extra_padding_for_conv1d(x_t)
+        t_padded = int(x_t.shape[-1]) + self.padding + int(extra_padding)
+        expected_t = (t_padded - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
+        x_t = F.pad(x_t, (self.padding, extra_padding), mode="constant", value=0)
+        t_pad = int(x_t.shape[-1])
+        # Long streams: TTNN conv can OOM (e.g. T~5e5); host path uses same padded tensor and weights as _fallback_torch_layer.conv.
+        if t_pad > self._causal_conv_host_time_threshold():
+            hf = self._fallback_torch_layer
+            with torch.no_grad():
+                out_t = hf.conv(x_t).contiguous()
+            out = _upload_bct_replicated(out_t, self.device)
+            return _ensure_code2wav_bct_full_t(out, self.device, expected_t)
+        out = self.conv(x_t)
+        return _ensure_code2wav_bct_full_t(out, self.device, expected_t)
+
+
+class TTNNQwen3OmniMoeCausalTransConvNet(TTNNModule):
+    """HF ``Qwen3OmniMoeCausalTransConvNet``: TTNN transpose conv, then host crop to match HF time trimming."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = None
+        self.left_pad = None
+        self.right_pad = None
+
+    @classmethod
+    def from_torch(cls, m, *args, **kwargs):
+        from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNConvTranspose1d
+
+        new = cls()
+        new._fallback_torch_layer = m
+        new.left_pad = int(m.left_pad)
+        new.right_pad = int(m.right_pad)
+        new.conv = TTNNConvTranspose1d.from_torch(m.conv)
+        return new
+
+    @staticmethod
+    def _causal_trans_conv_host_time_threshold():
+        """If T exceeds threshold, run HF transposed conv on host (DRAM/clicks vs TTNN). Env TT_SYMBIOTE_CODE2WAV_TRANS_CONV_HOST_T (default 1; 0 = TTNN-only)."""
+        raw = os.environ.get("TT_SYMBIOTE_CODE2WAV_TRANS_CONV_HOST_T", "1")
+        try:
+            v = int(raw)
+        except ValueError:
+            v = 1
+        if v <= 0:
+            return None
+        return max(1, v)
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        if self.conv is not None:
+            return self.conv.set_output_tensors_config_impl(output_tensors)
+        return super().set_output_tensors_config_impl(output_tensors)
+
+    def forward(self, hidden_state):
+        x_t = _materialize_code2wav_chain_output(hidden_state, self.device)
+        t_in = int(x_t.shape[-1])
+        th = self._causal_trans_conv_host_time_threshold()
+        dev = self.device
+        mesh_mapper = None
+        if dev is not None and hasattr(dev, "get_num_devices") and dev.get_num_devices() > 1:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(dev)
+
+        if th is not None and t_in > th:
+            hf = self._fallback_torch_layer
+            with torch.no_grad():
+                y_t = hf(x_t).contiguous()
+            return ttnn.from_torch(
+                y_t,
+                dtype=torch_dtype_to_ttnn_dtype(y_t.dtype),
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                mesh_mapper=mesh_mapper,
+            )
+
+        out = self.conv(x_t)
+        if isinstance(out, ttnn.Tensor):
+            y_t = _materialize_code2wav_bct_from_ttnn(out, self.device)
+        else:
+            y_t = out
+        t_out = int(y_t.shape[-1])
+        end = t_out - self.right_pad
+        y_t = y_t[..., self.left_pad : end].contiguous()
+        return ttnn.from_torch(
+            y_t,
+            dtype=torch_dtype_to_ttnn_dtype(y_t.dtype),
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            mesh_mapper=mesh_mapper,
+        )
+
+
+class TTNNQwen3OmniMoeConvNeXtBlock(TTNNModule):
+    """ConvNeXtBlock: TTNN depthwise (TTNNQwen3OmniMoeCausalConvNet) + host LayerNorm/pwconv/GELU/residual so branch and shortcut match T."""
+
+    def __init__(self):
+        super().__init__()
+        self.dwconv = None
+
+    @classmethod
+    def from_torch(cls, m, *args, **kwargs):
+        new = cls()
+        new._fallback_torch_layer = m
+        new.dwconv = TTNNQwen3OmniMoeCausalConvNet.from_torch(m.dwconv)
+        return new
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _code2wav_bct_replicated_mesh_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
+
+    def forward(self, hidden_states):
+        dev = self.device
+        residual = _materialize_code2wav_chain_output(hidden_states, dev)
+
+        hidden_states = self.dwconv(hidden_states)
+        x = _materialize_code2wav_chain_output(hidden_states, dev)
+
+        hf = self._fallback_torch_layer
+        x = x.permute(0, 2, 1)
+        x = hf.norm(x)
+        x = hf.pwconv1(x)
+        x = hf.act(x)
+        x = hf.pwconv2(x)
+        x = hf.gamma * x
+        x = x.permute(0, 2, 1)
+
+        result = x + residual
+        return _upload_bct_replicated(result, dev)
+
+
+class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):
+    """code2wav residual unit: TTNN SnakeBeta + CausalConvNet; host add (conv stitches T for branch vs shortcut)."""
+
+    def __init__(self):
+        super().__init__()
+        self.act1 = None
+        self.conv1 = None
+        self.act2 = None
+        self.conv2 = None
+
+    @classmethod
+    def from_torch(cls, m, *args, **kwargs):
+        from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNSnakeBeta
+
+        new = cls()
+        new._fallback_torch_layer = m
+        new.act1 = TTNNSnakeBeta.from_torch(m.act1)
+        new.conv1 = TTNNQwen3OmniMoeCausalConvNet.from_torch(m.conv1)
+        new.act2 = TTNNSnakeBeta.from_torch(m.act2)
+        new.conv2 = TTNNQwen3OmniMoeCausalConvNet.from_torch(m.conv2)
+        return new
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _code2wav_bct_replicated_mesh_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
+
+    def forward(self, hidden_state):
+        dev = self.device
+        if self.act1 is not None:
+            self.act1._bypass_tensor_wrapping = False
+        if self.act2 is not None:
+            self.act2._bypass_tensor_wrapping = False
+
+        residual = _materialize_code2wav_chain_output(hidden_state, dev)
+
+        hidden_state = self.act1(hidden_state)
+        hidden_state = self.conv1(hidden_state)
+        hidden_state = self.act2(hidden_state)
+        hidden_state = self.conv2(hidden_state)
+
+        branch = _materialize_code2wav_chain_output(hidden_state, dev)
+        result = branch + residual
+        return _upload_bct_replicated(result, dev)
+
+
+# ========================================================================
+# Merged from modules/qwen_omni_lm_head.py
+# ========================================================================
+
+
+def _lm_head_logits_dtensor_config(mesh_device):
+    """Replicated logits: compose then slice dim 0 so HF sampling sees ``[batch, …]`` not ``[batch*n_dev, …]``."""
+    return qwen_omni_replicated_concat_dim0_tensor_config(mesh_device)
+
+
+class TTNNQwenOmniThinkerLmHead(TTNNModule):
+    """Thinker logits: all-gather hidden if sharded (like TTNNQwen3OmniAttention), linear, replicated readback with dim0 slice for generate. Chunked matmul when env byte caps hit."""
+
+    @classmethod
+    def from_torch(cls, linear: nn.Linear):
+        m = cls()
+        m._fallback_torch_layer = linear
+        m.in_features = int(linear.in_features)
+        m.out_features = int(linear.out_features)
+        m.weight = linear.weight
+        m.bias = linear.bias
+        return m
+
+    def preprocess_weights_impl(self):
+        self.tt_weight_host = preprocess_linear_weight(self.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self.tt_bias_host = None
+        if self.bias is not None:
+            self.tt_bias_host = preprocess_linear_bias(self.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def move_weights_to_device_impl(self):
+        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+        self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+
+    def deallocate_weights_impl(self):
+        if getattr(self, "tt_weight", None) is not None:
+            ttnn.deallocate(self.tt_weight)
+            self.tt_weight = None
+        if getattr(self, "tt_bias", None) is not None:
+            ttnn.deallocate(self.tt_bias)
+            self.tt_bias = None
+        super().deallocate_weights_impl()
+
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _to_ttnn(self, tensor):
+        return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+
+    def _maybe_all_gather_hidden(self, tensor):
+        """All-gather last dim when activations are column-sharded (``last * num_devices == in_features``).
+
+        Do **not** skip based on ``TorchTTNNTensor`` "replicated" metadata alone: symbiote can tag
+        tensors replicated while the physical ttnn width is still a shard (e.g. 256 of 2048), which
+        broke chunked LM-head readback (ragged ``vocab`` dims across chunks).
+        """
+        t = self._to_ttnn(tensor)
+        last = int(t.shape[-1])
+        if last == self.in_features:
+            return t
+        mesh = self.device
+        if mesh is None or not hasattr(mesh, "get_num_devices") or mesh.get_num_devices() <= 1:
+            return t
+        n = int(mesh.get_num_devices())
+        if last * n != self.in_features:
+            return t
+        if self._is_distributed:
+            return ttnn.experimental.all_gather_async(
+                t,
+                dim=-1,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+            )
+        return ttnn.all_gather(
+            t,
+            dim=-1,
+            cluster_axis=1,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = _lm_head_logits_dtensor_config(self.device)
+        if cfg is None:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def apply(e):
+            if isinstance(e, TorchTTNNTensor):
+                e.set_distributed_tensor_config(cfg)
+            return e
+
+        return tree_map(apply, output_tensors)
+
+    def _readback_logits_bf16(self, tt_out: ttnn.Tensor, expected_token_rows: int) -> torch.Tensor:
+        """Device logits → host ``(expected_token_rows, out_features)`` bf16 for chunk concat."""
+        n = 1 if self.device is None else int(self.device.get_num_devices())
+        wid = int(tt_out.shape[-1])
+        if n > 1 and wid * n == self.out_features:
+            pt = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=-1))
+        elif n > 1:
+            pt = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        else:
+            pt = ttnn.to_torch(tt_out)
+        pt = pt.to(torch.bfloat16)
+        while pt.dim() > 2:
+            pt = pt.reshape(-1, pt.shape[-1])
+        if pt.shape[0] > expected_token_rows:
+            pt = pt[:expected_token_rows]
+        if pt.shape[-1] > self.out_features:
+            pt = pt[..., : self.out_features]
+        return pt.contiguous()
+
+    def _forward_linear_4d(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        input_tensor_shape = list(x.shape)
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+        x4 = ttnn.reshape(x, input_shape)
+        out = ttnn.linear(x4, self.tt_weight, bias=self.tt_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(out, input_tensor_shape[:-1] + [self.out_features])
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return int(os.environ.get(name, str(default)))
+        except ValueError:
+            return default
+
+    def _effective_chunk_rows(self, n_inner: int, chunk_cap: int, hidden_last: int) -> int:
+        max_chunk_out = self._env_int("TT_SYMBIOTE_LM_HEAD_MAX_CHUNK_OUTPUT_BYTES", 64 * 1024 * 1024)
+        max_chunk_in = self._env_int("TT_SYMBIOTE_LM_HEAD_MAX_CHUNK_INPUT_BYTES", 32 * 1024 * 1024)
+        r = min(max(1, chunk_cap), max(1, n_inner))
+        while r > 1:
+            if r * self.out_features * 2 <= max_chunk_out and r * hidden_last * 2 <= max_chunk_in:
+                return r
+            r = max(1, r // 2)
+        return 1
+
+    def forward(self, hidden_states):
+        x = self._maybe_all_gather_hidden(hidden_states)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor_shape = list(x.shape)
+        n_inner = int(math.prod(int(d) for d in input_tensor_shape[:-1]))
+        hidden = int(input_tensor_shape[-1])
+        if n_inner == 0:
+            return ttnn.reshape(x, input_tensor_shape[:-1] + [self.out_features])
+
+        max_out = self._env_int("TT_SYMBIOTE_LM_HEAD_MAX_OUTPUT_BYTES", 32 * 1024 * 1024)
+        max_in = self._env_int("TT_SYMBIOTE_LM_HEAD_MAX_INPUT_BYTES", 48 * 1024 * 1024)
+        chunk_cap = self._env_int("TT_SYMBIOTE_LM_HEAD_CHUNK_TOKENS", 16)
+        est_out = n_inner * self.out_features * 2
+        est_in = n_inner * hidden * 2
+        # ``chunk_cap <= 0`` disables chunking (single device-sized matmul; can OOM on long prefill).
+        if chunk_cap <= 0 or (est_out <= max_out and est_in <= max_in):
+            return self._forward_linear_4d(x)
+
+        row_step = self._effective_chunk_rows(n_inner, chunk_cap, hidden)
+        x2 = ttnn.reshape(x, (n_inner, hidden))
+        parts: list[torch.Tensor] = []
+        for r0 in range(0, n_inner, row_step):
+            r1 = min(r0 + row_step, n_inner)
+            sub = ttnn.slice(x2, (r0, 0), (r1, hidden))
+            sub4 = ttnn.reshape(sub, (1, 1, r1 - r0, hidden))
+            tt_chunk = self._forward_linear_4d(sub4)
+            parts.append(self._readback_logits_bf16(tt_chunk, r1 - r0))
+        logits_cpu = torch.cat(parts, dim=0).reshape(*input_tensor_shape[:-1], self.out_features)
+        return TorchTTNNTensor(logits_cpu)
+
+
+def replace_thinker_lm_head_with_ttnn(thinker: nn.Module) -> None:
+    """Replace ``thinker.lm_head`` with :class:`TTNNQwenOmniThinkerLmHead` when it is ``nn.Linear``.
+
+    If :data:`torch.nn.Linear` was already swapped to :class:`~models.experimental.tt_symbiote.modules.linear.TTNNLinear`
+    by a thinker-wide op map, recover weights from ``_fallback_torch_layer`` and install this head instead.
+    """
+    if "lm_head" not in getattr(thinker, "_modules", {}):
+        return
+    old = thinker._modules.get("lm_head")
+    if old is None or isinstance(old, TTNNQwenOmniThinkerLmHead):
+        return
+    if isinstance(old, nn.Linear):
+        thinker._modules["lm_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+        return
+    from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+
+    if isinstance(old, TTNNLinear):
+        tl = getattr(old, "_fallback_torch_layer", None)
+        if isinstance(tl, nn.Linear):
+            new_head = TTNNQwenOmniThinkerLmHead.from_torch(tl)
+            if getattr(old, "_unique_name", None) is not None:
+                new_head._unique_name = old._unique_name
+            thinker._modules["lm_head"] = new_head
+
+
+def _lm_head_from_linear_or_ttnn_linear(m):
+    if isinstance(m, TTNNQwenOmniThinkerLmHead):
+        return m
+    if isinstance(m, nn.Linear):
+        return TTNNQwenOmniThinkerLmHead.from_torch(m)
+    from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+
+    if isinstance(m, TTNNLinear):
+        tl = getattr(m, "_fallback_torch_layer", None)
+        if isinstance(tl, nn.Linear):
+            nh = TTNNQwenOmniThinkerLmHead.from_torch(tl)
+            if getattr(m, "_unique_name", None) is not None:
+                nh._unique_name = m._unique_name
+            return nh
+    return m
+
+
+def replace_code_predictor_lm_head_with_ttnn(talker: nn.Module) -> None:
+    """Replace ``talker.code_predictor.lm_head`` (``nn.ModuleList[nn.Linear]``) with TTNN heads.
+
+    Uses a plain ``list`` for multiple heads: ``nn.ModuleList`` only accepts ``nn.Module`` children,
+    while :class:`TTNNQwenOmniThinkerLmHead` is a ``TTNNModule`` (not ``nn.Module``).
+    HF only does ``self.lm_head[i](hidden_states)``, so a list is sufficient.
+    """
+    cp = getattr(talker, "code_predictor", None)
+    if cp is None:
+        return
+    old = getattr(cp, "lm_head", None)
+    if old is None:
+        return
+    if isinstance(old, nn.ModuleList):
+        new_heads = [_lm_head_from_linear_or_ttnn_linear(m) for m in old]
+        if "lm_head" in cp._modules:
+            del cp._modules["lm_head"]
+        cp.lm_head = new_heads
+        return
+    if isinstance(old, nn.Linear):
+        cp._modules["lm_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+        return
+    from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+
+    if isinstance(old, TTNNLinear):
+        tl = getattr(old, "_fallback_torch_layer", None)
+        if isinstance(tl, nn.Linear):
+            nh = TTNNQwenOmniThinkerLmHead.from_torch(tl)
+            if getattr(old, "_unique_name", None) is not None:
+                nh._unique_name = old._unique_name
+            cp._modules["lm_head"] = nh
+
+
+def replace_talker_codec_head_with_ttnn(talker: nn.Module) -> None:
+    """Replace ``talker.codec_head`` (``nn.Linear``) with :class:`TTNNQwenOmniThinkerLmHead`."""
+    if "codec_head" not in getattr(talker, "_modules", {}):
+        return
+    old = talker._modules.get("codec_head")
+    if old is None or isinstance(old, TTNNQwenOmniThinkerLmHead):
+        return
+    if isinstance(old, nn.Linear):
+        talker._modules["codec_head"] = TTNNQwenOmniThinkerLmHead.from_torch(old)
+        return
+    from models.experimental.tt_symbiote.modules.linear import TTNNLinear
+
+    if isinstance(old, TTNNLinear):
+        tl = getattr(old, "_fallback_torch_layer", None)
+        if isinstance(tl, nn.Linear):
+            new_head = TTNNQwenOmniThinkerLmHead.from_torch(tl)
+            if getattr(old, "_unique_name", None) is not None:
+                new_head._unique_name = old._unique_name
+            talker._modules["codec_head"] = new_head
+
+
 def _to_ttnn_raw(tensor):
     """Return raw ttnn.Tensor from TorchTTNNTensor or ttnn.Tensor for use in ttnn ops."""
     if tensor is None:
@@ -1581,6 +4330,182 @@ def _to_ttnn_raw(tensor):
     if hasattr(tensor, "shape") and hasattr(tensor, "layout"):
         return tensor
     raise TypeError(f"Expected TorchTTNNTensor or ttnn.Tensor; got {type(tensor).__name__}.")
+
+
+# ========================================================================
+# Merged from modules/qwen_omni_moe.py (thinker HF MoE adapter)
+# ========================================================================
+
+
+def _thinker_experts_adapter(thinker_mlp):
+    """Adapt HF thinker experts for TTNNExperts (needs config + gate_up/down tensors)."""
+    hf_experts = thinker_mlp.experts
+    cfg = getattr(hf_experts, "config", None)
+    if cfg is None:
+        cfg = type("ThinkerExpertsConfig", (), {})()
+    cfg.hidden_size = getattr(cfg, "hidden_size", hf_experts.gate_up_proj.shape[2])
+    cfg.moe_intermediate_size = getattr(cfg, "moe_intermediate_size", hf_experts.gate_up_proj.shape[1] // 2)
+    cfg.n_routed_experts = getattr(cfg, "n_routed_experts", hf_experts.gate_up_proj.shape[0])
+    cfg.num_experts_per_tok = getattr(cfg, "num_experts_per_tok", None) or getattr(thinker_mlp.gate, "top_k", 8)
+
+    adapter = type("ThinkerExpertsAdapter", (), {})()
+    adapter.gate_up_proj = hf_experts.gate_up_proj
+    adapter.down_proj = hf_experts.down_proj
+    adapter.config = cfg
+    return adapter
+
+
+class TTNNQwen3OmniThinkerMoE(TTNNModule):
+    """Thinker MoE: HF-style linear→softmax→top-k router on device; TTNNExperts dispatch/combine. Returns torch tensor for decoder."""
+
+    @classmethod
+    def from_torch(cls, thinker_mlp):
+        module = cls()
+        module._fallback_torch_layer = thinker_mlp
+        g = thinker_mlp.gate
+        module._gate_w_torch = g.weight.data.clone()
+        module.top_k = int(g.top_k)
+        module.norm_topk_prob = bool(g.norm_topk_prob)
+        module.num_experts = int(g.num_experts)
+        experts_for_tt = _thinker_experts_adapter(thinker_mlp)
+        module.experts = TTNNExperts.from_torch(experts_for_tt)
+        return module
+
+    def preprocess_weights_impl(self):
+        self._gate_tt_host = preprocess_linear_weight(self._gate_w_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        del self._gate_w_torch
+        self.experts.preprocess_weights()
+
+    def move_weights_to_device_impl(self):
+        self.gate_weight_tt = ttnn.to_device(self._gate_tt_host, self.device)
+        self.experts.move_weights_to_device()
+
+    def deallocate_weights_impl(self):
+        gw = getattr(self, "gate_weight_tt", None)
+        if gw is not None:
+            ttnn.deallocate(gw)
+            self.gate_weight_tt = None
+        self.experts.deallocate_weights()
+
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _maybe_all_gather(self, tensor):
+        if not self._is_distributed:
+            return tensor
+        return ttnn.experimental.all_gather_async(
+            tensor,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+    def _moe_from_tiled_4d(self, hidden_states_tile, b, s, h, orig_batch, out_dtype):
+        """Run gate + experts on TILE activations (b, 1, s, h). Returns torch (b, s, hidden_size)."""
+        t = b * s
+        x_2d = ttnn.reshape(hidden_states_tile, ttnn.Shape((t, h)))
+        gate_logits = ttnn.linear(x_2d, self.gate_weight_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        probs = ttnn.softmax(gate_logits, dim=-1)
+        ttnn.deallocate(gate_logits)
+
+        topk_vals, topk_idx = ttnn.topk(probs, k=self.top_k, dim=-1)
+        ttnn.deallocate(probs)
+
+        if self.norm_topk_prob:
+            denom = ttnn.sum(topk_vals, dim=-1, keepdim=True)
+            topk_vals = ttnn.div(topk_vals, denom)
+            ttnn.deallocate(denom)
+
+        topk_idx = ttnn.to_layout(topk_idx, ttnn.ROW_MAJOR_LAYOUT)
+        topk_vals = ttnn.to_layout(topk_vals, ttnn.ROW_MAJOR_LAYOUT)
+        topk_idx = ttnn.reshape(topk_idx, ttnn.Shape((t, self.top_k)))
+        topk_vals = ttnn.reshape(topk_vals, ttnn.Shape((t, self.top_k)))
+
+        expert_out = self.experts.forward(hidden_states_tile, topk_idx, topk_vals)
+        try:
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+            if isinstance(expert_out, TorchTTNNTensor):
+                expert_out = expert_out.to_ttnn
+        except Exception:
+            pass
+        expert_out = _to_ttnn_raw(expert_out)
+        h_out = int(self.experts.hidden_size)
+        expert_out = ttnn.reshape(expert_out, ttnn.Shape((b, s, h_out)))
+
+        mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if self.device.get_num_devices() > 1 else None
+        out_torch = ttnn.to_torch(expert_out, mesh_composer=mesh_composer).to(out_dtype)
+        ttnn.deallocate(expert_out)
+        if mesh_composer is not None:
+            out_torch = out_torch.narrow(0, 0, int(orig_batch))
+        return out_torch
+
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, hidden_states):
+        hidden_states_torch = _to_torch_any(hidden_states)
+        orig_shape = hidden_states_torch.shape
+        out_dtype = hidden_states_torch.dtype
+        orig_batch = int(orig_shape[0])
+
+        hidden_states_tt = _to_ttnn_raw(hidden_states)
+        hidden_states_tt = self._maybe_all_gather(hidden_states_tt)
+        if len(hidden_states_tt.shape) == 3:
+            b, s, h = (int(hidden_states_tt.shape[0]), int(hidden_states_tt.shape[1]), int(hidden_states_tt.shape[2]))
+            hidden_states_tt = ttnn.reshape(hidden_states_tt, ttnn.Shape((b, 1, s, h)))
+        else:
+            b, s, h = (
+                int(hidden_states_tt.shape[0]),
+                int(hidden_states_tt.shape[2]),
+                int(hidden_states_tt.shape[3]),
+            )
+
+        seq_chunk = int(os.environ.get("TT_SYMBIOTE_MOE_SEQ_CHUNK", "1024"))
+        if seq_chunk <= 0:
+            seq_chunk = s + 1
+
+        # Long prefill: drop full-sequence TILE if present (dense RM is usually smaller), then tile only each chunk.
+        # Set TT_SYMBIOTE_MOE_SEQ_CHUNK=0 to force the single-shot path (legacy behavior).
+        if s > seq_chunk:
+            if hidden_states_tt.layout == ttnn.TILE_LAYOUT:
+                hidden_rm = ttnn.to_layout(
+                    hidden_states_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                try:
+                    ttnn.deallocate(hidden_states_tt)
+                except Exception:
+                    pass
+                hidden_states_tt = hidden_rm
+            parts = []
+            for s0 in range(0, s, seq_chunk):
+                s1 = min(s0 + seq_chunk, s)
+                sc = s1 - s0
+                h_rm = ttnn.slice(hidden_states_tt, (0, 0, s0, 0), (b, 1, s1, h))
+                h_tile = ttnn.to_layout(h_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                try:
+                    ttnn.deallocate(h_rm)
+                except Exception:
+                    pass
+                parts.append(self._moe_from_tiled_4d(h_tile, b, sc, h, orig_batch, out_dtype))
+                try:
+                    ttnn.deallocate(h_tile)
+                except Exception:
+                    pass
+            out_torch = torch.cat(parts, dim=1)
+            return out_torch.reshape(orig_shape)
+
+        if hidden_states_tt.layout != ttnn.TILE_LAYOUT:
+            hidden_states_tt = ttnn.to_layout(hidden_states_tt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        out_torch = self._moe_from_tiled_4d(hidden_states_tt, b, s, h, orig_batch, out_dtype)
+        return out_torch.reshape(orig_shape)
 
 
 def _make_fitted_sparse_matmul_program_config(
@@ -2312,19 +5237,40 @@ class TTNNQwenOmniDistributedRMSNorm(TTNNDistributedRMSNorm):
 
 
 __all__ = [
+    "Qwen3OmniMoeTalkerTextMLPTTNN",
     "TTNNBailingMoEAttentionHostCachePositionRoPE",
     "TTNNConv1d",
     "TTNNConv3d",
     "TTNNConvTranspose1d",
     "TTNNConvTranspose2dNHWC",
-    "Qwen3OmniMoeTalkerTextMLPTTNN",
-    "TTNNQwen3OmniSparseMoE",
+    "TTNNQwen3Attention",
+    "TTNNQwen3OmniAttention",
     "TTNNQwen3OmniMoeAudioEncoderConvOutLinear",
+    "TTNNQwen3OmniMoeCausalConvNet",
+    "TTNNQwen3OmniMoeCausalTransConvNet",
+    "TTNNQwen3OmniMoeCode2WavAttention",
+    "TTNNQwen3OmniMoeCode2WavDecoderResidualUnit",
+    "TTNNQwen3OmniMoeConvNeXtBlock",
+    "TTNNQwen3OmniMoeRotaryEmbedding",
+    "TTNNQwen3OmniMoeThinkerTextRotaryEmbedding",
+    "TTNNQwen3OmniMoeTalkerRotaryEmbedding",
+    "TTNNQwen3OmniMoeVisionRotaryEmbedding",
+    "TTNNQwen3OmniSparseMoE",
+    "TTNNQwen3OmniTalkerResizeMLP",
+    "TTNNQwen3OmniThinkerMoE",
+    "TTNNQwen3OmniVisionMLP",
     "TTNNQwen3TalkerMoE",
+    "TTNNQwen3VLMoeVisionAttention",
+    "TTNNQwenAudioAttention",
+    "TTNNQwenLayerNorm",
     "TTNNQwenOmniConv2dNHWC",
+    "TTNNQwenOmniDistributedRMSNorm",
     "TTNNQwenOmniIColShardedWAllReduced",
     "TTNNQwenOmniLinear",
     "TTNNQwenOmniMoERouterDecode",
-    "TTNNQwenOmniDistributedRMSNorm",
+    "TTNNQwenOmniThinkerLmHead",
     "TTNNSnakeBeta",
+    "replace_code_predictor_lm_head_with_ttnn",
+    "replace_talker_codec_head_with_ttnn",
+    "replace_thinker_lm_head_with_ttnn",
 ]
