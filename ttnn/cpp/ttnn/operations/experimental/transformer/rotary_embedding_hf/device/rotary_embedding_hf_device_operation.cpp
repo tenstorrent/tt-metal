@@ -132,6 +132,7 @@ tt::stl::hash::hash_t RotaryEmbeddingHfDeviceOperation::compute_program_hash(
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingHfDeviceOperation>(
         args.is_decode_mode,
         args.output_mem_config,
+        args.compute_kernel_config,
         program_factory.index(),
         tensor_args.input_tensor,
         tensor_args.cos_cache,
