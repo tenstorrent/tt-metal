@@ -315,18 +315,18 @@ ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
             FDCloser f{::open(path.c_str(), O_RDONLY | O_CLOEXEC)};
             if (f.fd < 0) {
                 const int e = errno;
-                inner_ec.assign(e != 0 ? e : EIO, std::system_category());
+                if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
                 return false;
             }
             if (::fstat(f.fd, &st) < 0) {
                 const int e = errno;
-                inner_ec.assign(e != 0 ? e : EIO, std::system_category());
+                if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
                 return false;
             }
             buffer = ::mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, f.fd, 0);
             if (buffer == MAP_FAILED) {
                 const int e = errno;
-                inner_ec.assign(e != 0 ? e : EIO, std::system_category());
+                if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
                 return false;
             }
             return true;
@@ -372,14 +372,14 @@ void ElfFile::WriteImage(std::string const& path) {
                 S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH)};
             if (f.fd < 0) {
                 const int e = errno;
-                inner_ec.assign(e != 0 ? e : EIO, std::system_category());
+                if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
                 return false;
             }
             const ssize_t n = ::write(f.fd, contents_.data(), contents_.size());
             if (n != static_cast<ssize_t>(contents_.size())) {
                 const int e = errno;
                 if (n < 0) {
-                    inner_ec.assign(e != 0 ? e : EIO, std::system_category());
+                    if (e != 0) { inner_ec.assign(e, std::system_category()); } else { inner_ec = std::make_error_code(std::errc::io_error); }
                 } else {
                     inner_ec = std::make_error_code(std::errc::io_error);
                 }
