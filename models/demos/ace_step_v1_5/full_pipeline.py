@@ -51,6 +51,7 @@ class AceStepV15TTNNPipeline:
         activation_dtype: ttnn.DataType | None = None,
         weights_dtype: ttnn.DataType | None = None,
         timesteps_host: Optional["np.ndarray"] = None,
+        expected_input_length: int | None = None,
     ) -> None:
         self.device = device
         if activation_dtype is None:
@@ -109,6 +110,7 @@ class AceStepV15TTNNPipeline:
             state_dict=sd,
             base_address="proj_in",
             device=device,
+            expected_input_length=expected_input_length,
             activation_dtype=activation_dtype,
             weights_dtype=weights_dtype,
         )

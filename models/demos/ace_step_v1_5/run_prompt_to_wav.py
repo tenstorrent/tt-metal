@@ -127,6 +127,7 @@ def main():
     # --------------------------
     # TTNN path: diffusion sampler (device-pure)
     # --------------------------
+    import os
     import sys
 
     # Ensure tt-metal + ttnn python package are importable before importing `ttnn`
@@ -139,8 +140,17 @@ def main():
         if p not in sys.path:
             sys.path.insert(0, p)
 
+    # Force strict no-fallback mode *before* importing ttnn, because ttnn prints CONFIG at import-time.
+    # This makes any implicit fallback (including device->host repacking) throw immediately.
+    os.environ["TTNN_CONFIG_OVERRIDES"] = '{"throw_exception_on_fallback": true}'
+
     import ttnn
     from models.demos.ace_step_v1_5.full_pipeline import AceStepV15TTNNPipeline
+
+    # Strict mode: any fallback should hard-fail (proves device-pure execution).
+    if hasattr(ttnn, "CONFIG") and hasattr(ttnn.CONFIG, "throw_exception_on_fallback"):
+        ttnn.CONFIG.throw_exception_on_fallback = True
+        print(f"TTNN strict: throw_exception_on_fallback={ttnn.CONFIG.throw_exception_on_fallback}")
 
     dev = ttnn.open_device(device_id=int(args.device_id))
     if hasattr(dev, "enable_program_cache"):
@@ -150,10 +160,12 @@ def main():
         t_schedule = _build_t_schedule(float(args.shift))
         timesteps_host = np.asarray(t_schedule + [0.0], dtype=np.float32)
 
+        expected_input_length = int(context_latents.shape[1])
         pipe = AceStepV15TTNNPipeline(
             device=dev,
             checkpoint_safetensors_path=str(safetensors_path),
             timesteps_host=timesteps_host,
+            expected_input_length=expected_input_length,
         )
 
         # One host->device staging phase (all inputs/weights)

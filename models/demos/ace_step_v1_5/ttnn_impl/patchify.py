@@ -75,6 +75,7 @@ class TtAceStepPatchEmbed1D:
         state_dict: dict,
         base_address: str,
         device: ttnn.Device,
+        expected_input_length: int | None = None,
         activation_dtype: ttnn.DataType | None = None,
         weights_dtype: ttnn.DataType | None = None,
         math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2,
@@ -92,6 +93,7 @@ class TtAceStepPatchEmbed1D:
         self.patch_size = int(getattr(config, "patch_size"))
         self.in_channels = int(getattr(config, "in_channels"))
         self.out_channels = int(getattr(config, "hidden_size"))
+        self.expected_input_length = int(expected_input_length) if expected_input_length is not None else None
 
         weight_key = _maybe_get_state_dict_key(
             state_dict,
@@ -120,21 +122,13 @@ class TtAceStepPatchEmbed1D:
         if int(weight_host.shape[2]) != self.patch_size:
             raise ValueError(f"Unexpected proj_in kernel_size: got {weight_host.shape[2]}, expected {self.patch_size}")
 
-        # Host -> device transfer happens once here (allowed). Keep weights device-resident for all forwards.
-        self.weight = ttnn.as_tensor(
-            weight_host,
-            dtype=weights_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.bias = ttnn.as_tensor(
-            bias_host.reshape(1, 1, 1, -1),
-            dtype=weights_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # We must avoid conv2d's internal "pull back to host" fallback. That means weights/bias must be
+        # prepared (host-side preprocessing) *before* the first conv invocation, then moved to device once.
+        #
+        # `prepare_conv_weights/prepare_conv_bias` expect HOST tensors and return prepared tensors on DEVICE.
+        weight_host_tt = ttnn.as_tensor(weight_host, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # Bias for conv1d/conv2d path is expected in NHWC-like rank-4 form [1,1,1,C]
+        bias_host_tt = ttnn.as_tensor(bias_host.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         self.conv_config = ttnn.Conv1dConfig(
             weights_dtype=weights_dtype, shard_layout=None, deallocate_activation=False
@@ -147,10 +141,53 @@ class TtAceStepPatchEmbed1D:
             packer_l1_acc=True,
         )
         self.activation_dtype = activation_dtype
-        # `ttnn.conv1d` may return prepared weights/bias tensors when `return_weights_and_bias=True`.
-        # Cache them on-device after the first successful call to avoid repeated host-side reprocessing.
-        self._prepared_weight = None
-        self._prepared_bias = None
+        # Pre-pack conv weights/bias at init to avoid conv2d "pull back to host" during first forward.
+        # This keeps the entire TTNN forward device-pure (no TTNN->host mid-run transfers).
+        if self.expected_input_length is None:
+            raise RuntimeError(
+                "TtAceStepPatchEmbed1D requires expected_input_length to prepack conv weights for strict device-pure runs"
+            )
+        padded_len = int(((self.expected_input_length + self.patch_size - 1) // self.patch_size) * self.patch_size)
+        self.weight = ttnn.prepare_conv_weights(
+            weight_tensor=weight_host_tt,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            weights_format="OIHW",
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=1,
+            input_height=1,
+            input_width=padded_len,
+            kernel_size=(1, self.patch_size),
+            stride=(1, self.patch_size),
+            padding=(0, 0),
+            dilation=(1, 1),
+            has_bias=True,
+            groups=1,
+            device=self.device,
+            input_dtype=self.activation_dtype,
+            conv_config=self.conv_config,
+            compute_config=self.compute_config,
+        )
+        self.bias = ttnn.prepare_conv_bias(
+            bias_tensor=bias_host_tt,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            in_channels=self.in_channels,
+            out_channels=self.out_channels,
+            batch_size=1,
+            input_height=1,
+            input_width=padded_len,
+            kernel_size=(1, self.patch_size),
+            stride=(1, self.patch_size),
+            padding=(0, 0),
+            dilation=(1, 1),
+            device=self.device,
+            input_dtype=self.activation_dtype,
+            groups=1,
+            conv_config=self.conv_config,
+            compute_config=self.compute_config,
+        )
 
     def forward(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, PatchifyMetadata]:
         if len(hidden_states.shape) != 3:
@@ -170,8 +207,8 @@ class TtAceStepPatchEmbed1D:
         batch_size = int(hidden_states.shape[0])
         input_length = int(hidden_states.shape[1])
 
-        weight_tensor = self._prepared_weight if self._prepared_weight is not None else self.weight
-        bias_tensor = self._prepared_bias if self._prepared_bias is not None else self.bias
+        weight_tensor = self.weight
+        bias_tensor = self.bias
 
         conv_ret = ttnn.conv1d(
             input_tensor=hidden_states,
@@ -189,22 +226,18 @@ class TtAceStepPatchEmbed1D:
             compute_config=self.compute_config,
             groups=1,
             return_output_dim=True,
-            # NOTE: In current TTNN builds, `return_output_dim=True` without returning weights/bias yields a 2-tuple.
-            # The unit tests always pair `return_output_dim=True` with `return_weights_and_bias=True`.
-            return_weights_and_bias=True,
+            return_weights_and_bias=False,
             dtype=self.activation_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        if len(conv_ret) != 3:
+        if len(conv_ret) != 2:
             raise RuntimeError(
                 "Unexpected `ttnn.conv1d` return arity. "
-                f"Expected 3 when return_output_dim=True and return_weights_and_bias=True, got {len(conv_ret)}."
+                f"Expected 2 when return_output_dim=True and return_weights_and_bias=False, got {len(conv_ret)}."
             )
 
-        out, out_length, prepared = conv_ret
-        if prepared is not None and len(prepared) == 2:
-            self._prepared_weight, self._prepared_bias = prepared
+        out, out_length = conv_ret
 
         # conv1d returns rank-4 [1, B, out_length, out_channels]
         out = ttnn.squeeze(out, 0)
