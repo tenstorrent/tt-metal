@@ -152,24 +152,6 @@ void py_module(nb::module_& m) {
         py_optimizer_base.def("zero_grad", &OptimizerBase::zero_grad, "Zero out gradient");
         py_optimizer_base.def("step", &OptimizerBase::step, "Step function");
         py_optimizer_base.def("get_state_dict", &OptimizerBase::get_state_dict, "Get state dictionary");
-        // ``set_state_dict`` is wrapped here (rather than bound directly) so we
-        // can route the ``"steps"`` value into the ``size_t`` alternative of
-        // ``serialization::ValueType`` instead of the ``int`` alternative.
-        //
-        // Why this is needed: ``ValueType`` is
-        //   ``std::variant<bool, char, int, float, double, uint32_t, size_t,
-        //                  bfloat16, std::string, ...>``
-        // and nanobind's default variant caster picks the *first* matching
-        // alternative when converting a Python ``int`` -- which is ``int``,
-        // not ``size_t``. ``OptimizerBase`` subclasses (AdamW, SGD, ...)
-        // store their step counter as ``size_t`` and read it back via
-        // ``serialization::get_value_type<size_t>(dict, "steps")``, which
-        // then throws ``std::get: wrong index for variant`` whenever
-        // ``set_state_dict`` is called from Python with a state dict that
-        // round-tripped through ``get_state_dict``. By special-casing the
-        // ``"steps"`` key here we keep every C++ call path unchanged
-        // (variant declaration order, optimizer implementations, on-disk
-        // flatbuffer format) while making Python-side resume work.
         py_optimizer_base.def(
             "set_state_dict",
             [](OptimizerBase& self, nb::dict d) {
