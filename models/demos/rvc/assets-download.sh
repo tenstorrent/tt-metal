@@ -20,7 +20,7 @@ RMVPE_REPO_FOLDER="${SCRIPT_DIR}/rmvpe"
 DATA_DIR="${SCRIPT_DIR}/data"
 TARGET_ASSETS_DIR="${DATA_DIR}/assets"
 TARGET_CONFIGS_DIR="${DATA_DIR}/configs"
-TARGET_SAMPLE_FILE="${DATA_DIR}/sample-speech.wav"
+TARGET_SPEECH_DIR="${DATA_DIR}/speech"
 TARGET_RMVPE_FILE="${DATA_DIR}/rmvpe.safetensors"
 
 export GIT_CLONE_PROTECTION_ACTIVE=false
@@ -51,7 +51,7 @@ unset GIT_CLONE_PROTECTION_ACTIVE
 
 download "assets"
 download "configs"
-download "sample-speech.wav"
+download "speech"
 
 rm -rf .git
 
@@ -90,7 +90,7 @@ mkdir -p "${DATA_DIR}"
 rm -rf "${TARGET_ASSETS_DIR}" "${TARGET_CONFIGS_DIR}"
 mv "${REPO_FOLDER}/assets" "${TARGET_ASSETS_DIR}"
 mv "${REPO_FOLDER}/configs" "${TARGET_CONFIGS_DIR}"
-mv "${REPO_FOLDER}/sample-speech.wav" "${TARGET_SAMPLE_FILE}"
+mv "${REPO_FOLDER}/speech" "${TARGET_SPEECH_DIR}"
 mv "${RMVPE_REPO_FOLDER}/rmvpe.safetensors" "${TARGET_RMVPE_FILE}"
 
 

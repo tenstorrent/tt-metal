@@ -23,7 +23,7 @@ from models.demos.rvc.tt_impl.crepe import CrepePredictor
 from models.demos.rvc.tt_impl.rmvpe import RMVPEPitchAlgorithm
 from models.demos.rvc.tt_impl.vc.hubert import HubertModel
 from models.demos.rvc.tt_impl.vc.synthesizer import SynthesizerTrnMsNSF, SynthesizerTrnMsNSF_nono
-from models.demos.rvc.utils.audio import load_audio
+from models.demos.rvc.utils.audio import load_audio, load_audio_batch
 from models.demos.rvc.utils.config import (
     Config,
     HubertPretrainingConfig,
@@ -97,6 +97,7 @@ class RVCRunner:
     def __init__(
         self,
         device: ttnn.MeshDevice,
+        batch_size: int = 1,
         if_f0: bool = True,
         version: str = "v1",
         num: str = "48k",
@@ -120,14 +121,26 @@ class RVCRunner:
         self.x_center = config.x_center
         self.t_center = self.x_center * self.sr
         self.performance_runner = performance_runner
+        self.num_devices = self.device.get_num_devices()
+        if batch_size % self.num_devices != 0:
+            raise ValueError(f"Batch size {batch_size} must be divisible by the number of devices {self.num_devices}.")
+
+        self.batch_size_per_device = batch_size // self.num_devices
 
         self.synthesizer, data_cfg = _load_synthesizer(self.device, if_f0, self.version, num, validation=validation)
         self.tgt_sr = data_cfg["sampling_rate"]
         self.hubert_model = _load_hubert(config, hubert_path, hubert_cfg_path, self.device)
-        self.torch_input = torch.randn((1, self.t_center, 1))
-        self.torch_pitch = torch.randint(low=0, high=255, size=(1, self.t_center // self.window), dtype=torch.uint32)
-        self.torch_pitchf = torch.randn((1, self.t_center // self.window), dtype=torch.float32)
-        self.torch_speaker_id = torch.tensor([0], dtype=torch.long)
+        self.torch_input = torch.randn((batch_size, self.t_center // self.batch_size_per_device, 1))
+        self.torch_pitch = torch.randint(
+            low=0,
+            high=255,
+            size=(batch_size, (self.t_center // self.batch_size_per_device) // self.window),
+            dtype=torch.uint32,
+        )
+        self.torch_pitchf = torch.randn(
+            (batch_size, (self.t_center // self.batch_size_per_device) // self.window), dtype=torch.float32
+        )
+        self.torch_speaker_id = torch.full((batch_size,), fill_value=0, dtype=torch.long)
 
         (
             tt_inputs_host,
@@ -136,12 +149,11 @@ class RVCRunner:
             tt_speaker_id_host,
             input_mem_config,
         ) = self.setup_dram_sharded_input(device)
-        sharded_mem_config_DRAM = ttnn.DRAM_MEMORY_CONFIG
 
-        self.tt_inputs_device = tt_inputs_host.to(device, sharded_mem_config_DRAM)
-        self.tt_pitch_device = tt_pitch_host.to(device, sharded_mem_config_DRAM)
-        self.tt_pitchf_device = tt_pitchf_host.to(device, sharded_mem_config_DRAM)
-        self.tt_speaker_id_device = tt_speaker_id_host.to(device, sharded_mem_config_DRAM)
+        self.tt_inputs_device = tt_inputs_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
+        self.tt_pitch_device = tt_pitch_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
+        self.tt_pitchf_device = tt_pitchf_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
+        self.tt_speaker_id_device = tt_speaker_id_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
 
         if not self.performance_runner:
             self.run(
@@ -243,42 +255,43 @@ class RVCRunner:
         torch_input_tensor = self.torch_input if torch_input_tensor is None else torch_input_tensor
         b, t, c = torch_input_tensor.shape
         assert c == 1, f"Expected input with 1 channel, got {c}"
-        input_mem_config = ttnn.DRAM_MEMORY_CONFIG
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if device.get_num_devices() > 1:
+            assert b % device.get_num_devices() == 0, "b isn't evenly divided by the available number of devices"
+            b = b // device.get_num_devices()
+            input_mem_config = ttnn.create_sharded_memory_config(
+                [b, t, c],
+                ttnn.CoreGrid(x=8, y=4),
+                ttnn.ShardStrategy.HEIGHT,
+            )
+            input_tensor = torch.chunk(torch_input_tensor, device.get_num_devices(), dim=0)
+            tt_inputs_host = ttnn.from_host_shards(
+                [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor],
+                device.shape,
+            )
+        else:
+            input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         return tt_inputs_host, input_mem_config
-        # input_mem_config = ttnn.create_sharded_memory_config(
-        #     [b, t, c],
-        #     ttnn.CoreGrid(x=8, y=4),
-        #     ttnn.ShardStrategy.HEIGHT,
-        # )
-        # input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
-        # tt_inputs_host = ttnn.from_host_shards(
-        #     [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
-        # )
 
-        # return tt_inputs_host, input_mem_config
+    def _from_torch_data_parallel(self, torch_tensor, dtype, device):
+        if device.get_num_devices() <= 1:
+            return ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if torch_tensor.shape[0] % device.get_num_devices() != 0:
+            raise ValueError(
+                f"Tensor batch {torch_tensor.shape[0]} must be divisible by the number of devices {device.get_num_devices()}."
+            )
+        shards = torch.chunk(torch_tensor, device.get_num_devices(), dim=0)
+        return ttnn.from_host_shards(
+            [ttnn.from_torch(shard, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT) for shard in shards],
+            device.shape,
+        )
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None):
-        tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device)
-        tt_pitch_host = ttnn.from_torch(self.torch_pitch, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tt_pitchf_host = ttnn.from_torch(self.torch_pitchf, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tt_speaker_id_host = ttnn.from_torch(self.torch_speaker_id, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device, torch_input_tensor)
+        tt_pitch_host = self._from_torch_data_parallel(self.torch_pitch, ttnn.uint32, device)
+        tt_pitchf_host = self._from_torch_data_parallel(self.torch_pitchf, ttnn.bfloat16, device)
+        tt_speaker_id_host = self._from_torch_data_parallel(self.torch_speaker_id, ttnn.uint32, device)
         return tt_inputs_host, tt_pitch_host, tt_pitchf_host, tt_speaker_id_host, input_mem_config
-        dram_grid_size = device.dram_grid_size()
-        dram_shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-            ),
-            [
-                divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], (dram_grid_size.x * dram_grid_size.y)),
-                tt_inputs_host.shape[-1],
-            ],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        sharded_mem_config_DRAM = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
-        )
-        return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def execute_inference(self, tt_inputs_host, tt_pitch_host, tt_pitchf_host, tt_speaker_id_host):
         if not self.performance_runner:
@@ -372,6 +385,7 @@ class Pipeline:
     def __init__(
         self,
         device: ttnn.MeshDevice,
+        batch_size: int = 1,
         if_f0: bool = True,
         version: str = "v1",
         num: str = "48k",
@@ -408,6 +422,7 @@ class Pipeline:
 
         self.runner = RVCRunner(
             device=self.device,
+            batch_size=batch_size,
             if_f0=self.if_f0,
             version=version,
             num=num,
@@ -549,13 +564,15 @@ class Pipeline:
 
     def _get_time_stamps(self, audio, num_frames):
         batch_size = audio.shape[0]
-        num_segments = (audio.shape[1] + self.t_center - 1) // self.t_center
+        batch_size_per_device = self.runner.batch_size_per_device
+        block_size = self.t_center // batch_size_per_device
+        num_segments = (audio.shape[1] + block_size - 1) // block_size
         idx_list = []
         for b_idx in range(batch_size):
             b_idx_list = []
             for i in range(num_segments):
-                s = i * self.t_center
-                t = min(s + self.t_center, num_frames * self.window)
+                s = i * block_size
+                t = min(s + block_size, num_frames * self.window)
                 b_idx_list.append((s // self.window, t // self.window))
             idx_list.append(b_idx_list)
         return idx_list
@@ -563,6 +580,7 @@ class Pipeline:
     def run(self, audio):
         assert audio.dim() == 2, audio.dim()
         batch_size = audio.shape[0]
+        batch_size_per_device = self.runner.batch_size_per_device
         speaker_id = ttnn.from_torch(
             torch.full((batch_size,), self.speaker_id, dtype=torch.long),
             dtype=ttnn.uint32,
@@ -572,14 +590,21 @@ class Pipeline:
         index, big_npy = self._load_feature_index()
         audio_secs = audio.shape[1] / self.sr
         audio_padded = F.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
-        block_size = self.t_center
+        block_size = self.t_center // batch_size_per_device
         padded_length = ((audio_padded.shape[1] + block_size - 1) // block_size) * block_size
         audio_padded = F.pad(audio_padded, (0, padded_length - audio_padded.shape[1]), mode="constant")
         num_frames = audio_padded.shape[1] // self.window
         idx_list = self._get_time_stamps(audio, num_frames)
         pitch, pitchf = None, None
         if self.if_f0:
-            pitch, pitchf = self._get_f0(audio_padded, num_frames)
+            pitch_list = []
+            pitchf_list = []
+            for b_idx in range(batch_size):
+                pitch_b, pitchf_b = self._get_f0(audio_padded[b_idx], num_frames)
+                pitch_list.append(pitch_b)
+                pitchf_list.append(pitchf_b)
+            pitch = torch.cat(pitch_list, dim=0)
+            pitchf = torch.cat(pitchf_list, dim=0)
 
         audio_output = []
         for idx_s, idx_e in idx_list[0]:
@@ -607,7 +632,6 @@ class Pipeline:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=self.input_mesh_mapper,
             )
-            # out = self.runner.run(audio_slice, pitch_slice, pitchf_slice, speaker_id, index, big_npy)
             out = self.runner.execute_inference(audio_slice, pitch_slice, pitchf_slice, speaker_id)
             out = ttnn.to_torch(out, mesh_composer=self.output_mesh_composer).to(torch.float32)[:, :, 0]
             start_idx = self.t_pad_tgt
@@ -631,12 +655,21 @@ class Pipeline:
 
         return audio_output
 
-    def prepare_audio_input(self, num_secs: float | None = None) -> torch.Tensor:
-        audio = load_audio(self.sr)
+    def _prepare_loaded_audio(self, audio: torch.Tensor) -> torch.Tensor:
         # preprocess
         audio_max = torch.abs(audio).max().item()
         if audio_max > 1:
             audio /= audio_max
-        audio = signal.filtfilt(bh, ah, audio)
-        audio = torch.from_numpy(audio.copy()).unsqueeze(0).to(torch.float32)
+        audio = signal.filtfilt(bh, ah, audio, axis=-1)
+        audio = torch.from_numpy(audio.copy()).to(torch.float32)
+        if audio.dim() == 1:
+            audio = audio.unsqueeze(0)
         return audio
+
+    def prepare_audio_input(self, num_secs: float | None = None) -> torch.Tensor:
+        audio = load_audio(self.sr)
+        return self._prepare_loaded_audio(audio)
+
+    def prepare_audio_batch_input(self, num_secs: float | None = None) -> torch.Tensor:
+        audio = load_audio_batch(self.sr)
+        return self._prepare_loaded_audio(audio)

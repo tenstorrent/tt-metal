@@ -34,6 +34,7 @@ def load_ttnn_pipeline(
     device,
     model_config: RVCModelConfig,
     inference_config: RVCInferenceConfig,
+    batch_size: int = 1,
     validation=False,
     performance_runner=False,
 ):
@@ -41,6 +42,7 @@ def load_ttnn_pipeline(
 
     ttnn_pipeline = TTPipeline(
         device=device,
+        batch_size=batch_size,
         if_f0=model_config.if_f0,
         version=model_config.version,
         num=model_config.num,
@@ -66,6 +68,7 @@ class RVCRunner:
         self,
         device,
         config,
+        batch_size: int = 1,
         model_config: RVCModelConfig | None = None,
         input_tensor_torch: torch.Tensor | None = None,
         validation=False,
@@ -77,13 +80,15 @@ class RVCRunner:
         ) = self._normalize_runner_config(config, model_config)
         self.device = device
         self.num_devices = self.device.get_num_devices()
-        self.batch_size = self.num_devices
+        self.batch_size = batch_size
+        # self.batch_size = self.num_devices
         self.inference_config = inference_config
         self.model_config = normalized_model_config or RVCModelConfig()
         self.ttnn_pipeline = load_ttnn_pipeline(
             self.device,
             self.model_config,
             self.inference_config,
+            batch_size=self.batch_size,
             validation=validation,
             performance_runner=performance_runner,
         )

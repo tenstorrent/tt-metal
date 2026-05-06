@@ -218,8 +218,8 @@ class GroupNorm1D:
         return ttnn.squeeze(output, dim=1)
 
     def __call__(self, input: ttnn.Tensor) -> ttnn.Tensor:
-        length_block = 8192
         batch_size, sequence_length, num_channels = input.shape
+        length_block = 8192 // batch_size  # heuristic block size to fit in memory, can be tuned
         if sequence_length <= length_block:
             input = pad_to_alignment(input)
             output = self._internal_call_(input)

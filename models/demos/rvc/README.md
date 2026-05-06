@@ -37,22 +37,55 @@ export RVC_CONFIGS_DIR="$PWD/models/demos/rvc/data/configs"
 export RVC_ASSETS_DIR="$PWD/models/demos/rvc/data/assets"
 ```
 
-The current demo uses a fixed input audio file:
+The current demo uses fixed input audio files under:
 
-- `models/demos/rvc/data/sample-speech.wav`
+- `models/demos/rvc/data/speech/sample-speech-0.wav`
+- `models/demos/rvc/data/speech/sample-speech-1.wav`
+- ...
+- `models/demos/rvc/data/speech/sample-speech-7.wav`
 
 Run inference using the helper script:
 
 ```sh
 mkdir -p ./models/demos/rvc/data/output
 
-# The current helper scripts still accept `-i`, but the pipeline itself now
-# loads the fixed demo input from `models/demos/rvc/data/sample-speech.wav`.
+# Single-audio run. The pipeline loads
+# `models/demos/rvc/data/speech/sample-speech-0.wav`.
 uv run --active models/demos/rvc/scripts/infer_ttnn.py -o ./models/demos/rvc/data/output/output_ttnn.wav
 
 # torch version
 # uv run --active models/demos/rvc/scripts/infer_torch.py -o ./models/demos/rvc/data/output/output_torch.wav
 
+```
+
+Batch input loading is available with `--batch-run`. This loads the hard-coded files
+`sample-speech-0.wav` through `sample-speech-7.wav`, pads them to the longest input,
+and runs them as one batch:
+
+```sh
+uv run --active models/demos/rvc/scripts/infer_ttnn.py \
+  --performance-runner \
+  --batch-run
+```
+
+On multi-device systems, use `--mesh-num-devices` to open a 1xN mesh and shard the
+batch dimension across devices. For example, this runs the 8-file batch across 2
+devices:
+
+```sh
+uv run --active models/demos/rvc/scripts/infer_ttnn.py \
+  --performance-runner \
+  --mesh-num-devices 2 \
+  --batch-run
+```
+
+For a replicated single input across 2 devices, pass an explicit batch size:
+
+```sh
+uv run --active models/demos/rvc/scripts/infer_ttnn.py \
+  --performance-runner \
+  --mesh-num-devices 2 \
+  --batch-size 2
 ```
 
 Run inference using the Python API:
@@ -69,6 +102,8 @@ sf.write("./models/demos/rvc/data/output/output.wav", audio, pipe.tgt_sr, subtyp
 Expected layout after download:
 - `RVC_CONFIGS_DIR` contains `v1/` and `v2/` config folders plus `hubert_cfg.json`.
 - `RVC_ASSETS_DIR` contains `hubert.safetensors` and `pretrained/` weights.
+- `models/demos/rvc/data/speech/` contains the fixed sample speech inputs and
+  `sample-speech-transcript.txt`.
 
 
 ## Development
@@ -84,64 +119,59 @@ For repeated fixed-shape benchmarking and validation, `rvc` now has a runner sur
 `unet_3d`:
 
 - `models.demos.rvc.runner.performant_runner.RVCRunner`
-- `models.demos.rvc.runner.performant_runner.RVCTestInfra`
 
 This runner currently assumes a fixed input audio path and fixed inference configuration for the
 life of the initialized runner. That matches the constraints needed for later trace-oriented work:
 the `rvc` pipeline is more dynamic than `unet_3d`, so trace/CQ optimization will need to target a
 stable subgraph or fixed input shape rather than arbitrary audio lengths.
 
+The runner supports data-parallel mesh execution when the caller passes a `ttnn.MeshDevice`.
+The global batch size must be divisible by `device.get_num_devices()`. Runtime tensors are
+split along batch dimension and outputs are concatenated back along batch dimension.
+
 The runner is Tenstorrent-only. Torch reference generation and TT-vs-Torch comparison stay in the
 separate eval flow instead of the runtime runner.
 
 ## Evaluation
 
-Speaker similarity should live under a dedicated eval surface rather than inside the TT/Torch inference paths.
-This demo now exposes:
-
-- module: `models.demos.rvc.evals.speaker_similarity`
-- module: `models.demos.rvc.evals.token_accuracy`
-- script: `models/demos/rvc/scripts/eval_token_accuracy.py`
-- module: `models.demos.rvc.evals.wer`
-- script: `models/demos/rvc/scripts/eval_wer.py`
-
-Recommended backend for the bounty metric:
+Start with a plain TTNN run before enabling any evaluation flags. This verifies that the
+model loads, runs on the Tenstorrent device, and writes converted audio.
 
 ```sh
-pip install transformers
+mkdir -p ./models/demos/rvc/data/output
+uv run --active models/demos/rvc/scripts/infer_ttnn.py \
+  -o ./models/demos/rvc/data/output/output_ttnn.wav
 ```
 
-Notes:
-- The default backend uses a Transformers `WavLMForXVector` speaker encoder and reports cosine similarity.
-- If the model is not already cached locally, backend initialization may need network access to download weights.
-- `compute_speaker_similarity(reference_audio, candidate_audio, ...)` compares two in-memory audio arrays.
-- This is intentionally separate from the TTNN inference pipeline so future evals such as WER, mel similarity,
-  and frame-level TT-vs-Torch comparisons can live under `models/demos/rvc/evals/`.
+The expected result is a playable `output_ttnn.wav` file and printed runtime metrics
+such as average inference time, output duration, and real-time factor (RTF).
 
-Content-preservation WER can be computed with the fixed demo audio input:
+For batch and data-parallel checks, use:
 
 ```sh
-python models/demos/rvc/scripts/eval_wer.py \
-  --device cpu
+uv run --active models/demos/rvc/scripts/infer_ttnn.py \
+  --performance-runner \
+  --mesh-num-devices 2 \
+  --batch-run
 ```
 
-This currently runs on the fixed demo audio input and reports the metric from
-that fixed-path flow.
+This loads all 8 fixed speech samples from `models/demos/rvc/data/speech/`, shards
+the batch across 2 devices, and reports the output shape, batch size, input sample
+count, average runtime, output duration, and RTF.
 
-Token-level accuracy against a PyTorch reference can be computed from a Torch-generated
-reference audio and a TTNN-generated candidate audio:
+After the plain run succeeds, check token-level accuracy against the PyTorch reference and WER
 
 ```sh
-python models/demos/rvc/scripts/eval_token_accuracy.py \
-  --reference-audio path/to/output_torch.wav \
-  --candidate-audio path/to/output_ttnn.wav \
-  --device cpu
+uv run --active models/demos/rvc/scripts/infer_ttnn.py \
+  -o ./models/demos/rvc/data/output/output_ttnn.wav \
+  --check-torch-token-accuracy
 ```
 
-This runs ASR on both files, normalizes the transcripts, tokenizes them with the same
-tokenizer, and reports:
+This command runs the TTNN pipeline, generates a PyTorch reference in validation mode,
+checks waveform PCC, and reports token-level content accuracy. The token accuracy
+target is:
 
-`token_accuracy = 1 - edit_distance(reference_tokens, candidate_tokens) / len(reference_tokens)`
+`token_accuracy > 0.95`
 
 ## Attributions
 Heavily inspired by RVC (Retrieval-based Voice Conversion) and please see the original repo

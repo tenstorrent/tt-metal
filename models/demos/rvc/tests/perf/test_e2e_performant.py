@@ -26,14 +26,17 @@ def run_rvc_e2e_inference(device) -> None:
     _require_assets_env()
     model = RVCRunner()
     inference_config = RVCInferenceConfig(num_secs=33.0)
+    batch_size = device.get_num_devices()
 
     model.initialize_inference(
         device,
         {"inference": inference_config},
+        batch_size=batch_size,
         validation=False,
         performance_runner=True,
     )
     torch_input_tensor = model.ttnn_pipeline.prepare_audio_input()
+    torch_input_tensor = torch_input_tensor.expand(batch_size, torch_input_tensor.shape[1])
     inference_iter_count = 10
 
     t0 = time.time()

@@ -227,6 +227,7 @@ class ConvFeatureExtractionModel:
                 group_norm.load_state_dict(state_dict=state_dict, key=f"conv_layers.{i}.1", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        batch_size = x.shape[0]
         for i, conv in enumerate(self.conv_layers):
             if i == 3:
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)

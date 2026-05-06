@@ -24,11 +24,13 @@ def _mesh_mapper_and_composer(device):
     return None, None
 
 
-def ttnn_randn_fallback(shape, dtype, device, cache) -> ttnn.Tensor:
+def ttnn_randn_fallback(shape, dtype, device, cache, mesh_mapper="auto") -> ttnn.Tensor:
     # Fallback random generator using PyTorch, since TTNN's random generation is not available in the current version.
-    mesh_mapper, _ = _mesh_mapper_and_composer(device)
-    if shape in cache:
-        return cache[shape]
+    cache_key = (shape, mesh_mapper)
+    if mesh_mapper == "auto":
+        mesh_mapper, _ = _mesh_mapper_and_composer(device)
+    if cache_key in cache:
+        return cache[cache_key]
     output = ttnn.from_torch(
         torch.randn(shape, dtype=torch.float32),
         dtype=dtype,
@@ -36,7 +38,7 @@ def ttnn_randn_fallback(shape, dtype, device, cache) -> ttnn.Tensor:
         device=device,
         mesh_mapper=mesh_mapper,
     )
-    cache[shape] = output
+    cache[cache_key] = output
     return output
 
 
@@ -854,11 +856,12 @@ class SineGen:
         self.randn_cache = {}
 
     def __call__(self, f0: ttnn.Tensor, upp: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        batch_size, length = f0.shape
         # f0: [B, T]
         # Upsample f0 to full resolution first using TTNN wrapper.
         f0_up = _interpolate_1d(f0, scale_factor=upp, mode="nearest")
         # f0_up = ttnn.pad(f0_up, ((0, 0), (0, (32 - f0_up.shape[1] % 32) % 32), (0, 0)), value=0)
-        f0_up = ttnn.reshape(f0_up, (1, int(f0_up.shape[1] / 32), 32))
+        f0_up = ttnn.reshape(f0_up, (batch_size, int(f0_up.shape[1] / 32), 32))
         f0_up = ttnn.to_layout(f0_up, ttnn.TILE_LAYOUT)
         # Voiced/unvoiced mask.
         uv = ttnn.gt(f0_up, self.voiced_threshold)
@@ -870,11 +873,11 @@ class SineGen:
         phase = ttnn.cumsum(f0_harm, dim=1)
         if not self.validation:
             rand_ini = ttnn_randn_fallback(
-                (f0_up.shape[0], self.harmonic_num + 1),
+                (f0_up.shape[0], self.harmonic_num + 1, 1),
                 dtype=ttnn.bfloat16,
                 device=self.device,
                 cache=self.randn_cache,
-                # memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=None,
             )
             phase = ttnn.add(phase, rand_ini, output_tensor=phase)
         phase = ttnn.multiply(phase, 2 * math.pi, output_tensor=phase)
@@ -886,7 +889,11 @@ class SineGen:
             noise_amp = ttnn.multiply(
                 noise_amp,
                 ttnn_randn_fallback(
-                    tuple(sine_waves.shape), dtype=ttnn.bfloat16, device=self.device, cache=self.randn_cache
+                    tuple(sine_waves.shape),
+                    dtype=ttnn.bfloat16,
+                    device=self.device,
+                    cache=self.randn_cache,
+                    mesh_mapper=None,
                 ),
                 output_tensor=noise_amp,
             )
@@ -1130,7 +1137,11 @@ class SynthesizerTrnMsNSF:
                 prior_mean
                 + ttnn.exp(prior_log, output_tensor=prior_log)
                 * ttnn_randn_fallback(
-                    tuple(prior_mean.shape), dtype=ttnn.bfloat16, device=self.device, cache=self.randn_cache
+                    tuple(prior_mean.shape),
+                    dtype=ttnn.bfloat16,
+                    device=self.device,
+                    cache=self.randn_cache,
+                    mesh_mapper=None,
                 )
                 * 0.66666
             )

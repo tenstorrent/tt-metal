@@ -18,6 +18,9 @@ Example:
 import argparse
 import os
 import time
+from pathlib import Path
+
+import torch
 
 import ttnn
 from models.demos.rvc.evals import (
@@ -27,10 +30,13 @@ from models.demos.rvc.evals import (
     count_whisper_token,
 )
 from models.demos.rvc.evals.speaker_similarity import compute_speaker_similarity
+from models.demos.rvc.evals.wer import DEFAULT_MAX_WER, normalize_transcript, transcribe_audio
 from models.demos.rvc.runner.performant_runner import RVCInferenceConfig, RVCRunner
 from models.demos.rvc.torch_impl.vc.pipeline import Pipeline as TorchPipeline
 from models.demos.rvc.utils.f0 import F0Method
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+DEFAULT_TRANSCRIPT_PATH = Path(__file__).resolve().parent.parent / "data" / "speech" / "sample-speech-transcript.txt"
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,6 +53,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rms-mix-rate", type=float, default=0.25, help="RMS mix rate.")
     parser.add_argument("--protect", type=float, default=0.33, help="Protect rate.")
     parser.add_argument("--device-id", type=int, default=0, help="TT device id.")
+    parser.add_argument(
+        "--mesh-num-devices",
+        type=int,
+        default=1,
+        help="Open a 1xN mesh and shard the batch dimension across N devices.",
+    )
     parser.add_argument("--l1-small-size", type=int, default=65384, help="CreateDevice l1_small_size.")
     parser.add_argument("--warmup-runs", type=int, default=1, help="Warmup runs before timing.")
     parser.add_argument("--iters", type=int, default=3, help="Timed inference iterations.")
@@ -58,27 +70,30 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--whisper-device", default="cpu", help="Execution device for Whisper.")
     parser.add_argument(
+        "--compute-wer",
+        action="store_true",
+        help="Transcribe output audio with Whisper and compute WER against data/speech/sample-speech-transcript.txt.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Batch size for inference. Default is 1 since the runner is optimized for real-time single audio processing.",
+    )
+    parser.add_argument(
+        "--batch-run",
+        action="store_true",
+        help="Load sample-speech-0.wav through sample-speech-7.wav as an 8-item batch.",
+    )
+    parser.add_argument(
         "--compute-embedding-similarity",
         action="store_true",
         help="Compute speaker embedding cosine similarity between input and output audio.",
     )
-    parser.add_argument("--speaker-similarity-device", default="cpu", help="Execution device for speaker similarity.")
     parser.add_argument(
         "--check-torch-token-accuracy",
         action="store_true",
         help="Compare TTNN output token accuracy against a Torch reference output.",
-    )
-    parser.add_argument(
-        "--segmented-pcc-window-sec",
-        type=float,
-        default=0.5,
-        help="Window size in seconds for --compute-segmented-pcc.",
-    )
-    parser.add_argument(
-        "--segmented-pcc-hop-sec",
-        type=float,
-        default=0.25,
-        help="Hop size in seconds for --compute-segmented-pcc.",
     )
     parser.add_argument(
         "--performance-runner",
@@ -95,7 +110,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def torch_infer(
-    *,
+    audio: torch.Tensor,
     speaker_id: int,
     f0_up_key: int,
     f0_method: F0Method | str,
@@ -118,7 +133,55 @@ def torch_infer(
         protect=protect,
         validation=validation,
     )
-    return pipe.infer()
+    return pipe.run(audio)
+
+
+def _word_edit_distance(reference_words: list[str], candidate_words: list[str]) -> int:
+    rows = len(reference_words) + 1
+    cols = len(candidate_words) + 1
+    dp = [[0] * cols for _ in range(rows)]
+
+    for i in range(rows):
+        dp[i][0] = i
+    for j in range(cols):
+        dp[0][j] = j
+
+    for i in range(1, rows):
+        for j in range(1, cols):
+            cost = 0 if reference_words[i - 1] == candidate_words[j - 1] else 1
+            dp[i][j] = min(
+                dp[i - 1][j] + 1,
+                dp[i][j - 1] + 1,
+                dp[i - 1][j - 1] + cost,
+            )
+    return dp[-1][-1]
+
+
+def _load_reference_transcripts() -> list[str]:
+    transcript_path = Path(DEFAULT_TRANSCRIPT_PATH)
+    if not transcript_path.exists():
+        raise FileNotFoundError(f"Reference transcript file does not exist: {transcript_path}")
+    transcript = transcript_path.read_text(encoding="utf-8").strip()
+    if not transcript:
+        raise ValueError(f"Reference transcript file is empty: {transcript_path}")
+    return [transcript]
+
+
+def _prepare_asr_audio(audio: torch.Tensor, sample_rate: int) -> torch.Tensor:
+    waveform = audio.detach().cpu().reshape(-1).to(torch.float32)
+    peak = torch.max(torch.abs(waveform)).item() if waveform.numel() else 0.0
+    if peak > 1.0:
+        waveform = torch.clamp(waveform / max(peak, 1e-6), -1.0, 1.0)
+    if sample_rate != 16000:
+        import librosa
+
+        waveform_np = librosa.resample(
+            waveform.numpy(),
+            orig_sr=sample_rate,
+            target_sr=16000,
+        )
+        waveform = torch.from_numpy(waveform_np).to(torch.float32)
+    return waveform
 
 
 def main() -> None:
@@ -127,6 +190,18 @@ def main() -> None:
         raise RuntimeError("RVC_CONFIGS_DIR is not set.")
     if not os.getenv("RVC_ASSETS_DIR"):
         raise RuntimeError("RVC_ASSETS_DIR is not set.")
+
+    effective_batch_size = 8 if args.batch_run else args.batch_size
+    if args.mesh_num_devices > 1 and not args.batch_run and args.batch_size == 1:
+        effective_batch_size = args.mesh_num_devices
+    if effective_batch_size <= 0:
+        raise ValueError(f"Batch size must be positive, got {effective_batch_size}")
+    if args.mesh_num_devices <= 0:
+        raise ValueError(f"Mesh device count must be positive, got {args.mesh_num_devices}")
+    if effective_batch_size % args.mesh_num_devices != 0:
+        raise ValueError(
+            f"Batch size {effective_batch_size} must be divisible by mesh device count {args.mesh_num_devices}."
+        )
 
     validation = args.check_torch_token_accuracy
     runner = RVCRunner()
@@ -139,11 +214,30 @@ def main() -> None:
         rms_mix_rate=args.rms_mix_rate,
         protect=args.protect,
     )
-    device = ttnn.CreateDevice(device_id=args.device_id, l1_small_size=args.l1_small_size, num_command_queues=2)
+    if args.mesh_num_devices > 1:
+        device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(1, args.mesh_num_devices),
+            l1_small_size=args.l1_small_size,
+            trace_region_size=15079936,
+            num_command_queues=2,
+        )
+    else:
+        device = ttnn.CreateDevice(device_id=args.device_id, l1_small_size=args.l1_small_size, num_command_queues=2)
     runner.initialize_inference(
-        device, {"inference": inference_config}, validation=validation, performance_runner=args.performance_runner
+        device,
+        {"inference": inference_config},
+        validation=validation,
+        performance_runner=args.performance_runner,
+        batch_size=effective_batch_size,
     )
-    torch_input_tensor = runner.ttnn_pipeline.prepare_audio_input()
+    if args.batch_run:
+        torch_input_tensor = runner.ttnn_pipeline.prepare_audio_batch_input()
+    else:
+        torch_input_tensor = runner.ttnn_pipeline.prepare_audio_input()
+    _, audio_length = torch_input_tensor.shape
+    print(f"Prepared input audio tensor shape: {torch_input_tensor.shape}, dtype: {torch_input_tensor.dtype}")
+    if not args.batch_run:
+        torch_input_tensor = torch_input_tensor.expand(effective_batch_size, audio_length)
 
     ttnn.synchronize_device(device)
 
@@ -155,7 +249,6 @@ def main() -> None:
     end_time = time.time()
 
     output_np = output.cpu().numpy()
-    print(f"output shape: {output_np.shape}, dtype: {output_np.dtype}, device: {output.device}")
 
     avg_sec = (end_time - start_time) / args.iters
     print(f"Average inference time: {avg_sec:.6f} seconds.")
@@ -176,6 +269,32 @@ def main() -> None:
         print(f"num_whisper_tokens={num_tokens}")
         print(f"tokens/second={num_tokens / avg_sec:.2f}")
 
+    if args.compute_wer:
+        reference_transcripts = _load_reference_transcripts()
+        reference_transcript = normalize_transcript(" ".join(reference_transcripts))
+        candidate_audio = _prepare_asr_audio(output[0], runner.ttnn_pipeline.tgt_sr)
+        candidate_transcript = transcribe_audio(
+            candidate_audio,
+            model_id=args.whisper_model,
+            device=args.whisper_device,
+        )
+        reference_words = reference_transcript.split()
+        candidate_words = candidate_transcript.split()
+        if not reference_words:
+            raise ValueError("Reference transcript is empty after normalization.")
+        word_edit_distance = _word_edit_distance(reference_words, candidate_words)
+        wer = 100.0 * word_edit_distance / len(reference_words)
+        wer_pass = wer < DEFAULT_MAX_WER
+        print(f"wer_reference_transcripts={reference_transcripts}")
+        print(f"wer_reference_transcript={reference_transcript}")
+        print(f"wer_candidate_transcript={candidate_transcript}")
+        print(f"wer_reference_num_words={len(reference_words)}")
+        print(f"wer_candidate_num_words={len(candidate_words)}")
+        print(f"wer_word_edit_distance={word_edit_distance}")
+        print(f"wer={wer:.6f}")
+        print(f"wer_threshold={args.max_wer:.6f}")
+        print(f"wer_pass={str(wer_pass).lower()}")
+
     if args.compute_embedding_similarity:
         speaker_similarity = compute_speaker_similarity(
             torch_input_tensor[0],
@@ -190,6 +309,7 @@ def main() -> None:
 
     if args.check_torch_token_accuracy:
         torch_output = torch_infer(
+            audio=torch_input_tensor,
             speaker_id=args.speaker_id,
             f0_up_key=args.f0_up_key,
             f0_method=F0Method.from_str(args.f0_method),
@@ -199,16 +319,15 @@ def main() -> None:
             protect=args.protect,
             validation=True,
         )
-        assert tuple(output_np[0].shape) == tuple(
+        assert tuple(output_np.shape) == tuple(
             torch_output.shape
         ), f"Shape mismatch between TTNN output {output.shape} and Torch output {torch_output.shape}"
 
-        msg = assert_with_pcc(torch_output, output.cpu()[0], pcc=args.token_accuracy_threshold)
+        msg = assert_with_pcc(torch_output, output.cpu(), pcc=args.token_accuracy_threshold)
         print(f"Token accuracy check PCC: {msg}")
         token_accuracy_result = compute_token_accuracy(
             torch_output,
-            # torch_output,
-            output[0],
+            output,
             reference_sample_rate=runner.ttnn_pipeline.tgt_sr,
             candidate_sample_rate=runner.ttnn_pipeline.tgt_sr,
             whisper_model=args.whisper_model,
