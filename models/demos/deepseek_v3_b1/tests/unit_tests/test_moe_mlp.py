@@ -1052,12 +1052,12 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
 
     # ── Create MoE tensors (routed weights TP8-sharded; other tensors replicated) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
-    # T=1: place expert 0 in L1 (separate-pipeline plan, Steps 0.1+1.1+1.2).
+    # T=1: place expert 1 in L1 (separate-pipeline plan, Steps 0.1+1.1+1.2).
     # Empty list = DRAM-only (Phase 1B baseline). With T=1, anchor PCC drops
-    # because expert 0's contribution is missing (DRAM kernel skips it via
-    # bit-15 filter; SRAM kernel runs but output drained locally — full
-    # gather/reduce/mcast pipeline lands in Steps 3-5).
-    sram_expert_ids = [0]
+    # because the placed expert's contribution is missing (DRAM kernel skips
+    # it via bit-15 filter; SRAM kernel runs but output drained locally —
+    # full gather/reduce/mcast pipeline lands in Steps 3-5).
+    sram_expert_ids = [1]
     r = create_routed_expert_tensors(
         submesh,
         mesh_mapper=mesh_mapper,
@@ -1237,10 +1237,17 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     _ = ttnn.to_torch(ttnn_result_scores, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
     root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
     tt_top8 = device_gate_indices[0].flatten()[:8].to(torch.int64)
-    tt_top8_sorted = torch.sort(tt_top8).values
+    # SRAM-placed experts are bit-15-encoded ((1<<15) | slot) in the gate output
+    # (gate_indices_tensor lookup happens in-kernel). Decode by mapping each
+    # encoded slot back to the original eid for the comparison.
+    tt_top8_decoded = tt_top8.clone()
+    for slot, eid in enumerate(sram_expert_ids):
+        tt_top8_decoded[tt_top8 == ((1 << 15) | slot)] = eid
+    tt_top8_sorted = torch.sort(tt_top8_decoded).values
     expected_top8_sorted = torch.sort(torch.tensor(expected_expert_ids, dtype=torch.int64)).values
     assert torch.equal(tt_top8_sorted, expected_top8_sorted), (
-        f"Rigged gate experts mismatch: expected={expected_top8_sorted.tolist()}, " f"got={tt_top8_sorted.tolist()}"
+        f"Rigged gate experts mismatch: expected={expected_top8_sorted.tolist()}, "
+        f"got={tt_top8_sorted.tolist()} (raw={tt_top8.tolist()})"
     )
 
     # Per-device golden: each device runs TP8-shared + TP8-routed experts and the
@@ -1310,6 +1317,51 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
 
     passing, pcc_output = comp_pcc(_exp_flat, _hw_flat, 0.97)
     logger.info(f"Reduce output PCC: {pcc_output}")
+
+    # ── SRAM gate/up matmul output PCC ──
+    # Independent correctness signal: compares rmsnorm(input) @ weight_per_dev[eid]
+    # against the per-device SRAM cb_out (K-reduced across the 8 K-slice cores).
+    # The reduce-output PCC above WILL drop because the SRAM cb_out is drained
+    # locally — never gathered/reduced into the final output (Steps 3-5).
+    if r.sram_gate_proj_out_tensor is not None and sram_expert_ids:
+        _x = r.torch_input.float()
+        _variance = _x.pow(2).mean(-1, keepdim=True)
+        _normed_input = ((_x * torch.rsqrt(_variance + 1e-6)) * r.torch_rmsnorm_gamma.float()).bfloat16().float()
+
+        _sram_k_parallel = 8
+        _sram_n_parallel = 8
+        _sram_per_core_N = 1
+        _tile_w = 32
+        _num_active = 8
+        _sram_out_shard = _sram_per_core_N * _tile_w * _num_active  # 256
+        _N_per_dev = RoutedExpert.GATE_PROJ_N // num_devices
+
+        for label, sram_out_tensor, weights_dict in [
+            ("gate", r.sram_gate_proj_out_tensor, r.expert_weights_dict),
+            ("up", r.sram_up_proj_out_tensor, r.up_proj_weights_dict),
+        ]:
+            for dev_idx, sram_dev in enumerate(ttnn.get_device_tensors(sram_out_tensor)):
+                sram_output_dev = ttnn.to_torch(sram_dev)
+                for slot, eid in enumerate(sram_expert_ids):
+                    # Slot N-partial reassembly: core si has (k_idx, n_idx) =
+                    # (si // n_parallel, si % n_parallel); per-core slot data is
+                    # at byte offset si*sram_out_shard + slot*per_core_N*tile_w.
+                    reduced = torch.zeros((1, _N_per_dev), dtype=sram_output_dev.dtype)
+                    for n_idx in range(_sram_n_parallel):
+                        col_sum = torch.zeros((1, _tile_w), dtype=sram_output_dev.dtype)
+                        for k_idx in range(_sram_k_parallel):
+                            si = k_idx * _sram_n_parallel + n_idx
+                            start = si * _sram_out_shard + slot * _sram_per_core_N * _tile_w
+                            col_sum = col_sum + sram_output_dev[..., start : start + _sram_per_core_N * _tile_w].view(
+                                1, _tile_w
+                            )
+                        reduced[..., n_idx * _tile_w : (n_idx + 1) * _tile_w] = col_sum
+                    weight_full = weights_dict[eid].reshape(RoutedExpert.K, RoutedExpert.GATE_PROJ_N)
+                    weight_per_dev = weight_full[:, dev_idx * _N_per_dev : (dev_idx + 1) * _N_per_dev]
+                    expected = (_normed_input @ weight_per_dev.float()).bfloat16().float()
+                    passing_sram, pcc_sram = comp_pcc(expected, reduced.float(), 0.97)
+                    logger.info(f"SRAM {label} dev={dev_idx} eid={eid} slot={slot} PCC: {pcc_sram}")
+                    assert passing_sram, f"SRAM {label} dev={dev_idx} eid={eid} slot={slot} failed: {pcc_sram}"
 
     # --- Reference model comparison ---
     num_experts_in_state_dict = sum(1 for k in state_dict if ".mlp.experts." in k and "gate_proj" in k)
