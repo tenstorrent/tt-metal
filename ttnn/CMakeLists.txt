@@ -683,7 +683,6 @@ target_link_libraries(
         TTNN::Ops::Core
         TTNN::Ops::Creation
         TTNN::Ops::DataMovement
-        TTNN::Ops::ConcatNew
         TTNN::Ops::Eltwise::Binary
         TTNN::Ops::Eltwise::Binary::Backward
         TTNN::Ops::Eltwise::Binary::NG
@@ -938,7 +937,6 @@ add_subdirectory(cpp/ttnn/operations/conv)
 add_subdirectory(cpp/ttnn/operations/creation)
 add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
-add_subdirectory(cpp/ttnn/operations/data_movement/concat_new)
 add_subdirectory(cpp/ttnn/operations/debug)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary_backward)
