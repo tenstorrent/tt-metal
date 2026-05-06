@@ -31,6 +31,11 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     const bool has_bias = tensor_args.bias_tensor.has_value();
     const Tensor* bias_ptr = has_bias ? &tensor_args.bias_tensor.value() : nullptr;
 
+    // Topology check: only Ring topology is supported
+    TT_FATAL(
+        attributes.topology == tt::tt_fabric::Topology::Ring,
+        "all_gather_minimal_matmul_async only supports Ring topology");
+
     // Basic device/storage checks
     TT_FATAL(
         act_tensor.storage_type() == StorageType::DEVICE && weight_tensor.storage_type() == StorageType::DEVICE,
