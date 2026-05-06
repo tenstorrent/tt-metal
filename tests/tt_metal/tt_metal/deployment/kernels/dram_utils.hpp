@@ -1,6 +1,7 @@
 #ifndef _DRAM_TEST_UTILS_H
 #define _DRAM_TEST_UTILS_H
 
+#include <stdint.h>
 #include "noc_parameters.h"
 #include "dev_mem_map.h"
 #include "common_dram.hpp"

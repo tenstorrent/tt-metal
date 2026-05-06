@@ -144,6 +144,7 @@ static bool eth_data_check(
     return pass;
 }
 
+[[maybe_unused]]
 static bool eth_bandwidth_check(
     tt::tt_metal::IDevice* const send_device,
     const CoreCoord& send_core,
