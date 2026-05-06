@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -111,6 +112,30 @@ public:
     const KvChunkAddressTableConfig& config() const { return config_; }
     uint32_t num_position_chunks() const { return num_position_chunks_; }
     size_t total_entries() const { return entries_.size(); }
+
+    // --- Debug ---
+
+    // Dump the entire table to stderr in human-readable form: config,
+    // device groups, fabric-node→host mapping, and every (slot, layer,
+    // position) -> KvCacheLocation entry. Each line is prefixed with
+    // `[KvChunkAddressTable.dump]` so it can be grepped from a noisy log.
+    // `tag` is an arbitrary marker the caller can pass to distinguish
+    // multiple dumps (e.g. "prefill", "decode-master", "decode-sub-rank3").
+    void dump(const std::string& tag = "") const;
+
+    // Iterate every populated (size_bytes != 0) entry in storage order
+    // [slot][layer][position_chunk]. The caller supplies a function that
+    // receives (slot, layer, position_in_tokens, location, replica_group)
+    // and can do whatever it wants — read DRAM, hex-dump, count, etc.
+    //
+    // KvChunkAddressTable deliberately doesn't own a device handle; for a
+    // "dump-with-contents" use case, the caller wraps this with a read+log
+    // closure (see migration_layer.cpp::dump_table_with_contents which
+    // routes reads through the migration's MultiDeviceReader and logs via
+    // chunk_dump.hpp::dump_chunk_record).
+    using EntryVisitFn = std::function<void(
+        uint32_t slot, uint32_t layer, uint32_t position, const KvCacheLocation& loc, const DeviceGroup& group)>;
+    void for_each_populated_entry(const EntryVisitFn& fn) const;
 
 private:
     size_t flat_index(uint32_t layer, uint32_t position_chunk, uint32_t slot) const;
