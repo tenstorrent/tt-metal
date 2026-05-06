@@ -84,8 +84,10 @@ void kernel_main() {
 
         // Bias CB lifecycle is caller-owned (helper does NOT touch wait/pop on
         // bias_cb — see bias_add_helpers.hpp:93-97). Wait once across the whole
-        // bias add, pop once after.
-        cb_wait_front(cb_bias_tiles, Nt);
+        // bias add, pop once after. Use the experimental::CircularBuffer
+        // wait_front / pop_front methods to stay consistent with the canonical
+        // bmm_large_block_zm_fused_bias_activation pattern.
+        bias_buf.wait_front(Nt);
 
         // Bias add → cb_output. Layout MUST match upstream matmul (both
         // SubblockMajor) so cb_partials is consumed in the same order it was
@@ -95,7 +97,7 @@ void kernel_main() {
             compute_kernel_lib::OutputLayout::SubblockMajor>(
             partials_buf, bias_buf, output_buf, compute_kernel_lib::BiasAddShape::of(Mt, Nt, 1, 1));
 
-        cb_pop_front(cb_bias_tiles, Nt);
+        bias_buf.pop_front(Nt);
     } else {
         // No-bias path: matmul packs directly to cb_output_tiles.
         compute_kernel_hw_startup(cb_input_tiles, cb_weight_tiles, cb_output_tiles);
