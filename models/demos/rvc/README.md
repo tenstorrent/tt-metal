@@ -178,6 +178,8 @@ if i == 3:
     x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 ```
 
+### Attention with Positional Embedding
+
 The VITS text encoder uses relative-position multi-head attention. See
 `models/demos/rvc/tt_impl/vc/synthesizer.py`, where `MultiHeadAttention` starts at
 line 85. The TTNN implementation avoids a padding-heavy relative-position attention
@@ -271,13 +273,37 @@ with Whisper, and computes WER against
 
 `wer < 2.5`
 
+### Generative Validation Mode
+
+The synthesizer has a `validation` input that indicates whether the model is running in the
+validation workflow. In validation mode, the generative noise path is forced to zero. This makes the
+Torch and TTNN implementations easier to compare reliably because stochastic sampling noise does not
+hide deterministic implementation differences.
+
 ## Speaker Embedding
 
 The original target speaker reference voice clips are not publicly available.
 Those speakers are only available through `speaker_id` as can be seen in the original RVC project. So, for the time being, it is not possible to compute the similarity between speaker embeddings of reference clip and output audio.
 
+## Caching and Tracing
+
+Tensor creation ops such as `ttnn.arange` are not allowed inside the traced region. The RVC TTNN
+implementation therefore caches shape-dependent helper tensors used by attention, indexing, masks,
+and other fixed-shape paths.
+
+The performant runner performs a cold-start run before trace capture so these caches are populated
+before tracing begins.
+
 ## Validation logs
-You can find them attached to the relevant PR.
+The PR includes the requested performance report and validation logs. All artifacts except the CSV
+are shell-command logs: each file contains the command that was run plus the command output. They can
+be reproduced by following this README and rerunning the commands shown in each log.
+
+- Perf sheet CSV: `cpp_device_perf_report.csv`
+- Runtime comparison for traced vs. untraced execution: `traced-vs-untraced.log`
+- Accuracy and consistency validation against the Torch implementation: `val1.log`
+- Batch-running validation, up to 8 concurrent audio conversions: `val2.log`
+- Pytest results: `pytest.log`
 
 
 
