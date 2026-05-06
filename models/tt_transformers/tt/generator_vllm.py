@@ -117,16 +117,19 @@ class HybridAttentionForCausalLM(Generator):
 
     * ``initialize_vllm_model``: load the underlying TT model.
     * ``prefill_forward`` / ``decode_forward``: consume the
-      ``page_tables_per_group`` list (one per kv_cache_group, in upstream's
-      group order) and route per layer to the right group's page table.
-      The underlying TT model must accept this routing.
+      ``page_tables_per_layer`` list (one tensor per decoder layer, layer-
+      aligned with the model's ``self.layers``) and pass each entry to its
+      corresponding attention layer. The plugin pre-expands
+      ``block_tables_per_group`` into this per-layer view at submission
+      time so bridges don't have to re-derive vLLM's group construction
+      order — see ``TTModelRunner._block_tables_per_layer``.
     * ``allocate_kv_cache_per_layer``: typically just delegates to
       :func:`allocate_vllm_kv_cache_per_layer` with the model handles.
 
     Until a subclass overrides them, ``prefill_forward`` and
     ``decode_forward`` raise :class:`NotImplementedError` to make the
     contract explicit. Legacy (non-hybrid) models never see the
-    ``page_tables_per_group`` kwarg — vLLM's plugin opts in via the
+    ``page_tables_per_layer`` kwarg — vLLM's plugin opts in via the
     presence of ``get_kv_cache_spec`` on the model class.
     """
 
@@ -195,15 +198,15 @@ class HybridAttentionForCausalLM(Generator):
     def prefill_forward(self, *args, **kwargs):
         raise NotImplementedError(
             f"{type(self).__name__} must override prefill_forward to consume "
-            "`page_tables_per_group` and route per layer to the right "
-            "kv_cache_group's page table."
+            "`page_tables_per_layer` and pass each entry to the matching "
+            "attention layer."
         )
 
     def decode_forward(self, *args, **kwargs):
         raise NotImplementedError(
             f"{type(self).__name__} must override decode_forward to consume "
-            "`page_tables_per_group` and route per layer to the right "
-            "kv_cache_group's page table."
+            "`page_tables_per_layer` and pass each entry to the matching "
+            "attention layer."
         )
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
@@ -703,8 +706,25 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return super().decode_forward(*args, **kwargs)
 
 
-class GptOssForCausalLM(Generator):
-    """GPT-OSS model for vLLM integration"""
+class GptOssForCausalLM(HybridAttentionForCausalLM):
+    """GPT-OSS model for vLLM integration.
+
+    GPT-OSS is a hybrid attention model — its layers alternate between
+    full attention and sliding-window attention per ``hf_config.layer_types``.
+    Inheriting from :class:`HybridAttentionForCausalLM` opts into vLLM's
+    hybrid kv cache manager so sliding-window layers can index a smaller
+    paged pool than full-attention layers, recovering the asymmetric-hybrid
+    memory waste described in vLLM's hybrid kv cache manager design.
+
+    The bridge accepts ``page_tables_per_layer`` from the plugin (one tensor
+    per decoder layer, layer-aligned with the underlying TT model's
+    ``self.layers``) and stashes it on each TT model handle as
+    ``_active_page_tables_per_layer`` so the model's ``ttnn_prefill_forward``
+    / ``ttnn_decode_forward`` pick it up without us having to thread the
+    kwarg through every call site in :class:`Generator`. The attribute is
+    cleared on the way out so a subsequent legacy single-page-table call
+    isn't accidentally affected.
+    """
 
     # Class-level capabilities
     model_capabilities = {
@@ -714,6 +734,48 @@ class GptOssForCausalLM(Generator):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    def _route_per_layer_page_tables(self, page_tables_per_layer):
+        """Context-manager-style helper: stash the per-layer list on each TT
+        model in ``self.model`` for the duration of a forward call.
+
+        ``Generator``'s prefill/decode paths invoke
+        ``model[i].ttnn_prefill_forward`` / ``ttnn_decode_forward`` from many
+        sites (warmup, trace capture, traced replay, etc.) without forwarding
+        an arbitrary kwarg. Threading ``page_tables_per_layer`` through every
+        site would be a wide change for a feature only this hybrid bridge
+        consumes, so we use a localised attribute injection instead: the
+        models read ``getattr(self, "_active_page_tables_per_layer", None)``
+        when their own kwarg is None.
+        """
+
+        class _Stash:
+            def __init__(self, models, value):
+                self._models = models
+                self._value = value
+
+            def __enter__(self):
+                if self._value is None:
+                    return
+                for m in self._models:
+                    m._active_page_tables_per_layer = self._value
+
+            def __exit__(self, *_):
+                if self._value is None:
+                    return
+                for m in self._models:
+                    if hasattr(m, "_active_page_tables_per_layer"):
+                        del m._active_page_tables_per_layer
+
+        return _Stash(self.model, page_tables_per_layer)
+
+    def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        with self._route_per_layer_page_tables(page_tables_per_layer):
+            return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        with self._route_per_layer_page_tables(page_tables_per_layer):
+            return super().decode_forward(*args, **kwargs)
 
     @classmethod
     def initialize_vllm_model(
@@ -766,14 +828,8 @@ class GptOssForCausalLM(Generator):
     def cache_path(self):
         return self.model_args[0].weight_cache_path(ttnn.bfloat8_b)
 
-    def prefill_forward(self, *args, **kwargs):
-        return super().prefill_forward_text(*args, **kwargs)
-
-    def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
-
+    # prefill_forward / decode_forward are defined above with the
+    # per-layer page-table stash; allocate_kv_cache_per_layer is inherited
+    # from HybridAttentionForCausalLM.
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
-
-    def allocate_kv_cache_per_layer(self, per_layer_specs):
-        return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
