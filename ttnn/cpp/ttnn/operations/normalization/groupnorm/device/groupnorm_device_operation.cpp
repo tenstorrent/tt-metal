@@ -16,7 +16,7 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     const auto& input = tensor_args.input;
 
     if (input.is_sharded()) {
-        return GroupNormShardedProgramFactory{};
+        return GroupNormDeviceOperation::GroupNormShardedProgramFactory{};
     }
 
     // For non-sharded: determine if we need mcast or no-mcast based on batch vs virtual rows
@@ -38,9 +38,9 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
 
     if (batch >= num_virtual_rows) {
-        return GroupNormNoMcastProgramFactory{};
+        return GroupNormDeviceOperation::GroupNormNoMcastProgramFactory{};
     }
-    return GroupNormMcastProgramFactory{};
+    return GroupNormDeviceOperation::GroupNormMcastProgramFactory{};
 }
 
 void GroupNormDeviceOperation::validate_on_program_cache_miss(
