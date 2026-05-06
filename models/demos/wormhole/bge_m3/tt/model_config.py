@@ -24,6 +24,7 @@ class ModelArgs:
         max_seq_len=8192,
         cache_hf=False,
         hf_model_name=None,
+        dtype=ttnn.bfloat16,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -38,6 +39,10 @@ class ModelArgs:
         self.tile_size = 32
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
+        self.dtype = dtype
+        self.attention_mask_dtype = (
+            dtype if self.max_seq_len == 512 and max(1, int(self.max_batch_size)) in (1, 32) else ttnn.bfloat16
+        )
         self.prefill_len_cutoff = 512 if ttnn_is_blackhole(mesh_device) else 1024
 
         self.dummy_weights = dummy_weights
@@ -193,7 +198,7 @@ class ModelArgs:
             ttnn.CoreCoord(num_x - 1, num_y - 1),
         )
 
-    def encode_prompts(self, prompts: list[str] | str) -> ttnn.Tensor:
+    def encode_prompts(self, prompts: list[str] | str, prompt_length: int | None = None) -> ttnn.Tensor:
         if isinstance(prompts, str):
             prompts = [prompts]
 
@@ -203,7 +208,15 @@ class ModelArgs:
             max_length=self.max_seq_len,
         )
         max_prompt_length = max(len(prompt_input_ids) for prompt_input_ids in tokenized["input_ids"])
-        padded_length = get_padded_sequence_length(max_prompt_length)
+        padded_length = (
+            int(prompt_length) if prompt_length is not None else get_padded_sequence_length(max_prompt_length)
+        )
+
+        if padded_length < max_prompt_length:
+            raise ValueError(
+                f"prompt_length={padded_length} is shorter than tokenized prompt length {max_prompt_length}. "
+                "Increase prompt_length or use a shorter prompt."
+            )
 
         if padded_length > self.max_seq_len:
             raise ValueError(
@@ -211,12 +224,54 @@ class ModelArgs:
                 "Increase max_seq_len or use shorter prompts."
             )
 
-        return self.tokenizer.pad(
+        encoded = self.tokenizer.pad(
             tokenized,
             padding="max_length",
             max_length=padded_length,
             return_tensors="pt",
         )
+        input_ids = encoded["input_ids"]
+        if "token_type_ids" not in encoded:
+            encoded["token_type_ids"] = input_ids.new_zeros(input_ids.shape)
+        encoded["tokenizer_attention_mask"] = encoded["attention_mask"]
+
+        keep = encoded["tokenizer_attention_mask"].bfloat16()
+        additive = (1.0 - keep) * -100000.0
+        encoded["attention_mask"] = additive.unsqueeze(1).unsqueeze(1).expand(-1, -1, padded_length, -1).contiguous()
+
+        mask = input_ids.ne(int(self.pad_token_id)).to(dtype=input_ids.dtype)
+        incremental_indices = mask.cumsum(dim=1) * mask
+        encoded["position_ids"] = (incremental_indices + int(self.pad_token_id)).to(dtype=input_ids.dtype)
+
+        if self.mesh_device is not None:
+            encoded["model_inputs"] = {
+                "input_ids": ttnn.from_torch(
+                    encoded["input_ids"].int(),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                "attention_mask": ttnn.from_torch(
+                    encoded["attention_mask"].bfloat16(),
+                    device=self.mesh_device,
+                    dtype=self.attention_mask_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                "token_type_ids": ttnn.from_torch(
+                    encoded["token_type_ids"].int(),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                "position_ids": ttnn.from_torch(
+                    encoded["position_ids"].int(),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+            }
+        return encoded
 
 
 def get_padded_sequence_length(seq_len: int) -> int:
