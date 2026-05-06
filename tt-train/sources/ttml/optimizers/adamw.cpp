@@ -20,7 +20,7 @@ std::string AdamW::get_name() const {
 
 AdamW::AdamW(ttml::serialization::NamedParameters parameters, const AdamWConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
-    m_state_dict_schema = {{"steps", size_t{0}}, {"amsgrad", bool{false}}};
+    m_state_dict_schema = {{"steps", size_t{0}}, {"lr", float{0}}, {"amsgrad", bool{false}}};
 
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -95,6 +95,7 @@ void AdamW::step() {
 serialization::StateDict AdamW::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
+    dict["lr"] = m_config.lr;
     dict["exp_avg"] = m_exp_avg;
     dict["exp_avg_sq"] = m_exp_avg_sq;
     dict["amsgrad"] = m_config.amsgrad;
@@ -106,6 +107,9 @@ serialization::StateDict AdamW::get_state_dict() const {
 
 void AdamW::set_state_dict(const serialization::StateDict& dict) {
     set_steps(serialization::get_value_type<size_t>(dict, "steps"));
+    if (dict.contains("lr")) {
+        set_lr(serialization::get_value_type<float>(dict, "lr"));
+    }
     m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
     m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
 

@@ -46,9 +46,6 @@ optimizer subclass.
    Python-bound optimizer (AdamW, AdamWFullPrecision, SGD, MuonComposite,
    NoOp). A regression in the binding wrapper would surface as a uniform
    failure across this matrix.
-4. ``test_adamw_set_state_dict_workaround_numpy_uint64_does_not_help`` --
-   documents that passing ``np.uint64(steps)`` instead of a Python int does
-   not change the routing on the unfixed path.
 """
 
 import numpy as np
@@ -127,6 +124,10 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
 # declarations in nb_optimizers.cpp:py_module_types. See ``_make_optimizer``
 # above for what is intentionally excluded and why.
 _PY_BOUND_OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD", "MuonComposite", "NoOp"]
+
+# Optimizers that store and restore lr in their state dict. NoOp is excluded
+# because its get_lr() returns a hardcoded 0.0 and set_lr() is a no-op.
+_LR_OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD", "MuonComposite"]
 
 
 @pytest.mark.requires_device
@@ -218,20 +219,36 @@ def test_set_state_dict_after_steps_inprocess_roundtrip(optimizer_name):
 
 
 @pytest.mark.requires_device
-def test_adamw_set_state_dict_workaround_numpy_uint64_does_not_help():
-    """``set_state_dict`` accepts a ``np.uint64`` for ``steps``.
+@pytest.mark.parametrize("optimizer_name", _LR_OPTIMIZERS)
+def test_lr_present_in_state_dict(optimizer_name):
+    """``get_state_dict()`` includes ``lr`` as a float for all lr-bearing optimizers."""
+    params = _make_simple_params()
+    opt = _make_optimizer(optimizer_name, params)
 
-    This test was originally written to *document* that ``np.uint64`` was
-    not a sufficient Python-side workaround for the variant-routing
-    issue. With the binding wrapper in ``nb_optimizers.cpp`` in place,
-    the wrapper casts whatever Python value is at the ``"steps"`` key
-    via ``nb::cast<size_t>``, which transparently accepts numpy unsigned
-    scalars too. Kept around to lock in that behaviour.
+    state = opt.get_state_dict()
+
+    assert "lr" in state, f"{optimizer_name}.get_state_dict() missing 'lr' key"
+    assert isinstance(state["lr"], float), f"{optimizer_name}: expected float lr, got {type(state['lr'])}"
+    assert state["lr"] == pytest.approx(1e-3)
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize("optimizer_name", _LR_OPTIMIZERS)
+def test_lr_restored_after_set_state_dict(optimizer_name):
+    """``set_state_dict`` correctly restores a mutated lr value.
+
+    Constructs an optimizer with lr=1e-3, then round-trips a state dict with
+    lr overridden to 5e-4. Verifies that ``get_lr()`` reflects the restored
+    value, exercising the ``float`` variant routing through the schema.
     """
     params = _make_simple_params()
-    opt = _make_adamw(params)
+    opt = _make_optimizer(optimizer_name, params)
 
     state = dict(opt.get_state_dict())
-    state["steps"] = np.uint64(0)
+    state["lr"] = 5e-4
 
     opt.set_state_dict(state)
+
+    assert opt.get_lr() == pytest.approx(
+        5e-4
+    ), f"{optimizer_name}: expected lr=5e-4 after set_state_dict, got {opt.get_lr()}"

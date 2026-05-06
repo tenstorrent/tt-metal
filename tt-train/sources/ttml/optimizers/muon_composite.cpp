@@ -14,7 +14,7 @@ namespace ttml::optimizers {
 
 MuonComposite::MuonComposite(ttml::serialization::NamedParameters parameters, const MuonConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
-    m_state_dict_schema = {{"steps", size_t{0}}};
+    m_state_dict_schema = {{"steps", size_t{0}}, {"lr", float{0}}};
 
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -70,12 +70,16 @@ serialization::StateDict MuonComposite::get_state_dict() const {
     serialization::StateDict dict;
     dict["momentum_buffer"] = m_momentum_buffer;
     dict["steps"] = m_steps;
+    dict["lr"] = m_config.lr;
     return dict;
 }
 
 void MuonComposite::set_state_dict(const serialization::StateDict& dict) {
     m_momentum_buffer = std::get<serialization::NamedParameters>(dict.at("momentum_buffer"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
+    if (dict.contains("lr")) {
+        set_lr(serialization::get_value_type<float>(dict, "lr"));
+    }
 }
 
 size_t MuonComposite::get_steps() const {
