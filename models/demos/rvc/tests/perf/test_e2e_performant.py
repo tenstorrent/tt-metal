@@ -49,14 +49,17 @@ def run_rvc_e2e_inference(device) -> None:
     inference_time_avg = round((t1 - t0) / inference_iter_count, 6)
     input_duration_sec = torch_input_tensor.shape[1] / model.ttnn_pipeline.sr
     output_duration_sec = output.shape[1] / model.ttnn_pipeline.tgt_sr
-    rtf = inference_time_avg / output_duration_sec if output_duration_sec > 0 else float("inf")
+    output_batch_size = output.shape[0]
+    aggregate_output_duration_sec = output_batch_size * output_duration_sec
+    rtf = inference_time_avg / aggregate_output_duration_sec if aggregate_output_duration_sec > 0 else float("inf")
     logger.info(
         "ttnn_rvc. "
         f"One inference iteration time (sec): {inference_time_avg}, "
         f"input_duration_sec: {input_duration_sec:.6f}, "
         f"output_duration_sec: {output_duration_sec:.6f}, "
+        f"aggregate_output_duration_sec: {aggregate_output_duration_sec:.6f}, "
         f"rtf: {rtf:.6f}, "
-        f"batch_size: {torch_input_tensor.shape[0]}, "
+        f"batch_size: {output_batch_size}, "
         f"num_input_samples: {torch_input_tensor.shape[1]}, "
         f"output_shape: {tuple(output.shape)}"
     )

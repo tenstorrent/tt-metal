@@ -343,13 +343,16 @@ def main() -> None:
         print(f"token_accuracy_percent={token_accuracy_result.token_accuracy * 100:.2f}")
         print(f"token_accuracy_pass={str(token_accuracy_result.passed).lower()}")
 
+    batch_size = output_np.shape[0]
     output_duration_sec = output_np.shape[1] / runner.ttnn_pipeline.tgt_sr
-    rtf = avg_sec / output_duration_sec if output_duration_sec > 0 else float("inf")
+    aggregate_output_duration_sec = batch_size * output_duration_sec
+    rtf = avg_sec / aggregate_output_duration_sec if aggregate_output_duration_sec > 0 else float("inf")
     print(f"avg_sec={avg_sec:.6f}")
     print(f"output_duration_sec={output_duration_sec:.6f}")
+    print(f"aggregate_output_duration_sec={aggregate_output_duration_sec:.6f}")
     print(f"rtf={rtf:.6f}")
     print(f"output_shape={output_np.shape}")
-    print(f"batch_size={torch_input_tensor.shape[0]}")
+    print(f"batch_size={batch_size}")
     print(f"num_input_samples={torch_input_tensor.shape[1]}")
 
 
