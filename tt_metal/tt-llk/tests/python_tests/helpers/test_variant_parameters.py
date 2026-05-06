@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
 
+from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
@@ -846,3 +847,11 @@ class HOST_IS_STREAM_CONSUMER(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "bool HOST_IS_STREAM_CONSUMER;", "?"
+
+
+@dataclass
+class FILL_INT_FORMAT(TemplateParameter):
+    data_format: DataFormat = DataFormat.Int32
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto FILL_INT_FORMAT = DataFormat::{self.data_format.name};"

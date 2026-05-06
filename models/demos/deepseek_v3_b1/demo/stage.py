@@ -172,14 +172,12 @@ class EmbeddingStage(StageKind):
         *,
         loopback_payload: PassthroughPayload = PassthroughPayload.TOKEN,
         d2h_page_size: int | None = None,
-        forward_metadata: bool = False,
         host_loopback: bool = False,
     ) -> None:
         self._weights = weights
         self._loopback_payload = loopback_payload
         self._host_loopback = host_loopback
         self._d2h_page_size = d2h_page_size
-        self._forward_metadata = forward_metadata
 
     @staticmethod
     def _payload_sizes(payload: PassthroughPayload) -> tuple[int, int]:
@@ -194,11 +192,8 @@ class EmbeddingStage(StageKind):
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
         my_stage_idx = ctx.my_stage_idx
-        activation_fifo_size = ACTIVATION_W_TOKEN_META_FIFO_SIZE if self._forward_metadata else ACTIVATION_FIFO_SIZE
-        activation_page_size = (
-            ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if self._forward_metadata else ACTIVATION_PAGE_SIZE_BYTES
-        )
-
+        activation_fifo_size = ACTIVATION_W_TOKEN_META_FIFO_SIZE
+        activation_page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         pipeline_config = ctx.pipeline_config
         if self._d2h_page_size is not None:
             size_to_payload = {
@@ -234,7 +229,7 @@ class EmbeddingStage(StageKind):
             d2h_socket_fifo_size=d2h_fifo,
             d2h_socket_page_size=d2h_page,
             embedding_tensor=self._weights.embedding,
-            forward_metadata=self._forward_metadata,
+            forward_metadata=True,
             loopback=loopback,
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
