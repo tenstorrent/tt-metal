@@ -474,17 +474,28 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     compute_kernel_desc.core_ranges = all_cores_in_rect_grid;
     compute_kernel_desc.compile_time_args = compute_kernel_args;
     compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
-    compute_kernel_desc.named_compile_time_args = {
-        {"cb_in0", tt::CBIndex::c_0},
-        {"cb_in1", tt::CBIndex::c_1},
-        {"cb_bias", tt::CBIndex::c_3},
-        {"cb_out", tt::CBIndex::c_4},
-        {"cb_intermed0", tt::CBIndex::c_5},
-        {"cb_in0_intermediate", tt::CBIndex::c_8},
-        {"cb_in1_intermediate", tt::CBIndex::c_9},
-        {"cb_in0_transposed", tt::CBIndex::c_10},
-        {"bias_ntiles", per_core_N},
-    };
+    {
+        KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
+            {"cb_in0", tt::CBIndex::c_0},
+            {"cb_in1", tt::CBIndex::c_1},
+            {"cb_bias", tt::CBIndex::c_3},
+            {"cb_out", tt::CBIndex::c_4},
+            {"cb_intermed0", tt::CBIndex::c_5},
+            {"cb_in0_intermediate", tt::CBIndex::c_8},
+            {"cb_in1_intermediate", tt::CBIndex::c_9},
+            {"cb_in0_transposed", tt::CBIndex::c_10},
+            {"bias_ntiles", per_core_N},
+        };
+        if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+            using ttnn::operations::matmul::utilities::get_activation_params;
+            const auto params = get_activation_params(fused_activation.value());
+            named_compile_args.push_back({"activation_type", static_cast<uint32_t>(params.type)});
+            named_compile_args.push_back({"activation_param0", params.param0});
+            named_compile_args.push_back({"activation_param1", params.param1});
+            named_compile_args.push_back({"activation_param2", params.param2});
+        }
+        compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
 

@@ -575,13 +575,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
-            using ttnn::operations::unary::utils::get_defines;
-            mm_kernel_defines.merge(get_defines(
-                fused_activation.value().op_type,
-                fused_activation.value().params,
-                "ACTIVATION",
-                "i",
-                tt_metal::dataformat_to_datatype_converter(output_data_format)));
+            mm_kernel_defines["SFPU_ACTIVATION"] = "1";
         }
     }
     if (packer_l1_acc_en) {
@@ -894,17 +888,28 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     compute_kernel_desc.core_ranges = CoreRangeSet(all_cores_with_work);
     compute_kernel_desc.compile_time_args = compute_kernel_args;
     compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
-    compute_kernel_desc.named_compile_time_args = {
-        {"cb_in0", tt::CBIndex::c_0},
-        {"cb_in1", tt::CBIndex::c_1},
-        {"cb_bias", tt::CBIndex::c_3},
-        {"cb_out", tt::CBIndex::c_4},
-        {"cb_intermed0", tt::CBIndex::c_5},
-        {"cb_in0_intermediate", tt::CBIndex::c_8},
-        {"cb_in1_intermediate", tt::CBIndex::c_9},
-        {"cb_in0_transposed", tt::CBIndex::c_10},
-        {"bias_ntiles", in1_per_core_w},
-    };
+    {
+        KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
+            {"cb_in0", tt::CBIndex::c_0},
+            {"cb_in1", tt::CBIndex::c_1},
+            {"cb_bias", tt::CBIndex::c_3},
+            {"cb_out", tt::CBIndex::c_4},
+            {"cb_intermed0", tt::CBIndex::c_5},
+            {"cb_in0_intermediate", tt::CBIndex::c_8},
+            {"cb_in1_intermediate", tt::CBIndex::c_9},
+            {"cb_in0_transposed", tt::CBIndex::c_10},
+            {"bias_ntiles", in1_per_core_w},
+        };
+        if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+            using ttnn::operations::matmul::utilities::get_activation_params;
+            const auto params = get_activation_params(fused_activation.value());
+            named_compile_args.push_back({"activation_type", static_cast<uint32_t>(params.type)});
+            named_compile_args.push_back({"activation_param0", params.param0});
+            named_compile_args.push_back({"activation_param1", params.param1});
+            named_compile_args.push_back({"activation_param2", params.param2});
+        }
+        compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
 
