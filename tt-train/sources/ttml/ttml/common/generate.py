@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 import ttnn
 import ttml
 from ttml.common.utils import round_up_to_tile, build_logits_mask
