@@ -4,6 +4,8 @@
 
 #include "distributed/realtime_profiler_manager.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -223,6 +225,40 @@ inline double rt_profiler_ns_per_tick() {
 #else
     return 1.0;
 #endif
+}
+
+// Concurrent host-device sync per device (distinct PCIe paths / sockets). Uses up to
+// hardware_concurrency workers; single-threaded when only one task or concurrency unknown.
+template <typename Fn>
+void parallel_for_each_device_index(const std::vector<size_t>& indices, Fn&& fn) {
+    if (indices.empty()) {
+        return;
+    }
+    const unsigned hc = std::thread::hardware_concurrency();
+    const size_t worker_count = std::min(indices.size(), static_cast<size_t>(std::max(1u, hc)));
+    if (worker_count <= 1) {
+        for (size_t di : indices) {
+            fn(di);
+        }
+        return;
+    }
+    std::atomic<size_t> next{0};
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (size_t w = 0; w < worker_count; ++w) {
+        workers.emplace_back([&]() {
+            while (true) {
+                const size_t k = next.fetch_add(1, std::memory_order_relaxed);
+                if (k >= indices.size()) {
+                    break;
+                }
+                fn(indices[k]);
+            }
+        });
+    }
+    for (auto& t : workers) {
+        t.join();
+    }
 }
 
 }  // namespace
@@ -540,6 +576,8 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     auto& cluster = MetalContext::instance().get_cluster();
     const auto init_throttle_now = std::chrono::steady_clock::now();
     std::vector<bool> skip_init_sync_check(devices_.size(), false);
+    std::vector<size_t> init_run_sync_indices;
+    init_run_sync_indices.reserve(devices_.size());
 
     // Run our own host-device sync; the device profiler's SyncInfo masks the high word to
     // 12 bits and would shift RT zones by hours in Tracy. Skip full calibration for chips
@@ -572,6 +610,11 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             continue;
         }
 
+        init_run_sync_indices.push_back(di);
+    }
+
+    parallel_for_each_device_index(init_run_sync_indices, [&](size_t di) {
+        auto& dev_state = devices_[di];
         constexpr uint32_t kMaxSyncRetries = 3;
         constexpr uint32_t kRetryDelayMs = 500;
         for (uint32_t attempt = 0; attempt <= kMaxSyncRetries; attempt++) {
@@ -593,7 +636,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             std::lock_guard<std::mutex> lock(g_rt_profiler_init_sync_mu);
             g_rt_profiler_last_init_sync_by_chip[dev_state.chip_id] = std::chrono::steady_clock::now();
         }
-    }
+    });
 
     tracy_handler_ = std::make_unique<RealtimeProfilerTracyHandler>();
     for (const auto& dev_state : devices_) {
@@ -607,10 +650,14 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     // Emit sync verification markers: take one independent device measurement per device
     // and push paired host + device events. In Tracy, the horizontal distance between the
     // host "SYNC_CHECK" zone and the device "SYNC_CHECK" zone is the sync error.
+    std::vector<size_t> init_sync_check_indices;
+    init_sync_check_indices.reserve(devices_.size());
     for (size_t di = 0; di < devices_.size(); ++di) {
-        if (skip_init_sync_check[di]) {
-            continue;
+        if (!skip_init_sync_check[di]) {
+            init_sync_check_indices.push_back(di);
         }
+    }
+    parallel_for_each_device_index(init_sync_check_indices, [&](size_t di) {
         auto& dev_state = devices_[di];
         std::vector<uint32_t> sync_req = {1};
         tt::tt_metal::detail::WriteToDeviceL1(
@@ -678,7 +725,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 dev_state.chip_id,
                 kSyncCheckTimeoutMs);
         }
-    }
+    });
 
     // Background receiver thread that polls all device sockets round-robin.
     stop_.store(false);
@@ -1063,12 +1110,11 @@ void RealtimeProfilerManager::trigger_sync_check() {
         }
     }
 
-    std::vector<uint32_t> page_buf(kPageWords);
-
     // Only devices in device_indices_to_sync enter sync mode and emit FINISH_SYNC; others
     // keep receiving via the receiver thread once it resumes (no device-side sync_request).
-    for (size_t dev_index : device_indices_to_sync) {
+    parallel_for_each_device_index(device_indices_to_sync, [&](size_t dev_index) {
         auto& dev_state = devices_[dev_index];
+        std::vector<uint32_t> page_buf(kPageWords);
 
         // 2. Drain pending data pages so the socket has room for the sync response. Each
         //    page is processed the same way the receiver thread would.
@@ -1086,6 +1132,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
                 record.frequency = dev_state.sync_frequency;
                 record.chip_id = dev_state.chip_id;
                 record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                std::lock_guard<std::mutex> cb_lock(parallel_finish_sync_callback_mu_);
                 tt::InvokeProgramRealtimeProfilerCallbacks(record);
             }
         }
@@ -1152,6 +1199,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
                     record.frequency = dev_state.sync_frequency;
                     record.chip_id = dev_state.chip_id;
                     record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                    std::lock_guard<std::mutex> cb_lock(parallel_finish_sync_callback_mu_);
                     tt::InvokeProgramRealtimeProfilerCallbacks(record);
                 }
             }
@@ -1165,7 +1213,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
             dev_state.sync_request_addr,
             sync_req,
             CoreType::WORKER);
-    }
+    });
 
     // 7. Resume receiver thread.
     pause_requested_.store(false, std::memory_order_release);

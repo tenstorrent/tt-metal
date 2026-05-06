@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -49,6 +50,11 @@ struct RealtimeProfilerCoreL1Addrs {
 //     then resumes the receiver. Called from the FD command queue's finish path.
 //     Constructor init uses the same interval process-wide per chip_id to throttle full
 //     run_sync + SYNC_CHECK when reopening meshes on the same chips.
+//
+//     Init host-device sync (run_sync + constructor SYNC_CHECK) and finish-path
+//     trigger_sync_check shard work across devices using a small worker pool (up to
+//     hardware_concurrency). ProgramRealtimeProfilerCallbacks invoked from parallel
+//     finish-path workers are serialized — callbacks run outside DataCollector's mutex.
 class RealtimeProfilerManager {
 public:
     explicit RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device);
@@ -112,6 +118,8 @@ private:
     std::atomic<bool> pause_requested_{false};
     std::atomic<bool> paused_{false};
     std::unique_ptr<RealtimeProfilerTracyHandler> tracy_handler_;
+    // Finish-path sync may drain profiler pages from parallel workers; serialize callbacks.
+    std::mutex parallel_finish_sync_callback_mu_;
 };
 
 }  // namespace distributed
