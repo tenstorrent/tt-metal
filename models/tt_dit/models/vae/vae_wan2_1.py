@@ -1726,8 +1726,8 @@ class WanEncoder(Module):
             N     - frame 0 alone, then N frames at a time with caching
         """
         assert (
-            encoder_t_chunk_size is None or encoder_t_chunk_size >= 3
-        ), f"encoder_t_chunk_size must be None or >= 3, got {encoder_t_chunk_size}"
+            encoder_t_chunk_size is None or encoder_t_chunk_size >= 4
+        ), f"encoder_t_chunk_size must be None or >= 4, got {encoder_t_chunk_size}"
         B, T, H, W, C = x_BTHWC.shape
         logger.info(f"WanEncoder.forward: T={T}, encoder_t_chunk_size={encoder_t_chunk_size}")
 
