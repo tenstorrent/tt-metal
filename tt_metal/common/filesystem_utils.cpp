@@ -768,6 +768,11 @@ bool map_path_prefix(
     if (!starts_with_components(path_parts, source_parts)) {
         return false;
     }
+    // Return false when path == source_prefix (no file-path suffix to remap).
+    // Consistent with make_relative_if_under returning false for path == base.
+    if (path_parts.size() == source_parts.size()) {
+        return false;
+    }
     PathParts mapped_parts = target_parts;
     mapped_parts.insert(mapped_parts.end(), path_parts.begin() + source_parts.size(), path_parts.end());
     mapped_path = build_from_parts(mapped_parts, 0, mapped_parts.size());
