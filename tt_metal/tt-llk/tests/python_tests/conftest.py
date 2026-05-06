@@ -6,6 +6,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import signal
 import sys
 from dataclasses import asdict
@@ -395,6 +396,62 @@ def _stringify_params(params):
             parts.append(f"{name}={str(value)}")
 
     return f"[{' | '.join(parts)}]"
+
+
+# Match the ttsim error preamble printed by ttsim_error() before _Exit(1):
+#   [<clk>] ERROR: <Category>: <function>: <details>
+_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_logreport(report):
+    # pytest-forked appends a crashed child's captured streams to report.sections
+    # using lowercase headers ("captured stdout"/"captured stderr"), but pytest's
+    # TestReport.capstdout/capstderr properties only match headers that start with
+    # "Captured stdout"/"Captured stderr" (capital C). The junit XML writer reads
+    # via those properties, so without renaming, <system-out> stays empty for
+    # forked crashes. Rename in place so the ttsim "ERROR: ..." line lands in the
+    # XML and any junit-XML-aware viewer (junit2html, CI, etc.) can render it.
+    sections = getattr(report, "sections", None)
+    if sections:
+        report.sections = [
+            (
+                ("Captured stdout call", content)
+                if name == "captured stdout"
+                else (
+                    ("Captured stderr call", content)
+                    if name == "captured stderr"
+                    else (name, content)
+                )
+            )
+            for name, content in sections
+        ]
+
+    # Rewrite the headline of forked-crash reports from the useless
+    #   ":-1: running the test CRASHED with signal 0"
+    # to the actual ttsim category/function so it shows up in the test summary,
+    # in <error message="..."> in the junit XML, and in CI annotations.
+    #
+    # We also normalize report.when from pytest-forked's sentinel "???" to "call".
+    # Without this, pytest-sugar (and other reporters that count by phase) treat
+    # forked-crash reports as setup-phase errors and miss them in the live
+    # pass/fail/skip footer; the junit writer also classifies them as <error>
+    # rather than <failure>. Setting when="call" makes the report indistinguish-
+    # able from a normal call-phase failure, which is what we actually want:
+    # the test ran, ttsim hit an unimplemented path mid-execution, the test
+    # failed.
+    if report.outcome == "failed" and "CRASHED with signal" in str(
+        report.longrepr or ""
+    ):
+        report.when = "call"
+        m = _TTSIM_ERR_RE.search(report.capstdout or "")
+        if m:
+            cat, func, msg = m.group(1), m.group(2), m.group(3).strip()
+            report.longrepr = f"[ttsim:{cat}] {func}: {msg}"
+            props = list(getattr(report, "user_properties", []))
+            props.append(("ttsim_category", cat))
+            props.append(("ttsim_func", func))
+            report.user_properties = props
 
 
 @pytest.hookimpl(hookwrapper=True)

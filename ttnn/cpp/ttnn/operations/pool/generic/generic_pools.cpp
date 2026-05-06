@@ -13,12 +13,14 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::pool {
@@ -304,9 +306,17 @@ static std::vector<Tensor> pool2d_L1(
     };
 
     // call the halo uop
+    const auto resolved_compute_kernel_config = init_device_compute_kernel_config(
+        tt::tt_metal::hal::get_arch(),
+        compute_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/input_tensor_sharded.dtype() == DataType::FLOAT32,
+        /*default_l1_acc=*/false);
     Tensor haloed_tensor = ttnn::halo(
         input_tensor_sharded,
         sliding_window_config,
+        resolved_compute_kernel_config,
         get_bf16_pool_init_value(pool_type),  // pad_val
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,

@@ -91,6 +91,7 @@ class TensorCacheProtocol(Protocol):
         fingerprint: Fingerprint,
         device,
         *,
+        move_to_device: bool = True,
         preprocess: Callable[[dict[str, torch.Tensor]], dict],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
         reconstruct: Callable[["CompressedTensorBuildInputs", object], "CompressedTensor"] | None = None,
@@ -211,8 +212,8 @@ class TensorCache:
             json.dump(metadata_dict, f, indent=2, sort_keys=True)
         return dest
 
-    def _load(self, paths: ContentAddressedStoragePaths, device) -> ttnn.Tensor:
-        return ttnn.load_tensor(paths.data_path, device=device)
+    def _load(self, paths: ContentAddressedStoragePaths, device, *, move_to_device: bool = True) -> ttnn.Tensor:
+        return ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
 
     def _store_fused(
         self,
@@ -240,9 +241,10 @@ class TensorCache:
         paths: ContentAddressedStoragePaths,
         device,
         *,
+        move_to_device: bool = True,
         meta: dict | None = None,
     ) -> dict[str, "OverlappedTensor"]:
-        fused = ttnn.load_tensor(paths.data_path, device=device)
+        fused = ttnn.load_tensor(paths.data_path, device=device if move_to_device else None)
         if meta is None:
             with open(paths.object_dir / "metadata.json") as f:
                 meta = json.load(f)
@@ -358,6 +360,7 @@ class TensorCache:
         fingerprint: Fingerprint,
         device,
         *,
+        move_to_device: bool = True,
         preprocess: Callable[[dict[str, torch.Tensor]], dict],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
         reconstruct: Callable[["CompressedTensorBuildInputs", object], "CompressedTensor"] | None = None,
@@ -383,7 +386,7 @@ class TensorCache:
             if isinstance(entry, PresentCacheEntry):
                 logger.debug("Cache hit (compressed) for {} ({})", logical, artifact_id[:12])
                 inputs = self._load_compressed(entry.paths.object_dir, target)
-                return reconstruct(inputs, device)
+                return reconstruct(inputs, device if move_to_device else None)
             if isinstance(entry, CorruptCacheEntry):
                 logger.warning("Corrupt compressed cache entry for {} ({}), rebuilding", logical, artifact_id[:12])
                 shutil.rmtree(entry.paths.object_dir, ignore_errors=True)
@@ -399,20 +402,20 @@ class TensorCache:
                 elapsed,
                 artifact_id[:12],
             )
-            return reconstruct(inputs, device)
+            return reconstruct(inputs, device if move_to_device else None)
 
         # --- TensorTarget / FusionGroupSpec: original path ---
         entry = self._lookup(artifact_id)
 
         if isinstance(entry, PresentCacheEntry):
             if isinstance(target, TensorTarget):
-                return self._load(entry.paths, device)
+                return self._load(entry.paths, device, move_to_device=move_to_device)
             meta_path = entry.paths.object_dir / "metadata.json"
             if meta_path.is_file():
                 with open(meta_path) as f:
                     meta = json.load(f)
                 if meta.get("views"):
-                    return self._load_fused(entry.paths, device, meta=meta)
+                    return self._load_fused(entry.paths, device, move_to_device=move_to_device, meta=meta)
             logger.warning(
                 "Present cache entry for fused {} ({}) missing fusion metadata; rebuilding",
                 logical,
@@ -443,7 +446,7 @@ class TensorCache:
             paths = self._store(artifact_id, fingerprint, tensor_host)
             elapsed = time.perf_counter() - t0
             logger.info("Cache miss for {} resolved in {:.3f}s, stored as {}", logical, elapsed, artifact_id[:12])
-            return self._load(paths, device)
+            return self._load(paths, device, move_to_device=move_to_device)
 
         spec = target
         fused_host, views = _create_overlapped_tensor_fused(
@@ -460,7 +463,12 @@ class TensorCache:
             elapsed,
             artifact_id[:12],
         )
-        return self._load_fused(paths, device, meta={"views": views_dict_from_overlapped(views)})
+        return self._load_fused(
+            paths,
+            device,
+            move_to_device=move_to_device,
+            meta={"views": views_dict_from_overlapped(views)},
+        )
 
 
 class EphemeralTensorCache:
@@ -478,10 +486,12 @@ class EphemeralTensorCache:
         fingerprint: Fingerprint,
         device,
         *,
+        move_to_device: bool | None = None,
         preprocess: Callable[[dict[str, torch.Tensor]], dict],
         raw_tensors: Callable[[], dict[str, torch.Tensor]] | dict[str, torch.Tensor],
         reconstruct: Callable[["CompressedTensorBuildInputs", object], "CompressedTensor"] | None = None,
     ) -> "ttnn.Tensor | dict[str, OverlappedTensor] | CompressedTensor":
+        effective_move_to_device = self._move_to_device if move_to_device is None else move_to_device
         target = fingerprint.target
         if not isinstance(target, (TensorTarget, FusionGroupSpec, CompressedTensorTarget)):
             raise TypeError(
@@ -499,14 +509,14 @@ class EphemeralTensorCache:
                     "use get_or_create_bspm_expert() instead of calling get_or_create() directly."
                 )
             inputs: CompressedTensorBuildInputs = preprocessed[target.name]
-            return reconstruct(inputs, device)
+            return reconstruct(inputs, device if effective_move_to_device else None)
 
         if isinstance(target, TensorTarget):
             torch_tensor = preprocessed[target.name]
             from_torch_kwargs: dict = {
                 "dtype": target.dtype,
                 "layout": target.layout,
-                "device": device if self._move_to_device else None,
+                "device": device if effective_move_to_device else None,
                 "memory_config": target.memory_config,
                 "mesh_mapper": build_mesh_mapper_for_target(target, device),
             }
@@ -518,6 +528,6 @@ class EphemeralTensorCache:
             target,
             preprocessed,
             device,
-            move_to_device=self._move_to_device,
+            move_to_device=effective_move_to_device,
         )
         return views

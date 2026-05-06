@@ -222,7 +222,9 @@ PoolCBSizes calculate_pool_cb_sizes(
     const Layout& output_layout,
     const DataType& output_dtype,
     const std::array<uint32_t, 2>& output_shard_shape,
-    bool config_tensor_in_dram) {
+    bool config_tensor_in_dram,
+    std::optional<uint32_t> reader_indices_actual_page_size,
+    std::optional<uint32_t> scalar_config_actual_page_size) {
     PoolCBSizes sizes;
     const bool is_output_tiled = output_layout == Layout::TILE;
 
@@ -295,13 +297,16 @@ PoolCBSizes calculate_pool_cb_sizes(
     }
 
     // Config tensor L1 CB (for DRAM-based config tensors)
+    // When the factory has the real DRAM buffers it can pass their actual page sizes so that the
+    // predicted CB footprint matches the CB the factory creates. For auto-shard estimation we fall
+    // back to the worst case (3 uint16 indices per output element + 2-byte segment count).
     sizes.config_tensor_l1_size = 0;
     if (config_tensor_in_dram) {
-        sizes.config_tensor_l1_size =
-            (output_shard_shape[0] * 6) + 2;  // Worst case of 6 Bytes per output elem for reader indices
+        const uint32_t reader_indices_worst_case = (output_shard_shape[0] * 3 * sizeof(uint16_t)) + 2;
+        sizes.config_tensor_l1_size += reader_indices_actual_page_size.value_or(reader_indices_worst_case);
         if (!one_scalar_per_core) {
-            sizes.config_tensor_l1_size +=
-                output_shard_shape[0] * 6;  // Additional 6 Bytes per output elem for avg pool scalar config tensor
+            const uint32_t scalar_config_worst_case = output_shard_shape[0] * 3 * sizeof(uint16_t);
+            sizes.config_tensor_l1_size += scalar_config_actual_page_size.value_or(scalar_config_worst_case);
         }
     }
 

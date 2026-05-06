@@ -38,7 +38,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
-          A2D,
+          DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
@@ -116,14 +116,14 @@ ALWI void tilizeA_B_reduce_init(
 // clang-format on
 ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t block, uint32_t ocb) {
     MATH((llk_math_eltwise_unary_datacopy_init<
-          A2D,
+          DataCopyType::A2D,
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false /*is_int_en*/,
           true /*tilize en*/>(new_icb)));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_icb, new_icb)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
 
@@ -159,8 +159,8 @@ ALWI void tilize_block(
 
 #ifndef ARCH_QUASAR
         // Datacopy
-        MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
-            0 /*dst index*/)));
+        MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+            0 /*dst index*/, icb)));
         PACK((llk_pack<DST_ACCUM_MODE, true, false>(0 /*tile index*/, ocb, t + output_tile_index)));
 #else
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
@@ -250,7 +250,7 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 // clang-format on
 ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(old_icb)));
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_icb, new_icb)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init(ocb)));
@@ -270,7 +270,7 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32
 }
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
+    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(icb, icb)));
     MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
 
     fast_tilize_init(icb, full_dim, ocb);

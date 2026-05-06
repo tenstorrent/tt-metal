@@ -353,6 +353,28 @@ jobs:
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+  # SD LLK Unit Tests — runs the full LLK gtest binary in slow dispatch as a comprehensive
+  # nightly regression. The PR gate covers two narrower slices (FD path via
+  # llk-fd-unit-tests-* and a Quasar+SD-only slice via llk-sd-unit-tests-*); this job is the
+  # superset that re-validates everything in SD on every supported runner class.
+  llk-sd-unit-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
+      needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-sd-fd-tests) }}
+    uses: ./.github/workflows/llk-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      dispatch-mode: sd
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [build-artifact, generate-arch-matrix]

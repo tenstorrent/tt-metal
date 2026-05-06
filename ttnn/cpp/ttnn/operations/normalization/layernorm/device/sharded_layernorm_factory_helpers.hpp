@@ -164,6 +164,7 @@ struct CBSizeParams {
     bool use_two_stage_reduce = false;
     bool use_welford = false;
     bool skip_write_back = false;
+    bool rms_norm = false;
 
     // Computes all CB sizes and returns them in a struct
     struct Sizes {

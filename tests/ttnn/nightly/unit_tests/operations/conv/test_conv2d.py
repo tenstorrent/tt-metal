@@ -5700,3 +5700,77 @@ def test_conv2d_zeros_pad_regression(device, torch_tensor_map):
         padding=(1, 1),
         padding_mode=ttnn.PaddingMode.Zeros,
     )
+
+
+# Regression for issue #43229: fp32 conv with TILE input + padding caps output magnitude at
+# ~131K (= fp16 max ±65504 widened to fp32). The halo's untilize compute kernel passed fp32
+# values through the unpacker's default conditional dst format — which was Float16 (5-bit
+# exponent), saturating fp32 magnitudes. The fix in tt_metal/jit_build/data_format.cpp
+# escalates the conditional from Float16 to Tf32 (8-bit exponent) for fp32 src, preserving
+# the magnitude. Threading compute_kernel_config through ttnn::halo() is the corresponding
+# API change so the halo's compute kernel knows fp32_dest_acc_en=true is required.
+#
+# We feed inputs scaled to ~5e6 — well above fp16's ±65504 — and check that the conv output
+# tracks torch's fp32 reference (PCC ≈ 1). Pre-fix the same test produced PCC ≈ 0.82 with
+# max_abs ≈ 2.5e7 (the cap propagated through the matmul reduction).
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_fp32_input_no_fp16_saturation(device):
+    torch.manual_seed(0)
+    batch_size, input_channels, input_height, input_width = 1, 64, 32, 32
+    output_channels = 64
+    filter_height, filter_width = 3, 3
+    pad_h, pad_w = 1, 1
+    input_scale = 1.0e6  # values comparable to the chained-conv regime in the issue
+
+    torch_input_nchw = (torch.randn(batch_size, input_channels, input_height, input_width) * input_scale).float()
+    torch_weight = torch.randn(output_channels, input_channels, filter_height, filter_width).float()
+    torch_bias = torch.zeros(output_channels).float()
+
+    ref = torch.nn.functional.conv2d(
+        torch_input_nchw, torch_weight, bias=torch_bias, stride=(1, 1), padding=(pad_h, pad_w)
+    )
+    # Sanity: input is scaled large enough that pre-fix output would saturate.
+    assert ref.abs().max().item() > 1.0e7, "regression test must exercise magnitudes past the fp16 cap"
+
+    torch_input = torch.permute(torch_input_nchw, (0, 2, 3, 1))
+    tt_input = ttnn.from_torch(torch_input, ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_weight = ttnn.from_torch(torch_weight, ttnn.float32)
+    tt_bias = ttnn.from_torch(torch_bias.reshape(1, 1, 1, -1), ttnn.float32)
+
+    conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.float32, deallocate_activation=False, shard_layout=None)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    tt_out, _, _ = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias,
+        kernel_size=(filter_height, filter_width),
+        stride=(1, 1),
+        padding=(pad_h, pad_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        dtype=ttnn.float32,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=1,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+    )
+    out_nhwc = ttnn.to_torch(tt_out).reshape(batch_size, input_height, input_width, output_channels).float()
+    out_nchw = torch.permute(out_nhwc, (0, 3, 1, 2))
+
+    # Pre-fix this would be ~2.5e7. Post-fix it tracks the reference.
+    assert out_nchw.abs().max().item() > 5.0e7, (
+        f"output max_abs {out_nchw.abs().max().item():.3e} suggests fp16-cap regression (issue #43229)"
+    )
+    passed, msg = check_with_pcc_without_tensor_printout(ref, out_nchw, pcc=0.99)
+    assert passed, msg
