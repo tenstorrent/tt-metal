@@ -47,10 +47,16 @@ template <bool APPROXIMATION_MODE>
 inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed) {
     const sfpi::vFloat inv_abs_x = sfpu_reciprocal<APPROXIMATION_MODE>(abs_x);
 
-    // P(y), degree-4 minimax fit on y ∈ [1/88.5, 0.1]; max rel err ~1e-8.
+    // P(y), degree-5 minimax fit on y ∈ [1/88.5, 0.1]; max rel err ~1e-9.
     // This outlined function does not stress the main loop's LRA, so full precision is safe.
     const sfpi::vFloat correction = PolynomialEvaluator::eval(
-        inv_abs_x, 3.9894228967e-01f, -1.4960495444e-01f, -4.6652925320e-02f, -4.3674591560e-02f, -1.9748322314e-02f);
+        inv_abs_x,
+        3.9894228967e-01f,
+        -1.4960495444e-01f,
+        -4.6652925320e-02f,
+        -4.3674591560e-02f,
+        -1.9748322314e-02f,
+        -3.3467922914e-01f);
 
     // exp(|x|) — accurate variant for FP32 (<1 FP32 ULP), 21-bit for BF16.
     // |x|≤88.5, no overflow possible.
