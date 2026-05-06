@@ -40,7 +40,7 @@ import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import LLKAssertException, _send_arc_message
+from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
@@ -628,12 +628,6 @@ def perf_report(request, worker_id):
 def pytest_sessionfinish(session):
     if hasattr(session.config, "workerinput"):
         return
-
-    if (
-        not TestConfig.TEST_TARGET.run_simulator
-        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
-    ):
-        _send_arc_message("GO_IDLE", TestConfig.TEST_TARGET.device_id)
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()

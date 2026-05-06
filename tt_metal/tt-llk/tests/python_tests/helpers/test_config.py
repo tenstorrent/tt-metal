@@ -183,7 +183,6 @@ class TestConfig:
     TENSIX_LOCATION: ClassVar[str] = "0,0"
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
     SIMULATOR_TIMEOUT: ClassVar[int] = 600
-    SIMULATOR_POLL_INTERVAL: ClassVar[float] = 0.01
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
@@ -1355,11 +1354,6 @@ class TestConfig:
 
             if completed == mailboxes:
                 return
-
-            if TestConfig.TEST_TARGET.run_simulator:
-                time.sleep(
-                    TestConfig.SIMULATOR_POLL_INTERVAL
-                )  # Poll every 10ms in simulator, because it takes a lot longer to execute the kernel
 
         handle_if_assert_hit(
             self.temp_elfs,
