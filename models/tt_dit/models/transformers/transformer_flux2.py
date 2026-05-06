@@ -169,8 +169,8 @@ class Flux2SingleTransformerBlock(Module):
         c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0)), 0)
 
         shift_msa, scale_msa, gate_msa = temb_mod_params
-        x = x * (1 + scale_msa) + shift_msa
-        c = c * (1 + scale_msa) + shift_msa
+        x = x * scale_msa + shift_msa
+        c = c * scale_msa + shift_msa
 
         x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
         c = self._ccl_manager.all_gather_persistent_buffer(c, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
@@ -342,6 +342,14 @@ class Flux2Transformer(Module):
         double_stream_mod_img = self.double_stream_modulation_img(time_embed, skip_act_fn=True)
         double_stream_mod_txt = self.double_stream_modulation_txt(time_embed, skip_act_fn=True)
         single_stream_mod = self.single_stream_modulation(time_embed, skip_act_fn=True)
+        # Pre-add 1 to scale and typecast all params to BF16 so the single-stream block
+        # avoids expensive BF16 × FP32 broadcast multiplies on the full spatial tensor.
+        shift, scale, gate = single_stream_mod
+        single_stream_mod = (
+            ttnn.typecast(shift, ttnn.bfloat16),
+            ttnn.typecast(scale + 1, ttnn.bfloat16),
+            ttnn.typecast(gate, ttnn.bfloat16),
+        )
 
         spatial = self.x_embedder(spatial)
         prompt = self.context_embedder(prompt)
@@ -383,12 +391,14 @@ class Flux2Transformer(Module):
 
         spatial_time = self.time_embed_out(time_embed)
         [scale, shift] = ttnn.chunk(spatial_time, 2, dim=-1)
+        scale = ttnn.typecast(scale + 1, ttnn.bfloat16)
+        shift = ttnn.typecast(shift, ttnn.bfloat16)
 
         spatial = self._ccl_manager.all_gather_persistent_buffer(
             spatial, dim=2, mesh_axis=self._tp_axis, use_hyperparams=True
         )
 
-        spatial = spatial * (1 + scale) + shift
+        spatial = spatial * scale + shift
 
         return self.proj_out(spatial)
 
