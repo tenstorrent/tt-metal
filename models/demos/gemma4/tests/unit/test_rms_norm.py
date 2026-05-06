@@ -17,7 +17,7 @@ from ...tests.test_factory import TestFactory, compare_tensors, parametrize_batc
 
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
-def test_rms_norm_with_scale(batch_size, seq_len, mesh_device):
+def test_rms_norm_with_scale(batch_size, seq_len, mesh_device, reset_seeds):
     """Test RMSNorm (with_scale=True) against HF Gemma4RMSNorm."""
     from transformers.models.gemma4.modeling_gemma4 import Gemma4RMSNorm
 
@@ -51,7 +51,7 @@ def test_rms_norm_with_scale(batch_size, seq_len, mesh_device):
 
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq()
-def test_rms_norm_without_scale(batch_size, seq_len, mesh_device):
+def test_rms_norm_without_scale(batch_size, seq_len, mesh_device, reset_seeds):
     """Test RMSNorm (with_scale=False) against HF Gemma4RMSNorm."""
     from transformers.models.gemma4.modeling_gemma4 import Gemma4RMSNorm
 

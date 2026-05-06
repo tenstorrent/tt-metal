@@ -95,10 +95,10 @@ sfpi_inline void _welfords_load_block_()
     constexpr std::uint32_t offset3        = dst_reg_offset + 18;
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset0);
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset1);
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset2);
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset3);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset0);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset1);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset2);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, offset3);
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
@@ -399,8 +399,8 @@ sfpi_inline void _store_mean_m2_to_dst_()
     constexpr std::uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
     constexpr std::uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
 
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, m2_tile_offset);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, mean_tile_offset);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, m2_tile_offset);
 }
 
 /*
@@ -418,8 +418,8 @@ sfpi_inline void _store_mean_m2_to_dst_group_(std::uint32_t group_id)
     constexpr std::uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
     constexpr std::uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
 
-    TT_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + (group_id << 2));
-    TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, m2_tile_offset + (group_id << 2));
+    TT_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, mean_tile_offset + (group_id << 2));
+    TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, m2_tile_offset + (group_id << 2));
 }
 
 /*
@@ -435,8 +435,8 @@ sfpi_inline void _load_mean_m2_from_dst_()
     constexpr std::uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
     constexpr std::uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
 
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset);
-    TTI_SFPLOAD(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, m2_tile_offset);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, mean_tile_offset);
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, m2_tile_offset);
 }
 
 /*
@@ -453,8 +453,8 @@ sfpi_inline void _load_mean_m2_from_dst_group_(std::uint32_t group_id)
     constexpr std::uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
     constexpr std::uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
 
-    TT_SFPLOAD(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + (group_id << 2));
-    TT_SFPLOAD(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, m2_tile_offset + (group_id << 2));
+    TT_SFPLOAD(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, mean_tile_offset + (group_id << 2));
+    TT_SFPLOAD(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, m2_tile_offset + (group_id << 2));
 }
 
 /*
@@ -493,17 +493,17 @@ sfpi_inline void _store_mean_var_to_dst_row_(std::uint32_t scale_idx, const std:
 
     constexpr std::uint32_t mean_tile_offset = 0; // offset for the mean tile in dst
 
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + offset0);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + offset1);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + offset2);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + offset3);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, mean_tile_offset + offset0);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, mean_tile_offset + offset1);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, mean_tile_offset + offset2);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, mean_tile_offset + offset3);
 
     constexpr std::uint32_t var_tile_offset = 64; // offset for the var tile in dst
 
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, var_tile_offset + offset0);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, var_tile_offset + offset1);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG6, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, var_tile_offset + offset2);
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, var_tile_offset + offset3);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, var_tile_offset + offset0);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, var_tile_offset + offset1);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG6, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, var_tile_offset + offset2);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_7, var_tile_offset + offset3);
 }
 
 /*
@@ -526,10 +526,10 @@ sfpi_inline void _store_mean_var_to_dst_raw_(std::uint32_t scale_idx, const std:
     TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
 
     constexpr std::uint32_t mean_tile_offset = 0; // offset for the mean tile in dst
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, 0, ckernel::ADDR_MOD_3, mean_tile_offset);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, 0, ckernel::ADDR_MOD_7, mean_tile_offset);
 
     constexpr std::uint32_t var_tile_offset = 64; // offset for the var tile in dst
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, 0, ckernel::ADDR_MOD_3, var_tile_offset);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, 0, ckernel::ADDR_MOD_7, var_tile_offset);
 }
 
 /*
@@ -553,10 +553,10 @@ sfpi_inline void _store_mean_var_to_dst_raw_group_(
     TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
 
     constexpr std::uint32_t mean_tile_offset = 0; // offset for the mean tile in dst
-    TT_SFPSTORE(ckernel::p_sfpu::LREG4, 0, ckernel::ADDR_MOD_3, mean_tile_offset + (group_id << 2));
+    TT_SFPSTORE(ckernel::p_sfpu::LREG4, 0, ckernel::ADDR_MOD_7, mean_tile_offset + (group_id << 2));
 
     constexpr std::uint32_t var_tile_offset = 64; // offset for the var tile in dst
-    TT_SFPSTORE(ckernel::p_sfpu::LREG5, 0, ckernel::ADDR_MOD_3, var_tile_offset + (group_id << 2));
+    TT_SFPSTORE(ckernel::p_sfpu::LREG5, 0, ckernel::ADDR_MOD_7, var_tile_offset + (group_id << 2));
 }
 } // namespace sfpu
 } // namespace ckernel

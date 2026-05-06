@@ -206,8 +206,18 @@ class Gemma4ModelArgs:
         cache_dir = os.getenv("TT_CACHE_PATH")
         if cache_dir:
             cache_dir = Path(cache_dir)
-        else:
+        elif Path(model_path).is_dir():
+            # Local checkpoint: cache next to the weights.
             cache_dir = Path(model_path)
+        else:
+            # Otherwise model_path is an HF id like "google/gemma-4-E2B-it".
+            # Caching under Path(model_path) would create that as a relative dir
+            # in cwd, which then makes transformers' AutoConfig.from_pretrained
+            # treat the id as a local path (os.path.isdir returns True) and fail
+            # to find config.json. Fall back to an HF_HOME-based cache instead.
+            hf_home = os.getenv("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+            sanitized = str(model_path).replace("/", "--")
+            cache_dir = Path(hf_home) / "tt_cache" / sanitized
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
         cache_path = cache_dir / f"tensor_cache_{dtype_str}"
         cache_path.mkdir(parents=True, exist_ok=True)

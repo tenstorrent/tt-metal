@@ -68,8 +68,8 @@ the most common format and no SFPU/tilize paths.
 
 | Arch | LLK tests on ttsim |
 |---|---|
-| Blackhole | Working (validated against ttsim v1.5.4). |
-| Wormhole B0 | Working (validated against ttsim v1.5.4). |
+| Blackhole | Working (validated against ttsim v1.5.5). |
+| Wormhole B0 | Working (validated against ttsim v1.5.5). |
 | Quasar | Not validated. |
 
 ## Limitations

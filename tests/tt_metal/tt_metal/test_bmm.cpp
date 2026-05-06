@@ -74,7 +74,7 @@ BmmDFBHandles create_bmm_quasar_dfbs(Program& program, const CoreSpec& cores, co
         .num_producers = p.num_threads,
         .pap = AccessPattern::STRIDED,
         .num_consumers = p.num_threads,
-        .cap = AccessPattern::BLOCKED,
+        .cap = AccessPattern::ALL,
         .enable_implicit_sync = false,
         .data_format = tt::DataFormat::Float16_b};
     DataflowBufferConfig dst_cfg = {
@@ -272,11 +272,8 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 
 // This needs to be a separate test because we don't have a way of querying the correct compute grid size
 // when running a multi-neo emu/sim build. Otherwise its the same test with batch split across nodes.
-TEST_F(MeshDeviceSingleCardFixture, BmmMultinode) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     IDevice* dev = devices_[0]->get_devices()[0];
-    if (dev->arch() != ARCH::QUASAR) {
-        GTEST_SKIP();
-    }
 
     Program program = CreateProgram();
     CoreCoord core0 = {0, 0};

@@ -99,7 +99,7 @@ struct LocalDFBInterface {
         num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
-    uint8_t broadcast_tc;  // DM-DM BLOCKED producer: post to all TCs instead of round-robin
+    uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));

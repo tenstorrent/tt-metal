@@ -83,6 +83,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.cb_size = my_dispatch_constants.dispatch_s_buffer_size();
     // used by dispatch_s to sync with prefetch
     static_config_.my_dispatch_cb_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    // used by dispatch_d to signal that its shutdown handoff is ready
+    static_config_.dispatch_d_shutdown_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
     static_config_.dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     // used by dispatch_d to signal that dispatch_s can send go signal
@@ -162,6 +164,7 @@ void DispatchSKernel::CreateKernel() {
         {"CB_LOG_PAGE_SIZE", std::to_string(static_config_.cb_log_page_size.value())},
         {"CB_SIZE", std::to_string(static_config_.cb_size.value())},
         {"MY_DISPATCH_CB_SEM_ID", std::to_string(static_config_.my_dispatch_cb_sem_id.value())},
+        {"DISPATCH_D_SHUTDOWN_SEM_ID", std::to_string(static_config_.dispatch_d_shutdown_sem_id.value())},
         {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dependent_config_.upstream_dispatch_cb_sem_id.value())},
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},

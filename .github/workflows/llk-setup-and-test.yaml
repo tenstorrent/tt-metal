@@ -161,9 +161,9 @@ jobs:
 
       # Step 4: Zip performance data if perf tests were run
       - name: Zip performance data
-        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles(format('{0}/tests/python_tests/perf_data/**', env.LLK_PATH)) != ''
+        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles(format('{0}/perf_data/**', env.LLK_PATH)) != ''
         shell: bash
-        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        working-directory: ${{ env.LLK_PATH }}
         run: |
           zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip perf_data/
           echo "Performance data zipped successfully"
@@ -179,10 +179,10 @@ jobs:
       # Step 5: Upload performance data
       - name: Upload performance data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles(format('{0}/tests/python_tests/perf_data-{1}-{2}.zip', env.LLK_PATH, env.CHIP_ARCH, matrix.test_group)) != ''
+        if: always() && contains(inputs.pytest_markers, 'perf') && hashFiles(format('{0}/perf_data-{1}-{2}.zip', env.LLK_PATH, env.CHIP_ARCH, matrix.test_group)) != ''
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
-          path: ${{ env.LLK_PATH }}/tests/python_tests/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
+          path: ${{ env.LLK_PATH }}/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.zip
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
