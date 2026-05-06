@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <cstring>
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     uint32_t in_tile_offset_by_batch = get_arg_val<uint32_t>(0);
@@ -27,8 +27,13 @@ void kernel_main() {
     // noc_async_read path violates the NOC alignment rule
     // ((src & (alignment-1)) == (dst & (alignment-1))) for half the (batch, head) parities, and
     // silently returns wrong data on Blackhole. The aligned path stages each read through an L1
-    // scratch CB sized to a DRAM-aligned chunk per tile, then memcpys the desired sub-tile-line
-    // into the output CB. See issue #43270 for the original symptom.
+    // scratch CB sized to a DRAM-aligned chunk per tile, then copies the desired sub-tile-line
+    // into the output CB. The copy uses tt_memmove, which routes through the NOC datamover for
+    // L1→L1 transfers when the source/destination 16B parities match (the common case here:
+    // SUBTILE_LINE_BYTES is a multiple of 16, write_addr is multi-of-16-tiled, and scratch_base
+    // is DRAM-aligned). When parities don't match it falls back to baby-RISC memmove. The
+    // datamover path is dramatically faster than std::memcpy on Blackhole. See issue #43270 for
+    // the original symptom.
     constexpr uint32_t USE_ALIGNED_PATH = get_compile_time_arg_val(10);
     // Named DRAM_ALIGN_BYTES rather than DRAM_ALIGNMENT to avoid collision with the
     // DRAM_ALIGNMENT macro in tt_metal/hw/inc/internal/tt-1xx/*/noc/noc_parameters.h.
@@ -79,16 +84,32 @@ void kernel_main() {
 
             // Stage 2: copy the desired SUBTILE_LINE_BYTES slice from each scratch slot into the
             // output CB at the per-tile destination offset.
+            //
+            // tt_memmove<guaranteed_16B_aligned=false, copy_async=true, use_read_datamover=true,
+            //            max_transfer_size=SUBTILE_LINE_BYTES>: at runtime the helper checks
+            // (dst & 0xF) == (src & 0xF) and uses the NOC read datamover when it matches,
+            // otherwise falls back to memmove. SUBTILE_LINE_BYTES is 32 (bf16) or 64 (fp32) —
+            // both multiples of 16. write_addr stride is tile_size (multiple of 16). scratch is
+            // DRAM-aligned at base, with skew < DRAM_ALIGN_BYTES added per phase; for 16-byte
+            // multiples of phase offsets the parities line up and we hit the datamover fast
+            // path. The trailing barrier below makes the (async) datamover reads complete before
+            // the scratch CB is reused by the next stage_phase invocation.
             uint32_t scratch_read_offset = scratch_base + skew;
             uint32_t write_addr = write_addr_base + phase_offset;
             for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-                std::memcpy(
-                    reinterpret_cast<void*>(write_addr),
-                    reinterpret_cast<void*>(scratch_read_offset),
-                    SUBTILE_LINE_BYTES);
+                tt::data_movement::common::tt_memmove<
+                    /*guaranteed_16B_aligned=*/false,
+                    /*copy_async=*/true,
+                    /*use_read_datamover=*/true,
+                    /*max_transfer_size=*/SUBTILE_LINE_BYTES>(write_addr, scratch_read_offset, SUBTILE_LINE_BYTES);
                 scratch_read_offset += DRAM_ALIGN_BYTES;
                 write_addr += tile_size;
             }
+            // Sync the async tt_memmove reads before the scratch CB is reused or callers expect
+            // the output CB region to be populated. The std::memcpy version was synchronous so no
+            // barrier was needed; the NOC datamover path is async and writes to scratch must
+            // complete before the next stage_phase issues stage-1 DRAM reads into the same CB.
+            noc_async_read_barrier();
         };
 
         auto handle_one_head = [&](uint32_t write_addr_base) {
