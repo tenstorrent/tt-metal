@@ -156,11 +156,21 @@ void kernel_main() {
             cb_wait_front(cb_mask_in, 2);
         }
 
+        // Flat work folds (nb, nq, q_iter) into a single global range. Reader/writer decode
+        // (nb, nq) from global_q_start, so compute only iterates the q range and resolves
+        // q_chunk via proxy_q_chunk inside sdpa_standard_v2.
+        const uint32_t streaming_q_count = flatten_work ? global_q_count : q_chunks_per_core;
+        const uint32_t streaming_q_start = flatten_work ? global_q_start : local_q_start;
+        const uint32_t streaming_batch_start = flatten_work ? 0u : local_batch_start;
+        const uint32_t streaming_batch_end = flatten_work ? 1u : local_batch_end;
+        const uint32_t streaming_nh_start = flatten_work ? 0u : local_nh_start;
+        const uint32_t streaming_nh_end = flatten_work ? 1u : local_nh_end;
+
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
             const uint32_t phase_chunked_offset =
                 (phase == 0) ? chunked_q_chunk_offset_phase_1 : chunked_q_chunk_offset_phase_2;
-            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+            for (uint32_t nb = streaming_batch_start; nb < streaming_batch_end; ++nb) {
+                for (uint32_t nq = streaming_nh_start; nq < streaming_nh_end; ++nq) {
                     sdpa_standard_v2<
                         Sq_chunk_t,
                         Sk_chunk_t,
@@ -184,8 +194,10 @@ void kernel_main() {
                         cb_out,  // normalized output goes directly to output CB
                         cb_mask_in,
                         uniform_dataformat,
-                        is_causal>(
-                        q_chunks_per_core,
+                        is_causal,
+                        flatten_work,
+                        proxy_mode>(
+                        streaming_q_count,
                         k_num_chunks,
                         cb_out_im_A,
                         cb_out_im_B,
@@ -193,10 +205,12 @@ void kernel_main() {
                         cb_max_B,
                         cb_sum_A,
                         cb_sum_B,
-                        local_q_start,
+                        streaming_q_start,
                         phase_chunked_offset,
                         lw_mask,
-                        q_num_chunks);
+                        q_num_chunks,
+                        flat_use_zigzag,
+                        is_chain_participant != 0);
                 }
             }
         }

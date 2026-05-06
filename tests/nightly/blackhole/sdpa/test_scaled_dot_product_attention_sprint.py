@@ -127,7 +127,7 @@ def generate_model_configs() -> Dict[str, ModelConfig]:
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat8_b,
             q_chunk_sizes=[160],
-            k_chunk_sizes=[160],
+            k_chunk_sizes=[320],
             ring_proxy_case="diag",
         ),
         # DeepSeek MLA 128K — same ring iter 0 semantics as the 100K suite, longer local seq.
@@ -161,7 +161,7 @@ def generate_model_configs() -> Dict[str, ModelConfig]:
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat8_b,
             q_chunk_sizes=[160],
-            k_chunk_sizes=[160],
+            k_chunk_sizes=[320],
             ring_proxy_case="up",
         ),
         # DeepSeek MLA 100K — ring non-diag iter DOWN proxy. Only the heavy Q half is assigned
@@ -179,7 +179,7 @@ def generate_model_configs() -> Dict[str, ModelConfig]:
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat8_b,
             q_chunk_sizes=[160],
-            k_chunk_sizes=[160],
+            k_chunk_sizes=[320],
             ring_proxy_case="down",
         ),
     ]

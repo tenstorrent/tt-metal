@@ -1249,7 +1249,9 @@ template <
     uint32_t cb_normalized_out,
     uint32_t cb_mask_in,
     bool uniform_dataformat = false,
-    bool is_causal_sdpa = false>
+    bool is_causal_sdpa = false,
+    bool flatten_work = false,
+    RingProxyCase proxy_mode = RingProxyCase::None>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -1262,7 +1264,9 @@ void sdpa_standard_v2(
     const uint32_t local_q_start = 0,
     const uint32_t chunked_q_chunk_offset = 0,
     const LightweightMaskContext& lw_mask = {},
-    const uint32_t q_num_chunks = 0) {
+    const uint32_t q_num_chunks = 0,
+    const bool use_zigzag = false,
+    const bool is_chain_participant = false) {
     // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
     static_assert(
         !(use_padded_mask && is_causal_sdpa), "use_padded_mask and is_causal_sdpa are mutually exclusive in v2");
@@ -1299,9 +1303,21 @@ void sdpa_standard_v2(
         // Causal-only: BALANCED_Q_PARALLEL Q-chunk remap, per-Q diagonal K-chunk limit, and
         // q_start_tile (the only causal-mask consumer downstream). Non-causal builds skip
         // the whole block — q_chunk_local stays in-order, q_start_tile=0, k_loop_end=full.
-        uint32_t q_chunk_local = local_q_start + q;
+        // Flat work overrides the q_chunk_local computation via proxy_q_chunk, mirroring the
+        // non-streaming path's flat-iter decode (compute_common.hpp:1750).
+        uint32_t q_chunk_local;
+        if constexpr (flatten_work) {
+            q_chunk_local = proxy_q_chunk(local_q_start + q, q_num_chunks, use_zigzag, proxy_mode);
+        } else {
+            q_chunk_local = local_q_start + q;
+        }
         uint32_t q_start_tile = 0;
         uint32_t k_loop_end = k_num_chunks;
+        // UP proxy halves the K loop (mirrors compute_common.hpp:1805). Applied for both
+        // causal/non-causal so the streaming path is loop-symmetric to the non-flat causal trim.
+        if constexpr (proxy_mode == RingProxyCase::Up) {
+            k_loop_end = k_num_chunks / 2;
+        }
         if constexpr (is_causal_sdpa) {
 #if defined BALANCED_Q_PARALLEL
             // Pair a light (top-half) Q chunk with a heavy (bottom-half) Q chunk per core to
@@ -1440,6 +1456,21 @@ void sdpa_standard_v2(
             }
         }
         // Q already popped inside sdpa_inner_loop_step after Phase 1 of the last K chunk.
+
+        // Chain participant drain (causal only): the reader walks full K so all chain cores
+        // stay in CB lockstep. Compute already finished real work at the diagonal chunk
+        // (k_loop_end), normalized prev/cur, and wrote output. Just drain remaining K/V tiles
+        // so the K/V CBs don't fill up. Mirrors compute_common.hpp:1831 pop+continue.
+        if constexpr (is_causal_sdpa) {
+            if (is_chain_participant) {
+                for (uint32_t k_chunk = k_loop_end; k_chunk < k_num_chunks; k_chunk++) {
+                    cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
+                    cb_pop_front(cb_kt_in, DHt * Sk_chunk_t);
+                    cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+                    cb_pop_front(cb_v_in, Sk_chunk_t * vDHt);
+                }
+            }
+        }
     }
 }
 

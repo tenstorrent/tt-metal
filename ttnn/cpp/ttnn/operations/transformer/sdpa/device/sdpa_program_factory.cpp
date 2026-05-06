@@ -88,12 +88,7 @@ bool can_use_streaming_compute(
     bool use_provided_mask,
     bool use_attention_sink,
     const std::optional<uint32_t>& sliding_window_size,
-    bool fp32_dest_acc_en,
-    bool flatten_work) {
-    // Streaming SDPA doesn't honor flat work distribution yet.
-    if (flatten_work) {
-        return false;
-    }
+    bool fp32_dest_acc_en) {
     if (use_provided_mask || use_attention_sink) {
         return false;
     }
@@ -490,7 +485,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
     const bool use_streaming_compute = can_use_streaming_compute(
-        use_provided_mask, use_attention_sink, sliding_window_size, fp32_dest_acc_en, flatten_work);
+        use_provided_mask, use_attention_sink, sliding_window_size, fp32_dest_acc_en);
 
     const bool lightweight_causal = is_causal && !use_provided_mask && sliding_window_size.value_or(0) == 0;
     const bool lightweight_mask = (use_streaming_compute && use_padded_mask) || lightweight_causal;
