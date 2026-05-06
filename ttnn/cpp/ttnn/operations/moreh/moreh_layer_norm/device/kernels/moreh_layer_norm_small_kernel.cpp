@@ -313,7 +313,7 @@ void kernel_main() {
             eltwise_chain(
                 onetile,
                 AddRsqrt{},
-                Rsqrt<Approx::Exact, Dst::D0>{},
+                Rsqrt<Approx::Exact, Legacy::Off, Dst::D0>{},
                 PackTile<cb_recip_std, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
                          PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
         }

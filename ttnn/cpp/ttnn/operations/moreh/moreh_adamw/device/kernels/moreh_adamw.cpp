@@ -10,7 +10,67 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/tile_move_copy.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+
+namespace {
+
+template <
+    compute_kernel_lib::BinaryFpuOp Op,
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    uint32_t IdxA,
+    uint32_t IdxB,
+    bool PopA,
+    bool PopB>
+ALWI void moreh_bin_chain() {
+    using namespace compute_kernel_lib;
+    using BinElt = BinaryFpu<
+        CbA,
+        CbB,
+        Op,
+        BroadcastDim::None,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::InputAndOutput,
+        PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        IdxA == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        IdxB == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        Dst::D0,
+        0,
+        0,
+        0,
+        CbOut>;
+    BinElt elt{};
+    elt.a_tile_idx = IdxA;
+    elt.b_tile_idx = IdxB;
+    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
+ALWI void moreh_copy_chain() {
+    using namespace compute_kernel_lib;
+    using CopyElt = CopyTile<
+        CbIn,
+        Dst::D0,
+        Pop ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        Idx == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        CopyTileReconfig::Input>;
+    CopyElt elt{};
+    elt.cb_tile_idx = Idx;
+    eltwise_chain(
+        1,
+        elt,
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
+}
+
+}  // namespace
 
 void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(0);
@@ -72,30 +132,86 @@ void kernel_main() {
 #endif
         // param = param - lr * weight_decay * param.
         // cb_tmp1 : weight_decay * cb_param_in
-        mul_tiles_to_cb(cb_scalar_args, cb_param_in, cb_tmp1, weight_decay_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_scalar_args,
+            cb_param_in,
+            cb_tmp1,
+            weight_decay_tile,
+            first_tile,
+            /*popA=*/false,
+            /*popB=*/false>();
 
         // cb_tmp1 : lr * cb_tmp1
-        mul_tiles_to_cb(cb_scalar_args, cb_tmp1, cb_tmp1, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_scalar_args,
+            cb_tmp1,
+            cb_tmp1,
+            lr_tile,
+            first_tile,
+            /*popA=*/false,
+            /*popB=*/true>();
 
         // tmp_cb_param : cb_param_in - cb_tmp1
-        sub_tiles_to_cb(cb_param_in, cb_tmp1, tmp_cb_param, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Sub,
+            cb_param_in,
+            cb_tmp1,
+            tmp_cb_param,
+            first_tile,
+            first_tile,
+            /*popA=*/false,
+            /*popB=*/true>();
 
         ////////////////////////////////////////////////////////////////////////
         // exp_avg = exp_avg * beta1 + grad * (1 - beta1);
         // cb_tmp1 = (1 - beta1)
-        sub_tiles_to_cb(cb_one, cb_scalar_args, cb_tmp1, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Sub,
+            cb_one,
+            cb_scalar_args,
+            cb_tmp1,
+            first_tile,
+            beta1_tile,
+            /*popA=*/false,
+            /*popB=*/false>();
 
         // cb_tmp1 = cb_grad_in * cb_tmp1
-        mul_tiles_to_cb(cb_grad_in, cb_tmp1, cb_tmp1, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_grad_in,
+            cb_tmp1,
+            cb_tmp1,
+            first_tile,
+            first_tile,
+            /*popA=*/false,
+            /*popB=*/true>();
 
         // tmp_cb_exp_avg = cb_exp_avg_in * beta1
-        mul_tiles_to_cb(cb_exp_avg_in, cb_scalar_args, tmp_cb_exp_avg, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_exp_avg_in,
+            cb_scalar_args,
+            tmp_cb_exp_avg,
+            first_tile,
+            beta1_tile,
+            /*popA=*/false,
+            /*popB=*/false>();
 
         // tmp_cb_exp_avg = tmp_cb_exp_avg + cb_tmp1
-        add_tiles_to_cb(tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg, first_tile, first_tile);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Add,
+            tmp_cb_exp_avg,
+            cb_tmp1,
+            tmp_cb_exp_avg,
+            first_tile,
+            first_tile,
+            /*popA=*/true,
+            /*popB=*/true>();
 
         // cb_exp_avg_out
-        copy_tile_to_cb(tmp_cb_exp_avg, cb_exp_avg_out, first_tile, /*pop=*/0);
+        moreh_copy_chain<tmp_cb_exp_avg, cb_exp_avg_out, first_tile, /*pop=*/false>();
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -113,20 +229,51 @@ void kernel_main() {
         tile_regs_release();
 
         // cb_tmp2 = grad * grad
-        mul_tiles_to_cb(cb_grad_in, cb_grad_in, cb_tmp2, first_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_grad_in,
+            cb_grad_in,
+            cb_tmp2,
+            first_tile,
+            first_tile,
+            /*popA=*/false,
+            /*popB=*/false>();
 
         // cb_tmp1 = cb_tmp1 * cb_tmp2
-        mul_tiles_to_cb(cb_tmp1, cb_tmp2, cb_tmp1, first_tile, first_tile);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_tmp1,
+            cb_tmp2,
+            cb_tmp1,
+            first_tile,
+            first_tile,
+            /*popA=*/true,
+            /*popB=*/true>();
 
         // tmp_cb_exp_avg_sq = cb_exp_avg_sq_in * beta2
-        mul_tiles_to_cb(
-            cb_exp_avg_sq_in, cb_scalar_args, tmp_cb_exp_avg_sq, first_tile, beta2_tile, /*pop0=*/0, /*pop1=*/0);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_exp_avg_sq_in,
+            cb_scalar_args,
+            tmp_cb_exp_avg_sq,
+            first_tile,
+            beta2_tile,
+            /*popA=*/false,
+            /*popB=*/false>();
 
         // tmp_cb_exp_avg_sq = tmp_cb_exp_avg_sq + cb_tmp1
-        add_tiles_to_cb(tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq, first_tile, first_tile);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Add,
+            tmp_cb_exp_avg_sq,
+            cb_tmp1,
+            tmp_cb_exp_avg_sq,
+            first_tile,
+            first_tile,
+            /*popA=*/true,
+            /*popB=*/true>();
 
         // cb_exp_avg_sq_out
-        copy_tile_to_cb(tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, first_tile, /*pop=*/0);
+        moreh_copy_chain<tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, first_tile, /*pop=*/false>();
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -167,7 +314,7 @@ void kernel_main() {
         tile_regs_release();
 
         // cb_max_exp_avg_sq_out
-        copy_tile_to_cb(tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/0);
+        moreh_copy_chain<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/false>();
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq / cb_tmp1);
@@ -229,16 +376,48 @@ void kernel_main() {
         tile_regs_release();
 
         // cb_tmp2 = lr * cb_tmp2;
-        mul_tiles_to_cb(cb_scalar_args, cb_tmp2, cb_tmp2, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_scalar_args,
+            cb_tmp2,
+            cb_tmp2,
+            lr_tile,
+            first_tile,
+            /*popA=*/false,
+            /*popB=*/true>();
 
         // cb_tmp2 = cb_tmp2 * tmp_cb_exp_avg;
-        mul_tiles_to_cb(cb_tmp2, tmp_cb_exp_avg, cb_tmp2, first_tile, first_tile);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_tmp2,
+            tmp_cb_exp_avg,
+            cb_tmp2,
+            first_tile,
+            first_tile,
+            /*popA=*/true,
+            /*popB=*/true>();
 
         // cb_tmp1 = cb_tmp1 * cb_tmp2;
-        mul_tiles_to_cb(cb_tmp1, cb_tmp2, cb_tmp1, first_tile, first_tile);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Mul,
+            cb_tmp1,
+            cb_tmp2,
+            cb_tmp1,
+            first_tile,
+            first_tile,
+            /*popA=*/true,
+            /*popB=*/true>();
 
         // param = tmp_cb_param - cb_tmp1;
-        sub_tiles_to_cb(tmp_cb_param, cb_tmp1, cb_param_out, first_tile, first_tile);
+        moreh_bin_chain<
+            compute_kernel_lib::BinaryFpuOp::Sub,
+            tmp_cb_param,
+            cb_tmp1,
+            cb_param_out,
+            first_tile,
+            first_tile,
+            /*popA=*/true,
+            /*popB=*/true>();
 
         cb_pop_front(cb_param_in, onetile);
         cb_pop_front(cb_grad_in, onetile);

@@ -4,7 +4,67 @@
 
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+
+namespace {
+
+template <
+    compute_kernel_lib::BinaryFpuOp Op,
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    uint32_t IdxA,
+    uint32_t IdxB,
+    bool PopA,
+    bool PopB>
+ALWI void moreh_bin_chain() {
+    using namespace compute_kernel_lib;
+    using BinElt = BinaryFpu<
+        CbA,
+        CbB,
+        Op,
+        BroadcastDim::None,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::InputAndOutput,
+        PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        IdxA == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        IdxB == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        Dst::D0,
+        0,
+        0,
+        0,
+        CbOut>;
+    BinElt elt{};
+    elt.a_tile_idx = IdxA;
+    elt.b_tile_idx = IdxB;
+    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
+ALWI void moreh_copy_chain() {
+    using namespace compute_kernel_lib;
+    using CopyElt = CopyTile<
+        CbIn,
+        Dst::D0,
+        Pop ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        Idx == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        CopyTileReconfig::Input>;
+    CopyElt elt{};
+    elt.cb_tile_idx = Idx;
+    eltwise_chain(
+        1,
+        elt,
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
@@ -28,7 +88,7 @@ void kernel_main() {
         // find max
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                copy_tile_to_cb(cb_in0, cb_max);
+                moreh_copy_chain<cb_in0, cb_max, /*idx=*/0, /*pop=*/true>();
             } else {
                 cb_wait_front(cb_in0, onetile);
                 cb_wait_front(cb_max, onetile);

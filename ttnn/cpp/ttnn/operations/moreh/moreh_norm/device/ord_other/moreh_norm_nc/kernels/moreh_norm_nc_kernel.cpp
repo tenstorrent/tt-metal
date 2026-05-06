@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"        // Abs, Negative
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"  // UnaryNe
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Abs, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {
@@ -32,31 +31,40 @@ void kernel_main() {
 
     for (uint32_t outer_idx = 0; outer_idx < num_output_tiles_per_core; ++outer_idx) {
         for (uint32_t inner_idx = 0; inner_idx < num_reduced_tiles_along_dim; ++inner_idx) {
-            // PARTIAL migration: f(x) chain — Copy + (Nez | Abs) + (Negative if MINUS_INF) + Pack.
-            //   migrated: f(x) preprocessing into cb_val.
-            //   skipped : Add/Max accumulator (in-place CB recurrence on cb_cal).
+            // PARTIAL migration: f(x) chain (Abs path only).
+            //   migrated: !IS_ZERO branches via CopyTile + Abs + (Negative if MINUS_INF) + PackTile.
+            //   skipped : IS_ZERO branches use unary_ne_tile (runtime-param UnaryNe — chain dispatch
+            //             path doesn't support member-exec runtime-param ops in v1).
+#ifdef IS_ZERO
+            tile_regs_acquire();
+            cb_wait_front(cb_x, onetile);  // comes from the reader
+            cb_reserve_back(cb_val, onetile);
+
+            copy_tile_init_with_dt(cb_x);
+            copy_tile(cb_x, 0, dst0);
+
+            unary_ne_tile_init();
+            unary_ne_tile(dst0, 0);
+
+#ifdef MINUS_INF
+            negative_tile_init();
+            negative_tile(dst0);
+#endif
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_val);
+            tile_regs_release();
+
+            cb_pop_front(cb_x, onetile);
+            cb_push_back(cb_val, onetile);
+#else
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format_srca(cb_x);
             pack_reconfig_data_format(cb_val);
 #endif
             {
                 using namespace compute_kernel_lib;
-#ifdef IS_ZERO
-#ifdef MINUS_INF
-                eltwise_chain(
-                    onetile,
-                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                    UnaryNe<Dst::D0>{0u},
-                    Negative<Dst::D0>{},
-                    PackTile<cb_val, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
-#else
-                eltwise_chain(
-                    onetile,
-                    CopyTile<cb_x, Dst::D0, CopyTilePolicy::WaitAndPop>{},
-                    UnaryNe<Dst::D0>{0u},
-                    PackTile<cb_val, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
-#endif
-#else  // !IS_ZERO
 #ifdef MINUS_INF
                 eltwise_chain(
                     onetile,
@@ -71,8 +79,8 @@ void kernel_main() {
                     Abs<Dst::D0>{},
                     PackTile<cb_val, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 #endif
-#endif  // IS_ZERO
             }
+#endif  // IS_ZERO
 
             // Add(x != 0)
             if (inner_idx == 0) {

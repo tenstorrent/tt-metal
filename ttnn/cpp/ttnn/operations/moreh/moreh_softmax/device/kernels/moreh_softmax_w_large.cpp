@@ -4,8 +4,69 @@
 
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+
+namespace {
+
+template <
+    compute_kernel_lib::BinaryFpuOp Op,
+    compute_kernel_lib::BroadcastDim Bcast,
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    uint32_t IdxA,
+    uint32_t IdxB,
+    bool PopA,
+    bool PopB>
+ALWI void moreh_bin_chain() {
+    using namespace compute_kernel_lib;
+    using BinElt = BinaryFpu<
+        CbA,
+        CbB,
+        Op,
+        Bcast,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::InputAndOutput,
+        PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        IdxA == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        IdxB == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        Dst::D0,
+        0,
+        0,
+        0,
+        CbOut>;
+    BinElt elt{};
+    elt.a_tile_idx = IdxA;
+    elt.b_tile_idx = IdxB;
+    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+template <uint32_t CbIn, uint32_t CbOut, uint32_t Idx, bool Pop>
+ALWI void moreh_copy_chain() {
+    using namespace compute_kernel_lib;
+    using CopyElt = CopyTile<
+        CbIn,
+        Dst::D0,
+        Pop ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        Idx == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        CopyTileReconfig::Input>;
+    CopyElt elt{};
+    elt.cb_tile_idx = Idx;
+    eltwise_chain(
+        1,
+        elt,
+        PackTile<
+            CbOut,
+            Dst::D0,
+            PackTilePolicy::PerTileReserveAndPush,
+            PackTileIndexMode::FirstTile,
+            PackTileReconfig::Output>{});
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
@@ -89,7 +150,16 @@ void kernel_main() {
             // compute exp(x)
             if (w == Wt - 1) {
 #ifdef SOFTMAX
-                sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+                moreh_bin_chain<
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    cb_in0,
+                    cb_max,
+                    cb_tmp,
+                    /*idxA=*/0,
+                    /*idxB=*/0,
+                    /*popA=*/true,
+                    /*popB=*/false>();
 
                 exp_tile_and_mask_tile_to_cb(
                     cb_tmp,
@@ -111,20 +181,47 @@ void kernel_main() {
 #endif
             } else {
 #ifdef SOFTMAX
-                sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+                moreh_bin_chain<
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    cb_in0,
+                    cb_max,
+                    cb_tmp,
+                    /*idxA=*/0,
+                    /*idxB=*/0,
+                    /*popA=*/true,
+                    /*popB=*/false>();
 
                 exp_tile_to_cb(cb_tmp, cb_exps);
 #else
-                sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+                moreh_bin_chain<
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    cb_in0,
+                    cb_max,
+                    cb_tmp,
+                    /*idxA=*/0,
+                    /*idxB=*/0,
+                    /*popA=*/true,
+                    /*popB=*/false>();
 
                 rexp_tile_to_cb(cb_tmp, cb_exps);
 #endif
             }
 
             if (w == 0) {
-                copy_tile_to_cb(cb_exps, cb_add);
+                moreh_copy_chain<cb_exps, cb_add, /*idx=*/0, /*pop=*/true>();
             } else {
-                add_tiles_to_cb(cb_add, cb_exps, cb_add);
+                moreh_bin_chain<
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    cb_add,
+                    cb_exps,
+                    cb_add,
+                    /*idxA=*/0,
+                    /*idxB=*/0,
+                    /*popA=*/true,
+                    /*popB=*/true>();
             }
         }
 
@@ -163,9 +260,27 @@ void kernel_main() {
 #ifdef LOG
 #ifdef SOFTMAX
             // x - max - log(sum)
-            sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
-            sub_tiles_bcast_cols_to_cb(cb_tmp, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_tmp,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #else
             // -x + max - log(sum)
             // logsoftmin not implemented
@@ -173,18 +288,54 @@ void kernel_main() {
 #else
 #ifdef SOFTMAX
             // exp(x - max) / sum
-            sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
             exp_tile_to_cb(cb_tmp, cb_exps);
 
-            mul_tiles_bcast_cols_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #else
             // rexp(x - max) / sum
-            sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
             rexp_tile_to_cb(cb_tmp, cb_exps);
 
-            mul_tiles_bcast_cols_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #endif
 #endif
         }

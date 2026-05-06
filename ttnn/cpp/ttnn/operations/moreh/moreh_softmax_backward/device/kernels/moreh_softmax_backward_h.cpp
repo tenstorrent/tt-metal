@@ -4,8 +4,80 @@
 
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+
+namespace {
+
+template <
+    compute_kernel_lib::BinaryFpuOp Op,
+    compute_kernel_lib::BroadcastDim Bcast,
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    uint32_t IdxA,
+    uint32_t IdxB,
+    bool PopA,
+    bool PopB>
+ALWI void moreh_bin_chain() {
+    using namespace compute_kernel_lib;
+    using BinElt = BinaryFpu<
+        CbA,
+        CbB,
+        Op,
+        Bcast,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::InputAndOutput,
+        PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        IdxA == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        IdxB == 0 ? CbIndexMode::FirstTile : CbIndexMode::Pinned,
+        Dst::D0,
+        0,
+        0,
+        0,
+        CbOut>;
+    BinElt elt{};
+    elt.a_tile_idx = IdxA;
+    elt.b_tile_idx = IdxB;
+    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+// Runtime-index variant for cases where idxA / idxB are loop variables.
+template <
+    compute_kernel_lib::BinaryFpuOp Op,
+    compute_kernel_lib::BroadcastDim Bcast,
+    uint32_t CbA,
+    uint32_t CbB,
+    uint32_t CbOut,
+    bool PopA,
+    bool PopB>
+ALWI void moreh_bin_chain_rt(uint32_t idxA, uint32_t idxB) {
+    using namespace compute_kernel_lib;
+    using BinElt = BinaryFpu<
+        CbA,
+        CbB,
+        Op,
+        Bcast,
+        BinaryFpuOutputPolicy::PerTile,
+        BinaryDataFormatReconfig::InputAndOutput,
+        PopA ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        PopB ? CopyTilePolicy::WaitAndPop : CopyTilePolicy::WaitNoPop,
+        CbIndexMode::Pinned,
+        CbIndexMode::Pinned,
+        Dst::D0,
+        0,
+        0,
+        0,
+        CbOut>;
+    BinElt elt{};
+    elt.a_tile_idx = idxA;
+    elt.b_tile_idx = idxB;
+    eltwise_chain(1, elt, PackTile<CbOut, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -47,7 +119,16 @@ void kernel_main() {
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL>(
                 cb_inter1, cb_bcast_scaler, cb_inter2, compute_kernel_lib::ReduceInputBlockShape::single());
 
-            add_tiles_to_cb(cb_inter0, cb_inter2, cb_sum);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                cb_inter0,
+                cb_inter2,
+                cb_sum,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/true>();
         }
 
         // dy - sum * exp(y)
@@ -58,10 +139,26 @@ void kernel_main() {
             exp_tile_to_cb(cb_y, cb_exp, w, /*dst=*/0, /*pop=*/0);
 
             // sum * exp(y)
-            mul_tiles_bcast_rows_to_cb(cb_exp, cb_sum, cb_inter2, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Row,
+                cb_exp,
+                cb_sum,
+                cb_inter2,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
             // dy - sum * exp(y)
-            sub_tiles_to_cb(cb_dy, cb_inter2, cb_dx, w, 0, /*pop0=*/0, /*pop1=*/1);
+            moreh_bin_chain_rt<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                cb_dy,
+                cb_inter2,
+                cb_dx,
+                /*popA=*/false,
+                /*popB=*/true>(w, 0);
         }
 
         cb_pop_front(cb_sum, onetile);
@@ -74,7 +171,14 @@ void kernel_main() {
                 mul_tiles_and_mask_tile_to_cb(
                     cb_y, cb_dy, cb_mask, cb_ydy, h, h, 0, /*pop0=*/0, /*pop1=*/0, /*popm=*/0);
             } else {
-                mul_tiles_to_cb(cb_y, cb_dy, cb_ydy, h, h, /*pop0=*/0, /*pop1=*/0);
+                moreh_bin_chain_rt<
+                    compute_kernel_lib::BinaryFpuOp::Mul,
+                    compute_kernel_lib::BroadcastDim::None,
+                    cb_y,
+                    cb_dy,
+                    cb_ydy,
+                    /*popA=*/false,
+                    /*popB=*/false>(h, h);
             }
         }
 
@@ -86,11 +190,25 @@ void kernel_main() {
         // step 3, compute final result
         for (uint32_t h = 0; h < Ht; ++h) {
             // dy - sum
-            sub_tiles_bcast_rows_to_cb(cb_dy, cb_sum, cb_inter2, h, 0, /*pop0=*/0, /*pop1=*/0);
+            moreh_bin_chain_rt<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Row,
+                cb_dy,
+                cb_sum,
+                cb_inter2,
+                /*popA=*/false,
+                /*popB=*/false>(h, 0);
 
 #ifdef SOFTMAX
             // (dy - sum) * y
-            mul_tiles_to_cb(cb_y, cb_inter2, cb_dx, h, 0, /*pop0=*/0, /*pop1=*/1);
+            moreh_bin_chain_rt<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                cb_y,
+                cb_inter2,
+                cb_dx,
+                /*popA=*/false,
+                /*popB=*/true>(h, 0);
 #else
             // -(dy - sum) * y
             mul_tiles_and_negative_to_cb(cb_y, cb_inter2, cb_dx, h, 0, /*pop0=*/0, /*pop1=*/1);
