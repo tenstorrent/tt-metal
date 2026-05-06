@@ -785,6 +785,13 @@ class PipelineBlock:
             # place the downstream on the exit device so the exit sender program
             # can find its upstream socket locally.
             downstream_dc = this_exit_dc_for_downstream if not use_multi_upstream else this_entry_dc
+            logger.info(
+                f"PipelineBlock ENTRY socket ch[{i}] stage={self.my_stage_idx}: "
+                f"sender=MeshCoreCoord({prev_exit_dc},{core_exit}) on rank={ps.rank} mesh_id={ps.mesh_id} -> "
+                f"receiver=MeshCoreCoord({this_entry_dc},{core_entry}) on LOCAL mesh | "
+                f"downstream=MeshCoreCoord({downstream_dc},{effective_downstream_core}) | "
+                f"use_reader={entry_use_reader}"
+            )
             entry_si = SocketInterface(
                 upstream_d2d_socket_page_size,
                 upstream_d2d_socket_fifo_size,
@@ -813,6 +820,13 @@ class PipelineBlock:
             # different core to avoid semaphore conflicts with the forward exit
             # sender (which lives on a different device column on stage 0).
             exit_recv_core = loopback_entry_core if (self.is_last_stage and loopback_entry_core) else core_entry
+
+            logger.info(
+                f"PipelineBlock EXIT socket ch[{i}] stage={self.my_stage_idx}: "
+                f"sender=MeshCoreCoord({this_exit_dc},{core_exit}) on LOCAL mesh -> "
+                f"receiver=MeshCoreCoord({next_entry_dc},{exit_recv_core}) on rank={ns.rank} mesh_id={ns.mesh_id} | "
+                f"is_last_stage={self.is_last_stage} next_cfg_idx={next_cfg_idx}"
+            )
 
             if use_multi_upstream and len(exit_upstream_cores) > 0:
                 per_device_upstream_cores = [ttnn.MeshCoreCoord(this_exit_dc, uc) for uc in exit_upstream_cores]
