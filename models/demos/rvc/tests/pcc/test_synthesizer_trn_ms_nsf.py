@@ -51,6 +51,7 @@ def test_synthesizer_trn_ms_nsf(device):
         spk_embed_dim=spk_embed_dim,
         gin_channels=gin_channels,
         sr=sr,
+        validation=True,
     ).eval()
 
     tt_model = TTSynthesizerTrnMsNSF(
@@ -71,6 +72,7 @@ def test_synthesizer_trn_ms_nsf(device):
         spk_embed_dim=spk_embed_dim,
         gin_channels=gin_channels,
         sr=sr,
+        validation=True,
     )
     state_dict = {f"net_g.{k}": v for k, v in torch_model.state_dict().items()}
     tt_model.load_state_dict(state_dict, module_prefix="net_g.")

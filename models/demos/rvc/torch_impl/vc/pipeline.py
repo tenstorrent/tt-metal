@@ -110,6 +110,7 @@ def _load_synthesizer(
     if_f0: bool,
     version: str,
     num: str = "48k",
+    validation: bool = False,
 ):
     synthesizer_path, synthesizer_cfg_path = get_model_and_config_paths(version, num, if_f0)
     synthesizer_state = load_file(synthesizer_path)
@@ -122,7 +123,7 @@ def _load_synthesizer(
         1: SynthesizerTrnMsNSF,
         0: SynthesizerTrnMsNSF_nono,
     }
-    synthesizer = synthesizer_class[if_f0](**synthesizer_config["model"])
+    synthesizer = synthesizer_class[if_f0](**synthesizer_config["model"], validation=validation)
     synthesizer.load_state_dict(synthesizer_state, strict=True)
     synthesizer.eval().to(config.device)
     synthesizer = synthesizer.float()
@@ -155,6 +156,7 @@ class Pipeline:
         rms_mix_rate: float = 0.25,
         protect: float = 0.33,
         file_index: str | None = None,
+        validation: bool = False,
     ):
         hubert_cfg_path, hubert_path = get_hubert_paths()
         if not os.path.exists(hubert_path):
@@ -175,15 +177,16 @@ class Pipeline:
         self._feature_index: Any | None = None
         self._feature_index_embeddings: torch.Tensor | None = None
 
-        self.synthesizer, data_cfg = _load_synthesizer(self.config, self.if_f0, self.version, self.num)
+        self.synthesizer, data_cfg = _load_synthesizer(
+            self.config, self.if_f0, self.version, self.num, validation=validation
+        )
         self.tgt_sr = data_cfg["sampling_rate"]
         self.hubert_model = _load_hubert(self.config, hubert_path, hubert_cfg_path)
         self._init_timing(self.tgt_sr, self.config)
 
     def _init_timing(self, tgt_sr: int, config: Config) -> None:
-        x_pad, x_query, x_center, x_max = (
+        x_pad, x_center, x_max = (
             config.x_pad,
-            config.x_query,
             config.x_center,
             config.x_max,
         )
@@ -192,7 +195,6 @@ class Pipeline:
         self.t_pad = self.sr * x_pad
         self.t_pad_tgt = tgt_sr * x_pad
         self.t_pad2 = self.t_pad * 2
-        self.t_query = self.sr * x_query
         self.t_center = self.sr * x_center
         self.t_max = self.sr * x_max
         self.device = config.device
@@ -313,28 +315,14 @@ class Pipeline:
 
     def _get_time_stamps(self, audio, num_frames):
         batch_size = audio.shape[0]
-        audio_padded = F.pad(audio, (self.window // 2, self.window // 2), mode="reflect")
-        opt_ts = [[] for _ in range(batch_size)]
-        if audio_padded.shape[1] > self.t_max:
-            audio_avg = F.avg_pool1d(
-                audio_padded.abs().unsqueeze(1),
-                kernel_size=self.window,
-                stride=1,
-            ).squeeze(1)
-            for t in range(self.t_center, audio.shape[1], self.t_center):
-                segment = audio_avg[:, t - self.t_query : t + self.t_query]
-                argmin_indices = torch.argmin(segment, dim=1)
-                for b_idx in range(batch_size):
-                    opt_ts[b_idx].append((t - self.t_query + argmin_indices[b_idx].item()))
-
+        num_segments = (audio.shape[1] + self.t_center - 1) // self.t_center
         idx_list = []
         for b_idx in range(batch_size):
-            s = 0
             b_idx_list = []
-            for t in opt_ts[b_idx]:
-                b_idx_list.append((s // self.window, (t + self.t_pad * 2) // self.window))
-                s = t
-            b_idx_list.append((s // self.window, num_frames))
+            for i in range(num_segments):
+                s = i * self.t_center
+                t = min(s + self.t_center, num_frames * self.window)
+                b_idx_list.append((s // self.window, t // self.window))
             idx_list.append(b_idx_list)
         return idx_list
 
@@ -348,6 +336,7 @@ class Pipeline:
     ):
         assert audio.dim() == 2, audio.dim()
         speaker_id = torch.tensor(self.speaker_id, device=self.device).unsqueeze(0).long()
+        audio = audio.to(torch.float16).to(torch.float32)
         with torch.no_grad():
             logits = self.hubert_model(
                 source=audio,
@@ -392,10 +381,14 @@ class Pipeline:
         output = output[:, 0, :].contiguous()
         return output
 
-    def _run_pipeline(self, audio):
+    def run(self, audio):
         assert audio.dim() == 2, audio.dim()
         index, big_npy = self._load_feature_index()
+        audio_secs = audio.shape[1] / self.sr
         audio_padded = F.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
+        block_size = self.t_center
+        padded_length = ((audio_padded.shape[1] + block_size - 1) // block_size) * block_size
+        audio_padded = F.pad(audio_padded, (0, padded_length - audio_padded.shape[1]), mode="constant")
         num_frames = audio_padded.shape[1] // self.window
         opt_ts = []
         idx_list = self._get_time_stamps(audio, num_frames)
@@ -412,31 +405,36 @@ class Pipeline:
             else:
                 pitch_slice = None
                 pitchf_slice = None
-            audio_output.append(
-                self._vc(
-                    audio_padded[:, idx_s * self.window : idx_e * self.window],
-                    pitch_slice,
-                    pitchf_slice,
-                    index,
-                    big_npy,
-                )[:, self.t_pad_tgt : -self.t_pad_tgt]
+
+            out = self._vc(
+                audio_padded[:, idx_s * self.window : idx_e * self.window],
+                pitch_slice,
+                pitchf_slice,
+                index,
+                big_npy,
             )
+            start_idx = self.t_pad_tgt
+            end_idx = out.shape[1] - self.t_pad_tgt
+            audio_output.append(out[:, start_idx:end_idx])
         audio_output = torch.cat(audio_output, dim=1)
+
+        audio_output = audio_output[:, : int(audio_secs * self.tgt_sr)]
 
         # post-process
         if self.rms_mix_rate != 1:
             audio_output = change_rms(audio, self.sr, audio_output, self.tgt_sr, self.rms_mix_rate)
         audio_max = torch.abs(audio_output).max().item() / 0.99
         max_int16 = 32768
-        scale = max_int16 / audio_max if audio_max > 1 else 1
-        audio_output = audio_output * scale
+        scale = max_int16 / audio_max if audio_max > 1 else max_int16
+        audio_output = (audio_output * scale).to(torch.int16)
         return audio_output
 
-    def infer(self):
+    def prepare_audio_input(self, num_secs: float | None = None) -> torch.Tensor:
         audio = load_audio(self.sr)
+        # preprocess
         audio_max = torch.abs(audio).max().item()
         if audio_max > 1:
             audio /= audio_max
         audio = signal.filtfilt(bh, ah, audio)
         audio = torch.from_numpy(audio.copy()).unsqueeze(0).to(torch.float32)
-        return self._run_pipeline(audio)[0]
+        return audio

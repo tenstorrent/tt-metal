@@ -154,12 +154,12 @@ class MultiHeadAttention(nn.Module):
             rel_logits = self._matmul_with_relative_keys(
                 query / math.sqrt(self.features_per_head), key_relative_embeddings
             )
-            scores_local = self._relative_position_to_absolute_position(rel_logits)
+            scores_local = self._relative_to_absolute_position(rel_logits)
             scores = scores + scores_local
         p_attn = F.softmax(scores, dim=-1)  # [b, n_h, t_t, t_s]
         output = torch.matmul(p_attn, value)
         if self.window_size is not None:
-            relative_weights = self._absolute_position_to_relative_position(p_attn)
+            relative_weights = self._absolute_to_relative_position(p_attn)
             value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, t_s)
             output = output + self._matmul_with_relative_values(relative_weights, value_relative_embeddings)
         output = output.transpose(2, 3).contiguous().view(b, d, t_t)  # [b, n_h, t_t, d_k] -> [b, d, t_t]
@@ -198,7 +198,7 @@ class MultiHeadAttention(nn.Module):
         used_relative_embeddings = padded_relative_embeddings[:, slice_start_position:slice_end_position]
         return used_relative_embeddings
 
-    def _relative_position_to_absolute_position(self, x):
+    def _relative_to_absolute_position(self, x):
         """
         x: [b, h, l, 2*l-1]
         ret: [b, h, l, l]
@@ -212,7 +212,7 @@ class MultiHeadAttention(nn.Module):
         x_final = x.gather(dim=3, index=rel_idx)
         return x_final
 
-    def _absolute_position_to_relative_position(self, x):
+    def _absolute_to_relative_position(self, x):
         """
         x: [b, h, l, l]
         ret: [b, h, l, 2*l-1]
@@ -549,13 +549,16 @@ class Generator(nn.Module):
 
 
 class SineGen(nn.Module):
-    def __init__(self, samp_rate, harmonic_num=0, sine_amp=0.1, noise_std=0.003, voiced_threshold=0):
+    def __init__(self, samp_rate, harmonic_num=0, sine_amp=0.1, noise_std=0.003, voiced_threshold=0, validation=False):
         super().__init__()
         self.sine_amp = sine_amp
         self.noise_std = noise_std
         self.harmonic_num = harmonic_num
         self.sampling_rate = samp_rate
         self.voiced_threshold = voiced_threshold
+        # if true validation, no noise will be added to the output
+        # this enables to compare with ttnn implementation precisely
+        self.validation = validation
 
     def forward(self, f0: torch.Tensor, upp: int):
         # f0: (B, T)
@@ -572,15 +575,17 @@ class SineGen(nn.Module):
 
             # Accumulate phase, add random initial offset per harmonic
             phase = torch.cumsum(f0_harm / self.sampling_rate, dim=1)
-            rand_ini = torch.rand(f0.shape[0], self.harmonic_num + 1, device=f0.device)
-            rand_ini[:, 0] = 0  # keep fundamental phase at 0
-            phase = phase + rand_ini.unsqueeze(1)
+            if not self.validation:
+                rand_ini = torch.rand(f0.shape[0], self.harmonic_num + 1, device=f0.device)
+                rand_ini[:, 0] = 0  # keep fundamental phase at 0
+                phase = phase + rand_ini.unsqueeze(1)
 
             sine_waves = torch.sin(2 * torch.pi * phase) * self.sine_amp
 
             # Mix with noise based on voiced/unvoiced
             noise_amp = uv * self.noise_std + (1 - uv) * self.sine_amp / 3
-            sine_waves = sine_waves * uv + noise_amp * torch.randn_like(sine_waves)
+            if not self.validation:
+                sine_waves = sine_waves * uv + noise_amp * torch.randn_like(sine_waves)  # no noise, only sine waves
 
         return sine_waves
 
@@ -610,12 +615,13 @@ class SourceModuleHnNSF(nn.Module):
         sine_amp=0.1,
         add_noise_std=0.003,
         voiced_threshod=0,
+        validation=False,
     ):
         super().__init__()
 
         self.sine_amp = sine_amp
         # to produce sine waveforms
-        self.l_sin_gen = SineGen(sampling_rate, harmonic_num, sine_amp, add_noise_std, voiced_threshod)
+        self.l_sin_gen = SineGen(sampling_rate, harmonic_num, sine_amp, add_noise_std, voiced_threshod, validation)
 
         # to merge source harmonics into a single excitation
         self.l_linear = torch.nn.Linear(harmonic_num + 1, 1)
@@ -640,13 +646,14 @@ class GeneratorNSF(nn.Module):
         upsample_kernel_sizes,
         gin_channels,
         sr,
+        validation=False,
     ):
         super().__init__()
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
 
         self.f0_upsamp = torch.nn.Upsample(scale_factor=math.prod(upsample_rates))
-        self.m_source = SourceModuleHnNSF(sampling_rate=sr, harmonic_num=0)
+        self.m_source = SourceModuleHnNSF(sampling_rate=sr, harmonic_num=0, validation=validation)
         self.noise_convs = nn.ModuleList()
         self.conv_pre = nn.Conv1d(initial_channel, upsample_initial_channel, kernel_size=7, padding="same")
         resblock = ResBlock1 if resblock == "1" else ResBlock2
@@ -747,6 +754,7 @@ class SynthesizerTrnMsNSF(nn.Module):
         spk_embed_dim,
         gin_channels,
         sr,
+        validation=False,
     ):
         super().__init__()
         if isinstance(sr, str):
@@ -773,6 +781,7 @@ class SynthesizerTrnMsNSF(nn.Module):
         )
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
         self.emb_g = nn.Embedding(spk_embed_dim, gin_channels)
+        self.validation = validation
 
     def forward(
         self,
@@ -785,10 +794,11 @@ class SynthesizerTrnMsNSF(nn.Module):
         m_p, logs_p = self.enc_p(phone, pitch)
         # permutation trick below is needed to match the result from TT implementation which has the opposite order of C, T
         # this enables so that they give the same result with the same random seed.
-        # z_p = m_p + torch.exp(logs_p) * torch.randn_like(m_p.permute(0, 2, 1).contiguous()).permute(0, 2, 1) * 0.66666
         # instead of randn_like use randn with shape
-        m_p_shape = (m_p.shape[0], m_p.shape[2], m_p.shape[1])  # swap C and T
-        z_p = m_p + torch.exp(logs_p) * torch.randn(m_p_shape).permute(0, 2, 1) * 0.66666
+        if not self.validation:
+            z_p = m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666
+        else:
+            z_p = m_p
         z = self.flow(z_p, g=g)
         o = self.dec(z, nsff0, g=g)
         return o
@@ -813,6 +823,7 @@ class SynthesizerTrnMsNSF_nono(nn.Module):
         spk_embed_dim,
         gin_channels,
         sr=None,
+        validation=False,
     ):
         super().__init__()
         self.enc_p = TextEncoder(
@@ -838,14 +849,20 @@ class SynthesizerTrnMsNSF_nono(nn.Module):
         self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
         self.emb_g = nn.Embedding(spk_embed_dim, gin_channels)
 
+        self.validation = validation
+
     def forward(
         self,
         phone: torch.Tensor,
         speaker_id: torch.Tensor,
     ):
-        g = self.emb_g(speaker_id).unsqueeze(-1)
+        g = self.emb_g(speaker_id)
+        g = g.unsqueeze(-1)
         m_p, logs_p = self.enc_p(phone, None)
-        z_p = m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666
+        if not self.validation:
+            z_p = m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666
+        else:
+            z_p = m_p
         z = self.flow(z_p, g=g)
         o = self.dec(z, g=g)
         return o

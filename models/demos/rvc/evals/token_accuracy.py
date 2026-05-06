@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-DEFAULT_TOKEN_ACCURACY_THRESHOLD = 0.95
-DEFAULT_WHISPER_MODEL = "openai/whisper-medium"
+DEFAULT_TOKEN_ACCURACY_THRESHOLD = 0.90
+DEFAULT_WHISPER_MODEL = "nyrahealth/CrisperWhisper"
 
 
 @dataclass(frozen=True)

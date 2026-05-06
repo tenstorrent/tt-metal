@@ -44,7 +44,7 @@ def _interpolate_1d(
     # 1D upsample for [N, L, C] via 2D NHWC upsample with height fixed to 1.
     if mode not in ("nearest", "linear"):
         raise ValueError(f"Unsupported 1D interpolate mode: {mode}")
-    upsample_mode = "nearest" if mode == "nearest" else "bilinear"
+    upsample_mode = "nearest"  # if mode == "nearest" else "bilinear"
     x_nhwc = ttnn.unsqueeze(x, dim=1)
     y_nhwc = ttnn.upsample(
         x_nhwc,
@@ -54,22 +54,27 @@ def _interpolate_1d(
     )
     return ttnn.squeeze(y_nhwc, dim=1)
 
+    x_torch = ttnn.to_torch(x)
+    x_torch = F.interpolate(x_torch.permute(0, 2, 1), scale_factor=scale_factor).permute(0, 2, 1)
+    return ttnn.from_torch(x_torch, dtype=x.dtype, device=x.device())
 
-def _load_hubert(config, hubert_path: str, hubert_cfg_path: str, tt_device):
+
+def _load_hubert(config, hubert_path: str, hubert_cfg_path: str, device):
     task = HubertPretrainingTask(HubertPretrainingConfig())
     with open(hubert_cfg_path) as f:
         cfg = json.load(f)
-    hubert_model = HubertModel(device=tt_device, cfg=cfg["model"], task_cfg=task.cfg)
+    hubert_model = HubertModel(device=device, cfg=cfg["model"], task_cfg=task.cfg)
     hubert_state_safetensors = load_file(hubert_path)
     hubert_model.load_state_dict(hubert_state_safetensors)
     return hubert_model.eval()
 
 
 def _load_synthesizer(
-    tt_device: ttnn.MeshDevice,
+    device: ttnn.MeshDevice,
     if_f0: bool,
     version: str,
     num: str = "32k",
+    validation: bool = False,
 ) -> tuple[SynthesizerTrnMsNSF | SynthesizerTrnMsNSF_nono, dict]:
     synthesizer_path, synthesizer_cfg_path = get_model_and_config_paths(version, num, if_f0)
     synthesizer_state = load_file(synthesizer_path)
@@ -83,9 +88,282 @@ def _load_synthesizer(
         1: SynthesizerTrnMsNSF,
         0: SynthesizerTrnMsNSF_nono,
     }
-    synthesizer = synthesizer_class[if_f0](device=tt_device, **synthesizer_config["model"])
+    synthesizer = synthesizer_class[if_f0](device=device, **synthesizer_config["model"], validation=validation)
     synthesizer.load_state_dict(state_dict=synthesizer_state)
     return synthesizer, synthesizer_config["data"]
+
+
+class RVCRunner:
+    def __init__(
+        self,
+        device: ttnn.MeshDevice,
+        if_f0: bool = True,
+        version: str = "v1",
+        num: str = "48k",
+        config: Config | None = None,
+        index_rate: float = 0.75,
+        protect: float = 0.33,
+        validation: bool = False,
+        performance_runner: bool = False,
+    ):
+        hubert_cfg_path, hubert_path = get_hubert_paths()
+        if not os.path.exists(hubert_path):
+            raise FileNotFoundError("hubert_path not found.")
+        self.device = device
+        self.version = version
+        self.index_rate = index_rate
+        config = config or Config()
+        self.protect = protect
+
+        self.sr = 16000
+        self.window = 160
+        self.x_center = config.x_center
+        self.t_center = self.x_center * self.sr
+        self.performance_runner = performance_runner
+
+        self.synthesizer, data_cfg = _load_synthesizer(self.device, if_f0, self.version, num, validation=validation)
+        self.tgt_sr = data_cfg["sampling_rate"]
+        self.hubert_model = _load_hubert(config, hubert_path, hubert_cfg_path, self.device)
+        self.torch_input = torch.randn((1, self.t_center, 1))
+        self.torch_pitch = torch.randint(low=0, high=255, size=(1, self.t_center // self.window), dtype=torch.uint32)
+        self.torch_pitchf = torch.randn((1, self.t_center // self.window), dtype=torch.float32)
+        self.torch_speaker_id = torch.tensor([0], dtype=torch.long)
+
+        (
+            tt_inputs_host,
+            tt_pitch_host,
+            tt_pitchf_host,
+            tt_speaker_id_host,
+            input_mem_config,
+        ) = self.setup_dram_sharded_input(device)
+        sharded_mem_config_DRAM = ttnn.DRAM_MEMORY_CONFIG
+
+        self.tt_inputs_device = tt_inputs_host.to(device, sharded_mem_config_DRAM)
+        self.tt_pitch_device = tt_pitch_host.to(device, sharded_mem_config_DRAM)
+        self.tt_pitchf_device = tt_pitchf_host.to(device, sharded_mem_config_DRAM)
+        self.tt_speaker_id_device = tt_speaker_id_host.to(device, sharded_mem_config_DRAM)
+
+        if not self.performance_runner:
+            self.run(
+                self.tt_inputs_device,
+                self.tt_pitch_device,
+                self.tt_pitchf_device,
+                self.tt_speaker_id_device,
+                index=None,
+                big_npy=None,
+            )
+            return
+
+        self.op_event = ttnn.record_event(device, 0)
+
+        # First run configures convs JIT
+        ttnn.wait_for_event(1, self.op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_inputs_device, 1)
+        ttnn.copy_host_to_device_tensor(tt_pitch_host, self.tt_pitch_device, 1)
+        ttnn.copy_host_to_device_tensor(tt_pitchf_host, self.tt_pitchf_device, 1)
+        ttnn.copy_host_to_device_tensor(tt_speaker_id_host, self.tt_speaker_id_device, 1)
+        self.write_event = ttnn.record_event(device, 1)
+        ttnn.wait_for_event(0, self.write_event)
+        input_spec = self.tt_inputs_device.spec
+        pitch_spec = self.tt_pitch_device.spec
+        pitchf_spec = self.tt_pitchf_device.spec
+        speaker_id_spec = self.tt_speaker_id_device.spec
+        self.op_event = ttnn.record_event(device, 0)
+        self.output_tensor = self.run(
+            self.tt_inputs_device,
+            self.tt_pitch_device,
+            self.tt_pitchf_device,
+            self.tt_speaker_id_device,
+            index=None,
+            big_npy=None,
+        )
+        self.output_tensor.deallocate(force=True)
+
+        # Optimized run
+        ttnn.wait_for_event(1, self.op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_inputs_device, 1)
+        ttnn.copy_host_to_device_tensor(tt_pitch_host, self.tt_pitch_device, 1)
+        ttnn.copy_host_to_device_tensor(tt_pitchf_host, self.tt_pitchf_device, 1)
+        ttnn.copy_host_to_device_tensor(tt_speaker_id_host, self.tt_speaker_id_device, 1)
+        self.write_event = ttnn.record_event(device, 1)
+        ttnn.wait_for_event(0, self.write_event)
+        self.op_event = ttnn.record_event(device, 0)
+        self.output_tensor = self.run(
+            self.tt_inputs_device,
+            self.tt_pitch_device,
+            self.tt_pitchf_device,
+            self.tt_speaker_id_device,
+            index=None,
+            big_npy=None,
+        )
+
+        # Capture
+        ttnn.wait_for_event(1, self.op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_inputs_device, 1)
+        ttnn.copy_host_to_device_tensor(tt_pitch_host, self.tt_pitch_device, 1)
+        ttnn.copy_host_to_device_tensor(tt_pitchf_host, self.tt_pitchf_device, 1)
+        ttnn.copy_host_to_device_tensor(tt_speaker_id_host, self.tt_speaker_id_device, 1)
+        self.write_event = ttnn.record_event(device, 1)
+        ttnn.wait_for_event(0, self.write_event)
+        self.op_event = ttnn.record_event(device, 0)
+        self.output_tensor.deallocate(force=True)
+        trace_input_addr = self.tt_inputs_device.buffer_address()
+        trace_pitch_addr = self.tt_pitch_device.buffer_address()
+        trace_pitchf_addr = self.tt_pitchf_device.buffer_address()
+        trace_speaker_id_addr = self.tt_speaker_id_device.buffer_address()
+        self.tid = ttnn.begin_trace_capture(device, cq_id=0)
+        self.output_tensor = self.run(
+            self.tt_inputs_device,
+            self.tt_pitch_device,
+            self.tt_pitchf_device,
+            self.tt_speaker_id_device,
+            index=None,
+            big_npy=None,
+        )
+        self.tt_inputs_device.deallocate(force=True)
+        self.tt_pitch_device.deallocate(force=True)
+        self.tt_pitchf_device.deallocate(force=True)
+        self.tt_speaker_id_device.deallocate(force=True)
+        self.input_tensor = ttnn.allocate_tensor_on_device(input_spec, device)
+        self.pitch_tensor = ttnn.allocate_tensor_on_device(pitch_spec, device)
+        self.pitchf_tensor = ttnn.allocate_tensor_on_device(pitchf_spec, device)
+        self.speaker_id_tensor = ttnn.allocate_tensor_on_device(speaker_id_spec, device)
+        ttnn.end_trace_capture(device, self.tid, cq_id=0)
+        assert trace_input_addr == self.input_tensor.buffer_address()
+        assert trace_pitch_addr == self.pitch_tensor.buffer_address()
+        assert trace_pitchf_addr == self.pitchf_tensor.buffer_address()
+        assert trace_speaker_id_addr == self.speaker_id_tensor.buffer_address()
+        self.tt_inputs_device = self.input_tensor
+        self.tt_pitch_device = self.pitch_tensor
+        self.tt_pitchf_device = self.pitchf_tensor
+        self.tt_speaker_id_device = self.speaker_id_tensor
+
+    def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+        # torch tensor
+        torch_input_tensor = self.torch_input if torch_input_tensor is None else torch_input_tensor
+        b, t, c = torch_input_tensor.shape
+        assert c == 1, f"Expected input with 1 channel, got {c}"
+        input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return tt_inputs_host, input_mem_config
+        # input_mem_config = ttnn.create_sharded_memory_config(
+        #     [b, t, c],
+        #     ttnn.CoreGrid(x=8, y=4),
+        #     ttnn.ShardStrategy.HEIGHT,
+        # )
+        # input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
+        # tt_inputs_host = ttnn.from_host_shards(
+        #     [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
+        # )
+
+        # return tt_inputs_host, input_mem_config
+
+    def setup_dram_sharded_input(self, device, torch_input_tensor=None):
+        tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device)
+        tt_pitch_host = ttnn.from_torch(self.torch_pitch, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_pitchf_host = ttnn.from_torch(self.torch_pitchf, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_speaker_id_host = ttnn.from_torch(self.torch_speaker_id, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return tt_inputs_host, tt_pitch_host, tt_pitchf_host, tt_speaker_id_host, input_mem_config
+        dram_grid_size = device.dram_grid_size()
+        dram_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
+            ),
+            [
+                divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], (dram_grid_size.x * dram_grid_size.y)),
+                tt_inputs_host.shape[-1],
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        sharded_mem_config_DRAM = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+        )
+        return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
+
+    def execute_inference(self, tt_inputs_host, tt_pitch_host, tt_pitchf_host, tt_speaker_id_host):
+        if not self.performance_runner:
+            ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_inputs_device)
+            ttnn.copy_host_to_device_tensor(tt_pitch_host, self.tt_pitch_device)
+            ttnn.copy_host_to_device_tensor(tt_pitchf_host, self.tt_pitchf_device)
+            ttnn.copy_host_to_device_tensor(tt_speaker_id_host, self.tt_speaker_id_device)
+            return self.run(
+                self.tt_inputs_device,
+                self.tt_pitch_device,
+                self.tt_pitchf_device,
+                self.tt_speaker_id_device,
+                index=None,
+                big_npy=None,
+            )
+        ttnn.wait_for_event(1, self.op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.input_tensor, 1)
+        ttnn.copy_host_to_device_tensor(tt_pitch_host, self.pitch_tensor, 1)
+        ttnn.copy_host_to_device_tensor(tt_pitchf_host, self.pitchf_tensor, 1)
+        ttnn.copy_host_to_device_tensor(tt_speaker_id_host, self.speaker_id_tensor, 1)
+        self.write_event = ttnn.record_event(self.device, 1)
+        ttnn.wait_for_event(0, self.write_event)
+        self.op_event = ttnn.record_event(self.device, 0)
+        ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+        return self.output_tensor
+
+    def run(
+        self,
+        audio,
+        pitch,
+        pitchf,
+        speaker_id,
+        index,
+        big_npy,
+    ):
+        assert (
+            len(audio.shape) == 3 and audio.shape[2] == 1
+        ), f"Expected audio shape [batch_size, 1, num_samples], got {audio.shape}"
+        logits = self.hubert_model(
+            source=audio,
+            output_layer=9 if self.version == "v1" else 12,
+        )
+        feats = self.hubert_model.final_proj(logits) if self.version == "v1" else logits
+
+        feats = ttnn.to_layout(feats, ttnn.ROW_MAJOR_LAYOUT)
+
+        if self.protect < 0.5 and pitch is not None and pitchf is not None:
+            protected_features = _interpolate_1d(feats, scale_factor=2)
+        if index is not None and big_npy is not None and self.index_rate != 0:
+            feats_torch = ttnn.to_torch(feats, mesh_composer=self.output_mesh_composer).to(torch.float32)
+            index_features = feats_torch[0].detach().cpu().numpy()
+            scores, indices = index.search(index_features, k=8)
+            scores = torch.from_numpy(scores).to(torch.float32)
+            indices = torch.from_numpy(indices).to(torch.long)
+            weights = torch.square(1.0 / torch.clamp(scores, min=1e-6))
+            weights /= weights.sum(dim=1, keepdim=True)
+            index_features = torch.sum(big_npy[indices] * weights.unsqueeze(2), dim=1)
+            index_features = index_features.unsqueeze(0).to(dtype=feats_torch.dtype)
+            feats_torch = index_features * self.index_rate + (1 - self.index_rate) * feats_torch
+            feats = ttnn.from_torch(
+                feats_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=self.input_mesh_mapper,
+            )
+
+        feats = _interpolate_1d(feats, scale_factor=2)
+        num_frames = feats.shape[1]
+
+        if pitch is not None and pitchf is not None:
+            pitch = pitch[:, :num_frames]
+            pitchf = pitchf[:, :num_frames]
+            if self.protect < 0.5:
+                pitchff = self.protect + (1 - self.protect) * (pitchf >= 1)
+                pitchff = ttnn.unsqueeze(pitchff, -1)
+                feats = feats * pitchff + protected_features * ttnn.rsub(pitchff, 1)
+                ttnn.deallocate(protected_features)
+
+            output = self.synthesizer(feats, pitch, pitchf, speaker_id)
+        else:
+            output = self.synthesizer(feats, speaker_id)
+
+        return output
 
 
 class Pipeline:
@@ -93,7 +371,7 @@ class Pipeline:
 
     def __init__(
         self,
-        tt_device: ttnn.MeshDevice,
+        device: ttnn.MeshDevice,
         if_f0: bool = True,
         version: str = "v1",
         num: str = "48k",
@@ -105,44 +383,46 @@ class Pipeline:
         rms_mix_rate: float = 0.25,
         protect: float = 0.33,
         file_index: str | None = None,
+        validation: bool = False,
+        performance_runner: bool = False,
     ):
-        hubert_cfg_path, hubert_path = get_hubert_paths()
-        if not os.path.exists(hubert_path):
-            raise FileNotFoundError("hubert_path not found.")
-
-        self.config = config or Config()
-        self.tt_device = tt_device
+        config = config or Config()
+        self.device = device
         self.if_f0 = if_f0
-        self.version = version
-        self.num = num
         self.speaker_id = speaker_id
         self.f0_up_key = f0_up_key
         self.f0_method = f0_method
-        self.index_rate = index_rate
         self.rms_mix_rate = rms_mix_rate
-        self.protect = protect
         self.file_index = file_index
         self._rmvpe_pitch_algorithm: RMVPEPitchAlgorithm | None = None
         self._crepe_predictor: CrepePredictor | None = None
         self._feature_index: Any | None = None
         self._feature_index_embeddings: torch.Tensor | None = None
 
-        if self.tt_device.get_num_devices() > 1:
-            self.input_mesh_mapper = ttnn.ShardTensorToMesh(self.tt_device, dim=0)
-            self.output_mesh_composer = ttnn.ConcatMeshToTensor(self.tt_device, dim=0)
+        if self.device.get_num_devices() > 1:
+            self.input_mesh_mapper = ttnn.ShardTensorToMesh(self.device, dim=0)
+            self.output_mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
         else:
             self.input_mesh_mapper = None
             self.output_mesh_composer = None
 
-        self.synthesizer, data_cfg = _load_synthesizer(self.tt_device, self.if_f0, self.version, self.num)
-        self.tgt_sr = data_cfg["sampling_rate"]
-        self.hubert_model = _load_hubert(self.config, hubert_path, hubert_cfg_path, self.tt_device)
-        self._init_timing(self.tgt_sr, self.config)
+        self.runner = RVCRunner(
+            device=self.device,
+            if_f0=self.if_f0,
+            version=version,
+            num=num,
+            config=config,
+            index_rate=index_rate,
+            protect=protect,
+            validation=validation,
+            performance_runner=performance_runner,
+        )
+        self.tgt_sr = self.runner.tgt_sr
+        self._init_timing(self.tgt_sr, config)
 
     def _init_timing(self, tgt_sr: int, config: Config) -> None:
-        x_pad, x_query, x_center, x_max = (
+        x_pad, x_center, x_max = (
             config.x_pad,
-            config.x_query,
             config.x_center,
             config.x_max,
         )
@@ -150,27 +430,23 @@ class Pipeline:
         self.window = 160
         self.t_pad = self.sr * x_pad
         self.t_pad_tgt = tgt_sr * x_pad
-        self.t_query = self.sr * x_query
         self.t_center = self.sr * x_center
         self.t_max = self.sr * x_max
-        self.device = config.device
 
     def _get_rmvpe_pitch_algorithm(self) -> RMVPEPitchAlgorithm:
         if self._rmvpe_pitch_algorithm is None:
-            device_type = self.device.type if isinstance(self.device, torch.device) else str(self.device)
             self._rmvpe_pitch_algorithm = RMVPEPitchAlgorithm(
-                device=self.tt_device, sample_rate=self.sr, hop_size=self.window
+                device=self.device, sample_rate=self.sr, hop_size=self.window
             )
         return self._rmvpe_pitch_algorithm
 
     def _get_crepe_predictor(self) -> CrepePredictor:
         if self._crepe_predictor is None:
-            device_type = self.device.type if isinstance(self.device, torch.device) else str(self.device)
-            self._crepe_predictor = CrepePredictor(device=self.tt_device)
+            self._crepe_predictor = CrepePredictor(device=self.device)
         return self._crepe_predictor
 
     def _load_feature_index(self):
-        if not self.file_index or self.index_rate == 0:
+        if not self.file_index:
             return None, None
         if self._feature_index is not None and self._feature_index_embeddings is not None:
             return self._feature_index, self._feature_index_embeddings
@@ -273,130 +549,32 @@ class Pipeline:
 
     def _get_time_stamps(self, audio, num_frames):
         batch_size = audio.shape[0]
-        audio_padded = F.pad(audio, (self.window // 2, self.window // 2), mode="reflect")
-        opt_ts = [[] for _ in range(batch_size)]
-        if audio_padded.shape[1] > self.t_max:
-            audio_avg = F.avg_pool1d(
-                audio_padded.abs().unsqueeze(1),
-                kernel_size=self.window,
-                stride=1,
-            ).squeeze(1)
-            for t in range(self.t_center, audio.shape[1], self.t_center):
-                segment = audio_avg[:, t - self.t_query : t + self.t_query]
-                argmin_indices = torch.argmin(segment, dim=1)
-                for b_idx in range(batch_size):
-                    opt_ts[b_idx].append((t - self.t_query + argmin_indices[b_idx].item()))
-
+        num_segments = (audio.shape[1] + self.t_center - 1) // self.t_center
         idx_list = []
         for b_idx in range(batch_size):
-            s = 0
             b_idx_list = []
-            for t in opt_ts[b_idx]:
-                b_idx_list.append((s // self.window, (t + self.t_pad * 2) // self.window))
-                s = t
-            b_idx_list.append((s // self.window, num_frames))
+            for i in range(num_segments):
+                s = i * self.t_center
+                t = min(s + self.t_center, num_frames * self.window)
+                b_idx_list.append((s // self.window, t // self.window))
             idx_list.append(b_idx_list)
         return idx_list
 
-    def _vc(
-        self,
-        audio,
-        pitch,
-        pitchf,
-        index,
-        big_npy,
-    ):
+    def run(self, audio):
         assert audio.dim() == 2, audio.dim()
         batch_size = audio.shape[0]
-        speaker_id = torch.full((batch_size,), self.speaker_id, device=self.device, dtype=torch.long)
         speaker_id = ttnn.from_torch(
-            speaker_id,
+            torch.full((batch_size,), self.speaker_id, dtype=torch.long),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.tt_device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=self.input_mesh_mapper,
         )
-        hubert_input = ttnn.from_torch(
-            audio.view(batch_size, -1, 1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.tt_device,
-            mesh_mapper=self.input_mesh_mapper,
-        )
-        logits = self.hubert_model(
-            source=hubert_input,
-            output_layer=9 if self.version == "v1" else 12,
-        )
-        feats = self.hubert_model.final_proj(logits) if self.version == "v1" else logits
-
-        feats = ttnn.to_layout(feats, ttnn.ROW_MAJOR_LAYOUT)
-
-        if self.protect < 0.5 and pitch is not None and pitchf is not None:
-            protected_features = _interpolate_1d(feats, scale_factor=2, mode="linear")
-        if index is not None and big_npy is not None and self.index_rate != 0:
-            feats_torch = ttnn.to_torch(feats, mesh_composer=self.output_mesh_composer).to(torch.float32)
-            index_features = feats_torch[0].detach().cpu().numpy()
-            scores, indices = index.search(index_features, k=8)
-            scores = torch.from_numpy(scores).to(torch.float32)
-            indices = torch.from_numpy(indices).to(torch.long)
-            weights = torch.square(1.0 / torch.clamp(scores, min=1e-6))
-            weights /= weights.sum(dim=1, keepdim=True)
-            index_features = torch.sum(big_npy[indices] * weights.unsqueeze(2), dim=1)
-            index_features = index_features.unsqueeze(0).to(dtype=feats_torch.dtype)
-            feats_torch = index_features * self.index_rate + (1 - self.index_rate) * feats_torch
-            feats = ttnn.from_torch(
-                feats_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.tt_device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                mesh_mapper=self.input_mesh_mapper,
-            )
-
-        feats = _interpolate_1d(feats, scale_factor=2, mode="linear")
-        num_frames = feats.shape[1]
-
-        if pitch is not None and pitchf is not None:
-            pitch = pitch[:, :num_frames]
-            pitchf = pitchf[:, :num_frames]
-            pitch = ttnn.from_torch(
-                pitch,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.tt_device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                mesh_mapper=self.input_mesh_mapper,
-            )
-            pitchf = ttnn.from_torch(
-                pitchf,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.tt_device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                mesh_mapper=self.input_mesh_mapper,
-            )
-            if self.protect < 0.5:
-                pitchff = self.protect + (1 - self.protect) * (pitchf >= 1)
-                pitchff = ttnn.unsqueeze(pitchff, -1)
-                feats = feats * pitchff + protected_features * ttnn.rsub(pitchff, 1)
-                ttnn.deallocate(protected_features)
-            feats = ttnn.reallocate(feats)
-            # pitch = ttnn.reallocate(pitch)
-            # pitchf = ttnn.reallocate(pitchf)
-            speaker_id = ttnn.reallocate(speaker_id)
-            output = self.synthesizer(feats, pitch, pitchf, speaker_id)
-        else:
-            output = self.synthesizer(feats, speaker_id)
-
-        output_torch = ttnn.to_torch(output, mesh_composer=self.output_mesh_composer).to(torch.float32)
-        output = output_torch[:, :, 0].contiguous()
-        return output
-
-    def _run_pipeline(self, audio):
-        assert audio.dim() == 2, audio.dim()
         index, big_npy = self._load_feature_index()
+        audio_secs = audio.shape[1] / self.sr
         audio_padded = F.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
+        block_size = self.t_center
+        padded_length = ((audio_padded.shape[1] + block_size - 1) // block_size) * block_size
+        audio_padded = F.pad(audio_padded, (0, padded_length - audio_padded.shape[1]), mode="constant")
         num_frames = audio_padded.shape[1] // self.window
         idx_list = self._get_time_stamps(audio, num_frames)
         pitch, pitchf = None, None
@@ -407,23 +585,40 @@ class Pipeline:
         for idx_s, idx_e in idx_list[0]:
             if self.if_f0:
                 chunk_end = min(idx_e, pitch.shape[1])
-                pitch_slice = pitch[:, idx_s:chunk_end]
-                pitchf_slice = pitchf[:, idx_s:chunk_end]
+                pitch_slice = ttnn.from_torch(
+                    pitch[:, idx_s:chunk_end],
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=self.input_mesh_mapper,
+                )
+                pitchf_slice = ttnn.from_torch(
+                    pitchf[:, idx_s:chunk_end],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=self.input_mesh_mapper,
+                )
             else:
                 pitch_slice = None
                 pitchf_slice = None
-            audio_output.append(
-                self._vc(
-                    audio_padded[:, idx_s * self.window : idx_e * self.window],
-                    pitch_slice,
-                    pitchf_slice,
-                    index,
-                    big_npy,
-                )[:, self.t_pad_tgt : -self.t_pad_tgt]
+
+            audio_slice = ttnn.from_torch(
+                audio_padded[:, idx_s * self.window : idx_e * self.window].view(batch_size, -1, 1).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.input_mesh_mapper,
             )
+            # out = self.runner.run(audio_slice, pitch_slice, pitchf_slice, speaker_id, index, big_npy)
+            out = self.runner.execute_inference(audio_slice, pitch_slice, pitchf_slice, speaker_id)
+            out = ttnn.to_torch(out, mesh_composer=self.output_mesh_composer).to(torch.float32)[:, :, 0]
+            start_idx = self.t_pad_tgt
+            end_idx = out.shape[1] - self.t_pad_tgt
+            audio_output.append(out[:, start_idx:end_idx])
 
         audio_output = torch.cat(audio_output, dim=1)
+        audio_output = audio_output[:, : int(audio_secs * self.tgt_sr)]
 
+        # Need to use torch for multiple reasons
+        # e.g. ttnn does not support int16 datayeype for tensors
         # post-process
         if self.rms_mix_rate != 1:
             audio_output = change_rms(audio, self.sr, audio_output, self.tgt_sr, self.rms_mix_rate)
@@ -439,13 +634,9 @@ class Pipeline:
     def prepare_audio_input(self, num_secs: float | None = None) -> torch.Tensor:
         audio = load_audio(self.sr)
         # preprocess
-        audio_max = torch.abs(audio).max().item() / 0.95
+        audio_max = torch.abs(audio).max().item()
         if audio_max > 1:
             audio /= audio_max
         audio = signal.filtfilt(bh, ah, audio)
         audio = torch.from_numpy(audio.copy()).unsqueeze(0).to(torch.float32)
         return audio
-
-    def infer(self):
-        audio = self.prepare_audio_input()
-        return self._run_pipeline(audio)[0]

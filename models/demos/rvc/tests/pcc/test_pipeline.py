@@ -9,31 +9,25 @@ import pytest
 from models.demos.rvc.runner.performant_runner import RVCInferenceConfig, RVCRunner
 
 
-def _to_mono_1d(x: np.ndarray) -> np.ndarray:
-    if x.ndim == 1:
-        return x
-    if x.ndim == 2:
-        return x[:, 0]
-    raise AssertionError(f"Unexpected audio rank: {x.ndim}")
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65384}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 65384, "trace_region_size": 679936, "num_command_queues": 2}], indirect=True
+)
 def test_pipeline_real_file_usage(device) -> None:
     from models.demos.rvc.torch_impl.vc.pipeline import Pipeline as TorchPipeline
 
-    torch_pipe = TorchPipeline(if_f0=True, version="v1", num="48k")
+    torch_pipe = TorchPipeline(if_f0=True, version="v1", num="48k", validation=True)
     runner = RVCRunner()
-    runner.initialize_inference(device, {"inference": RVCInferenceConfig(num_secs=30.0)})
+    runner.initialize_inference(device, {"inference": RVCInferenceConfig(num_secs=30.0)}, validation=True)
 
-    audio_input = runner.test_infra.ttnn_pipeline.prepare_audio_input()
-    torch_out = np.asarray(torch_pipe._run_pipeline(audio_input)[0].detach().cpu())
-    tt_out = np.asarray(runner.run(audio_input)[0].detach().cpu())
+    audio_input = runner.ttnn_pipeline.prepare_audio_input()
+    torch_out = np.asarray(torch_pipe.run(audio_input))
+    tt_out = np.asarray(runner.run(audio_input))
 
     assert torch_out.size > 0
     assert tt_out.size > 0
 
-    torch_mono = _to_mono_1d(torch_out.astype(np.float32))
-    tt_mono = _to_mono_1d(tt_out.astype(np.float32))
+    torch_mono = torch_out.astype(np.float32)
+    tt_mono = tt_out.astype(np.float32)
 
     min_len = min(torch_mono.shape[0], tt_mono.shape[0])
     assert min_len > 0

@@ -17,38 +17,27 @@ from models.demos.rvc.tt_impl.linear import Linear
 LRELU_SLOPE = 0.1
 
 
+# caching for individual functions are needed since tracing does not allow write to device from host
 def _mesh_mapper_and_composer(device):
     if device.get_num_devices() > 1:
         return ttnn.ShardTensorToMesh(device, dim=0), ttnn.ConcatMeshToTensor(device, dim=0)
     return None, None
 
 
-def ttnn_randn_fallback(shape, dtype, device):
+def ttnn_randn_fallback(shape, dtype, device, cache) -> ttnn.Tensor:
     # Fallback random generator using PyTorch, since TTNN's random generation is not available in the current version.
     mesh_mapper, _ = _mesh_mapper_and_composer(device)
-    return ttnn.from_torch(
+    if shape in cache:
+        return cache[shape]
+    output = ttnn.from_torch(
         torch.randn(shape, dtype=torch.float32),
         dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         mesh_mapper=mesh_mapper,
     )
-
-
-def ttnn_cumsum_fallback(x: ttnn.Tensor, dim: int) -> ttnn.Tensor:
-    # Fallback implementation of cumsum using to_host, torch.cumsum, and from_torch.
-    mesh_mapper, mesh_composer = _mesh_mapper_and_composer(x.device())
-    x_torch = ttnn.to_torch(x, mesh_composer=mesh_composer)
-    cumsum_torch = torch.cumsum(x_torch, dim=dim)
-    cumsum = ttnn.from_torch(
-        cumsum_torch,
-        dtype=x.dtype,
-        layout=x.layout,
-        device=x.device(),
-        memory_config=x.memory_config(),
-        mesh_mapper=mesh_mapper,
-    )
-    return cumsum
+    cache[shape] = output
+    return output
 
 
 def _interpolate_1d(
@@ -69,34 +58,26 @@ def _interpolate_1d(
     return ttnn.squeeze(y_nhwc, dim=1)
 
 
-def _flip_last_dim_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
+def _flip_last_dim_ttnn(x: ttnn.Tensor, flip_cache: dict[int, ttnn.Tensor]) -> ttnn.Tensor:
     if x.layout != ttnn.TILE_LAYOUT:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-    reverse_index = ttnn.arange(
-        start=x.shape[-1] - 1,
-        end=-1,
-        step=-1,
-        dtype=ttnn.int32,
-        device=x.device(),
-        layout=ttnn.TILE_LAYOUT,
-    )
+    if x.shape[-1] in flip_cache:
+        reverse_index = flip_cache[x.shape[-1]]
+    else:
+        reverse_index = ttnn.arange(
+            start=x.shape[-1] - 1,
+            end=-1,
+            step=-1,
+            dtype=ttnn.int32,
+            device=x.device(),
+            layout=ttnn.TILE_LAYOUT,
+        )
+        flip_cache[x.shape[-1]] = reverse_index
     reverse_index = ttnn.reshape(reverse_index, shape=(1,) * (len(x.shape) - 1) + (x.shape[-1],))
     reverse_index = ttnn.expand(reverse_index, tuple(x.shape))
     reverse_index = ttnn.typecast(reverse_index, ttnn.uint32)
     return ttnn.gather(x, dim=-1, index=reverse_index)
-
-
-def ttnn_gather_fallback(x: ttnn.Tensor, dim: int, index: ttnn.Tensor, device) -> ttnn.Tensor:
-    # Fallback implementation of gather using to_host, torch.gather, and from_torch.
-    # needed since ttnn.gather is 4-8x slower than this fallback version
-    mesh_mapper, mesh_composer = _mesh_mapper_and_composer(device)
-    x = ttnn.reallocate(x)
-    x_torch = ttnn.to_torch(x, mesh_composer=mesh_composer)
-    index_torch = ttnn.to_torch(index, mesh_composer=mesh_composer).to(torch.int64)
-    gathered_torch = torch.gather(x_torch, dim=dim, index=index_torch)
-    gathered = ttnn.from_torch(gathered_torch, dtype=x.dtype, layout=x.layout, device=device, mesh_mapper=mesh_mapper)
-    return gathered
 
 
 class MultiHeadAttention:
@@ -140,6 +121,8 @@ class MultiHeadAttention:
         self.emb_rel_v: ttnn.Tensor | None = None
         self.relative_position_cache: dict[int : ttnn.Tensor] = {}
         self.index_cache: dict[int : ttnn.Tensor] = {}
+        self.absolute_position_cache = {}
+        self.index_and_mask_cache = {}
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if module_prefix is None:
@@ -190,7 +173,7 @@ class MultiHeadAttention:
         if self.window_size is not None:
             assert self.emb_rel_v is not None
             relative_weights = self._absolute_to_relative_position(attn_weights)
-            value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, source_length)
+            value_relative_embeddings = self._get_relative_embeddings2(self.emb_rel_v, source_length)
             out = ttnn.add(out, ttnn.matmul(relative_weights, value_relative_embeddings), output_tensor=out)
         out = ttnn.transformer.concatenate_heads(out)
 
@@ -207,8 +190,55 @@ class MultiHeadAttention:
         if self.window_size is None:
             raise ValueError("window_size must be set for relative attention.")
         pad_length: int = max(length - (self.window_size + 1), 0)
-        slice_start_position = max((self.window_size + 1) - length, 0)
-        slice_end_position = slice_start_position + 2 * length - 1
+
+        embeddings = relative_embeddings
+        return ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
+
+    def _get_absolute_position_index_and_zero_mask_old(
+        self, length: int, b: int, h: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        if (length, b, h) in self.index_and_mask_cache:
+            return self.index_and_mask_cache[(length, b, h)]
+        idx_row = torch.arange(start=0, end=length, dtype=torch.int64)
+        idx_col = torch.arange(start=0, end=2 * self.window_size + 1, dtype=torch.int64)
+        index = idx_col.unsqueeze(0) + idx_row.unsqueeze(1) - self.window_size
+        index = index.expand(b, h, length, 2 * self.window_size + 1)
+        zero_mask = torch.logical_and(index >= 0, index < length).to(torch.float32)
+        index = index % length
+
+        zero_mask = torch.nn.functional.pad(zero_mask, (0, max(0, length - (2 * self.window_size + 1))), value=1)
+        zero_mask_tt = ttnn.from_torch(zero_mask, dtype=ttnn.bfloat16, device=self.device)
+        index_tt = ttnn.from_torch(index, dtype=ttnn.uint32, device=self.device)
+        self.index_and_mask_cache[(length, b, h)] = (index_tt, zero_mask_tt)
+        return index_tt, zero_mask_tt
+
+    def _get_absolute_position_index_and_zero_mask(
+        self, length: int, b: int, h: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        if (length, b, h) in self.index_and_mask_cache:
+            return self.index_and_mask_cache[(length, b, h)]
+        idx_row = ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device)
+        idx_col = ttnn.arange(start=0, end=2 * self.window_size + 1, dtype=ttnn.int32, device=self.device)
+        index = ttnn.unsqueeze(idx_col, dim=0) + ttnn.unsqueeze(idx_row, dim=1) - self.window_size
+        index = ttnn.expand(
+            ttnn.reshape(index, shape=(1, 1, length, 2 * self.window_size + 1)),
+            (b, h, length, 2 * self.window_size + 1),
+        )
+        zero_mask = ttnn.logical_and(ttnn.ge(index, 0), ttnn.lt(index, length))
+        negative_mask = ttnn.typecast(ttnn.lt(index, 0), ttnn.int32)
+        overflow_mask = ttnn.typecast(ttnn.ge(index, length), ttnn.int32)
+        index = index + negative_mask * length
+        index = index - overflow_mask * length
+        index = ttnn.typecast(index, ttnn.uint32)
+        zero_mask = ttnn.pad(zero_mask, padding=[(0, max(0, length - (2 * self.window_size + 1)))], value=1)
+        zero_mask = ttnn.typecast(zero_mask, ttnn.bfloat16)
+        self.index_and_mask_cache[(length, b, h)] = (index, zero_mask)
+        return index, zero_mask
+
+    def _get_relative_embeddings2(self, relative_embeddings: ttnn.Tensor, length: int) -> ttnn.Tensor:
+        if self.window_size is None:
+            raise ValueError("window_size must be set for relative attention.")
+        pad_length: int = max(length - (self.window_size + 1), 0)
 
         embeddings = relative_embeddings
         if pad_length > 0:
@@ -217,36 +247,41 @@ class MultiHeadAttention:
                 padding=((0, 0), (0, 0), (pad_length, pad_length), (0, 0)),
                 value=0.0,
             )
-        embeddings = ttnn.slice(
-            embeddings,
-            (0, 0, slice_start_position, 0),
-            (1, 1, slice_end_position, self.features_per_head),
-        )
         return ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
 
-    def _get_relative_position_index(self, length: int) -> ttnn.Tensor:
-        if length in self.index_cache:
-            return self.index_cache[length]
+    def _get_relative_position_index(self, length: int, b: int, h: int) -> torch.Tensor:
+        if (length, b, h) in self.index_cache:
+            return self.index_cache[(length, b, h)]
         idx_row = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.uint32, device=self.device), dim=1)
         idx_col = ttnn.unsqueeze(
             ttnn.arange(start=length - 1, end=2 * length - 1, dtype=ttnn.uint32, device=self.device), dim=0
         )
         relative_position_index = idx_col - idx_row
         relative_position_index = ttnn.expand(
-            ttnn.reshape(relative_position_index, shape=(1, 1, length, length)), (1, 1, length, length)
+            ttnn.reshape(relative_position_index, shape=(1, 1, length, length)), (b, h, length, length)
         )
-        self.index_cache[length] = relative_position_index
+        self.index_cache[(length, b, h)] = relative_position_index
         return relative_position_index
 
     def _relative_to_absolute_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
-        relative_position_index = self._get_relative_position_index(length)
-        out = ttnn_gather_fallback(x, dim=3, index=relative_position_index, device=self.device)
+        out = self._get_absolute_position_tensor(length, batch, heads)
+
+        index, zero_mask = self._get_absolute_position_index_and_zero_mask(length, batch, heads)
+        out = ttnn.scatter(out, dim=3, index=index, src=x)
+        out = out * zero_mask
+        return out
+
+    def _get_absolute_position_tensor(self, length: int, batch: int, heads: int) -> ttnn.Tensor:
+        if (length, batch, heads) in self.absolute_position_cache:
+            return self.absolute_position_cache[(length, batch, heads)]
+        out = ttnn.zeros((batch, heads, length, length), dtype=ttnn.bfloat16, device=self.device)
+        self.absolute_position_cache[(length, batch, heads)] = out
         return out
 
     def _absolute_to_relative_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
-        relative_position_index = self._get_relative_position_index(length)
+        relative_position_index = self._get_relative_position_index(length, batch, heads)
         if length in self.relative_position_cache:
             out = self.relative_position_cache[length]
         else:
@@ -697,6 +732,7 @@ class ResidualCouplingBlock:
             for _ in range(num_flows)
         ]
         self.device = device
+        self.flip_cache: dict[int, ttnn.Tensor] = {}
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if module_prefix is None:
@@ -706,7 +742,7 @@ class ResidualCouplingBlock:
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         for flow in self.flows:
-            x = flow(_flip_last_dim_ttnn(x), g=g)
+            x = flow(_flip_last_dim_ttnn(x, self.flip_cache), g=g)
         return x
 
 
@@ -791,7 +827,7 @@ class Generator:
         x = self.conv_pre(x)
         if conditioning is not None and self.cond_linear is not None:
             x = ttnn.add(x, self.cond_linear(conditioning), output_tensor=x)
-
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         for i in range(self.num_upsamples):
             x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE, output_tensor=x)
             x = self.ups[i](x)
@@ -816,6 +852,7 @@ class SineGen:
         sine_amp: float = 0.1,
         noise_std: float = 0.003,
         voiced_threshold: float = 0,
+        validation: bool = False,
     ) -> None:
         self.device = device
         self.sine_amp = sine_amp
@@ -824,6 +861,15 @@ class SineGen:
         self.dim = self.harmonic_num + 1
         self.sampling_rate = samp_rate
         self.voiced_threshold = voiced_threshold
+        self.harmonics_arange = ttnn.arange(
+            start=1,
+            end=self.harmonic_num + 2,
+            dtype=ttnn.bfloat16,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        self.validation = validation
+        self.randn_cache = {}
 
     def __call__(self, f0: ttnn.Tensor, upp: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         # f0: [B, T]
@@ -836,37 +882,35 @@ class SineGen:
         uv = ttnn.gt(f0_up, self.voiced_threshold)
 
         # Expand for harmonics: [B, T*upp, H].
-        harmonics = ttnn.arange(
-            start=1,
-            end=self.harmonic_num + 2,
-            dtype=f0_up.dtype,
-            device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        f0_harm = f0_up * (harmonics / self.sampling_rate)
+        f0_harm = f0_up * (self.harmonics_arange / self.sampling_rate)
 
         # Accumulate phase and add random initial offset per harmonic.
-        # phase = ttnn.cumsum(f0_harm, dim=1, out=f0_harm)
-        # TODO: fallback is faster than native cumsum
-        phase = ttnn_cumsum_fallback(f0_harm, dim=1)
-        rand_ini = ttnn.rand(
-            (f0_up.shape[0], self.harmonic_num + 1),
-            dtype=ttnn.bfloat16,
-            device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        phase = ttnn.add(phase, rand_ini, output_tensor=phase)
+        phase = ttnn.cumsum(f0_harm, dim=1)
+        if not self.validation:
+            rand_ini = ttnn_randn_fallback(
+                (f0_up.shape[0], self.harmonic_num + 1),
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                cache=self.randn_cache,
+                # memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            phase = ttnn.add(phase, rand_ini, output_tensor=phase)
         phase = ttnn.multiply(phase, 2 * math.pi, output_tensor=phase)
         sine_waves = ttnn.multiply(ttnn.sin(phase, output_tensor=phase), self.sine_amp, output_tensor=phase)
 
         # Mix with noise based on voiced/unvoiced.
-        noise_amp = uv * self.noise_std + ttnn.rsub(uv, 1) * self.sine_amp / 3
-        noise_amp = ttnn.multiply(
-            noise_amp,
-            ttnn_randn_fallback(tuple(sine_waves.shape), dtype=ttnn.bfloat16, device=self.device),
-            output_tensor=noise_amp,
-        )
-        out = ttnn.add(sine_waves, noise_amp, output_tensor=sine_waves)
+        if not self.validation:
+            noise_amp = uv * self.noise_std + ttnn.rsub(uv, 1) * self.sine_amp / 3
+            noise_amp = ttnn.multiply(
+                noise_amp,
+                ttnn_randn_fallback(
+                    tuple(sine_waves.shape), dtype=ttnn.bfloat16, device=self.device, cache=self.randn_cache
+                ),
+                output_tensor=noise_amp,
+            )
+            out = ttnn.add(sine_waves, noise_amp, output_tensor=sine_waves)
+        else:
+            out = sine_waves
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.reshape(out, (out.shape[0], out.shape[1] * out.shape[2], 1))
         return out
@@ -881,9 +925,12 @@ class SourceModuleHnNSF:
         sine_amp: float = 0.1,
         add_noise_std: float = 0.003,
         voiced_threshod: float = 0,
+        validation: bool = False,
     ) -> None:
         self.device = device
-        self.l_sin_gen = SineGen(device, sampling_rate, harmonic_num, sine_amp, add_noise_std, voiced_threshod)
+        self.l_sin_gen = SineGen(
+            device, sampling_rate, harmonic_num, sine_amp, add_noise_std, voiced_threshod, validation
+        )
         self.l_linear = Linear(device=device, in_features=harmonic_num + 1, out_features=1, activation="tanh")
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
@@ -910,11 +957,12 @@ class GeneratorNSF:
         upsample_kernel_sizes: list[int],
         gin_channels: int,
         sr: int,
+        validation: bool = False,
     ) -> None:
         self.device = device
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
-        self.m_source = SourceModuleHnNSF(device=device, sampling_rate=sr, harmonic_num=0)
+        self.m_source = SourceModuleHnNSF(device=device, sampling_rate=sr, harmonic_num=0, validation=validation)
         self.upp = math.prod(upsample_rates)
         self.lrelu_slope = LRELU_SLOPE
 
@@ -1049,6 +1097,7 @@ class SynthesizerTrnMsNSF:
         spk_embed_dim: int,
         gin_channels: int,
         sr: int | str,
+        validation: bool = False,
     ) -> None:
         if isinstance(sr, str):
             sr = sr2sr[sr]
@@ -1077,6 +1126,8 @@ class SynthesizerTrnMsNSF:
         )
         self.flow = ResidualCouplingBlock(device, inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
         self.embedding = Embedding(device, spk_embed_dim, gin_channels)
+        self.validation = validation
+        self.randn_cache = {}
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if module_prefix is None:
@@ -1092,12 +1143,17 @@ class SynthesizerTrnMsNSF:
         conditioning = self.embedding(speaker_id)
         conditioning = ttnn.unsqueeze(conditioning, dim=1)
         prior_mean, prior_log = self.enc_p(phone, pitch)
-        latent = (
-            prior_mean
-            + ttnn.exp(prior_log, output_tensor=prior_log)
-            * ttnn_randn_fallback(tuple(prior_mean.shape), dtype=ttnn.bfloat16, device=self.device)
-            * 0.66666
-        )
+        if not self.validation:
+            latent = (
+                prior_mean
+                + ttnn.exp(prior_log, output_tensor=prior_log)
+                * ttnn_randn_fallback(
+                    tuple(prior_mean.shape), dtype=ttnn.bfloat16, device=self.device, cache=self.randn_cache
+                )
+                * 0.66666
+            )
+        else:
+            latent = prior_mean
         latent_flow = self.flow(latent, conditioning)
         out = self.dec(latent_flow, nsf_f0, conditioning)
         return out
@@ -1123,6 +1179,7 @@ class SynthesizerTrnMsNSF_nono:
         spk_embed_dim: int,
         gin_channels: int,
         sr: int | None = None,
+        validation: bool = False,
     ) -> None:
         self.device = device
         self.enc_p = TextEncoder(
@@ -1149,6 +1206,8 @@ class SynthesizerTrnMsNSF_nono:
         )
         self.flow = ResidualCouplingBlock(device, inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
         self.embedding = Embedding(device, spk_embed_dim, gin_channels)
+        self.validation = validation
+        self.randn_cache = {}
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if module_prefix is None:
@@ -1162,12 +1221,17 @@ class SynthesizerTrnMsNSF_nono:
         conditioning = self.embedding(speaker_id)
         conditioning = ttnn.unsqueeze(conditioning, dim=1)
         prior_mean, prior_log = self.enc_p(phone, None)
-        latent = (
-            prior_mean
-            + ttnn.exp(prior_log)
-            * ttnn_randn_fallback(tuple(m_p.shape), dtype=ttnn.bfloat16, device=self.device)
-            * 0.66666
-        )
+        if not self.validation:
+            latent = (
+                prior_mean
+                + ttnn.exp(prior_log, output_tensor=prior_log)
+                * ttnn_randn_fallback(
+                    tuple(prior_mean.shape), dtype=ttnn.bfloat16, device=self.device, cache=self.randn_cache
+                )
+                * 0.66666
+            )
+        else:
+            latent = prior_mean
         latent_flow = self.flow(latent, conditioning)
         out = self.dec(latent_flow, conditioning)
         return out
