@@ -152,7 +152,7 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
         // Validate named CRTAs: every user-declared name set, no extras.
         // Implicit reserved-prefix CRTAs (e.g., __ta_addr_<name> for TensorAccessor bindings) are
-        // not part of the user-facing named-CRTA contract; they're filled from TensorRunParams at
+        // not part of the user-facing named-CRTA contract; they're filled from TensorArg at
         // dispatch time. Validation order matters:
         //   1. Reject any user-supplied name with the reserved prefix (else it could only show
         //      up via collision-with-declared-name path, which the count/contains checks below
@@ -216,37 +216,37 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
     // It is only required for DFBs built on borrowed memory. (Which is not yet supported.)
 
     // Validate tensor runtime parameters:
-    //   - No duplicate tensor_binding_name entries
-    //   - Every entry references a TensorBinding declared in the ProgramSpec
+    //   - No duplicate tensor_parameter_name entries
+    //   - Every entry references a TensorParameter declared in the ProgramSpec
     //   - The supplied MeshTensor's TensorSpec equals the binding's expected TensorSpec
-    //     (full equality — see also the design note in tensor_binding.hpp; loosens to
+    //     (full equality — see also the design note in tensor_parameter.hpp; loosens to
     //     layout-compatible-modulo-shape in the follow-up PR that adds RuntimeTensorShape).
-    //   - Every declared TensorBinding is set
-    std::unordered_set<std::string> tensor_bindings_with_params;
-    for (const auto& tensor_params : params.tensor_run_params) {
-        auto [it, inserted] = tensor_bindings_with_params.insert(tensor_params.tensor_binding_name);
+    //   - Every declared TensorParameter is set
+    std::unordered_set<std::string> tensor_parameters_with_params;
+    for (const auto& tensor_params : params.tensor_args) {
+        auto [it, inserted] = tensor_parameters_with_params.insert(tensor_params.tensor_parameter_name);
         TT_FATAL(
             inserted,
-            "Duplicate tensor_binding_name '{}' in ProgramRunParams.tensor_run_params. Each TensorBinding must appear "
+            "Duplicate tensor_parameter_name '{}' in ProgramRunParams.tensor_args. Each TensorParameter must appear "
             "at most once.",
-            tensor_params.tensor_binding_name);
-        const TensorSpec* expected_spec = program_impl.get_tensor_binding_spec(tensor_params.tensor_binding_name);
+            tensor_params.tensor_parameter_name);
+        const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(tensor_params.tensor_parameter_name);
         TT_FATAL(
             expected_spec != nullptr,
-            "TensorRunParams references unknown TensorBinding '{}'.",
-            tensor_params.tensor_binding_name);
+            "TensorArg references unknown TensorParameter '{}'.",
+            tensor_params.tensor_parameter_name);
         const TensorSpec& runtime_spec = tensor_params.tensor.get().tensor_spec();
         TT_FATAL(
             runtime_spec == *expected_spec,
-            "TensorRunParams for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
+            "TensorArg for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
             "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; the "
             "supplied tensor must conform to it.",
-            tensor_params.tensor_binding_name);
+            tensor_params.tensor_parameter_name);
     }
-    for (const std::string& declared : program_impl.get_registered_tensor_binding_names()) {
+    for (const std::string& declared : program_impl.get_registered_tensor_parameter_names()) {
         TT_FATAL(
-            tensor_bindings_with_params.contains(declared),
-            "TensorBinding '{}' is declared in the Program but has no TensorRunParams entry.",
+            tensor_parameters_with_params.contains(declared),
+            "TensorParameter '{}' is declared in the Program but has no TensorArg entry.",
             declared);
     }
 }
@@ -263,19 +263,19 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
 
     detail::ProgramImpl& program_impl = program.impl();
 
-    // Build a tensor_binding_name -> base address lookup from the user's TensorRunParams entries.
+    // Build a tensor_parameter_name -> base address lookup from the user's TensorArg entries.
     // Used below to fill the implicit __ta_addr_ CRTAs from MeshTensor::address(). Lockstep mesh
     // allocation makes this a single uint32_t per binding (same address on every device).
     std::unordered_map<std::string, uint32_t> ta_binding_addresses;
-    ta_binding_addresses.reserve(params.tensor_run_params.size());
-    for (const auto& tensor_params : params.tensor_run_params) {
+    ta_binding_addresses.reserve(params.tensor_args.size());
+    for (const auto& tensor_params : params.tensor_args) {
         const auto address = tensor_params.tensor.get().address();
         TT_FATAL(
             address <= std::numeric_limits<uint32_t>::max(),
-            "TensorBinding '{}' base address {} exceeds uint32_t max",
-            tensor_params.tensor_binding_name,
+            "TensorParameter '{}' base address {} exceeds uint32_t max",
+            tensor_params.tensor_parameter_name,
             address);
-        ta_binding_addresses.emplace(tensor_params.tensor_binding_name, static_cast<uint32_t>(address));
+        ta_binding_addresses.emplace(tensor_params.tensor_parameter_name, static_cast<uint32_t>(address));
     }
 
     // Process kernel runtime arguments.
@@ -341,23 +341,23 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
             kernel->set_runtime_args(node, combined);
         }
 
-        // Build a per-kernel implicit CRTA name -> tensor_binding_name lookup so the CRTA fill
-        // loop below can route reserved-prefix names to TensorRunParams instead of expecting
+        // Build a per-kernel implicit CRTA name -> tensor_parameter_name lookup so the CRTA fill
+        // loop below can route reserved-prefix names to TensorArg instead of expecting
         // user-supplied named_common_runtime_args values.
-        std::unordered_map<std::string, std::string> implicit_crta_to_tensor_binding;
-        for (const auto& handle : kernel->tensor_accessor_handles()) {
-            implicit_crta_to_tensor_binding.emplace(
-                std::string(kTensorAccessorAddrCrtaPrefix) + handle.accessor_name, handle.tensor_binding_name);
+        std::unordered_map<std::string, std::string> implicit_crta_to_tensor_parameter;
+        for (const auto& handle : kernel->tensor_binding_handles()) {
+            implicit_crta_to_tensor_parameter.emplace(
+                std::string(kTensorAccessorAddrCrtaPrefix) + handle.accessor_name, handle.tensor_parameter_name);
         }
 
         // Combine named CRTAs and vararg CRTAs into one common buffer.
         // Two value sources for named CRTAs: user-supplied named_common_runtime_args (default) and
-        // (for reserved-prefix implicit slots) the per-binding base address from TensorRunParams.
+        // (for reserved-prefix implicit slots) the per-binding base address from TensorArg.
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(schema->named_common_runtime_args.size() + kernel_params.common_runtime_varargs.size());
         for (const auto& name : schema->named_common_runtime_args) {
-            auto implicit_it = implicit_crta_to_tensor_binding.find(name);
-            if (implicit_it != implicit_crta_to_tensor_binding.end()) {
+            auto implicit_it = implicit_crta_to_tensor_parameter.find(name);
+            if (implicit_it != implicit_crta_to_tensor_parameter.end()) {
                 auto addr_it = ta_binding_addresses.find(implicit_it->second);
                 TT_FATAL(
                     addr_it != ta_binding_addresses.end(),

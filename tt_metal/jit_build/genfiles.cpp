@@ -108,7 +108,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         [&sem_entries](const string& name, uint16_t id) { sem_entries.emplace_back(name, id); });
     sort(sem_entries.begin(), sem_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
-    // Get the tensor accessor bindings from the settings callback
+    // Get the tensor binding handles from the settings callback
     // Sort by name for deterministic output (parallel to DFB / Semaphore handling above)
     struct TaEntry {
         string name;
@@ -116,7 +116,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         uint32_t addr_crta_offset;
     };
     vector<TaEntry> ta_entries;
-    settings.process_tensor_accessor_handles(
+    settings.process_tensor_binding_handles(
         [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset) {
             ta_entries.push_back({name, cta_offset, addr_crta_offset});
         });
@@ -125,7 +125,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
-    //  - TensorAccessor bindings are emitted into the ta namespace
+    //  - TensorBindings are emitted into the ta namespace
     //
     // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
@@ -134,9 +134,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     //       We are starting simple and can adjust later if problems arise.
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     //
-    //       TensorAccessor is the first accessor category to use implicit CRTAs: each binding's
+    //       TensorBindings are the first accessor category to use implicit CRTAs: each binding's
     //       per-enqueue base address rides a reserved-prefix named CRTA filled by SetProgramRunParameters
-    //       from the corresponding TensorRunParams. The static layout metadata (rank, shape, bank coords,
+    //       from the corresponding TensorArg. The static layout metadata (rank, shape, bank coords,
     //       etc.) still flows through CTAs, packed by the host into the kernel's positional CTA buffer.
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
@@ -239,7 +239,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             rta_offset += sizeof(uint32_t);
         }
         // Named CRTAs
-        // Implicit reserved-prefix CRTAs (e.g., __ta_addr_<name> for TensorAccessor bindings)
+        // Implicit reserved-prefix CRTAs (e.g., __ta_addr_<name> for TensorBindings)
         // co-exist in the dispatch layout but are NOT exposed in `args::` — they're surfaced
         // through their owning binding's namespace instead (`ta::`). The offset still advances
         // for them so dispatch and codegen stay in lockstep on the layout.

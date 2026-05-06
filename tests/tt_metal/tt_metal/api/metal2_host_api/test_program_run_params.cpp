@@ -47,11 +47,11 @@ namespace {
 
 // Import shared test helpers
 using test_helpers::BindDFBToKernel;
-using test_helpers::BindTensorAccessorToKernel;
+using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
-using test_helpers::MakeMinimalTensorBinding;
+using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ScopedSlowDispatchOverride;
@@ -705,10 +705,10 @@ TEST_F(ProgramRunParamsTestQuasar, NamedCRTACountMismatchFails) {
     });
     params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
 
+    // Validation now reports the specific missing name first (more useful than a count mismatch).
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("expects 2 named CRTAs, but 1 were provided")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is missing named CRTA 'scale'")));
 }
 
 // ============================================================================
@@ -1010,74 +1010,74 @@ TEST_F(ProgramRunParamsTestGen1, WrongRuntimeArgsCountFails) {
 }
 
 // ============================================================================
-// SECTION: TensorBinding Run-Params Validation Tests (Gen1 / WH)
+// SECTION: TensorParameter Run-Params Validation Tests (Gen1 / WH)
 // ============================================================================
 // Validation paths exercised by SetProgramRunParameters / ValidateProgramRunParams for the
 // Metal 2.0 TensorAccessor binding feature.
 
-TEST_F(ProgramRunParamsTestGen1, MissingTensorRunParamsFails) {
-    // Spec declares a TensorBinding; user supplies no TensorRunParams entry for it.
+TEST_F(ProgramRunParamsTestGen1, MissingTensorArgFails) {
+    // Spec declares a TensorParameter; user supplies no TensorArg entry for it.
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    spec.tensor_bindings = {MakeMinimalTensorBinding("input_tensor")};
-    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "input_ta");
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    // Run params with no tensor_run_params entries.
+    // Run params with no tensor_args entries.
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
 
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "TensorBinding 'input_tensor' is declared in the Program but has no TensorRunParams entry")));
+            "TensorParameter 'input_tensor' is declared in the Program but has no TensorArg entry")));
 }
 
-TEST_F(ProgramRunParamsTestGen1, DuplicateTensorRunParamsFails) {
+TEST_F(ProgramRunParamsTestGen1, DuplicateTensorArgFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    auto binding = MakeMinimalTensorBinding("input_tensor");
-    spec.tensor_bindings = {binding};
-    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "input_ta");
+    auto binding = MakeMinimalTensorParameter("input_tensor");
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
-    // Allocate one MeshTensor; reference it twice in tensor_run_params under the same name.
+    // Allocate one MeshTensor; reference it twice in tensor_args under the same name.
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
-    params.tensor_run_params = {
-        ProgramRunParams::TensorRunParams{.tensor_binding_name = "input_tensor", .tensor = std::cref(tensor)},
-        ProgramRunParams::TensorRunParams{.tensor_binding_name = "input_tensor", .tensor = std::cref(tensor)},
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
     };
 
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Duplicate tensor_binding_name 'input_tensor'")));
+            ::testing::HasSubstr("Duplicate tensor_parameter_name 'input_tensor'")));
 }
 
-TEST_F(ProgramRunParamsTestGen1, UnknownTensorBindingInRunParamsFails) {
+TEST_F(ProgramRunParamsTestGen1, UnknownTensorParameterInRunParamsFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    auto binding = MakeMinimalTensorBinding("input_tensor");
-    spec.tensor_bindings = {binding};
-    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "input_ta");
+    auto binding = MakeMinimalTensorParameter("input_tensor");
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
 
-    // tensor_binding_name doesn't match any TensorBinding in the spec.
+    // tensor_parameter_name doesn't match any TensorParameter in the spec.
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
-    params.tensor_run_params = {
-        ProgramRunParams::TensorRunParams{.tensor_binding_name = "ghost_tensor", .tensor = std::cref(tensor)},
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "ghost_tensor", .tensor = std::cref(tensor)},
     };
 
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("TensorRunParams references unknown TensorBinding 'ghost_tensor'")));
+            ::testing::HasSubstr("TensorArg references unknown TensorParameter 'ghost_tensor'")));
 }
 
 TEST_F(ProgramRunParamsTestGen1, TensorSpecMismatchFails) {
@@ -1085,9 +1085,9 @@ TEST_F(ProgramRunParamsTestGen1, TensorSpecMismatchFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     // Binding declares spec with shape {1, 32}; runtime tensor has a different shape ({1, 64}).
-    auto binding = MakeMinimalTensorBinding("input_tensor");  // default {1, 32}
-    spec.tensor_bindings = {binding};
-    BindTensorAccessorToKernel(spec.kernels[0], "input_tensor", "input_ta");
+    auto binding = MakeMinimalTensorParameter("input_tensor");  // default {1, 32}
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
@@ -1099,19 +1099,19 @@ TEST_F(ProgramRunParamsTestGen1, TensorSpecMismatchFails) {
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
-    params.tensor_run_params = {
-        ProgramRunParams::TensorRunParams{.tensor_binding_name = "input_tensor", .tensor = std::cref(tensor)},
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(tensor)},
     };
 
     EXPECT_THAT(
         [&] { SetProgramRunParameters(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "TensorRunParams for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
+            "TensorArg for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
 }
 
 TEST_F(ProgramRunParamsTestGen1, ReservedPrefixUserCRTANameFails) {
     // User supplies a CRTA whose name starts with the reserved __ta_addr_ prefix. Even with
-    // no TensorBindings declared, the prefix is reserved for the binding machinery and must
+    // no TensorParameters declared, the prefix is reserved for the binding machinery and must
     // not appear in user input. Validates that the reordered-prefix-check fires.
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();  // no tensor bindings

@@ -531,30 +531,30 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
     return names;
 }
 
-void ProgramImpl::register_tensor_binding(const std::string& name, const TensorSpec& spec) {
+void ProgramImpl::register_tensor_parameter(const std::string& name, const TensorSpec& spec) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    auto [it, inserted] = metal2_registry_->tensor_binding_specs.try_emplace(name, spec);
-    TT_FATAL(inserted, "Duplicate tensor binding name: {}", name);
+    auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(name, spec);
+    TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
-const TensorSpec* ProgramImpl::get_tensor_binding_spec(const std::string& name) const {
+const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
     if (!metal2_registry_) {
         return nullptr;
     }
-    auto it = metal2_registry_->tensor_binding_specs.find(name);
-    if (it == metal2_registry_->tensor_binding_specs.end()) {
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
         return nullptr;
     }
     return &it->second;
 }
 
-std::vector<std::string> ProgramImpl::get_registered_tensor_binding_names() const {
+std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
     std::vector<std::string> names;
     if (metal2_registry_) {
-        names.reserve(metal2_registry_->tensor_binding_specs.size());
-        for (const auto& [name, spec] : metal2_registry_->tensor_binding_specs) {
+        names.reserve(metal2_registry_->tensor_parameter_layouts.size());
+        for (const auto& [name, spec] : metal2_registry_->tensor_parameter_layouts) {
             names.push_back(name);
         }
     }

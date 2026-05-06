@@ -486,7 +486,7 @@ namespace tensor_accessor {
 // TensorAccessorBindingToken: codegen-emitted handle for a Metal 2.0 ProgramSpec TensorAccessor
 // binding. Pairs the binding's static layout (TensorAccessorArgs<CTA_OFFSET>) with the byte offset
 // of its implicit base-address CRTA — the slot SetProgramRunParameters fills from the binding's
-// TensorRunParams entry at enqueue time.
+// TensorArg entry at enqueue time.
 //
 // Kernel authors don't construct this directly. Codegen emits a per-binding instance into the
 // `ta::` namespace (see kernel_bindings_generated.h). Use `make_tensor_accessor(ta::name)` at the

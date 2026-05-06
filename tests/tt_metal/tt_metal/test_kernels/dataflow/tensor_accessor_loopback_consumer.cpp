@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Test kernel: TensorAccessor loopback consumer using a Metal 2.0 TensorAccessor binding.
+// Test kernel: TensorAccessor loopback consumer using a Metal 2.0 TensorBinding.
 // Pops entries from a DFB bound via dfb::input_dfb and writes them as pages to an output tensor
 // via make_tensor_accessor(ta::output_tensor). The base address comes from the binding's
-// implicit __ta_addr_output_tensor CRTA, filled by SetProgramRunParameters from TensorRunParams.
+// implicit __ta_addr_output_tensor CRTA, filled by SetProgramRunParameters from TensorArg.
 //
 // Runtime args:
 //   arg 0: number of pages to transfer

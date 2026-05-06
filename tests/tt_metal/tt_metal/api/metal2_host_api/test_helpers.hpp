@@ -17,7 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_binding.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 
@@ -152,28 +152,27 @@ inline void BindDFBToKernel(
     });
 }
 
-// Helper to create a minimal valid TensorBinding.
+// Helper to create a minimal valid TensorParameter.
 // Default layout: BFLOAT16, ROW_MAJOR, interleaved, shape {1, 32}. Hardware-agnostic;
 // works on any mock device (alignment + virtualized cores resolved by MakeProgramFromSpec).
-// buffer_type defaults to DRAM; pass BufferType::L1 for an SRAM-resident binding (e.g., to test
-// compute-kernel bindings, which can't access DRAM since TRISCs have no NoC).
-inline TensorBinding MakeMinimalTensorBinding(
+// buffer_type defaults to DRAM; pass BufferType::L1 for an SRAM-resident parameter.
+inline TensorParameter MakeMinimalTensorParameter(
     const std::string& name, tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::DRAM) {
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
     auto memory_config = tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type};
     auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
     auto spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 32}, tensor_layout);
-    return TensorBinding{
+    return TensorParameter{
         .unique_id = name,
         .spec = std::move(spec),
     };
 }
 
-// Helper to add a TensorAccessorBinding to a kernel.
-inline void BindTensorAccessorToKernel(
-    KernelSpec& kernel, const std::string& tensor_binding_name, const std::string& accessor_name) {
-    kernel.tensor_accessor_bindings.push_back(KernelSpec::TensorAccessorBinding{
-        .tensor_binding_name = tensor_binding_name,
+// Helper to add a TensorBinding to a kernel.
+inline void BindTensorParameterToKernel(
+    KernelSpec& kernel, const std::string& tensor_parameter_name, const std::string& accessor_name) {
+    kernel.tensor_bindings.push_back(KernelSpec::TensorBinding{
+        .tensor_parameter_name = tensor_parameter_name,
         .accessor_name = accessor_name,
     });
 }

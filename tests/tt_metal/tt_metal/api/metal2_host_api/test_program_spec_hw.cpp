@@ -33,7 +33,7 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 namespace {
 
 using test_helpers::BindDFBToKernel;
-using test_helpers::BindTensorAccessorToKernel;
+using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
@@ -556,7 +556,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     MeshTensor output_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
 
     // -------------------------------------------------------
-    // Build ProgramSpec: 2 DM kernels + 1 DFB + 2 TensorBindings
+    // Build ProgramSpec: 2 DM kernels + 1 DFB + 2 TensorParameters
     // -------------------------------------------------------
     ProgramSpec spec;
     spec.program_id = "ta_binding_loopback";
@@ -580,14 +580,14 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     BindDFBToKernel(consumer, "input_dfb", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
 
     // TensorAccessor bindings: each kernel sees its own tensor under its accessor name
-    BindTensorAccessorToKernel(producer, "input_tensor", "input_tensor");
-    BindTensorAccessorToKernel(consumer, "output_tensor", "output_tensor");
+    BindTensorParameterToKernel(producer, "input_tensor", "input_tensor");
+    BindTensorParameterToKernel(consumer, "output_tensor", "output_tensor");
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.tensor_bindings = {
-        TensorBinding{.unique_id = "input_tensor", .spec = tensor_spec},
-        TensorBinding{.unique_id = "output_tensor", .spec = tensor_spec},
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = "input_tensor", .spec = tensor_spec},
+        TensorParameter{.unique_id = "output_tensor", .spec = tensor_spec},
     };
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
@@ -610,9 +610,9 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
             .runtime_varargs = {{node, {num_pages}}},
         },
     };
-    params.tensor_run_params = {
-        ProgramRunParams::TensorRunParams{.tensor_binding_name = "input_tensor", .tensor = std::cref(input_tensor)},
-        ProgramRunParams::TensorRunParams{.tensor_binding_name = "output_tensor", .tensor = std::cref(output_tensor)},
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(input_tensor)},
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "output_tensor", .tensor = std::cref(output_tensor)},
     };
     SetProgramRunParameters(program, params);
 
