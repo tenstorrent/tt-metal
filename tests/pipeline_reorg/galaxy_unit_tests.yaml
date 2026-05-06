@@ -8,7 +8,6 @@
 #   team: Required for time_budget verification.
 #   skus: SKU -> { timeout } (minutes).
 #   owner_id: Slack owner (optional).
-#   use_mlperf_mount: If true, mount /mnt/MLPerf (default false).
 #   auto_triage: Passed to setup-job (default true).
 #   hang_detection_timeout: Optional float for setup-job.
 
@@ -19,7 +18,6 @@
   model: unit
   team: runtime
   # owner: see issue #29677
-  use_mlperf_mount: false
   auto_triage: true
   cmd: ./build/test/umd/galaxy/unit_tests_glx
   skus:
@@ -30,7 +28,6 @@
   name: UMD API tests
   model: unit
   team: runtime
-  use_mlperf_mount: false
   auto_triage: true
   cmd: ./build/test/umd/api/api_tests
   skus:
@@ -42,7 +39,6 @@
   model: fabric
   team: scaleout
   owner_id: UJ45FEC7M # Allan Liu
-  use_mlperf_mount: false
   auto_triage: true
   cmd: |
     mkdir -p generated/test_reports
@@ -59,7 +55,6 @@
   model: multiprocess
   team: scaleout
   owner_id: U03NG0A5ND7 # Aditya Saigal
-  use_mlperf_mount: false
   auto_triage: false
   cmd: |
     python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
@@ -79,7 +74,6 @@
   model: distributed-ops
   team: ttnn
   owner_id: U044T8U8DEF # Johanna Rock
-  use_mlperf_mount: false
   auto_triage: true
   cmd: |
     mkdir -p generated/test_reports
@@ -93,7 +87,6 @@
   model: prefetcher
   team: ttnn
   owner_id: U044T8U8DEF # Johanna Rock, Yu Gao
-  use_mlperf_mount: false
   auto_triage: true
   cmd: |
     mkdir -p generated/test_reports
@@ -107,7 +100,6 @@
   model: tttv2
   team: models
   owner_id: U07RY6B5FLJ # Gongyu Wang
-  use_mlperf_mount: true
   auto_triage: true
   cmd: |
     mkdir -p generated/test_reports
