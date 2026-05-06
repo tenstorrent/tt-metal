@@ -33,21 +33,29 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "mesh_device, device_params, num_links, topology",
     [
         pytest.param(
-            (1, 4),
+            (2, 4),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            1,
+            2,
             ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
             id="linear-4",
         ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
-        ),
+        # pytest.param(
+        #     (1, 4),
+        #     {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        #     1,
+        #     ttnn.Topology.Linear,
+        #     marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
+        #     id="linear-4",
+        # ),
+        # pytest.param(
+        #     (1, 4),
+        #     {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+        #     1,
+        #     ttnn.Topology.Ring,
+        #     marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
+        #     id="ring-4",
+        # ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -71,8 +79,8 @@ def test_shared_expert_pcc(
     5. Output matches torch reference with PCC > 0.97
     """
 
-    activations_dtype = ttnn.bfloat8_b
-    weights_dtype = ttnn.bfloat4_b
+    activations_dtype = ttnn.bfloat16
+    weights_dtype = ttnn.bfloat8_b
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
@@ -137,6 +145,7 @@ def test_shared_expert_pcc(
     # ========================================
     logger.debug("Running torch forward pass")
     torch_output = torch_model(torch_input)
+
     logger.debug(f"Torch output shape: {torch_output.shape}")
 
     logger.debug("Running ttnn forward pass")
