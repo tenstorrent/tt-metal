@@ -192,9 +192,10 @@ def open_mesh_device(mesh_shape=None):
     Open a ``ttnn`` mesh device for dots.mocr.
 
     **T3K (8-device Wormhole LLMBox):** by default (``DOTS_T3K_OPEN_FULL_MESH=1``), opens the
-    **physical** mesh (e.g. ``1×8``) and returns it, so callers can run on the full 8-device mesh.
-    Set ``DOTS_T3K_CREATE_SUBMESH=1`` to create a smaller logical submesh (e.g. ``1×1`` / ``1×2``)
-    after initializing the full system.
+    **physical** mesh (e.g. ``1×8``) to initialize the full system, but returns a **logical**
+    submesh that dots.mocr can run on (e.g. ``1×1`` / ``1×2``).
+    Set ``DOTS_T3K_CREATE_SUBMESH=0`` to opt into returning the full physical mesh (unsupported by
+    dots.mocr; will raise an explicit error unless the logical==physical).
 
     If ``mesh_shape`` is passed explicitly, behavior is unchanged: that shape is opened directly.
 
@@ -218,7 +219,11 @@ def open_mesh_device(mesh_shape=None):
         )
         t3k_family = canonical in ("T3K", "T3K_1X8", "T3K_2X4")
         device = None
-        create_submesh = os.environ.get("DOTS_T3K_CREATE_SUBMESH", "0").strip().lower() in (
+        # Dots OCR only supports TP<=2 (logical meshes like 1x1 / 1x2). The full physical T3K
+        # mesh (e.g. 1x8) will fail model config checks. Default to creating the logical submesh
+        # so the documented "MESH_DEVICE=T3K" path works out of the box.
+        create_submesh_default = "1" if t3k_family else "0"
+        create_submesh = os.environ.get("DOTS_T3K_CREATE_SUBMESH", create_submesh_default).strip().lower() in (
             "1",
             "true",
             "yes",
@@ -237,6 +242,12 @@ def open_mesh_device(mesh_shape=None):
                         f"({sub.get_num_devices()} devices). Set DOTS_T3K_OPEN_FULL_MESH=0 to open {logical} only."
                     )
                 else:
+                    if physical != logical:
+                        raise RuntimeError(
+                            f"dots_ocr.mesh: unsupported topology for dots.mocr: opened physical mesh {physical} "
+                            f"but dots.mocr only supports logical mesh {logical} (TP<=2). "
+                            "Set DOTS_T3K_CREATE_SUBMESH=1 (default) or DOTS_T3K_OPEN_FULL_MESH=0."
+                        )
                     device = full
                     logger.info(
                         f"dots_ocr.mesh: T3K-class system — opened physical mesh {physical} "

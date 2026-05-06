@@ -318,6 +318,12 @@ def _decode_loop(
         stop_ids.add(int(tokenizer.eos_token_id))
 
     user_done = [False] * batch_size
+    if stop_at_eos and stop_ids:
+        for b in range(batch_size):
+            if int(prefilled_token[b].item()) in stop_ids:
+                user_done[b] = True
+        if all(user_done):
+            return all_outputs
 
     # Option A: fixed-step decode. We still run a Python loop (TTNN does not provide a dynamic
     # device-side loop primitive here), but we eliminate per-token EOS bookkeeping and only
@@ -395,7 +401,8 @@ def _decode_loop(
         return out_lists
 
     # Legacy EOS-aware path (kept for debugging or very short runs).
-    for iteration in range(max_new_tokens):
+    # Account for the prefill argmax token already appended above.
+    for iteration in range(1, max_new_tokens):
         use_device_pick = not (repetition_penalty is not None and repetition_penalty > 1.0)
         if use_device_pick:
             tt_out = generator.decode_forward(
@@ -503,8 +510,7 @@ def run_ttnn_backend(
                 "Build tt-metal/ttnn (or activate the environment that provides `_ttnn.so`) and retry."
             ) from exc
     except Exception as exc:  # pragma: no cover
-        print(f"ttnn not importable: {exc}")
-        return ""
+        raise RuntimeError(f"ttnn not importable (TTNN backend was requested): {exc}") from exc
 
     from models.demos.dots_ocr.tt.common import (
         fused_ttnn_embeddings_to_torch,
@@ -539,10 +545,6 @@ def run_ttnn_backend(
     try:
         # HF reference for processor + token embeddings + config access.
         ref = DotsOCRReference(HFLoadSpec(model_id=model_id, use_fast_processor=not use_slow_processor))
-
-        # Dots OCR quality is highly sensitive to RoPE correctness with multimodal prompts.
-        # Default to host RoPE matrices (computed from config only; no HF rotary forward).
-        use_host_rope = True
 
         # Prefer bf16 for correctness. bf8 is faster but can be much less stable for text quality.
         tt_dtype = ttnn.bfloat16 if ttnn_dtype == "bf16" else ttnn.bfloat8_b
@@ -863,8 +865,19 @@ def main() -> None:
     )
     parser.add_argument(
         "--use-host-rope",
+        dest="use_host_rope",
         action="store_true",
-        help="Use HF-derived host RoPE cos/sin (default is device-side RoPE caches).",
+        default=True,
+        help=(
+            "Use HF-derived host RoPE cos/sin for TTNN run (default: ON; matches current demo behavior). "
+            "Disable with --no-host-rope to exercise device-side RoPE caches."
+        ),
+    )
+    parser.add_argument(
+        "--no-host-rope",
+        dest="use_host_rope",
+        action="store_false",
+        help="Disable host RoPE and use device-side RoPE caches for TTNN run.",
     )
     parser.add_argument(
         "--sanity-text-only",
