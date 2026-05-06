@@ -227,11 +227,20 @@ class PackerReluType(Enum):
 
     @property
     def bits(self) -> int:
-        return list(PackerReluType).index(self)
+        return _PACKER_RELU_BITS[self.value]
 
     @classmethod
     def from_bits(cls, bits: int) -> "PackerReluType":
-        return list(cls)[bits]
+        return cls(_PACKER_RELU_BITS_INV[bits])
+
+
+_PACKER_RELU_BITS = {
+    "NO_RELU": 0,
+    "ZERO_RELU": 1,
+    "MIN_THRESHOLD_RELU": 2,
+    "MAX_THRESHOLD_RELU": 3,
+}
+_PACKER_RELU_BITS_INV = {v: k for k, v in _PACKER_RELU_BITS.items()}
 
 
 def pack_relu_config(mode: "PackerReluType", threshold_bits: int) -> int:
