@@ -42,6 +42,7 @@ from matrix_runner_config import (
     get_mesh_test_group_map,
     get_runner_config,
     get_test_group_name_for_hardware_group,
+    is_model_traced_ccl_module,
 )
 
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
@@ -261,6 +262,13 @@ def compute_lead_models_matrix(modules, batch_size):
     return include_entries, batches
 
 
+def _split_ccl_modules(modules):
+    """Partition modules into (ccl, non_ccl) lists."""
+    ccl = [m for m in modules if is_model_traced_ccl_module(m)]
+    non_ccl = [m for m in modules if not is_model_traced_ccl_module(m)]
+    return ccl, non_ccl
+
+
 def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=None):
     """Compute matrix for model_traced runs using mesh/hardware grouped vector files."""
     mode = grouping_mode if grouping_mode in SUPPORTED_VECTOR_GROUPING_MODES else DEFAULT_MODEL_TRACED_GROUPING_MODE
@@ -281,12 +289,24 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
             "model_traced",
             "wormhole-n150-sweeps",
         )
+        ccl_mods, non_ccl_mods = _split_ccl_modules(mods)
         _append_routed_group(
             include_entries,
             batches,
             log_groups,
             f"mesh {mesh_shape}",
-            mods,
+            non_ccl_mods,
+            test_group_name,
+            batch_size,
+            suite_name,
+            MODEL_TRACED_BATCH_POLICY.get(test_group_name),
+        )
+        _append_routed_group(
+            include_entries,
+            batches,
+            log_groups,
+            f"ccl mesh {mesh_shape}",
+            ccl_mods,
             test_group_name,
             batch_size,
             suite_name,
@@ -299,12 +319,24 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
 
     for hw_group, mods in grouped:
         hw_test_group = get_test_group_name_for_hardware_group(hw_group)
+        ccl_mods, non_ccl_mods = _split_ccl_modules(mods)
         _append_routed_group(
             include_entries,
             batches,
             log_groups,
             f"hardware {_hw_label(hw_group)}",
-            mods,
+            non_ccl_mods,
+            hw_test_group,
+            batch_size,
+            suite_name,
+            MODEL_TRACED_BATCH_POLICY.get(hw_test_group),
+        )
+        _append_routed_group(
+            include_entries,
+            batches,
+            log_groups,
+            f"ccl hardware {_hw_label(hw_group)}",
+            ccl_mods,
             hw_test_group,
             batch_size,
             suite_name,

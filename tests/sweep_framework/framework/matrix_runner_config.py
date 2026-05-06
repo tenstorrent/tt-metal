@@ -15,6 +15,8 @@ parsing such as ``.mesh_*`` and ``.hw_*`` suffix semantics; this file maps those
 already-parsed routing hints to logical test groups and runner profiles.
 """
 
+from constants import strip_grouping_suffix
+
 
 # ── Run type detection (workflow inputs vs cron schedule) ────────────────────
 # ``compute_sweep_matrix.main`` sets batching and which matrix builder to call
@@ -167,6 +169,33 @@ LEAD_MODELS_BATCH_POLICY = {
 MODEL_TRACED_BATCH_POLICY = {
     "wormhole-t3k-sweeps": {"parallel_jobs": 5},
 }
+
+
+# ── Model-traced CCL module identification ───────────────────────────────────
+# CCL (collective communication) ops are batched separately from other
+# model-traced modules so they get their own CI jobs. This makes it easy to
+# re-run or triage CCL failures independently.
+#
+# A module's base name (after stripping ``_model_traced`` and grouping suffixes)
+# is checked against these prefixes.
+MODEL_TRACED_CCL_OP_PREFIXES = (
+    "all_gather",
+    "all_reduce",
+    "all_broadcast",
+    "all_to_all",
+    "reduce_scatter",
+    "fast_reduce_nc",
+)
+
+
+def is_model_traced_ccl_module(module_name):
+    """Return True if a model-traced module name represents a CCL op."""
+    base = strip_grouping_suffix(module_name)
+    # Remove the common ``_model_traced`` tail to get the raw op name.
+    stem = base.rsplit(".", 1)[-1]
+    if stem.endswith("_model_traced"):
+        stem = stem[: -len("_model_traced")]
+    return any(stem.startswith(prefix) for prefix in MODEL_TRACED_CCL_OP_PREFIXES)
 
 
 # ── Model-traced sweep: mesh suffix → logical test group ─────────────────────
