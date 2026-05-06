@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import os
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from typing import TYPE_CHECKING
 
 import diffusers
@@ -69,6 +69,31 @@ class Flux2TransformerState:
         return object.__getattribute__(self, f"_{name}")._value
 
 
+@contextmanager
+def mesh_reshape(device: ttnn.MeshDevice, new_shape: ttnn.MeshShape):
+    original_mesh_shape = ttnn.MeshShape(tuple(device.shape))
+    assert (
+        original_mesh_shape.mesh_size() == new_shape.mesh_size()
+    ), f"Mesh volume mismatch: {original_mesh_shape.mesh_size()} != {new_shape.mesh_size()}"
+    ttnn.synchronize_device(device)
+    if original_mesh_shape != new_shape:
+        device.reshape(new_shape)
+    yield
+    ttnn.synchronize_device(device)
+    if original_mesh_shape != device.shape:
+        device.reshape(original_mesh_shape)
+
+
+def get_mesh_shape(device: ttnn.MeshDevice, parallel_config: ParallelFactor, assert_key="encoder"):
+    assert (
+        device.shape.mesh_size() % parallel_config.factor == 0
+    ), f"Incompatible {assert_key} parallel configuration for device {device.shape}: {parallel_config}"
+    shape = list(device.shape)
+    shape[parallel_config.mesh_axis] = parallel_config.factor
+    shape[1 - parallel_config.mesh_axis] = device.shape.mesh_size() // parallel_config.factor
+    return ttnn.MeshShape(shape)
+
+
 class Flux2Pipeline:
     def __init__(
         self,
@@ -76,8 +101,8 @@ class Flux2Pipeline:
         mesh_device: ttnn.MeshDevice,
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         parallel_config: DiTGParallelConfigNoCFG,
-        encoder_parallel_config: EncoderParallelConfig | None = None,
-        vae_parallel_config: VAEParallelConfig | None = None,
+        encoder_parallel_config: EncoderParallelConfig,
+        vae_parallel_config: VAEParallelConfig,
         topology: ttnn.Topology,
         num_links: int,
         height: int = 1024,
@@ -88,34 +113,21 @@ class Flux2Pipeline:
     ) -> None:
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
+        self._encoder_parallel_config = encoder_parallel_config
+        self._vae_parallel_config = vae_parallel_config
+
+        # configure mesh device shapes for encoder and vae
+        self._encoder_mesh_shape = get_mesh_shape(mesh_device, encoder_parallel_config.tensor_parallel, "encoder")
+        self._vae_mesh_shape = get_mesh_shape(mesh_device, vae_parallel_config.tensor_parallel, "vae")
+
         self._height = height
         self._width = width
         self.is_fsdp = is_fsdp
         self.dynamic_load = dynamic_load
 
-        # setup encoder and vae parallel configs.
-        if encoder_parallel_config is None:
-            encoder_parallel_config = EncoderParallelConfig(
-                tensor_parallel=(
-                    parallel_config.tensor_parallel
-                    if parallel_config.tensor_parallel.mesh_axis == 4
-                    else parallel_config.sequence_parallel
-                )
-            )
-
-        if vae_parallel_config is None:
-            vae_parallel_config = VAEParallelConfig(
-                tensor_parallel=(
-                    parallel_config.tensor_parallel
-                    if parallel_config.tensor_parallel.mesh_axis == 4
-                    else parallel_config.sequence_parallel
-                )
-            )
-
-        self._encoder_parallel_config = encoder_parallel_config
-        self._vae_parallel_config = vae_parallel_config
-
         logger.info(f"Parallel config: {parallel_config}")
+        logger.info(f"Encoder parallel config: {encoder_parallel_config}")
+        logger.info(f"VAE parallel config: {vae_parallel_config}")
 
         self._ccl_manager = CCLManager(self._mesh_device, num_links=num_links, topology=topology)
 
@@ -171,25 +183,27 @@ class Flux2Pipeline:
 
         self._image_processor = VaeImageProcessor()
 
-        logger.info("creating TT-NN text encoder...")
-        self._prompt_encoder = PromptEncoder(
-            checkpoint_name=checkpoint_name,
-            use_torch_encoder=False,
-            device=self._mesh_device,
-            parallel_config=self._encoder_parallel_config,
-            ccl_manager=self._ccl_manager,
-        )
+        with mesh_reshape(self._mesh_device, self._encoder_mesh_shape):
+            logger.info("creating TT-NN text encoder...")
+            self._prompt_encoder = PromptEncoder(
+                checkpoint_name=checkpoint_name,
+                use_torch_encoder=False,
+                device=self._mesh_device,
+                parallel_config=self._encoder_parallel_config,
+                ccl_manager=self._ccl_manager,
+            )
 
-        logger.info("creating TT-NN VAE decoder...")
-        self._vae_decoder = Flux2VaeDecoder(
-            out_channels=3,
-            block_out_channels=[128, 256, 512, 512],
-            layers_per_block=2,
-            z_channels=32,
-            device=self._mesh_device,
-            parallel_config=self._vae_parallel_config,
-            ccl_manager=self._ccl_manager,
-        )
+        with mesh_reshape(self._mesh_device, self._vae_mesh_shape):
+            logger.info("creating TT-NN VAE decoder...")
+            self._vae_decoder = Flux2VaeDecoder(
+                out_channels=3,
+                block_out_channels=[128, 256, 512, 512],
+                layers_per_block=2,
+                z_channels=32,
+                device=self._mesh_device,
+                parallel_config=self._vae_parallel_config,
+                ccl_manager=self._ccl_manager,
+            )
 
         if self.dynamic_load:
             self.transformer.register_coresident_exclusions(self._prompt_encoder._encoder, self._vae_decoder)
@@ -197,9 +211,11 @@ class Flux2Pipeline:
             self._vae_decoder.register_coresident_exclusions(self.transformer)
 
         # Load in reverse order of use so the first-used model (encoder) stays loaded before __call__.
-        self._prepare_vae()
+        with mesh_reshape(self._mesh_device, self._vae_mesh_shape):
+            self._prepare_vae()
         self._prepare_transformer()
-        self._prepare_prompt_encoder()
+        with mesh_reshape(self._mesh_device, self._encoder_mesh_shape):
+            self._prepare_prompt_encoder()
 
         self.ts = Flux2TransformerState()
 
@@ -335,9 +351,9 @@ class Flux2Pipeline:
 
         logger.info("encoding prompts...")
 
-        with profiler("encoder", profiler_iteration) if profiler else nullcontext():
+        pce = profiler("encoder", profiler_iteration) if profiler else nullcontext()
+        with pce, mesh_reshape(self._mesh_device, self._encoder_mesh_shape):
             self._prepare_prompt_encoder()
-
             if prompt_upsample_temperature is not None:
                 prompts = self._prompt_encoder.upsample(
                     prompts,
@@ -394,10 +410,7 @@ class Flux2Pipeline:
                         traced=traced,
                     )
 
-        logger.info("decoding image...")
-
-        with profiler("vae", profiler_iteration) if profiler else nullcontext():
-            self._prepare_vae()
+            # gather latents in prep for VAE decoding
             tt_latents = self._ccl_manager.all_gather_persistent_buffer(
                 self.ts.tt_latents_step,
                 dim=1,
@@ -405,9 +418,11 @@ class Flux2Pipeline:
                 use_hyperparams=True,
             )
 
-            torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
+        logger.info("decoding image...")
+        pcv = profiler("vae", profiler_iteration) if profiler else nullcontext()
+        with pcv, mesh_reshape(self._mesh_device, self._vae_mesh_shape):
+            self._prepare_vae()
 
-            tt_latents = tensor.from_torch(torch_latents, device=self._mesh_device)
             tt_latents = self._vae_decoder.preprocess_and_unpatchify(
                 tt_latents,
                 height=self._height // self._vae_scale_factor,
