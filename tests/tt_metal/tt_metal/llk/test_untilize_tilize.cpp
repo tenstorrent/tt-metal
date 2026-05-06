@@ -31,7 +31,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
@@ -371,7 +371,7 @@ void run_single_core_tilize_program(
 Following tests are for Unpack Tilize
 ***************************************/
 
-TEST_F(MeshDeviceFixture, TensixComputeUnpackTilize) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -391,7 +391,7 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackTilize) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
+TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -415,7 +415,7 @@ TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeInt8) {
+TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeInt8) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {false, true}) {
@@ -439,7 +439,7 @@ TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeInt8) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
+TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {false, true}) {
@@ -463,7 +463,7 @@ TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeFastTilize) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {false}) {
@@ -484,7 +484,7 @@ TEST_F(MeshDeviceFixture, TensixComputeFastTilize) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
     for (bool dst_full_sync_en : {true, false}) {
         unit_tests::compute::tilize::TestConfig test_config = {
             .dst_full_sync_en = dst_full_sync_en,
@@ -502,7 +502,7 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
 Following tests are for Unpack Untilize
 ***************************************/
 
-TEST_F(MeshDeviceFixture, TensixComputeUnpackUntilize) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackUntilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -722,7 +722,7 @@ static void run_quasar_tilize_untilize_test(
 }
 
 // Pack Untilize (via pack_untilize_block)
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
     std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -747,7 +747,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
 }
 
 // Pack Untilize Dst (tiles pre-loaded into dest via copy_tile)
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
     std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -797,7 +797,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
 }
 
 // Pack Untilize Int8 -> Int32 dest -> Int32 (via pack_untilize_block)
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
     std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -817,7 +817,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
 }
 
 // Pack Untilize Dst Int8 -> Int32 dest -> Int32 (tiles pre-loaded into dest via copy_tile)
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) {
     std::vector<vector<uint32_t>> test_configs = {{1, 1}, {4, 12}, {8, 8}, {40, 14}, {2, 40}};
     for (auto& cfg : test_configs) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -840,7 +840,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) {
 Following tests are for pack untilize
 ***************************************/
 
-TEST_F(MeshDeviceFixture, TensixComputePackUntilize) {
+TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -860,7 +860,7 @@ TEST_F(MeshDeviceFixture, TensixComputePackUntilize) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputePackUntilizeDst) {
+TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDst) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -877,7 +877,7 @@ TEST_F(MeshDeviceFixture, TensixComputePackUntilizeDst) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
+TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -901,7 +901,7 @@ TEST_F(BlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, TensixComputePackUntilizeInt8) {
+TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeInt8) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -924,7 +924,7 @@ TEST_F(BlackholeSingleCardFixture, TensixComputePackUntilizeInt8) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, TensixComputePackUntilizeUInt8) {
+TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeUInt8) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -950,7 +950,7 @@ TEST_F(BlackholeSingleCardFixture, TensixComputePackUntilizeUInt8) {
 // Tests pack_untilize with tiny tile dims.
 // Row dim 1x32, which is faces = 2, rows = 1
 // Row dim 1x16, which is faces = 1, rows = 1
-TEST_F(MeshDeviceFixture, TensixComputePackUntilizeDstTinyTile) {
+TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstTinyTile) {
     vector<vector<uint32_t>> test_config_values = {{1, 1, 1, 1}, {1, 1, 2, 1}, {1, 2, 2, 1}};
     uint32_t face_c_dim = 16;
     for (auto test_config_value : test_config_values) {
