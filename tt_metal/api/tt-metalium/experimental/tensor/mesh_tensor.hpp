@@ -21,6 +21,7 @@ namespace tt::tt_metal {
 
 // Implementation details for MeshTensor
 class MeshTensorImpl;
+struct DeviceStorage;
 
 namespace distributed {
 class MeshDevice;
@@ -111,19 +112,6 @@ public:
     const distributed::MeshBuffer& mesh_buffer() const;
 
     /**
-     * THIS IS INTERNAL FUNCTION AND WILL BE DELETED ASAP, DO NOT USE, DO NOT RELY.
-     *
-     * Wider API compatible mesh_buffer() that returns a shared ownership to the underlying storage.
-     *
-     * Note: Prefer mesh_buffer() wherever possible, as it breaks unique ownership semantics easily.
-     * A core invariant of MeshTensor is that it is the sole owner of the underlying MeshBuffer,
-     * one can get the underlying shared_ptr of the MeshBuffer and break the invariant.
-     *
-     * See: #38691, #38375
-     */
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
-
-    /**
      * Get the device the allocated device memory is on.
      *
      * pre-condition: The device tensor must not be in a default constructed state.
@@ -190,6 +178,15 @@ public:
     const MeshTensorImpl& impl() const;
 
 private:
+    // This will be deleted after DeviceStorage no longer needs to keep a shared_ptr of the MeshBuffer.
+    friend struct DeviceStorage;
+
+    /**
+     * Wider API compatible mesh_buffer() that returns a shared ownership to the underlying storage.
+     * Access is only used by DeviceStorage.
+     */
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
+
     // impl_ could be a nullptr if MeshTensor is in a default constructed state.
     // Avoid using impl_ pointer directly, use the accessors instead.
     // Otherwise, please add manual TT_ASSERT checks for nullptr.
