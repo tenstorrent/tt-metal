@@ -52,6 +52,7 @@
 #include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/inbound_socket_service_sync_nanobind.hpp"
+#include "ttnn/operations/experimental/yuv_conversion/yuv_conversion_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
@@ -166,6 +167,7 @@ void py_module(nb::module_& mod) {
     quasar::bind_quasar(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
     deepseek_prefill::detail::bind_inbound_socket_service_sync(mod);
+    ttnn::experimental::detail::bind_yuv_conversion(mod);
     reshape::detail::bind_view(mod);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);

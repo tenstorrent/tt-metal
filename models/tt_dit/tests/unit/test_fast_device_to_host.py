@@ -228,29 +228,31 @@ class TestFastDeviceToHost:
 # followed by the resulting positions of H and W in the permuted tensor.
 _DIM_ORDER_CONFIGS: dict[str, tuple[tuple[int, ...], int, int]] = {
     #        perm from (C,T,H,W)   h_pos  w_pos
-    "CTHW": ((0, 1, 2, 3),         2,     3),
-    "THWC": ((1, 2, 3, 0),         1,     2),
-    "CHWT": ((0, 2, 3, 1),         1,     2),
+    "CTHW": ((0, 1, 2, 3), 2, 3),
+    "THWC": ((1, 2, 3, 0), 1, 2),
+    "CHWT": ((0, 2, 3, 1), 1, 2),
 }
 
 # (label, C, H, W); T=81 frames is fixed
 _D2H_SHAPES = [
-    ("720p_3c", 3, 720, 1280),   # full RGB 720p
-    ("480p_3c", 3, 480,  832),   # full RGB 480p
-    ("720p_1c", 1, 720, 1280),   # Y channel 720p
-    ("480p_1c", 1, 480,  832),   # Y channel 480p
-    ("360p_1c", 1, 360,  640),   # UV pooled 720p (H//2, W//2)
-    ("240p_1c", 1, 240,  416),   # UV pooled 480p
+    ("720p_3c", 3, 720, 1280),  # full RGB 720p
+    ("480p_3c", 3, 480, 832),  # full RGB 480p
+    ("720p_1c", 1, 720, 1280),  # Y channel 720p
+    ("480p_1c", 1, 480, 832),  # Y channel 480p
+    ("360p_1c", 1, 360, 640),  # UV pooled 720p (H//2, W//2)
+    ("240p_1c", 1, 240, 416),  # UV pooled 480p
 ]
 
-_D2H_T       = 81   # frames
-_D2H_TP_SIZE = 4    # mesh axis-0 devices (height sharding)
-_D2H_SP_SIZE = 8    # mesh axis-1 devices (width sharding)
-_DTYPE_BYTES  = 1    # bytes per uint8 element (on-device after RGB/YUV conversion)
+_D2H_T = 81  # frames
+_D2H_TP_SIZE = 4  # mesh axis-0 devices (height sharding)
+_D2H_SP_SIZE = 8  # mesh axis-1 devices (width sharding)
+_DTYPE_BYTES = 1  # bytes per uint8 element (on-device after RGB/YUV conversion)
 
 
 def _d2h_shard_shape(
-    C: int, H: int, W: int,
+    C: int,
+    H: int,
+    W: int,
     perm: tuple[int, ...],
     h_dim: int,
     w_dim: int,
@@ -311,9 +313,7 @@ class TestD2HLayoutPerformance:
             for layout_name, layout in layouts:
                 for dim_order_name, (perm, h_dim, w_dim) in _DIM_ORDER_CONFIGS.items():
                     gen = torch.Generator().manual_seed(42)
-                    host = torch.randint(
-                        0, 256, (channels, _D2H_T, height, width), generator=gen, dtype=torch.uint8
-                    )
+                    host = torch.randint(0, 256, (channels, _D2H_T, height, width), generator=gen, dtype=torch.uint8)
                     host = host.permute(perm).contiguous()
 
                     tt_tensor = typed_tensor_2dshard(
@@ -444,9 +444,7 @@ def test_host_rearrange_speed():
     def rgb_concat_naive(shards, dim_order):
         out = np.empty((T, H, W, C), dtype=np.uint8)
         for (r, c), shard in zip(mesh_coords, shards):
-            out[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per, :] = src_view_numpy(
-                shard, dim_order
-            )
+            out[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per, :] = src_view_numpy(shard, dim_order)
         return out
 
     # --- Variant 2: production `_reassemble_2d` -----------------------------
@@ -459,9 +457,7 @@ def test_host_rearrange_speed():
             permute = (3, 1, 2, 0)
             concat_dims = [1, 2]
         shard_shape = list(shards[0].shape)
-        out = _reassemble_2d(
-            mesh_coords, shards, shard_shape, (TP, SP), concat_dims, permute=permute
-        )
+        out = _reassemble_2d(mesh_coords, shards, shard_shape, (TP, SP), concat_dims, permute=permute)
         return out.numpy()  # zero-copy: out is contiguous
 
     # --- Variant 3: threaded numpy scatter ----------------------------------
@@ -475,10 +471,7 @@ def test_host_rearrange_speed():
         def write_one(out, src, r, c):
             out[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per, :] = src
 
-        futures = [
-            pool.submit(write_one, out, src, r, c)
-            for (r, c), src in zip(mesh_coords, srcs)
-        ]
+        futures = [pool.submit(write_one, out, src, r, c) for (r, c), src in zip(mesh_coords, srcs)]
         for f in futures:
             f.result()
         return out
@@ -493,10 +486,7 @@ def test_host_rearrange_speed():
         def write_one(out_t, src, r, c):
             out_t[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per, :].copy_(src)
 
-        futures = [
-            pool.submit(write_one, out_t, src, r, c)
-            for (r, c), src in zip(mesh_coords, srcs)
-        ]
+        futures = [pool.submit(write_one, out_t, src, r, c) for (r, c), src in zip(mesh_coords, srcs)]
         for f in futures:
             f.result()
         return out
@@ -554,9 +544,9 @@ def test_host_rearrange_speed():
         rgb_concat_numba = None  # type: ignore[assignment]
 
     variants = [
-        ("naive",          rgb_concat_naive),
-        ("reassemble",     rgb_concat_reassemble),
-        ("threaded",       rgb_concat_threaded),
+        ("naive", rgb_concat_naive),
+        ("reassemble", rgb_concat_reassemble),
+        ("threaded", rgb_concat_threaded),
         ("torch_threaded", rgb_concat_torch_threaded),
     ]
     if HAS_NUMBA:
@@ -571,9 +561,7 @@ def test_host_rearrange_speed():
         # --- Correctness check: every variant matches `naive` for both dim_orders ---
         for name, shape in configs:
             gen = torch.Generator().manual_seed(0)
-            check_shards = [
-                torch.randint(0, 256, shape, generator=gen, dtype=torch.uint8) for _ in range(n_shards)
-            ]
+            check_shards = [torch.randint(0, 256, shape, generator=gen, dtype=torch.uint8) for _ in range(n_shards)]
             ref = rgb_concat_naive(check_shards, name)
             for vname, fn in variants[1:]:
                 got = fn(check_shards, name)
@@ -659,9 +647,7 @@ def test_yuv_planar_concat_speed():
         return v
 
     def make_views(out):
-        y_view = np.lib.stride_tricks.as_strided(
-            out, shape=(T, H, W), strides=(row_stride, W, 1), writeable=True
-        )
+        y_view = np.lib.stride_tricks.as_strided(out, shape=(T, H, W), strides=(row_stride, W, 1), writeable=True)
         u_view = np.lib.stride_tricks.as_strided(
             out[:, hw:], shape=(T, Hu, Wu), strides=(row_stride, Wu, 1), writeable=True
         )
@@ -678,9 +664,7 @@ def test_yuv_planar_concat_speed():
 
         def scatter(shards, view, h_per, w_per):
             for (r, c), shard in zip(mesh_coords, shards):
-                view[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per] = to_thw_view(
-                    shard, dim_order
-                )
+                view[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per] = to_thw_view(shard, dim_order)
 
         scatter(y_shards, y_view, h_per_y, w_per_y)
         scatter(u_shards, u_view, h_per_uv, w_per_uv)
@@ -703,7 +687,7 @@ def test_yuv_planar_concat_speed():
                 t = stacked.reshape(TP, SP, h_per, w_per, T).permute(4, 0, 2, 1, 3)
             return t.contiguous().reshape(T, TP * h_per, SP * w_per)
 
-        y_full = assemble(y_shards, h_per_y, w_per_y)    # (T, H, W)
+        y_full = assemble(y_shards, h_per_y, w_per_y)  # (T, H, W)
         u_full = assemble(u_shards, h_per_uv, w_per_uv)  # (T, Hu, Wu)
         v_full = assemble(v_shards, h_per_uv, w_per_uv)  # (T, Hu, Wu)
 
@@ -823,12 +807,11 @@ def test_yuv_planar_concat_speed():
             def scatter(shards, plane_offset, plane_W, h_per, w_per):
                 for (r, c), shard in zip(mesh_coords, shards):
                     src = shard.squeeze(0).numpy()  # CTHW: (T, h, w); CHWT: (h, w, T)
-                    kernel(src, out_flat, plane_offset, row_stride, plane_W,
-                           r * h_per, c * w_per, h_per, w_per, T)
+                    kernel(src, out_flat, plane_offset, row_stride, plane_W, r * h_per, c * w_per, h_per, w_per, T)
 
-            scatter(y_shards, 0,        W,  h_per_y,  w_per_y)
-            scatter(u_shards, hw,       Wu, h_per_uv, w_per_uv)
-            scatter(v_shards, hw + uv,  Wu, h_per_uv, w_per_uv)
+            scatter(y_shards, 0, W, h_per_y, w_per_y)
+            scatter(u_shards, hw, Wu, h_per_uv, w_per_uv)
+            scatter(v_shards, hw + uv, Wu, h_per_uv, w_per_uv)
             return out
 
         HAS_NUMBA = True
@@ -837,9 +820,9 @@ def test_yuv_planar_concat_speed():
         planar_concat_numba = None  # type: ignore[assignment]
 
     variants = [
-        ("naive",          planar_concat_naive),
-        ("vectorized",     planar_concat_vectorized),
-        ("threaded",       planar_concat_threaded),
+        ("naive", planar_concat_naive),
+        ("vectorized", planar_concat_vectorized),
+        ("threaded", planar_concat_threaded),
         ("torch_threaded", planar_concat_torch_threaded),
     ]
     if HAS_NUMBA:
@@ -892,3 +875,109 @@ def test_yuv_planar_concat_speed():
             print(f"  {variant_name:<16} {name:<10} {avg_ms:>10.2f} {gbs:>8.2f} {shape:>20}")
     finally:
         pool.shutdown(wait=True)
+
+
+# ---------------------------------------------------------------------------
+# On-device permute overhead benchmark
+# ---------------------------------------------------------------------------
+
+
+def test_device_permute_overhead():
+    """Benchmark on-device ttnn.permute across all dim-ordering pairs.
+
+    Orderings tested: CTHW, THWC, CHWT — all 6 directed pairs.
+    Shapes emulate per-shard sizes on a 4×8 mesh (H//4, W//8):
+      720p 3-channel (3,81,180,160), 720p 1-channel (1,81,180,160),
+      360p 1-channel (1,81,90,80). Dtype: bfloat16.
+
+    100 timed iterations (sync per iteration) after a 10-iteration warmup.
+
+    Run with:
+        pytest models/tt_dit/tests/unit/test_fast_device_to_host.py::test_device_permute_overhead -s
+    """
+    n_warmup = 10
+    n_iters = 100
+    T = 81
+
+    _ORDERINGS = {
+        "CTHW": list("CTHW"),
+        "THWC": list("THWC"),
+        "CHWT": list("CHWT"),
+    }
+
+    # Per-shard sizes emulating a 4x8 mesh (H // 4, W // 8).
+    shapes_cfg = [
+        ("720p_3c", 3, 720 // 4, 1280 // 8),
+        ("720p_1c", 1, 720 // 4, 1280 // 8),
+        ("360p_1c", 1, 360 // 4, 640 // 8),
+    ]
+
+    device = ttnn.open_device(device_id=0)
+    try:
+        rows = []
+
+        for shape_name, C, H, W in shapes_cfg:
+            dim_vals = {"C": C, "T": T, "H": H, "W": W}
+
+            for src_name, src_dims in _ORDERINGS.items():
+                src_shape = tuple(dim_vals[d] for d in src_dims)
+                tensor_bytes = math.prod(src_shape) * 2  # bfloat16
+
+                host = torch.zeros(src_shape, dtype=torch.bfloat16)
+                tt_in = ttnn.from_torch(host, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+                for dst_name, dst_dims in _ORDERINGS.items():
+                    if dst_name == src_name:
+                        continue
+
+                    perm = tuple(src_dims.index(d) for d in dst_dims)
+
+                    for _ in range(n_warmup):
+                        out = ttnn.permute(tt_in, perm)
+                    ttnn.synchronize_device(device)
+
+                    start = time.perf_counter()
+                    for _ in range(n_iters):
+                        out = ttnn.permute(tt_in, perm)
+                        ttnn.synchronize_device(device)
+                    elapsed_s = time.perf_counter() - start
+
+                    avg_ms = elapsed_s / n_iters * 1_000
+                    throughput_gbs = (tensor_bytes / (elapsed_s / n_iters)) / 1e9
+
+                    rows.append(
+                        {
+                            "shape": shape_name,
+                            "src": src_name,
+                            "dst": dst_name,
+                            "src_shape": str(src_shape),
+                            "perm": str(perm),
+                            "avg_ms": avg_ms,
+                            "gbs": throughput_gbs,
+                        }
+                    )
+
+                del tt_in
+    finally:
+        ttnn.close_device(device)
+
+    perm_w = max(len("perm"), max(len(r["perm"]) for r in rows))
+    shape_w = max(len("src shape"), max(len(r["src_shape"]) for r in rows))
+    cols = (
+        ("shape", 10, "<", "s"),
+        ("src", 6, "<", "s"),
+        ("dst", 6, "<", "s"),
+        ("perm", perm_w, "<", "s"),
+        ("src shape", shape_w, "<", "s"),
+        ("avg (ms)", 10, ">", ".2f"),
+        ("GB/s", 8, ">", ".2f"),
+    )
+    keys = ("shape", "src", "dst", "perm", "src_shape", "avg_ms", "gbs")
+
+    header = " ".join(f"{name:{align}{width}}" for name, width, align, _ in cols)
+    print("\n--- on-device ttnn.permute latency (single device, bfloat16, row-major) ---")
+    print(header)
+    print("-" * len(header))
+    for r in rows:
+        cells = [f"{r[key]:{align}{width}{fmt}}" for (_, width, align, fmt), key in zip(cols, keys)]
+        print(" ".join(cells))
