@@ -15,11 +15,11 @@ pytestmark = pytest.mark.use_module_device
 
 # Test for int types
 @pytest.mark.parametrize("shape", [[1, 1, 32, 256], [64, 64], [9, 32, 768], [128]])
-@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32, ttnn.uint16])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 def test_to_memory_config(shape, layout, dtype, device):
     torch.manual_seed(2005)
-    torch_dtype = torch.int32
+    torch_dtype = torch.int16 if dtype == ttnn.uint16 else torch.int32
 
     input = torch.randint(1, 100, shape, dtype=torch_dtype)
     input = ttnn.from_torch(input, dtype, layout=layout, device=device)
@@ -210,6 +210,29 @@ def test_to_memory_config_width_sharded_unaligned_shard_width(device):
     output_torch = torch.zeros(shape)
     ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR)
     ttnn_output = ttnn.from_torch(output_torch, ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR)
+
+    num_cores = 4
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    shard_shape = (64, 25)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    input_tensor = ttnn.to_device(ttnn_input, device, memory_config=mem_config)
+    output_tensor = ttnn.to_device(ttnn_output, device, memory_config=mem_config)
+
+    ttnn.to_memory_config(input_tensor, output_tensor.memory_config(), output_tensor=output_tensor)
+    input_result = ttnn.to_torch(input_tensor)
+    output_result = ttnn.to_torch(output_tensor)
+    assert_equal(input_result, output_result)
+
+
+def test_to_memory_config_width_sharded_unaligned_shard_width_uint16(device):
+    torch.manual_seed(1234)
+    shape = [1, 1, 64, 100]
+    input_torch = torch.randint(0, 100, shape, dtype=torch.int16)
+    output_torch = torch.zeros(shape, dtype=torch.int16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR)
+    ttnn_output = ttnn.from_torch(output_torch, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR)
 
     num_cores = 4
     shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])

@@ -35,6 +35,20 @@ def test_copy(shape, layout, dtype, device):
     assert_equal(ttnn.to_torch(input), ttnn.to_torch(input_b))
 
 
+@pytest.mark.parametrize("shape", [[1, 1, 32, 256], [64, 64], [512, 6], [512, 4], [512, 10]])
+def test_copy_uint16(shape, device):
+    torch.manual_seed(2005)
+    input_torch = torch.randint(0, 1000, shape, dtype=torch.int16)
+    input_tensor = ttnn.from_torch(input_torch, ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output_torch = torch.zeros(shape, dtype=torch.int16)
+    output_tensor = ttnn.from_torch(output_torch, ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn.copy(input_tensor, output_tensor)
+    assert output_tensor.shape == input_tensor.shape
+    assert_equal(ttnn.to_torch(input_tensor), ttnn.to_torch(output_tensor))
+
+
 # Test for block sharding
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
@@ -204,6 +218,34 @@ def test_copy_height_sharded(device, layout, shape, shard_scheme, dtype):
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
     assert_equal(input_tensor, outout_tensor)
+
+
+@pytest.mark.parametrize("shard_width", [4, 6, 8, 10])
+def test_copy_uint16_to_memory_config(shard_width, device):
+    """Test that to_memory_config works for uint16 with various shard widths.
+
+    When shard_width * 2 is not L1-aligned (16 bytes), interleaved_to_sharded
+    rejects the tensor and to_memory_config falls back to ttnn::prim::copy.
+    This test verifies copy handles uint16 correctly for all shard widths.
+    """
+    torch.manual_seed(2005)
+    num_rows = 64
+    shape = [num_rows, shard_width]
+    input_torch = torch.randint(0, 1000, shape, dtype=torch.int16)
+
+    tt_input = ttnn.from_torch(
+        input_torch, ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    num_cores = 4
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    shard_shape = (num_rows // num_cores, shard_width)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_output = ttnn.to_memory_config(tt_input, sharded_mem_config)
+    output_torch = ttnn.to_torch(tt_output)
+    assert_equal(input_torch, output_torch)
 
 
 def test_copy_width_sharded_unaligned_shard_width(device):
