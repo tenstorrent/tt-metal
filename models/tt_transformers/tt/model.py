@@ -79,12 +79,13 @@ class Transformer(LightweightModule):
 
         if args.rope_theta_local:
             self.rope_local_setup = DefaultRopeSetup(
-                mesh_device,
-                args.max_batch_size,
-                args.head_dim,
-                args.max_seq_len,
-                args.rope_theta_local,
-                args.partial_rotary_factor,
+                device=mesh_device,
+                batch_size=args.max_batch_size,
+                head_dim=args.head_dim,
+                max_seq_len=args.max_seq_len,
+                rope_theta=args.rope_theta_local,
+                rope_scaling=args.rope_scaling,
+                partial_rotary_factor=args.partial_rotary_factor,
                 use_qk_fused=args.use_qk_fused,
                 prefetcher=None,
             )
@@ -350,14 +351,12 @@ class Transformer(LightweightModule):
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
         if batch_size > 1 and self.args.use_hf_rope:
-            # Batched prefill: q's seq dim is batch_size * S (users concatenated along the seq axis).
-            # Build cos/sin by tiling per-user slice so each user's concatenated chunk sees positions
-            # 0..S-1 (HF/Llama rope expect cos seq_len == q seq_len with correct per-user positions).
+            # Batched prefill with HF RoPE reshapes Q/K to [B, ..., S, D] before rotary embedding,
+            # while rotary_embedding expects a single [1, 1, S, D] cos/sin cache and broadcasts it
+            # across the batch dimension. Each user still sees positions 0..S-1 independently.
             assert mat_len >= S, f"Per-user seq_len {S} exceeds rope cache {mat_len}"
-            per_user_cos = self.rope_setup.cos_matrix_prefill[:, :, 0:S, :]
-            per_user_sin = self.rope_setup.sin_matrix_prefill[:, :, 0:S, :]
-            cos_slice = ttnn.concat([per_user_cos] * batch_size, dim=2)
-            sin_slice = ttnn.concat([per_user_sin] * batch_size, dim=2)
+            cos_slice = self.rope_setup.cos_matrix_prefill[:, :, 0:S, :]
+            sin_slice = self.rope_setup.sin_matrix_prefill[:, :, 0:S, :]
         else:
             required_end = start_pos + S
             pad_len = max(0, required_end - mat_len)
@@ -383,10 +382,8 @@ class Transformer(LightweightModule):
             local_mat_len = self.rope_local_setup.cos_matrix_prefill.shape[2]
             if batch_size > 1 and self.args.use_hf_rope:
                 assert local_mat_len >= S, f"Per-user seq_len {S} exceeds local rope cache {local_mat_len}"
-                local_per_user_cos = self.rope_local_setup.cos_matrix_prefill[:, :, 0:S, :]
-                local_per_user_sin = self.rope_local_setup.sin_matrix_prefill[:, :, 0:S, :]
-                local_cos_slice = ttnn.concat([local_per_user_cos] * batch_size, dim=2)
-                local_sin_slice = ttnn.concat([local_per_user_sin] * batch_size, dim=2)
+                local_cos_slice = self.rope_local_setup.cos_matrix_prefill[:, :, 0:S, :]
+                local_sin_slice = self.rope_local_setup.sin_matrix_prefill[:, :, 0:S, :]
             else:
                 local_required_end = start_pos + S
                 local_pad_len = max(0, local_required_end - local_mat_len)

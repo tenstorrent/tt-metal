@@ -363,6 +363,38 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
+
+        self.wo_bias_prefill = None
+        self.wo_bias_decode = None
+        if f"{wo_str}.bias" in state_dict:
+            wo_bias = state_dict[f"{wo_str}.bias"]
+            self.wo_bias_prefill = ttnn.as_tensor(
+                wo_bias.view(1, 1, 1, -1),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name("wo_bias_prefill_sharded"),
+            )
+            self.wo_bias_decode = []
+            for batch_size in range(
+                configuration.tile_size,
+                configuration.tile_padded_batch_rows + configuration.tile_size,
+                configuration.tile_size,
+            ):
+                wo_bias_decode = wo_bias.unsqueeze(0).expand(batch_size, -1)
+                self.wo_bias_decode.append(
+                    ttnn.as_tensor(
+                        wo_bias_decode,
+                        device=self.mesh_device,
+                        mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        layout=ttnn.TILE_LAYOUT,
+                        cache_file_name=cache_name(f"wo_bias_decode_sharded_{batch_size}"),
+                    )
+                )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -380,6 +412,20 @@ class Attention(LightweightModule):
                 self.prefetcher.insert_tensor(self.wo_sharded_ring)
 
             self.prefetcher.register_callback(register_weights)
+
+    def _add_wo_bias(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
+        if mode == Mode.DECODE:
+            if self.wo_bias_decode is None:
+                return x
+            num_tiles = int(math.ceil(x.shape[-2] / self.tile_size))
+            bias = self.wo_bias_decode[num_tiles - 1]
+        else:
+            if self.wo_bias_prefill is None:
+                return x
+            bias = self.wo_bias_prefill
+
+        bias = ttnn.to_memory_config(bias, x.memory_config())
+        return ttnn.add(x, bias)
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -905,6 +951,7 @@ class Attention(LightweightModule):
                 dense_out_sharded,
                 self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
             )
+            dense_out_sharded = self._add_wo_bias(dense_out_sharded, Mode.DECODE)
             return dense_out_sharded
 
         else:
@@ -970,6 +1017,7 @@ class Attention(LightweightModule):
                     dense_out_reduced, self.args.get_attn_dense_output_mem_config(Mode.DECODE, None)
                 )
 
+            dense_out_reduced = self._add_wo_bias(dense_out_reduced, Mode.DECODE)
             return dense_out_reduced
 
     def forward_prefill(
@@ -1305,6 +1353,7 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
             )
 
+        output_11SH = self._add_wo_bias(output_11SH, Mode.PREFILL)
         return output_11SH
 
     def forward(

@@ -230,6 +230,7 @@ class TransformerBlock(LightweightModule):
                 chunk_page_table,
                 chunk_start_idx,
                 kv_cache,
+                batch_size,
             )
 
         TG = self.args.is_galaxy
@@ -351,6 +352,7 @@ class TransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         is_decode = mode == Mode.DECODE or mode == "decode"
@@ -368,6 +370,12 @@ class TransformerBlock(LightweightModule):
         # Phi uses a single input layer norm and parallel residual (residual + attn + mlp).
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         normed_input = self.attention_norm(x, mode, norm_config=attn_norm_config)
+        attn_input = normed_input
+
+        # Mirror the standard decoder prefill path so attention sees an explicit batch dimension
+        # when batched prompts are packed along sequence upstream.
+        if mode == Mode.PREFILL and batch_size > 1:
+            attn_input = ttnn.reshape(attn_input, [batch_size, 1, attn_input.shape[-2] // batch_size, -1])
 
         # Phi runs attention and MLP from the same normalized input. Attention frees its input
         # internally, so keep an explicit clone alive for the parallel MLP branch.
@@ -378,7 +386,7 @@ class TransformerBlock(LightweightModule):
         )
 
         attn_out = self.attention.forward(
-            normed_input,
+            attn_input,
             current_pos,
             rot_mats,
             user_id,
@@ -388,6 +396,10 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+
+        if mode == Mode.PREFILL and batch_size > 1:
+            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
+
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         if TG and is_decode:
