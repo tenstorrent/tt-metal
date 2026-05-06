@@ -426,6 +426,229 @@ def capture_embedding_trace(
     }
 
 
+def capture_embedding_trace_2cq(
+    runtime,
+    input_ids,
+    attention_mask,
+    token_type_ids,
+    *,
+    position_ids=None,
+    model_attention_mask=None,
+):
+    """
+    Capture a fixed-shape encoder trace under 2-command-queue event choreography.
+
+    Mirrors the demo.py / bge_large_en performant-runner pattern:
+      * persistent host + DRAM device input tensors (re-used every iteration)
+      * CQ1 H2D writes signalled to CQ0 via an event
+      * 2 warm-up passes before begin_trace_capture (hot program cache,
+        settled allocator) so the captured trace is stable
+      * input buffer addresses are validated to remain unchanged across
+        begin_trace_capture/end_trace_capture
+
+    Returns a state dict with all the long-lived tensors and IDs needed to
+    drive ``run_embedding_forward_trace_2cq``.
+    """
+    models = runtime["models"]
+    submeshes = runtime["submeshes"]
+    local_dp = runtime["local_data_parallel"]
+    batch_per_dp = runtime["batch_per_dp"]
+
+    if local_dp != 1:
+        raise RuntimeError(f"Trace+2CQ path requires local_data_parallel=1, got {local_dp}")
+
+    local_batch = batch_per_dp * local_dp
+    if input_ids.shape[0] != local_batch:
+        raise RuntimeError(
+            f"Input batch ({input_ids.shape[0]}) must match local batch ({local_batch}) for local_data_parallel={local_dp}"
+        )
+
+    submesh = submeshes[0]
+    model = models[0]
+    mask_dtype = getattr(model, "_mask_dtype", ttnn.bfloat16)
+
+    if model_attention_mask is None:
+        raise RuntimeError(
+            "capture_embedding_trace_2cq requires a precomputed rank-4 model_attention_mask. "
+            "Set BGE_M3_PRECOMPUTE_ATTENTION_MASK=1 (default for S512/dp1)."
+        )
+    if position_ids is None:
+        raise RuntimeError(
+            "capture_embedding_trace_2cq requires precomputed position_ids. "
+            "Set BGE_M3_PRECOMPUTE_POSITION_IDS=1 (default for S512/dp1)."
+        )
+
+    # Persistent host (no device=) ttnn tensors used as the source of every H2D copy.
+    in_host = ttnn.from_torch(input_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tok_host = ttnn.from_torch(token_type_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    pos_host = ttnn.from_torch(position_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    mask_host = ttnn.from_torch(model_attention_mask.to(torch.bfloat16), dtype=mask_dtype, layout=ttnn.TILE_LAYOUT)
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    in_dev = in_host.to(submesh, dram)
+    tok_dev = tok_host.to(submesh, dram)
+    pos_dev = pos_host.to(submesh, dram)
+    mask_dev = mask_host.to(submesh, dram)
+
+    def _h2d_all_cq1():
+        ttnn.copy_host_to_device_tensor(in_host, in_dev, 1)
+        ttnn.copy_host_to_device_tensor(tok_host, tok_dev, 1)
+        ttnn.copy_host_to_device_tensor(pos_host, pos_dev, 1)
+        ttnn.copy_host_to_device_tensor(mask_host, mask_dev, 1)
+
+    def _model_forward():
+        return model(
+            input_ids=in_dev,
+            attention_mask=mask_dev,
+            token_type_ids=tok_dev,
+            position_ids=pos_dev,
+        )
+
+    op_event = ttnn.record_event(submesh, 0)
+
+    # Pass 1 (JIT).
+    ttnn.wait_for_event(1, op_event)
+    _h2d_all_cq1()
+    write_event = ttnn.record_event(submesh, 1)
+    ttnn.wait_for_event(0, write_event)
+    op_event = ttnn.record_event(submesh, 0)
+    out = _model_forward()
+    ttnn.deallocate(out)
+
+    # Pass 2 (program cache hot).
+    ttnn.wait_for_event(1, op_event)
+    _h2d_all_cq1()
+    write_event = ttnn.record_event(submesh, 1)
+    ttnn.wait_for_event(0, write_event)
+    op_event = ttnn.record_event(submesh, 0)
+    out = _model_forward()
+    ttnn.deallocate(out)
+
+    # Pass 3: capture.
+    ttnn.wait_for_event(1, op_event)
+    _h2d_all_cq1()
+    write_event = ttnn.record_event(submesh, 1)
+    ttnn.wait_for_event(0, write_event)
+    op_event = ttnn.record_event(submesh, 0)
+
+    in_addr = in_dev.buffer_address()
+    tok_addr = tok_dev.buffer_address()
+    pos_addr = pos_dev.buffer_address()
+    mask_addr = mask_dev.buffer_address()
+
+    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
+    output_dev = _model_forward()
+    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+    ttnn.synchronize_device(submesh)
+
+    assert in_addr == in_dev.buffer_address(), "input_ids buffer address moved during trace capture"
+    assert tok_addr == tok_dev.buffer_address(), "token_type_ids buffer address moved during trace capture"
+    assert pos_addr == pos_dev.buffer_address(), "position_ids buffer address moved during trace capture"
+    assert mask_addr == mask_dev.buffer_address(), "attention_mask buffer address moved during trace capture"
+
+    return {
+        "model": model,
+        "submesh": submesh,
+        "trace_id": trace_id,
+        "output_dev": output_dev,
+        "in_host": in_host,
+        "tok_host": tok_host,
+        "pos_host": pos_host,
+        "mask_host": mask_host,
+        "in_dev": in_dev,
+        "tok_dev": tok_dev,
+        "pos_dev": pos_dev,
+        "mask_dev": mask_dev,
+        "op_event": op_event,
+        "input_chunk": input_ids,
+        "attention_chunk": attention_mask,
+    }
+
+
+def run_embedding_forward_trace_2cq(trace_2cq_state, profiler=None, step_name=None, collect_conversion_timing=False):
+    """
+    Replay one iteration of the trace+2CQ path captured by ``capture_embedding_trace_2cq``.
+
+    Reads back the device output, mean-pools it, and returns torch embeddings
+    (matching ``run_embedding_forward_trace``'s return contract).
+    """
+    submesh = trace_2cq_state["submesh"]
+    trace_id = trace_2cq_state["trace_id"]
+    output_dev = trace_2cq_state["output_dev"]
+    op_event = trace_2cq_state["op_event"]
+    in_host = trace_2cq_state["in_host"]
+    tok_host = trace_2cq_state["tok_host"]
+    pos_host = trace_2cq_state["pos_host"]
+    mask_host = trace_2cq_state["mask_host"]
+    in_dev = trace_2cq_state["in_dev"]
+    tok_dev = trace_2cq_state["tok_dev"]
+    pos_dev = trace_2cq_state["pos_dev"]
+    mask_dev = trace_2cq_state["mask_dev"]
+
+    use_profiler_for_conversion = collect_conversion_timing and profiler is not None and step_name is not None
+    ttnn_to_torch_step = f"{step_name}_ttnn_to_torch" if step_name else None
+
+    if profiler and step_name:
+        profiler.start(step_name)
+
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(in_host, in_dev, 1)
+    ttnn.copy_host_to_device_tensor(tok_host, tok_dev, 1)
+    ttnn.copy_host_to_device_tensor(pos_host, pos_dev, 1)
+    ttnn.copy_host_to_device_tensor(mask_host, mask_dev, 1)
+    write_event = ttnn.record_event(submesh, 1)
+    ttnn.wait_for_event(0, write_event)
+    op_event = ttnn.record_event(submesh, 0)
+    ttnn.execute_trace(submesh, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(submesh)
+
+    # Persist the rotated op_event so the next iteration sees the correct fence.
+    trace_2cq_state["op_event"] = op_event
+
+    if profiler and step_name:
+        profiler.end(step_name)
+
+    if collect_conversion_timing and use_profiler_for_conversion:
+        profiler.start(ttnn_to_torch_step)
+    elif collect_conversion_timing:
+        ttnn_to_torch_start = time.perf_counter()
+
+    hidden_states = to_torch_auto_compose(output_dev, device=submesh)
+    if hidden_states.dim() == 4 and hidden_states.shape[1] == 1:
+        hidden_states = hidden_states.squeeze(1)
+    hidden_states = hidden_states[:, : trace_2cq_state["input_chunk"].shape[1], :].to(torch.float32)
+    embeddings = _mean_pool(hidden_states, trace_2cq_state["attention_chunk"][:, : hidden_states.shape[1]])
+
+    if collect_conversion_timing and use_profiler_for_conversion:
+        profiler.end(ttnn_to_torch_step)
+        ttnn_to_torch_time_s = profiler.get_duration(ttnn_to_torch_step)
+    elif collect_conversion_timing:
+        ttnn_to_torch_time_s = time.perf_counter() - ttnn_to_torch_start
+    else:
+        ttnn_to_torch_time_s = 0.0
+
+    if collect_conversion_timing:
+        conversion_timing = {
+            "torch_to_ttnn_s": 0.0,
+            "ttnn_to_torch_s": ttnn_to_torch_time_s,
+        }
+        return embeddings, conversion_timing
+
+    return embeddings
+
+
+def release_trace_2cq(trace_2cq_state):
+    """Release the trace owned by a trace+2CQ state dict."""
+    if trace_2cq_state is None:
+        return
+    submesh = trace_2cq_state.get("submesh")
+    trace_id = trace_2cq_state.get("trace_id")
+    if submesh is None or trace_id is None:
+        return
+    ttnn.release_trace(submesh, trace_id)
+    trace_2cq_state["trace_id"] = None
+
+
 def run_embedding_forward_trace(trace_state, profiler=None, step_name=None, collect_conversion_timing=False):
     torch_to_ttnn_time_s = 0.0
     ttnn_to_torch_time_s = 0.0
@@ -637,6 +860,16 @@ def run_embedding_forward_two_pass(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_num_command_queues_default():
+    """Pick num_command_queues for the perf test fixture.
+
+    BGE_M3_USE_TRACE_2CQ=1 → 2 (so the device opens with 2 CQs and the trace+2CQ
+    path can be exercised). Default → 1 to preserve historical behavior for
+    every other case.
+    """
+    return 2 if _env_flag("BGE_M3_USE_TRACE_2CQ") else 1
+
+
 @pytest.mark.parametrize(
     "batch_size, max_seq_len, input_seq_len, num_iterations, tt_data_parallel",
     [
@@ -667,7 +900,7 @@ def run_embedding_forward_two_pass(
         "batch1dp1-isl128",
         "batch1dp1-isl256",
         "batch1dp1-isl512",
-        "batch32dp1-isl512",
+        "batch32dp1-isl512",  # noqa: E501 — this is the trace+2CQ target case (BGE_M3_USE_TRACE_2CQ=1)
         # "batch32dp32-isl512",
         # "batch32dp32-isl1024",
         # "batch32dp32-isl2048",
@@ -681,7 +914,13 @@ def run_embedding_forward_two_pass(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    [
+        {
+            "fabric_config": True,
+            "trace_region_size": 50000000,
+            "num_command_queues": _resolve_num_command_queues_default(),
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -788,6 +1027,24 @@ def test_embedding_perf(
         )
         use_trace = False
 
+    use_trace_2cq = _env_flag("BGE_M3_USE_TRACE_2CQ")
+    if use_trace_2cq and runtime["local_data_parallel"] != 1:
+        logger.warning(
+            "BGE_M3_USE_TRACE_2CQ=1 requested, but local_data_parallel != 1; falling back to non-trace path."
+        )
+        use_trace_2cq = False
+    if use_trace_2cq and not fixed_s512_single_dp_case:
+        logger.warning(
+            "BGE_M3_USE_TRACE_2CQ=1 requested, but this is not a fixed S512/dp1 case; "
+            "falling back to non-trace path."
+        )
+        use_trace_2cq = False
+    if use_trace_2cq:
+        # 2CQ trace owns the trace; ensure the legacy single-CQ trace path is disabled.
+        if use_trace:
+            logger.info("BGE_M3_USE_TRACE_2CQ=1 takes precedence over BGE_M3_USE_TRACE; disabling single-CQ trace.")
+        use_trace = False
+
     manual_async_requested = _env_flag("BGE_M3_USE_ASYNC_SLOW_DISPATCH")
     auto_async_requested = _env_flag("BGE_M3_AUTO_ASYNC_SLOW_DISPATCH", "0") and fixed_b1s512_case
     disable_async_requested = _env_flag("BGE_M3_DISABLE_ASYNC_SLOW_DISPATCH")
@@ -817,6 +1074,7 @@ def test_embedding_perf(
         )
 
     trace_state = None
+    trace_2cq_state = None
     iteration_times = []
     torch_to_ttnn_times = []
     ttnn_to_torch_times = []
@@ -853,14 +1111,39 @@ def test_embedding_perf(
             )
             logger.info("Trace captured successfully.")
 
+        if use_trace_2cq:
+            _tracy_signpost("Trace+2CQ capture pass")
+            logger.info("Capturing trace under 2CQ event choreography...")
+            trace_2cq_state = capture_embedding_trace_2cq(
+                runtime,
+                input_ids,
+                attention_mask,
+                token_type_ids,
+                position_ids=position_ids,
+                model_attention_mask=model_attention_mask,
+            )
+            logger.info("Trace+2CQ captured successfully.")
+
         # ---- Benchmark iterations ----
-        benchmark_mode = "trace replay" if trace_state is not None else "regular forward"
+        if trace_2cq_state is not None:
+            benchmark_mode = "trace + 2CQ replay"
+        elif trace_state is not None:
+            benchmark_mode = "trace replay"
+        else:
+            benchmark_mode = "regular forward"
         logger.info(f"Running {num_iterations} benchmark iterations ({benchmark_mode})...")
 
         for i in range(num_iterations):
             if i == 0:
                 _tracy_signpost("Performance pass")
-            if trace_state is not None:
+            if trace_2cq_state is not None:
+                result, conversion_timing = run_embedding_forward_trace_2cq(
+                    trace_2cq_state,
+                    profiler,
+                    f"inference_prefill_{i}",
+                    collect_conversion_timing=True,
+                )
+            elif trace_state is not None:
                 result, conversion_timing = run_embedding_forward_trace(
                     trace_state,
                     profiler,
@@ -991,6 +1274,8 @@ def test_embedding_perf(
 
     if trace_state is not None:
         trace_state["model"].release_trace()
+    if trace_2cq_state is not None:
+        release_trace_2cq(trace_2cq_state)
 
 
 @pytest.mark.parametrize(
