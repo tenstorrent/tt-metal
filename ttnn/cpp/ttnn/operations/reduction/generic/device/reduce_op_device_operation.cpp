@@ -38,6 +38,8 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
+    // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W on 4D BF16/FLOAT32,
+    // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
     if (operation_attributes.row_major_w_dense_path) {
         TT_FATAL(
             operation_attributes.dim == tt::tt_metal::ReduceOpDim::W,
@@ -54,8 +56,11 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "row_major_w_dense_path only supports BFLOAT16 and FLOAT32, got {}",
             tensor_args.dtype());
         TT_FATAL(
+            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
+            "row_major_w_dense_path expects SUM math_op (mean is lowered from AVG before device launch)");
+        TT_FATAL(
             !tensor_args.memory_config().is_sharded() && !operation_attributes.output_mem_config.is_sharded(),
-            "row_major_w_dense_path only supports interleaved (non-sharded) tensors for now");
+            "row_major_w_dense_path requires interleaved input and output memory configs");
     } else {
         TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to reduce must be tilized");
         TT_FATAL(
