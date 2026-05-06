@@ -70,7 +70,6 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     if (a.is_sharded()) {
         const auto program_grid =
             std::visit([](const auto& config) { return config.compute_with_storage_grid_size; }, args.program_config);
-        // groupnorm operates on per-channel slices, so its kernels accept shard widths that are not tile-aligned.
         ttnn::operations::normalization::detail::validate_sharded_input(
             a, program_grid, /*require_shard_width_tile_aligned=*/false);
     }

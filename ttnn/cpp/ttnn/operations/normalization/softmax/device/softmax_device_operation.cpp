@@ -9,10 +9,11 @@
 
 #include "ttnn/device_operation.hpp"
 #include "softmax_operation_types.hpp"
-#include "ttnn/operations/normalization/shard_spec_validation.hpp"
+
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 using namespace tt::tt_metal;
 
