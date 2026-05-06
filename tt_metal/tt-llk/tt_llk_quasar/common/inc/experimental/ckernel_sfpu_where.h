@@ -8,6 +8,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel
@@ -49,10 +50,9 @@ inline void _init_where_()
 inline void _calculate_where_(const int iterations, const int in0_offset_idx, const int in1_offset_idx, const int in2_offset_idx, const int out_offset_idx)
 {
     // Record the 6-instruction body once into replay slots 0..5; the loop
-    // below issues a REPLAY (execute) per row pair. ADDR_MOD_6's dest.incr=2
-    // (programmed in _init_where_) handles row stride across iterations.
-    // load_mode=1, exec_while_loading=0 → record only, no execution at load time.
-    TTI_REPLAY(0, 6, 0, 0, 0, 1);
+    // below issues a REPLAY per row pair. ADDR_MOD_6's dest.incr=2 (programmed
+    // in _init_where_) handles row stride across iterations.
+    lltt::record(0, 6);
     TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in0_offset_idx); // condition -> LREG0
     TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in1_offset_idx); // true_val  -> LREG1
     TTI_SFPSETCC(0, p_sfpu::LREG0, sfpi::SFPSETCC_MOD1_LREG_EQ0);                      // CC := (LREG0 == 0)
@@ -63,7 +63,7 @@ inline void _calculate_where_(const int iterations, const int in0_offset_idx, co
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        TTI_REPLAY(0, 6, 0, 0, 0, 0); // execute the 6 recorded instructions
+        lltt::replay(0, 6);
     }
 }
 
