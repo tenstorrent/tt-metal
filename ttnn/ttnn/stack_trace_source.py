@@ -66,7 +66,7 @@ def insert_source_file_id_column(cursor: sqlite3.Cursor) -> None:
     cursor.execute("ALTER TABLE stack_traces ADD COLUMN source_file_id int REFERENCES source_files(id)")
 
 
-def get_source_file_id_id(cursor: sqlite3.Cursor, path: str, contents: str) -> int:
+def get_source_file_id(cursor: sqlite3.Cursor, path: str, contents: str) -> int:
     """Insert or ignore (path, contents), then return source_files.id for path."""
     cursor.execute(
         "INSERT OR IGNORE INTO source_files (path, contents) VALUES (?, ?)",
@@ -77,3 +77,9 @@ def get_source_file_id_id(cursor: sqlite3.Cursor, path: str, contents: str) -> i
     if row is None:
         raise RuntimeError(f"source_files row missing after insert for path {path!r}")
     return row[0]
+
+
+# ``ttnn.database`` / ``graph_report`` import ``get_source_file_id`` by this exact name.
+# Keep typo/historical aliases so mixed revisions or stale wheels do not break imports.
+ensure_source_file_id = get_source_file_id
+get_source_file_id_id = get_source_file_id
