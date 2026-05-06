@@ -73,21 +73,11 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKSingleCoreProgramFactor
          num_tiles_per_core_group_1,  // Number of tiles each core in the primary group processes
          num_tiles_per_core_group_2   // Number of tiles each core in the secondary group processes
     ] = tt::tt_metal::split_work_to_cores(args.sub_core_grids, Ht, true);
-    {
-        const uint32_t workload_tile_rows_g1 = core_group_1.num_cores() * num_tiles_per_core_group_1;
-        const uint32_t workload_tile_rows_g2 = core_group_2.num_cores() * num_tiles_per_core_group_2;
-        TT_FATAL(
-            workload_tile_rows_g1 + workload_tile_rows_g2 == Ht,
-            "TopK single-core workload mismatch: group1_tile_rows={} + group2_tile_rows={} must equal Ht={}",
-            workload_tile_rows_g1,
-            workload_tile_rows_g2,
-            Ht);
-        TT_FATAL(
-            args.sub_core_grids.contains(core_range),
-            "TopK single-core program core grid {} must be contained in sub_core_grids {}",
-            core_range,
-            args.sub_core_grids);
-    }
+    TT_FATAL(
+        args.sub_core_grids.contains(core_range),
+        "TopK single-core program core grid {} must be contained in sub_core_grids {}",
+        core_range,
+        args.sub_core_grids);
     const auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};

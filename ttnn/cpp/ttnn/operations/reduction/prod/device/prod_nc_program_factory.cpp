@@ -113,15 +113,6 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
             "Prod_nc program cores {} must be contained in device compute grid {}",
             all_cores,
             prod_nc_device_grid);
-        const uint32_t prod_nc_workload_tiles_g1 = core_group_1.num_cores() * num_cols_per_core_group_1;
-        const uint32_t prod_nc_workload_tiles_g2 = core_group_2.num_cores() * num_cols_per_core_group_2;
-        TT_FATAL(
-            prod_nc_workload_tiles_g1 + prod_nc_workload_tiles_g2 == num_output_tiles,
-            "Prod_nc workload mismatch: group1_output_tiles={} + group2_output_tiles={} must equal num_output_tiles={} "
-            "",
-            prod_nc_workload_tiles_g1,
-            prod_nc_workload_tiles_g2,
-            num_output_tiles);
         auto prod_nc_validate_shard_grid_subset_program = [&](const Tensor& t, const char* tensor_name) {
             const auto& prod_nc_mc = t.memory_config();
             if (prod_nc_mc.shard_spec().has_value()) {

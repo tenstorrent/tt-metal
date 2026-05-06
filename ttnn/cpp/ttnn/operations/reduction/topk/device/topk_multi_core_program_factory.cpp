@@ -154,14 +154,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
             device_grid_size.y);
         const CoreRangeSet device_grid =
             num_cores_to_corerangeset(device_grid_size.x * device_grid_size.y, device_grid_size, false);
-        // Test-only: same message as the following contains() check (natural path rarely fails from Python).
-        if (std::getenv("TTNN_TOPK_TEST_MULTICORE_FACTORY_GRID_FATAL") != nullptr) {
-            TT_FATAL(
-                false,
-                "TopK multi-core program core grid {} must be contained in device compute grid {}",
-                all_cores_range_set,
-                device_grid);
-        }
         TT_FATAL(
             device_grid.contains(all_cores_range_set),
             "TopK multi-core program core grid {} must be contained in device compute grid {}",
