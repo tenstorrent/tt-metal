@@ -363,6 +363,38 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
                              : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_h.cpp";
     }
 
+    // For Float32 input with fp32_dest_acc_en, force unpack-to-dest in fp32 mode so that
+    // the unpacker writes full fp32 to DEST instead of routing through SrcA (which would
+    // be downcast to TF32 -- 10 mantissa bits -- per Blackhole/Wormhole format conversion).
+    // Without this, large-mean fp32 variance silently collapses to ~0 due to TF32 truncation
+    // wiping the bits that distinguish nearby samples (issue: see test_var_fp32_known_answer_diagnostic).
+    //
+    // Currently gated to H-reduce only:
+    //   * HW-reduce: kernel uses a per-column-partials -> writer-rereduce pipeline that depends
+    //     on the previous TF32-via-SrcA rounding behavior; switching to fp32 produces regressions
+    //     on small-N / correction=0 cases (needs follow-up in welford_reduce_hw.cpp).
+    //   * W-reduce:  kernel uses transpose_wh_tile, whose fp32 path calls llk_math_transpose_dest
+    //     which writes to the SFPU replay buffer (slot 0). welford_init() also writes that same
+    //     slot, so the two clobber each other and the kernel hangs. Fix requires either
+    //     restructuring the kernel to avoid the shared replay-buffer slot, or extending the
+    //     welford LLK to expose a "reprogram replay buffer without clearing LREG4/5" entry point.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (input_cb_data_format == tt::DataFormat::Float32 && (reduce_h || reduce_w || reduce_hw)) {
+        unpack_to_dest_mode[static_cast<uint32_t>(input_cb_index)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    // W-reduce also reads back the variance tile from cb_var via transpose_wh_tile to undo the
+    // initial transpose; that read needs the same fp32-preserving unpack-to-dest path or it
+    // truncates the final variance to TF32 (~10 mantissa bits) on the output.
+    if (reduce_w && fp32_dest_acc_en) {
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    // HW-reduce reads back the combined-variance tile from cb_combined (Float32) via copy_tile;
+    // same TF32-truncation issue if the unpacker isn't told to use the UnpackToDest fp32 path.
+    if (reduce_hw && fp32_dest_acc_en) {
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel;
     compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -372,6 +404,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     compute_desc_g1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
     };
 
     std::optional<KernelDescriptor> compute_desc_g2;
@@ -385,6 +418,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         d.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
         };
         compute_desc_g2 = std::move(d);
     }

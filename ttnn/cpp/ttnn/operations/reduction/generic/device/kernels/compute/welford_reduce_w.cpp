@@ -157,9 +157,23 @@ void kernel_main() {
                 cb_scaled_obj.pop_front(onetile);
             } else {
                 cb_in_obj.wait_front(onetile);
+                // Re-establish transpose unpack/math config each iteration. The welford
+                // recovery sequence below reconfigures unpack to no-transpose, so subsequent
+                // iterations need to re-init transpose before reading the next tile.
+                transpose_wh_init_short(cb_in);
                 transpose_wh_tile(cb_in, 0, input_dst);
                 cb_in_obj.pop_front(onetile);
             }
+
+            // For fp32 input, transpose_wh_tile takes the UnpackToDest path which uses FPU
+            // MOV ops and reprograms the SFPU replay buffer. Re-establish welford state:
+            //   1. welford_reinit re-establishes UNPACK+MATH datacopy config (parallel of the
+            //      do_scale path which calls this after mul_tiles_bcast_scalar)
+            //   2. llk_math_welfords_sfpu_init re-programs the replay buffer with the welford
+            //      recurrence -- without clearing LREG4/5 (which would lose the running
+            //      mean/M2 accumulator).
+            welford_reinit(cb_in);
+            MATH((llk_math_welfords_sfpu_init()));
 
             if (wt < (Wt - 1)) {
                 welford_update<0>(input_dst, start_N, {});
