@@ -24,6 +24,7 @@ from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rop
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.tt_transformers.tt.generator_vllm import _dummy_num_layers_from_env, _dummy_weights_from_env
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
@@ -63,6 +64,8 @@ def initialize_vllm_text_transformer(
     max_seq_len,
     dtype=ttnn.bfloat8_b,
     optimizations=None,
+    dummy_weights=False,
+    n_layers=None,
 ):
     # Prefer the original HF model id (`_name_or_path`) since `name_or_path` may be rewritten to a local cache snapshot path.
     hf_model_id = getattr(hf_config, "_name_or_path", None) or getattr(hf_config, "name_or_path", "")
@@ -73,7 +76,10 @@ def initialize_vllm_text_transformer(
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        dummy_weights=dummy_weights,
     )
+    if n_layers is not None:
+        tt_model_args.n_layers = n_layers
     tt_model_args.use_qk_fused = False  # Qwen2.5-VL doesn't use qk fused ops
     assert tt_model_args.model_name.replace("-", "") in hf_model_id.replace(
         "-", ""
@@ -136,6 +142,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 f"max_seq_len {max_seq_len} is not supported for {hf_model_id}, using {max_seq_len_native} instead"
             )
             max_seq_len = max_seq_len_native
+        dummy_weights = _dummy_weights_from_env()
+        n_layers = _dummy_num_layers_from_env()
         model_args, model = initialize_vllm_text_transformer(
             hf_config,
             mesh_device,
@@ -143,14 +151,24 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             max_seq_len=max_seq_len,
             dtype=ttnn.bfloat8_b,
             optimizations=optimizations,
+            dummy_weights=dummy_weights,
+            n_layers=n_layers,
         )
 
         ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
         config = Ref_Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
         # config.vision_config.depth = 1 # [INFO] useful for debugging
-        reference_model = Ref_Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            ref_model_name, config=config, torch_dtype="auto", device_map="auto"
-        )
+        if dummy_weights:
+            # Skip the multi-GB HF reference checkpoint download — the
+            # vision tower runs through DropInVisionTransformer, which is
+            # functionally exercised but produces meaningless output under
+            # random weights anyway. _from_config gives a randomly-init
+            # reference model with the right submodule layout.
+            reference_model = Ref_Qwen2_5_VLForConditionalGeneration._from_config(config)
+        else:
+            reference_model = Ref_Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                ref_model_name, config=config, torch_dtype="auto", device_map="auto"
+            )
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
         vision_model_args = VisionModelArgs(
             mesh_device,
