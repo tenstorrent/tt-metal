@@ -11,7 +11,21 @@
 #endif
 
 void kernel_main() {
-    uint32_t src0_addr            = get_arg_val<uint32_t>(0);
+#ifdef ARCH_QUASAR
+    uint32_t src0_addr = get_vararg(0);
+    uint32_t src0_dram_bank_id = get_vararg(1);
+    uint32_t src1_addr = get_vararg(2);
+    uint32_t src1_dram_bank_id = get_vararg(3);
+    uint32_t num_blocks = get_vararg(4);
+
+    uint32_t in0_block_tile_cnt = get_vararg(5);
+    uint32_t in1_block_tile_cnt = get_vararg(6);
+    uint32_t in0_block_size_bytes = get_vararg(7);
+    uint32_t in1_block_size_bytes = get_vararg(8);
+
+    uint32_t with_bias = get_vararg(9);
+#else
+    uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src0_dram_bank_id = get_arg_val<uint32_t>(1);
     uint32_t src1_addr = get_arg_val<uint32_t>(2);
     uint32_t src1_dram_bank_id = get_arg_val<uint32_t>(3);
@@ -23,6 +37,7 @@ void kernel_main() {
     uint32_t in1_block_size_bytes = get_arg_val<uint32_t>(8);
 
     uint32_t with_bias = get_arg_val<uint32_t>(9);
+#endif
     uint32_t src2_addr;
     uint32_t src2_dram_bank_id;
     uint32_t in2_block_tile_cnt;
@@ -40,10 +55,8 @@ void kernel_main() {
     }
 
 #ifdef ARCH_QUASAR
-    constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
-    constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
-    DataflowBuffer dfb_in0(dfb_in0_id);
-    DataflowBuffer dfb_in1(dfb_in1_id);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
     Noc noc;
     AllocatorBank<AllocatorBankType::DRAM> dram;
 #else
