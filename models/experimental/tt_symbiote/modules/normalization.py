@@ -196,7 +196,7 @@ class TTNNDistributedRMSNorm(TTNNModule):
         )
         self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(self, inp):
         original_shape = inp.shape
         if len(original_shape) == 3:

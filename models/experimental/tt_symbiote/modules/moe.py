@@ -59,6 +59,34 @@ def even_int_div(a: int, b: int) -> int:
     return a // b
 
 
+def _pick_rect_subgrid(n_with_work: int, max_x: int, max_y: int):
+    """Pick a rectangular sub-grid (gx, gy) with gx*gy == n_with_work that fits in (max_x, max_y).
+
+    Prefers the most square factorization (gx closest to sqrt(n_with_work)) and tries gx <= max_x,
+    gy <= max_y. Returns None if no exact factorization fits.
+    """
+    if n_with_work <= 0:
+        return None
+    best = None
+    best_score = None
+    # Iterate gx from 1 up to min(max_x, n_with_work). For each gx that divides n_with_work,
+    # check if gy = n_with_work / gx fits within max_y.
+    max_gx = min(max_x, n_with_work)
+    for gx in range(1, max_gx + 1):
+        if n_with_work % gx != 0:
+            continue
+        gy = n_with_work // gx
+        if gy > max_y:
+            continue
+        # Score: prefer factorizations closest to a square (minimize |gx - gy|).
+        # Tie-break: prefer larger gx (wider, fewer rows).
+        score = (abs(gx - gy), -gx)
+        if best_score is None or score < best_score:
+            best_score = score
+            best = (gx, gy)
+    return best
+
+
 def _make_sparse_matmul_program_config(
     device,
     out_features: int,
@@ -73,11 +101,36 @@ def _make_sparse_matmul_program_config(
     n_tiles = (int(out_features) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     num_cores = max(1, core_x * core_y)
     per_core_N = max(1, int(math.ceil(n_tiles / num_cores)))
+
+    # The sparse_matmul (mcast_in0=True) kernel asserts that the actual working core count
+    # (num_cores_with_work = ceil(n_tiles / per_core_N)) exactly matches the rectangular grid
+    # passed via compute_with_storage_grid_size. If we pass the full device grid but only
+    # part of it has work, the kernel TT_FATALs. So we shrink the grid to a rectangular
+    # subset whose size equals the number of working cores.
+    n_with_work = (n_tiles + per_core_N - 1) // per_core_N
+    rect = _pick_rect_subgrid(n_with_work, core_x, core_y)
+    if rect is None:
+        # Fall back: find the largest divisor of n_tiles (so per_core_N divides n_tiles
+        # exactly and num_cores_with_work fills the rectangle) that fits in the device grid.
+        for size in range(min(num_cores, n_tiles), 0, -1):
+            if n_tiles % size != 0:
+                continue
+            cand = _pick_rect_subgrid(size, core_x, core_y)
+            if cand is not None:
+                rect = cand
+                per_core_N = max(1, n_tiles // size)
+                break
+    if rect is None:
+        # Ultimate fallback: 1x1. Always valid, slow but correct.
+        rect = (1, 1)
+        per_core_N = max(1, n_tiles)
+    grid_x, grid_y = rect
+
     out_block_w = per_core_N
     if out_subblock_w is None:
         out_subblock_w = min(per_core_N, 4)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
         in0_block_w=int(in0_block_w),
         out_subblock_h=int(out_subblock_h),
         out_subblock_w=int(out_subblock_w),
@@ -843,7 +896,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
         )
         return ttnn_module
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(self, hidden_states):
         hidden_states = TorchTTNNTensor(hidden_states)
         residuals = hidden_states
@@ -1162,7 +1215,7 @@ class TTNNExperts(TTNNModule):
             packer_l1_acc=True,
         )
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(
         self, x: ttnn.Tensor, topk_experts_indices: ttnn.Tensor, topk_experts_weights: ttnn.Tensor
     ) -> ttnn.Tensor:
@@ -1419,7 +1472,7 @@ class TTNNMoE(TTNNModule):
         self._gate_weight_tt = ttnn.to_device(self._gate_weight_tt, self.device)
         super().move_weights_to_device_impl()
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass: all-gather → gate → experts (handles dispatch/combine) → reduce-scatter → add shared.

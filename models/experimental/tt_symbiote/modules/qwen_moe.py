@@ -286,7 +286,7 @@ class TTNNQwenExperts(TTNNExperts):
             packer_l1_acc=True,
         )
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(
         self, x: ttnn.Tensor, topk_experts_indices: ttnn.Tensor, topk_experts_weights: ttnn.Tensor
     ) -> ttnn.Tensor:
@@ -790,7 +790,7 @@ class TTNNQwen3MoE(TTNNMoE):
 
         return tree_map(set_col_sharded_config, output_tensors)
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.QB2)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass with shared_expert_gate support.
 
