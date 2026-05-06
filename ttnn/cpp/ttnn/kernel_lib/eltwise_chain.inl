@@ -346,12 +346,20 @@ struct BinaryFpu : BinaryFpuTag {
                 pack_reconfig_data_format(CbOut);
             }
         }
-        // Op-specific init. v1 supports Bcast == None — broadcast variants land in eltwise_bcast.hpp.
-        static_assert(Bcast == BroadcastDim::None,
-                      "BinaryFpu broadcast variants not yet implemented in v1 — use eltwise_bcast helpers");
-        if constexpr      (Op == BinaryFpuOp::Add) add_tiles_init(CbA, CbB);
-        else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_init(CbA, CbB);
-        else                                       mul_tiles_init(CbA, CbB);
+        // Op-specific init.
+        if constexpr (Bcast == BroadcastDim::None) {
+            if constexpr      (Op == BinaryFpuOp::Add) add_tiles_init(CbA, CbB);
+            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_init(CbA, CbB);
+            else                                       mul_tiles_init(CbA, CbB);
+        } else {
+            // Broadcast init via init_bcast<EltwiseBinaryType, BroadcastType>.
+            constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
+            constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
+                                (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
+                                                           ckernel::EltwiseBinaryType::ELWMUL;
+            constexpr uint32_t ocb = (CbOut != 0) ? CbOut : CbA;
+            init_bcast<et, bt>(CbA, CbB, ocb);
+        }
     }
 
     // ---- CB lifecycle (per-tile) ----
@@ -381,10 +389,18 @@ struct BinaryFpu : BinaryFpuTag {
             else if constexpr (BIndex == CbIndexMode::BlockIter) return i;
             else return b_tile_idx;
         }();
-        // v1: Bcast == None only.
-        if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
-        else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
-        else                                       mul_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
+        if constexpr (Bcast == BroadcastDim::None) {
+            if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
+            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
+            else                                       mul_tiles(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
+        } else {
+            // Broadcast variants via the generic `add/sub/mul_tiles_bcast<BroadcastType>` template
+            // — these forward to `any_tiles_bcast<EltwiseBinaryType, BroadcastType>` internally.
+            constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
+            if constexpr      (Op == BinaryFpuOp::Add) add_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
+            else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
+            else                                       mul_tiles_bcast<bt>(CbA, CbB, a_idx, b_idx, to_u32(DstSlot));
+        }
     }
 
     ALWI void pop_per_tile(uint32_t /*i*/) const {
@@ -506,17 +522,38 @@ struct UnaryBcast : UnaryBcastTag {
     static constexpr bool           is_upfront        = (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd);
     static constexpr bool           clashes_with_fpu  = true;
 
-    // v1: UnaryBcast surface stub. Implementation lives in eltwise_bcast.hpp (forthcoming).
-    // Compile-time `static_assert(false)` if the user instantiates UnaryBcast without that header.
     static ALWI void init() {
-        static_assert(sizeof(decltype(Dim)) == 0,
-                      "UnaryBcast requires eltwise_bcast.hpp — not yet shipped in v1");
+        constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
+        constexpr uint32_t ocb = (CbOut != 0) ? CbOut : Cb;
+        if constexpr (Reconfig == UnaryBcastReconfig::Input) {
+            constexpr auto old_bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
+            constexpr uint32_t old_icb = (OldCb    != 0) ? OldCb    : Cb;
+            constexpr uint32_t old_ocb = (OldCbOut != 0) ? OldCbOut : ocb;
+            reconfigure_unary_bcast<old_bt, bt>(old_icb, Cb, old_ocb, ocb);
+        }
+        unary_bcast_init<bt>(Cb, ocb);
     }
-    ALWI void wait_per_tile(uint32_t) const {}
-    ALWI void wait_upfront(uint32_t) const {}
-    ALWI void exec(uint32_t) const {}
-    ALWI void pop_per_tile(uint32_t) const {}
-    ALWI void pop_upfront_end(uint32_t) const {}
+
+    ALWI void wait_per_tile(uint32_t /*i*/) const {
+        if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::WaitNoPop) {
+            cb_wait_front(Cb, 1);
+        }
+    }
+    ALWI void wait_upfront(uint32_t n) const {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_wait_front(Cb, n);
+    }
+    ALWI void exec(uint32_t /*i*/) const {
+        constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
+        unary_bcast<bt>(Cb, /*in_tile_index=*/0, to_u32(DstSlot));
+    }
+    ALWI void pop_per_tile(uint32_t /*i*/) const {
+        if constexpr (Policy == CopyTilePolicy::WaitAndPop || Policy == CopyTilePolicy::NoWaitPop) {
+            cb_pop_front(Cb, 1);
+        }
+    }
+    ALWI void pop_upfront_end(uint32_t n) const {
+        if constexpr (Policy == CopyTilePolicy::WaitUpfrontPopAtEnd) cb_pop_front(Cb, n);
+    }
 };
 
 // =============================================================================

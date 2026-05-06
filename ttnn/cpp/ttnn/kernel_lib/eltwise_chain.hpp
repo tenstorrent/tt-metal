@@ -87,6 +87,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 // LLK / compute-API includes consumed by the inline implementation.
+#include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"

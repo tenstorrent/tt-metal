@@ -157,3 +157,98 @@ SKIPPED:tiny ttnn/cpp/ttnn/operations/reduction/manual_seed/device/kernels/compu
 
 SKIPPED:test-fixture tests/tt_metal/tt_metal/test_kernels/compute/*.cpp :: per task: do not touch test files
 SKIPPED:test-fixture tools/tests/triage/hang_apps/*/kernels/compute/*.cpp :: per task: do not touch test files
+
+## Run 7 — additional reconnaissance (extends prior coverage)
+
+### moreh — every compute kernel re-examined; all genuinely incompatible
+SKIPPED:moreh-helpers ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/moreh_abs_pow_kernel.cpp :: power_tile_to_cb + mid-loop mask_tile + copy_tile_init switching
+SKIPPED:moreh-helpers ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/moreh_adam.cpp :: mul_tiles_to_cb / add_tiles_to_cb / sub_tiles_to_cb (held-CB pingpong) — multi-stage Adam recurrence
+SKIPPED:moreh-helpers ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/moreh_adamw.cpp :: same pattern as adam
+SKIPPED:moreh-helpers ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/moreh_sgd.cpp :: pure moreh_common helpers + held-CB ping-pong
+SKIPPED:moreh-helpers ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/moreh_clip_grad_norm_step1_kernel.cpp :: power_tile_to_cb + mid-loop mask + held-DEST accumulator
+SKIPPED:moreh-helpers ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/moreh_clip_grad_norm_step2_kernel.cpp :: held-DEST add accumulator + power_tile_to_cb
+SKIPPED:bcast ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/moreh_clip_grad_norm_step3_kernel.cpp :: mul_tiles_bcast_scalar (broadcast not supported in chain v1)
+SKIPPED:bcast ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/moreh_nll_loss_backward_kernel.cpp :: mul_tiles_bcast_scalar
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp :: reduce_tile + mask_tile + bcast_cols_to_cb (multi-stage softmax)
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/*.cpp :: all softmax variants — reductions + bcast
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/*.cpp :: same pattern
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/*.cpp :: layernorm reductions
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/*.cpp :: layernorm bw
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/**/kernels/*.cpp :: norm reductions
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/*.cpp :: norm bw
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp :: reduce
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/**/kernels/*.cpp :: sum reductions
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/*.cpp :: mean reductions
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/moreh_mean_backward.cpp :: mean bw
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/device/**/kernels/*.cpp :: nll reductions
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_unreduced_backward/device/kernels/*.cpp :: nll
+SKIPPED:reduction ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_*.cpp :: reduce + mask_tile
+SKIPPED:matmul ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp :: matmul
+SKIPPED:acquire-dst ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp :: ACQ()/REL() + reduce
+SKIPPED:acquire-dst ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp :: ACQ()/REL() + bcast_scalar
+SKIPPED:moreh-helpers ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/*.cpp :: reader/writer kernels (no compute)
+
+### tt-train / ttml — block matmul helpers + multi-stage CB pipelines (re-confirmed)
+SKIPPED:block-matmul-helpers tt-train/sources/ttml/metal/optimizers/sgd/device/kernels/compute/sgd_kernel.cpp :: pack_and_push_block + mul_tiles_bcast_scalar
+SKIPPED:block-matmul-helpers tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/compute/adamw_kernel.cpp :: same pattern
+SKIPPED:reduction tt-train/sources/ttml/metal/ops/polynorm_fw/device/kernels/compute/polynorm_fw_kernel.cpp :: norm reduction
+
+### experimental / ssm / bcast_to / paged_cache / hang_device / integral_image
+SKIPPED:transpose ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/ssm_eltwise_mul.cpp :: transpose_wh + bcast_rows
+SKIPPED:complex ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/kernels/ssm_prefix_scan.cpp :: prefix scan (multi-stage)
+SKIPPED:bcast ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels/compute/compute_interleaved_*.cpp :: broadcast variants
+SKIPPED:test-fixture ttnn/cpp/ttnn/operations/experimental/test/hang_device/device/kernels/compute/hang_device_kernel.cpp :: test hang loop
+SKIPPED:cumsum ttnn/cpp/ttnn/operations/experimental/reduction/integral_image/device/kernels/intimg_compute.cpp :: cumsum + transpose_wh_dest + bcast
+SKIPPED:reduction ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp :: reduce_tile
+SKIPPED:reduction ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/kernels/deepseek_moe_fast_reduce_nc_reduce.cpp :: reduce
+SKIPPED:reduction ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/deepseek_grouped_gate.cpp :: multi-stage gating
+SKIPPED:reduction ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/compute.cpp :: topk
+SKIPPED:reduction ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/kernels/minimal_ring_reduction.cpp :: reduce
+SKIPPED:reduction ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/*.cpp :: reduce
+SKIPPED:matmul ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp :: conv3d matmul
+SKIPPED:matmul ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp :: matmul
+SKIPPED:transpose ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/*.cpp :: rotary
+SKIPPED:matmul ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/kernels/compute/transformer_attn_matmul.cpp :: attn matmul
+SKIPPED:transpose ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/compute/transpose_wh_sharded.cpp :: split + transpose
+SKIPPED:tilize ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/deepseek_moe_post_combine_tilize_compute.cpp :: tilize
+SKIPPED:reduction ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/device/kernels/deepseek_moe_post_combine_reduce_compute.cpp :: reduce
+SKIPPED:matmul ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/compute.cpp :: matmul
+SKIPPED:matmul ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/compute.cpp :: moe matmul
+SKIPPED:tilize ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_compute.cpp :: tilize
+SKIPPED:tilize ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/tilize_compute.cpp :: tilize
+
+### models/demos/deepseek_v3_b1/unified_kernels — all RISC-unified, sharded CB, persistent loop
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/local_reduce.hpp :: persistent_loop reduce
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/gated_local_reduce_kernel.cpp :: doesn't exist (gated_reduce.hpp instead)
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/gated_reduce.hpp :: persistent_loop + gated reduce
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/sdpa_reduce_worker.hpp :: SDPA reduce
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/reduce_to_all_b1.hpp :: reduce + multi-RISC
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/rope.hpp :: rotary embedding
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/broadcast.hpp :: broadcast
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/flash_mla.hpp :: flash MLA
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/persistent_loop.hpp :: persistent loop infrastructure (not eltwise)
+SKIPPED:unified-op models/demos/deepseek_v3_b1/unified_kernels/termination.hpp :: termination signal (not eltwise)
+
+### binary_ng kernels_ng (sub-folder for v2 broadcast kernels) — all bcast variants
+SKIPPED:bcast ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_*_bcast.cpp :: all bcast variants — chain v1 doesn't support bcast
+SKIPPED:bcast ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_*_bcast.cpp :: all sfpu bcast variants
+SKIPPED:bcast ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_where_sfpu_*_bcast.cpp :: where bcast variants
+
+### binary / binary_ng compute kernels — runtime per_core_block_size with i*2/i*3 multi-DEST scratch
+SKIPPED:multi-tile-DEST ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_no_bcast.cpp :: PREPROCESS + i,i,i pack pattern over runtime per_core_block_size
+SKIPPED:multi-tile-DEST ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_scalar.cpp :: PREPROCESS + multi-tile DEST
+SKIPPED:multi-tile-DEST ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp :: i*2/i*2+1 multi-DEST scratch + macros
+SKIPPED:multi-tile-DEST ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu.cpp :: i*2/i*2+1 multi-DEST scratch + macros
+SKIPPED:multi-tile-DEST ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_scalar.cpp :: same
+SKIPPED:multi-tile-DEST ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_no_bcast.cpp :: i*3/i*3+1/i*3+2 multi-DEST + FILL_LLK + BINARY_SFPU_OP
+SKIPPED:multi-tile-DEST ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_sfpu.cpp :: same pattern
+SKIPPED:multi-tile-DEST ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_where_sfpu_scalar.cpp :: same pattern
+
+### Conclusion for Run 7
+The chain helper migration is essentially complete on the easy/medium targets covered by the
+current chain API surface (single-tile DEST, no broadcast, no held-DEST, no multi-RISC unified,
+no reductions, no multi-stage CB pipelines, no transpose/tilize, no matmul). The remaining
+production kernels are blocked on chain API gaps (broadcast support — needed by ~30+ moreh /
+tt-train / binary_ng kernels; multi-tile DEST scratch — needed by binary_ng with
+`num_tiles_per_cycle > 1`; held-DEST recurrence — needed by Adam-family optimizers).
+

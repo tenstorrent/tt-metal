@@ -852,6 +852,83 @@ def test_1_copy_upfront_block_iter(device, upfront_n, fp32_dest_acc):
     _check_pcc(out, golden, 0.9999, f"copy_upfront UPFRONT_N={upfront_n}")
 
 
+# =============================================================================
+# Test plan §6 — BinaryFpu broadcast (ROW / COL / SCALAR)
+# =============================================================================
+
+BINARY_BCAST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_fpu_bcast.cpp"
+
+
+@pytest.mark.parametrize("num_tiles", [1, 8])
+@pytest.mark.parametrize("fp32_dest_acc", [False])
+@pytest.mark.parametrize(
+    "op_name,bcast_dim,torch_op",
+    [
+        ("Add", "Scalar", lambda a, b: a + b),
+        ("Mul", "Scalar", lambda a, b: a * b),
+        ("Sub", "Scalar", lambda a, b: a - b),
+    ],
+)
+def test_6_binary_fpu_bcast_scalar(device, num_tiles, fp32_dest_acc, op_name, bcast_dim, torch_op):
+    """Scalar broadcast: B is one tile (only [0,0] used), broadcast to all of A."""
+    shape_a = [1, num_tiles, 32, 32]
+    shape_b = [1, 1, 32, 32]
+    data_a = (torch.rand(shape_a) * 4 - 2).to(torch.bfloat16)
+    data_b = (torch.rand(shape_b) * 4 - 2).to(torch.bfloat16)
+    dram = ttnn.DRAM_MEMORY_CONFIG
+
+    a = ttnn.from_torch(data_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+    b = ttnn.from_torch(data_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+    out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape_a), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    work_per_core = num_tiles
+    cb_a   = _make_cb(0, core_grid)
+    cb_b   = _make_cb(1, core_grid)
+    cb_out = _make_cb(16, core_grid)
+
+    reader_compile_args = (
+        [0]
+        + ttnn.TensorAccessorArgs(a).get_compile_time_args()
+        + ttnn.TensorAccessorArgs(b).get_compile_time_args()
+    )
+    writer_compile_args = [16] + ttnn.TensorAccessorArgs(out).get_compile_time_args()
+
+    rd_rt = ttnn.RuntimeArgs()
+    wr_rt = ttnn.RuntimeArgs()
+    rd_rt[0][0] = [a.buffer_address(), b.buffer_address(), num_tiles, 0, 0, 0, 1]
+    wr_rt[0][0] = [out.buffer_address(), num_tiles, 0]
+
+    reader_kd = ttnn.KernelDescriptor(
+        kernel_source=READER_BINARY_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=reader_compile_args,
+        runtime_args=rd_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer_kd = ttnn.KernelDescriptor(
+        kernel_source=WRITER_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
+        compile_time_args=writer_compile_args,
+        runtime_args=wr_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    compute_kd = _build_compute_kd(
+        core_grid, BINARY_BCAST_KERNEL, work_per_core,
+        {"BINARY_OP_NAME": op_name, "BCAST_DIM": bcast_dim},
+        fp32_dest_acc,
+    )
+    pd = ttnn.ProgramDescriptor(kernels=[reader_kd, writer_kd, compute_kd], semaphores=[], cbs=[cb_a, cb_b, cb_out])
+    out_tensor = ttnn.generic_op([a, b, out], pd)
+    out_torch = ttnn.to_torch(out_tensor).to(torch.float32)
+    # Scalar bcast — B[0,0] applied to all elements of A
+    scalar_b = data_b[0, 0, 0, 0].to(torch.float32)
+    golden = torch_op(data_a.to(torch.float32), scalar_b)
+    _check_pcc(out_torch, golden, 0.999, f"binary_bcast_scalar {op_name} n={num_tiles}")
+
+
 @pytest.mark.parametrize("upfront_n", [4, 8])
 def test_1_copy_upfront_RAW_REFERENCE(device, upfront_n):
     """Raw-LLK reference for the upfront-block lifecycle."""
