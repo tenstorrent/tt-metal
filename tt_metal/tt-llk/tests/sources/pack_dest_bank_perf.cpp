@@ -91,6 +91,7 @@ const bool is_int_fpu_en = true;
 const bool is_int_fpu_en = false;
 #endif
 
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 
@@ -110,21 +111,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-#ifdef ARCH_BLACKHOLE
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(4, formats.math);
-#else
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(4, formats.math);
-#endif
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(4, formats.math);
 
         for (std::uint32_t block_tile = 0; block_tile < TILE_CNT; block_tile++)
         {
-#ifdef ARCH_BLACKHOLE
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 block_tile, formats.math, formats.math, 4);
-#else
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                block_tile, formats.math, formats.math);
-#endif
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
@@ -150,13 +142,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
-#ifdef ARCH_BLACKHOLE
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                            block_tile, formats.math, formats.math, 4);
-#else
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                            block_tile, formats.math, formats.math);
-#endif
+                        _llk_math_eltwise_unary_datacopy_wrapper_<
+                            DataCopyType::A2D,
+                            DstSync::SyncHalf,
+                            is_fp32_dest_acc_en,
+                            BroadcastType::NONE,
+                            unpack_to_dest>(block_tile, formats.math, formats.math, 4);
                     }
                 }
             }
@@ -172,13 +163,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
-#ifdef ARCH_BLACKHOLE
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                            block_tile, formats.math, formats.math, 4);
-#else
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                            block_tile, formats.math, formats.math);
-#endif
+                        _llk_math_eltwise_unary_datacopy_wrapper_<
+                            DataCopyType::A2D,
+                            DstSync::SyncHalf,
+                            is_fp32_dest_acc_en,
+                            BroadcastType::NONE,
+                            unpack_to_dest>(block_tile, formats.math, formats.math, 4);
                     }
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
@@ -192,6 +182,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
@@ -214,15 +205,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-#ifdef ARCH_BLACKHOLE
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT, FACE_R_DIM, TILE_C_DIM, 4);
-        _llk_pack_init_<false, false, false>(formats.pack_src, FACE_R_DIM, TILE_C_DIM, num_faces, TILE_CNT);
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(
+            formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT, FACE_R_DIM, TILE_C_DIM, 4);
+        _llk_pack_init_with_src_wrapper_<false, false, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces, false, false, TILE_CNT);
         reconfigure_packer_l1_acc(L1_ACC);
-#else
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT, FACE_R_DIM, 4);
-        _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, 4, false, false, NUM_TILES_IN_BLOCK);
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
-#endif
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_packer_wait_for_math_done_();
         PROFILER_SYNC();

@@ -46,6 +46,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "ckernel_sfpu.h"
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
@@ -62,11 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 // copy srca to dest
-#ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(TILE_NUM_FACES, formats.math);
-#else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(TILE_NUM_FACES, formats.math);
-#endif
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(TILE_NUM_FACES, formats.math);
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
@@ -102,6 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
@@ -110,15 +108,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_<false, false>(FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+    _llk_pack_init_wrapper_<false, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_<false, false>(formats.pack_dst, FACE_R_DIM, TILE_NUM_FACES);
-    _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en, false>();
-#endif
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
         "NUM_TILES_IN_BLOCK exceeds max dest tiles");

@@ -62,6 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // ---------------------------------------------------------------------------
 #ifdef LLK_TRISC_MATH
 
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
@@ -74,11 +75,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-#ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(params.num_faces, formats.math);
-#else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(params.num_faces, formats.math);
-#endif
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(params.num_faces, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
@@ -93,13 +90,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Standard datacopy: sparse Tile32x32 DEST slots.
             // The block-contiguous pack handles the sparse->dense conversion.
-#ifdef ARCH_BLACKHOLE
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
+            _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
                 tile, formats.math, formats.math, params.num_faces);
-#else
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
-                tile, formats.math, formats.math);
-#endif
         }
 
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

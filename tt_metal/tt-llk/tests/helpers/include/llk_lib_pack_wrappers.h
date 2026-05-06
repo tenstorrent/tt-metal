@@ -13,6 +13,47 @@ using ckernel::TILE_C_DIM;
 
 #ifdef ARCH_WORMHOLE
 
+inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pack_src_format)
+{
+    (void)pack_src_format;
+    return false;
+}
+
+template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
+inline void _llk_pack_hw_configure_wrapper_(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim  = FACE_R_DIM,
+    const std::uint32_t tile_c_dim  = TILE_C_DIM,
+    const std::uint32_t num_faces   = 4,
+    const bool partial_face         = false,
+    const bool narrow_tile          = false,
+    const std::uint32_t relu_config = 0)
+{
+    (void)tile_c_dim;
+    (void)tilize;
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize>(
+        pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
+}
+
+template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+inline void _llk_pack_reconfig_data_format_wrapper_(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces  = 4,
+    const bool partial_face        = false,
+    const bool narrow_tile         = false,
+    const std::uint32_t num_tiles  = 1)
+{
+    (void)tile_c_dim;
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
+        pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+}
+
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_init_wrapper_(
     const std::uint32_t pack_dst_format,
@@ -26,6 +67,46 @@ inline void _llk_pack_init_wrapper_(
     (void)tile_c_dim;
     (void)tilize;
     _llk_pack_init_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+}
+
+template <bool untilize = false, bool zero_output = false, bool tilize = false>
+inline void _llk_pack_init_with_src_wrapper_(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t face_r_dim       = FACE_R_DIM,
+    const std::uint32_t tile_c_dim       = TILE_C_DIM,
+    const std::uint32_t num_faces        = 4,
+    const bool partial_face              = false,
+    const bool narrow_tile               = false,
+    const std::uint32_t num_tiles        = 1,
+    const bool skip_bh_tilize_workaround = false)
+{
+    (void)pack_src_format;
+    (void)tile_c_dim;
+    (void)tilize;
+    (void)skip_bh_tilize_workaround;
+    _llk_pack_init_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+}
+
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false, bool wormhole_is_fp32_dest_acc_en = is_fp32_dest_acc_en>
+inline void _llk_pack_dest_init_wrapper_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
+{
+    _llk_pack_dest_init_<Dst, wormhole_is_fp32_dest_acc_en, untilize>(face_r_dim, narrow_tile);
+}
+
+template <
+    std::uint32_t block_ct_dim,
+    std::uint32_t full_ct_dim    = block_ct_dim,
+    bool diagonal                = false,
+    bool narrow_row              = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense                   = false>
+inline void _llk_pack_untilize_init_wrapper_(
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+{
+    (void)pack_src_format;
+    (void)dense;
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(pack_dst_format, face_r_dim, num_faces);
 }
 
 template <
@@ -49,7 +130,52 @@ inline void _llk_pack_untilize_wrapper_(
         address, pack_dst_format, face_r_dim, tile_dst_rt_offset);
 }
 
+inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_format, const std::uint32_t face_r_dim = FACE_R_DIM)
+{
+    (void)pack_src_format;
+    _llk_pack_untilize_uninit_(face_r_dim);
+}
+
 #else // ARCH_BLACKHOLE version of the wrappers
+
+inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pack_src_format)
+{
+    return IS_8BIT_FORMAT(pack_src_format);
+}
+
+template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
+inline void _llk_pack_hw_configure_wrapper_(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim  = FACE_R_DIM,
+    const std::uint32_t tile_c_dim  = TILE_C_DIM,
+    const std::uint32_t num_faces   = 4,
+    const bool partial_face         = false,
+    const bool narrow_tile          = false,
+    const std::uint32_t relu_config = 0)
+{
+    (void)narrow_tile;
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize, tilize>(
+        pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+}
+
+template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+inline void _llk_pack_reconfig_data_format_wrapper_(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t tile_c_dim = TILE_C_DIM,
+    const std::uint32_t num_faces  = 4,
+    const bool partial_face        = false,
+    const bool narrow_tile         = false,
+    const std::uint32_t num_tiles  = 1)
+{
+    (void)narrow_tile;
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
+        pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, num_tiles);
+}
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void _llk_pack_init_wrapper_(
@@ -65,6 +191,48 @@ inline void _llk_pack_init_wrapper_(
     (void)partial_face;
     (void)narrow_tile;
     _llk_pack_init_<untilize, zero_output, tilize>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+}
+
+template <bool untilize = false, bool zero_output = false, bool tilize = false>
+inline void _llk_pack_init_with_src_wrapper_(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t face_r_dim       = FACE_R_DIM,
+    const std::uint32_t tile_c_dim       = TILE_C_DIM,
+    const std::uint32_t num_faces        = 4,
+    const bool partial_face              = false,
+    const bool narrow_tile               = false,
+    const std::uint32_t num_tiles        = 1,
+    const bool skip_bh_tilize_workaround = false)
+{
+    (void)pack_dst_format;
+    (void)partial_face;
+    (void)narrow_tile;
+    _llk_pack_init_<untilize, zero_output, tilize>(pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles, skip_bh_tilize_workaround);
+}
+
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false, bool wormhole_is_fp32_dest_acc_en = is_fp32_dest_acc_en>
+inline void _llk_pack_dest_init_wrapper_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
+{
+    (void)face_r_dim;
+    (void)narrow_tile;
+    (void)wormhole_is_fp32_dest_acc_en;
+    _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en>();
+}
+
+template <
+    std::uint32_t block_ct_dim,
+    std::uint32_t full_ct_dim    = block_ct_dim,
+    bool diagonal                = false,
+    bool narrow_row              = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense                   = false>
+inline void _llk_pack_untilize_init_wrapper_(
+    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+{
+    static_assert(!diagonal, "Blackhole pack untilize does not support diagonal mode");
+    (void)pack_dst_format;
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(pack_src_format, pack_dst_format, face_r_dim, num_faces);
 }
 
 template <
@@ -87,6 +255,12 @@ inline void _llk_pack_untilize_wrapper_(
     (void)face_r_dim;
     (void)row_num_datums;
     _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(address, num_faces, tile_dst_rt_offset);
+}
+
+inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_format, const std::uint32_t face_r_dim = FACE_R_DIM)
+{
+    (void)face_r_dim;
+    _llk_pack_untilize_uninit_(pack_src_format);
 }
 
 #endif

@@ -126,20 +126,12 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#endif
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 
-    _llk_pack_init_<false, false>(formats.pack_dst);
+    _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
     _llk_pack_reduce_mask_config_<false, REDUCE_DIM>();
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<DstSync::SyncFull, is_fp32_dest_acc_en, false>();
-#endif
+    _llk_pack_dest_init_wrapper_<DstSync::SyncFull, is_fp32_dest_acc_en, false>();
 
     _llk_packer_wait_for_math_done_();
     _llk_pack_<DstSync::SyncFull, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(params.buffer_Res[0]));

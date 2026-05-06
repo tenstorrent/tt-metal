@@ -84,10 +84,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "ckernel_sfpu.h"
-#include "sfpu/ckernel_sfpu_reduce.h"
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "sfpu/ckernel_sfpu_reduce.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -107,11 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // Initialize datacopy from srcA to dest
-#ifdef ARCH_BLACKHOLE
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(4, formats.math);
-#else
-        _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(4, formats.math);
-#endif
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(4, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
@@ -216,20 +213,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // Configure packer hardware
-#ifdef ARCH_BLACKHOLE
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#else
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
-#endif
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 
         _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
 
         // Initialize destination for packing
-#ifdef ARCH_BLACKHOLE
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-        _llk_pack_dest_init_<DstSync::SyncHalf, false, false>();
-#endif
+        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false, false>();
         PROFILER_SYNC();
     }
     {

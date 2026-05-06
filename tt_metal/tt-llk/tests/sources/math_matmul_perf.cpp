@@ -194,6 +194,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
@@ -216,8 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-#ifdef ARCH_BLACKHOLE
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(
             formats.pack_src,
             formats.pack_dst,
             TILE_SIZE_PACK,
@@ -225,14 +225,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TILE_C_DIM,
             num_faces,
             PARTIAL_FACE_PACK);
-        _llk_pack_init_<false, false, false>(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_init_wrapper_<false, false, false>(formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-#else
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(
-            formats.pack_src, formats.pack_dst, TILE_SIZE_PACK, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces, PARTIAL_FACE_PACK);
-        _llk_pack_init_<false, false>(formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces, PARTIAL_FACE_PACK);
-        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en, false>();
-#endif
         PROFILER_SYNC();
     }
     {
