@@ -13,13 +13,12 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import (
     sample_host,
     PagedAttentionConfig,
-    preprocess_inputs_prefill,
 )
 
 from models.tt_transformers.tt.model_config import DecodersPrecision
 from models.experimental.mistral_24b.tt.model import MistralTransformer as Transformer
 
-from models.tt_transformers.tt.generator import Generator
+from models.experimental.mistral_24b.tt.generator import MistralGenerator
 
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
@@ -231,30 +230,18 @@ def run_generation_exactly_like_test_end2end(
     logger.info("Running generation exactly like test_end2end.py...")
 
     logger.info("Running Vision Model...")
-    generator = Generator([text_model], [model_args], vision_model.mesh_device, tokenizer=model_args.tokenizer)
+    generator = MistralGenerator([text_model], [model_args], vision_model.mesh_device, tokenizer=model_args.tokenizer)
     tt_kv_cache = [[l.attention.layer_past for l in text_model.layers]] if paged_attention_config else None
 
-    input_tokens_prefill = input_ids
-    batch_size = input_tokens_prefill.shape[0]
-
-    prompt_text = model_args.tokenizer.decode(input_ids[0].tolist())
-    input_prompts = [prompt_text]
-
-    (
-        input_tokens_prefill_pt,
-        encoded_prompts,
-        decoding_pos,
-        prefill_lens,
-    ) = preprocess_inputs_prefill(
-        input_prompts,
-        model_args.tokenizer,
-        [model_args],
-        instruct=True,
-        max_generated_tokens=max_gen_len,
-        max_prefill_len=8192,
-    )
-
-    input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+    input_tokens_prefill_pt = input_ids
+    batch_size = input_tokens_prefill_pt.shape[0]
+    attention_mask = processed_inputs.get("attention_mask", None)
+    if attention_mask is not None:
+        decoding_pos = attention_mask.sum(dim=-1).tolist()
+    else:
+        decoding_pos = [input_tokens_prefill_pt.shape[1]] * batch_size
+    prefill_lens = decoding_pos
+    encoded_prompts = [input_ids[0].tolist()]
 
     logger.info("Running prefill...")
     logits = generator.prefill_forward_text(
@@ -262,7 +249,6 @@ def run_generation_exactly_like_test_end2end(
         page_table=page_table,
         kv_cache=tt_kv_cache,
         prompt_lens=decoding_pos,
-        enable_trace=False,
         vision_model=vision_model,
         processed_inputs=processed_inputs,
     )
