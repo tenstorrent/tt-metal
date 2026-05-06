@@ -1,22 +1,27 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <chrono>
-#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "impl/program/program_impl.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 
 namespace tt::tt_metal {
     class Inspector;
     class MetalContext;
 
     namespace distributed {
-        class MeshDevice;
-        class MeshWorkloadImpl;
+    class MeshDeviceImpl;
+    class MeshWorkloadImpl;
     }
 }
 
@@ -42,11 +47,21 @@ struct ProgramData {
 };
 
 struct MeshDeviceData {
-    const distributed::MeshDevice* mesh_device = nullptr;
+    const distributed::MeshDeviceImpl* mesh_device = nullptr;
     int mesh_id{};
     std::optional<int> parent_mesh_id;
     bool initialized = false;
 };
+
+struct MeshWorkloadRuntimeEntry {
+    uint64_t workload_id = 0;
+    uint64_t runtime_id = 0;
+    std::string_view operation_name;
+    std::vector<TensorSpec> tensor_specs;
+    std::optional<distributed::MeshTraceId> trace_id;
+};
+
+std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs);
 
 struct MeshWorkloadData {
     const distributed::MeshWorkloadImpl* mesh_workload = nullptr;

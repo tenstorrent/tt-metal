@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -355,7 +355,7 @@ def softshrink_bw(x, y):
 
 
 def unary_div_bw(x, y):
-    ttnn.div_bw(x, y, 3.0, round_mode=None)
+    ttnn.div_bw(x, y, 3.0, rounding_mode=None)
 
 
 all_binary_ops = [
@@ -1102,7 +1102,7 @@ def hardshrink(x):
 
 
 def elu(x):
-    ttnn.elu(x, 2)
+    ttnn.elu(x, alpha=2)
 
 
 def heaviside(x):
@@ -1297,8 +1297,8 @@ def erf_slow(x):
     ttnn.erf(x, fast_and_approximate_mode=False)
 
 
-def erfc_slow(x):
-    ttnn.erfc(x, fast_and_approximate_mode=False)
+def erfc_default(x):
+    ttnn.erfc(x)
 
 
 def rsqrt_slow(x):
@@ -2063,11 +2063,7 @@ all_unary_ops = [
     },
     {
         "op": ttnn.erfc,
-        "name": "ttnn.erfc_fast_and_approx_True",
-    },
-    {
-        "op": erfc_slow,
-        "name": "ttnn.erfc_fast_and_approx_False",
+        "name": "ttnn.erfc",
     },
     {
         "op": ttnn.rsqrt,
@@ -2457,7 +2453,7 @@ def subalpha_bw(x, y, z):
 
 
 def div_bw(x, y, z):
-    ttnn.div_bw(x, y, z, round_mode=None)
+    ttnn.div_bw(x, y, z, rounding_mode=None)
 
 
 def add_bw(x, y, z):

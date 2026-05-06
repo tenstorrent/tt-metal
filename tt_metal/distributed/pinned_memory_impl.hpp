@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -76,11 +76,14 @@ public:
 
     void add_barrier_event(const distributed::MeshEvent& event);
 
+    bool lock_may_block() const;
     void* lock();
 
     void unlock();
 
 private:
+    void drain_barrier_events();
+
     void initialize_from_devices(
         const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc);
 

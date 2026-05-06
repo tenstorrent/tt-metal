@@ -1,38 +1,44 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 300
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("experimental::nlp_create_qkv_heads", all_cases=False)
+model_traced_params = loader.get_suite_parameters("experimental::nlp_create_qkv_heads")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 768)],  # Batch, seq, 1, hidden_dim (3 * num_heads * head_dim)
+        "input_a_shape": [(1, 1, 32, 768)],  # Batch, seq, 1, hidden_dim (3 * num_heads * head_dim)
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "num_heads": [12],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
@@ -41,77 +47,193 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
+def _qkv_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
+def _qkv_per_chip_q(per_chip_input, num_q_heads, num_kv_heads):
+    b, _, s, hd = per_chip_input.shape
+    head_dim = hd // (num_q_heads + 2 * num_kv_heads)
+    (q, _k, _v) = torch.split(
+        per_chip_input,
+        [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim],
+        dim=-1,
+    )
+    return torch.reshape(q, [b, s, num_q_heads, head_dim]).transpose(-3, -2)
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    num_q_heads,
-    num_kv_heads,
-    output_memory_config,
+    num_q_heads=None,
+    num_kv_heads=None,
+    output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
-    else:
-        shape = input_shape
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Input shape is [B, 1, S, hidden_dim] where S is the sequence length
-    # For shape [1, 1, 256, 1536]: B=1, S=256, hidden_dim=1536
+    # Re-inject memory_config ONLY when the master config originally had it as a
+    # kwarg. Some models (e.g. gpt_oss) pass memory_config explicitly; others
+    # (e.g. wan/tt_dit) don't pass it at all. Falling back to output_memory_config
+    # would inject a kwarg the model never set, causing a trace diff.
+    mc_raw = kwargs.get("memory_config")
+    if mc_raw not in (None, "__ABSENT__") and "memory_config" not in op_kwargs:
+        parsed_mc = parse_dict_value("memory_config", mc_raw) if isinstance(mc_raw, dict) else mc_raw
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
+
+    # num_heads flows through op_kwargs; read it for golden computation
+    if num_q_heads is None:
+        num_q_heads = op_kwargs.get("num_heads", kwargs.get("num_heads"))
+
+    # Convert input_a_shape to tuple (loader should always provide this)
+    if isinstance(input_a_shape, (tuple, list)):
+        shape = tuple(input_a_shape)
+    else:
+        shape = input_a_shape
+
+    # Extract dimensions from shape: [B, 1, S, hidden_dim]
     batch_size = shape[0]
-    seq_len = shape[2]  # Third dimension is sequence length
+    seq_len = shape[2]
     hidden_dim = shape[3]
-    # For GQA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
-    # So head_dim = hidden_dim / (num_q_heads + 2 * num_kv_heads)
+
+    # Convert to int if needed (loader provides these, just ensure type correctness)
+    if num_q_heads is not None:
+        num_q_heads = int(num_q_heads)
+    if num_kv_heads is not None:
+        num_kv_heads = int(num_kv_heads)
+
+    if num_q_heads is None:
+        return [(False, f"Missing num_q_heads={num_q_heads}"), 0.0]
+    # Default num_kv_heads to num_q_heads (standard MHA) when not provided
+    if num_kv_heads is None:
+        num_kv_heads = num_q_heads
+
+    # Calculate head_dim from provided parameters
+    # For GQA/MHA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
     head_dim = hidden_dim // (num_q_heads + 2 * num_kv_heads)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # nlp_create_qkv_heads reshapes input [B, 1, S, hidden_dim] to Q heads [B, num_q_heads, S, head_dim]
-    # Input shape: [1, 1, 256, 1536] -> Output Q: [1, 16, 256, 64]
-    # So seq_len is the third dimension (256), not the second
-    expected_output_shape = (batch_size, num_q_heads, seq_len, head_dim)
-    torch_output_tensor = torch.zeros(expected_output_shape, dtype=torch_input_tensor_a.dtype)
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology and runs the kernel independently. The gathered
+    # output is the per-chip Q tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
+    (ref_q, _, _) = torch.split(
+        torch_input_tensor_a,
+        [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim],
+        dim=-1,
+    )
+    ref_q = torch.reshape(ref_q, [batch_size, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
+    torch_output_tensor = ref_q
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": input_a_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
     if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+        if is_mesh_device and input_a_tensor_placement:
+            input_tensor_a = create_tensor_on_mesh(
+                torch_input_tensor_a,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            input_tensor_a = ttnn.from_torch(
+                torch_input_tensor_a,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
+    else:
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
     # nlp_create_qkv_heads signature: (input, input_kv=None, *, num_heads, num_kv_heads=None, ...)
     # Note: The function uses num_heads (not num_q_heads), and num_kv_heads is optional
     # Returns a tuple of tensors (q_heads, k_heads, v_heads)
-    output_result = ttnn.experimental.nlp_create_qkv_heads(
-        input_tensor_a, num_heads=num_q_heads, num_kv_heads=num_kv_heads, memory_config=output_memory_config
-    )
+    # num_heads and num_kv_heads flow through op_kwargs from traced config.
+    # Ensure num_kv_heads default matches our golden computation.
+    if "num_kv_heads" not in op_kwargs and num_kv_heads is not None:
+        op_kwargs["num_kv_heads"] = num_kv_heads
+    output_result = ttnn.experimental.nlp_create_qkv_heads(input_tensor_a, **op_kwargs)
     # Handle tuple return - convert to torch
     if isinstance(output_result, tuple):
         # Take the first tensor (q_heads) for comparison, or concatenate all
-        output_tensor = ttnn.to_torch(output_result[0])
+        output_tensor = mesh_tensor_to_torch(output_result[0], device if is_mesh_device else None)
     else:
-        output_tensor = ttnn.to_torch(output_result)
+        output_tensor = mesh_tensor_to_torch(output_result, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC - using lower tolerance for complex operations
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
     return [pcc, e2e_perf]

@@ -13,5 +13,45 @@ direct_write:
     "Posted writes": "posted"
     "Same destination": "same_dest"
     "Same value": "same_value"
-    "NOC Index": "noc_index"
+    "NoC Index": "noc_index"
     "Stateful": "stateful"
+noc_estimator:
+  attributes:
+    "Memory type": "memory_type"
+    "Mechanism": "mechanism"
+    "Pattern": "pattern"
+    "Same axis": "same_axis"
+    "Stateful": "stateful"
+    "Loopback": "loopback"
+    "Number of subordinates": "num_subordinates"
+    "NoC Index": "noc_index"
+  value_mappings:
+    "Memory type":
+      0: "L1"
+      1: "DRAM Interleaved"
+      2: "DRAM Sharded"
+    "Mechanism":
+      0: "unicast"
+      1: "multicast"
+      2: "multicast_linked"
+    "Pattern":
+      0: "one_to_one"
+      1: "one_from_one"
+      2: "one_to_all"
+      3: "one_from_all"
+      4: "all_to_all"
+      5: "all_from_all"
+      6: "one_to_row"
+      7: "row_to_row"
+      8: "one_to_column"
+      9: "column_to_column"
+
+    "Same axis":
+      0: false
+      1: true
+    "Stateful":
+      0: false
+      1: true
+    "Loopback":
+      0: false
+      1: true

@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <variant>
@@ -11,12 +11,11 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
@@ -40,7 +39,7 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};
@@ -78,12 +77,7 @@ void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::Mesh
             expected_output.push_back(fmt::format("({},{}) After wait...", x, y));
         }
     }
-    EXPECT_TRUE(
-        FileContainsAllStrings(
-            DPrintMeshFixture::dprint_file_name,
-            expected_output
-        )
-    );
+    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, expected_output));
 }
 
 TEST_F(DPrintMeshFixture, TensixTestPrintFinish) {

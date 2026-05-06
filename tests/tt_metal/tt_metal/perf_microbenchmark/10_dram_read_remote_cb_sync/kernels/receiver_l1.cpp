@@ -1,11 +1,12 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
-#include "remote_circular_buffer_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/remote_circular_buffer.h"
+#include "experimental/noc.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 
 constexpr uint32_t num_layers = get_compile_time_arg_val(0);

@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 // #include <unistd.h>
@@ -120,7 +120,7 @@ void kernel_main() {
     } else if (worker_core) {
         // Calculate base addresses once
         const uint32_t base_input_tensor_addr = get_read_ptr(input_tensor_cb_id);
-        const uint32_t base_receiver_l1_addresses = get_read_ptr(fabric_receiver_cb_id) + chip_id_offset;
+        const uint32_t base_receiver_l1_addresses = get_write_ptr(fabric_receiver_cb_id) + chip_id_offset;
 
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             const uint32_t rem = linear_input_packet_start_idx + i;

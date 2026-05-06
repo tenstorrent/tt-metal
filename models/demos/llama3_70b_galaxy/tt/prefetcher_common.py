@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
@@ -23,6 +23,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         mesh_sub_device_manager_id_prefill=None,
         mesh_sub_device_manager_id_decode=None,
         save_tensor_addresses=False,
+        is_qwen=False,
     ):
         """
         - sub devices

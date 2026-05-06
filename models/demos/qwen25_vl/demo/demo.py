@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -13,6 +13,8 @@ from transformers import AutoProcessor
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
 
 import ttnn
+from models.common.sampling import SamplingParams
+from models.common.utility_functions import is_blackhole
 from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
     merge_vision_tokens,
@@ -25,8 +27,12 @@ from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.generator import SamplingParams
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
+
+# trace_region_size per architecture
+TRACE_REGION_SIZE = 28467200
+if is_blackhole():
+    TRACE_REGION_SIZE = 36000000
 
 
 def create_tt_page_table(paged_attention_config, tt_model_args):
@@ -229,7 +235,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 28467200, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": TRACE_REGION_SIZE, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -271,6 +277,9 @@ def test_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
+
+    if mesh_device.get_num_devices() == 1 and "Qwen2.5-VL-7B" in os.environ.get("HF_MODEL", ""):
+        pytest.skip("Qwen2.5-VL-7B does not support running on N150")
 
     logger.info(f"mesh_device: {mesh_device}")
     use_tt_vision = True
@@ -356,6 +365,9 @@ def test_demo(
 
     processor = model_args.processor
     tokenizer = model_args.tokenizer
+
+    # NOTE: For qwen 2.5 vl, we do not use QK fused ops
+    model_args.use_qk_fused = False
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     # Load vision model and processor
@@ -514,7 +526,7 @@ def test_demo(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Run decode forward
-            logits = generator.decode_forward_text(
+            logits, _ = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
@@ -566,6 +578,8 @@ def test_demo(
                         logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
                             users_decoding = False
+                    else:
+                        all_outputs[user].append(user_tok)
 
             # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
@@ -628,15 +642,20 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    if (
-        is_ci_env
-        and "bert-score" in test_id
-        and "Qwen2.5-VL-3B" not in model_args.base_model_name
-        and "Qwen2.5-VL-7B" not in model_args.base_model_name
-    ):
-        # todo)) fix this issue before enabling BERTScore check for 3B and 7B models:
-        #        https://github.com/tenstorrent/tt-metal/issues/28442
-        assert mesh_device.get_num_devices() > 2, "BERTScore is only supported for T3K for now"
+    # Quick sanity check that the model doesn't produce special tokens=garbage output
+    is_special_tokens_produced = [False] * len(all_outputs)
+    for i, output in enumerate(all_outputs):
+        # output = output[len(encoded_prompts[i]):]
+        is_eos = [token in tokenizer.stop_tokens for token in output]
+        if any(is_eos):
+            output = output[: is_eos.index(True)]
+        is_special_tokens_produced[i] = any(token in tokenizer.all_special_ids for token in output)
+    if any(is_special_tokens_produced):
+        logger.warning(f"{sum(is_special_tokens_produced)}/{len(all_outputs)} users produced special tokens")
+        if is_ci_env:
+            raise RuntimeError("Model produced special tokens")
+
+    if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)
         from bert_score import score as bert_score
 
@@ -808,9 +827,10 @@ def test_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
+            run_type="demo",
             ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
+            device_name=tt_device_name,
             num_layers=model_args.n_layers,
             batch_size=batch_size,
             config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
@@ -835,6 +855,8 @@ def load_expected_text(model_name):
         input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_72B.txt"
     elif "Qwen2.5-VL-32B" in model_name:
         input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_32B.txt"
+    elif "Qwen2.5-VL-7B" in model_name:
+        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_7B.txt"
     elif "Qwen2.5-VL-3B" in model_name:
         input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_3B.txt"
     else:

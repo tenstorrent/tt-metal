@@ -1,55 +1,67 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_model_traced_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 300
 
-# Load traced configurations from real model tests
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("pad", all_cases=False)
+model_traced_params = loader.get_suite_parameters("pad")
 
-# Parameters provided to the test vector generator are defined here.
 parameters = {
-    # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 32)],
+        "input_a_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "padding": [
-            ((0, 1), (0, 1), (0, 2), (0, 2))
-        ],  # padding as tuple of tuples: ((dim0_left, dim0_right), (dim1_left, dim1_right), ...)
+        "padding": [((0, 1), (0, 1), (0, 2), (0, 2))],
         "value": [0.0],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
-# Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def invalidate_vector(test_vector) -> tuple:
+    storage_type = test_vector.get("storage_type")
+    if storage_type and "HOST" in str(storage_type):
+        return True, "HOST storage operation: CPU-side preprocessing, not a device operation to test"
+    return False, None
+
+
+def mesh_device_fixture():
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    output_memory_config,
+    output_memory_config=None,
     padding=None,
     value=0.0,
     output_padded_shape=None,
@@ -57,82 +69,99 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle tuple input_shape for sample suite
-    if isinstance(input_shape, (tuple, list)):
-        shape = tuple(input_shape)
-    else:
-        shape = input_shape
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2", "arg3"}, output_memory_config=output_memory_config)
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(shape)
+    # v2 tracer captures pad args positionally:
+    #   Format A: arg1=padding (nested list [[left,right],...]), value=fill_value
+    #   Format B: arg1=output_padded_shape (flat list), arg2=input_tensor_start, arg3=fill_value
+    pos_args = extract_positional_args(kwargs)
+    arg1 = pos_args.get(1, None)
+    arg2 = pos_args.get(2, None)
+    arg3 = pos_args.get(3, None)
 
-    # Determine which pad format is being used
-    if output_padded_shape is not None and input_tensor_start is not None:
-        # Using output_padded_shape format from traced JSON
-        # Calculate padding for PyTorch reference from logical shapes
+    # Track which calling convention the master used so we can mirror it.
+    # Master may have called ttnn.pad(t, padding) (positional → arg1) or
+    # ttnn.pad(t, padding=padding) (kwarg). The two produce different traces.
+    pad_was_positional = False
+
+    if padding is None and arg1 is not None:
+        is_nested = isinstance(arg1, list) and arg1 and isinstance(arg1[0], (list, tuple))
+        if is_nested:
+            padding = arg1
+            pad_was_positional = True
+        else:
+            output_padded_shape = arg1
+            pad_was_positional = True
+            if arg2 is not None and input_tensor_start is None:
+                input_tensor_start = arg2
+            if arg3 is not None and value is None:
+                value = arg3
+
+    if value is None:
+        value = 0.0
+
+    shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+
+    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
+        shape
+    )
+
+    if padding is not None:
+        pass
+    elif output_padded_shape is not None and input_tensor_start is not None:
         calculated_padding = []
         for i in range(len(shape)):
             start = input_tensor_start[i] if i < len(input_tensor_start) else 0
             end = output_padded_shape[i] - shape[i] - start
-            # Ensure padding is non-negative (if output < input, this is invalid for padding)
-            if end < 0:
-                # This means output is smaller than input - invalid for padding, use 0
-                calculated_padding.append([0, 0])
-            else:
-                calculated_padding.append([start, end])
-
-        # Convert to torch padding format (reverse order and flatten) for reference output
-        torch_padding = []
-        for i in range(len(calculated_padding) - 1, -1, -1):
-            for p in calculated_padding[i]:
-                torch_padding.append(p)
-        torch_output_tensor = torch.nn.functional.pad(torch_input_tensor_a, torch_padding, mode="constant", value=value)
-
-        # Convert to padding format for ttnn.pad
-        padding = tuple(tuple(p) for p in calculated_padding)
+            calculated_padding.append([start, max(0, end)])
+        padding = calculated_padding
     else:
-        # Using padding format (default)
-        if padding is None:
-            # Fallback: no padding
-            padding = [[0, 0]] * len(shape)
+        padding = [[0, 0]] * len(shape)
 
-        # Convert padding format for PyTorch (reverse order and flatten)
-        torch_padding = []
-        for i in range(len(padding) - 1, -1, -1):  # go through each dim of padding
-            for p in padding[i]:
-                torch_padding.append(p)  # each dim has 2 padding values
-        torch_output_tensor = torch.nn.functional.pad(torch_input_tensor_a, torch_padding, mode="constant", value=value)
+    # PyTorch reference
+    torch_padding = []
+    for i in range(len(padding) - 1, -1, -1):
+        for p in padding[i]:
+            torch_padding.append(p)
+    torch_output = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=value)
 
-        if isinstance(padding, list):
-            padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
+    if isinstance(padding, list):
+        padding = tuple(tuple(p) if isinstance(p, (list, tuple)) else p for p in padding)
 
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
-    is_host = storage_type and "HOST" in str(storage_type)
-
-    # Build from_torch arguments based on storage_type
-    from_torch_kwargs = {
-        "dtype": input_a_dtype,
-        "layout": input_a_layout,
-    }
-
-    # Only add device and memory_config if not HOST storage
-    if not is_host:
-        from_torch_kwargs["device"] = device
-        from_torch_kwargs["memory_config"] = input_a_memory_config
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+    if not is_mesh_device or not input_a_tensor_placement:
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=input_a_dtype,
+            layout=input_a_layout,
+            device=device,
+            memory_config=input_a_memory_config,
+        )
+    else:
+        input_tensor = create_tensor_on_mesh(
+            torch_input,
+            device,
+            input_a_dtype,
+            input_a_layout,
+            input_a_memory_config,
+            input_a_tensor_placement,
+        )
 
     start_time = start_measuring_time()
-    # Call ttnn.pad directly - this will fail for HOST tensors (padding will be ignored)
-    output_tensor = ttnn.pad(input_tensor_a, padding=padding, value=value)
-    output_tensor = ttnn.to_torch(output_tensor)
+    if pad_was_positional:
+        # Mirror master: pad passed as arg1 positionally.
+        output_tensor = ttnn.pad(input_tensor, padding, value=value, **op_kwargs)
+    else:
+        output_tensor = ttnn.pad(input_tensor, padding=padding, value=value, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-
+    if is_mesh_device:
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
+    pcc = check_with_pcc(torch_output, output_tensor, 0.999)
     return [pcc, e2e_perf]

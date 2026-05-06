@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,19 +6,18 @@
 
 #include <utility>
 #include "device/create_qkv_heads_from_separate_tensors_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTensorsOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> create_qkv_heads_from_separate_tensors(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_kv,
     const uint32_t num_q_heads,
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::array<Tensor, 3>> optional_output_tensors) {
+    const std::optional<std::array<Tensor, 3>>& optional_output_tensors) {
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
     TT_FATAL(
         input_tensor_q.padded_shape()[3] % num_q_heads == 0,
@@ -38,4 +37,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTenso
         optional_output_tensors);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

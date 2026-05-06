@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,8 @@
 
 #include <vector>
 #include <optional>
-#include <api/tt-metalium/event.hpp>
 #include <api/tt-metalium/sub_device_types.hpp>
 
-#include <tt_stl/assert.hpp>
 #include "launch_message_ring_buffer_state.hpp"
 #include "dispatch_settings.hpp"
 

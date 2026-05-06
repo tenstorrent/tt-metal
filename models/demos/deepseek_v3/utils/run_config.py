@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
@@ -16,10 +16,10 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
 WeightConfig = (
-    dict[str, "WeightConfig | SavedWeight | None"]
-    | list["WeightConfig | SavedWeight | None"]
+    dict[str, "WeightConfig | ttnn.Tensor | SavedWeight | None"]
+    | list["WeightConfig | ttnn.Tensor | SavedWeight | None"]
     | tuple[
-        "WeightConfig | SavedWeight | None", ...
+        "WeightConfig | ttnn.Tensor | SavedWeight | None", ...
     ]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
@@ -155,6 +155,8 @@ def _merge_run_config(
     if isinstance(
         model_state_config_item, FromWeightConfig
     ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+        if isinstance(weight_config_item, ttnn.Tensor):
+            return weight_config_item
         if isinstance(weight_config_item, SavedWeight):
             # Check if we have cached weights first
             if cached_ttnn_weights is not None and weight_config_item.path in cached_ttnn_weights:
@@ -178,6 +180,10 @@ def _merge_run_config(
     # If model config doesn't need this weight (is None), but cached weight exists, ignore it
     if model_state_config_item is None and isinstance(weight_config_item, SavedWeight):
         logger.warning(f"Cached weight {weight_config_item.path} is not needed by the model config, ignoring it.")
+        return None
+
+    if model_state_config_item is None and isinstance(weight_config_item, ttnn.Tensor):
+        logger.warning("Resolved TTNN weight is not needed by the model config, ignoring it.")
         return None
 
     raise ValueError(
@@ -390,9 +396,46 @@ def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
     """
     Load a weight tensor from a SavedWeight object to a given mesh device.
     """
-    return ttnn.load_tensor(
+    # Load tensor directly to device to properly handle sharded layouts
+    tensor = ttnn.load_tensor(
         saved_weight.path,
-    ).to(
         device=device,
-        mem_config=saved_weight.memory_config,
     )
+
+    # If a specific memory config is provided and the tensor doesn't already have it,
+    # convert to the target memory config
+    if saved_weight.memory_config is not None:
+        current_mem_config = tensor.memory_config()
+        # Check if we need to convert (e.g., if loaded as INTERLEAVED but should be SHARDED)
+        if current_mem_config.memory_layout != saved_weight.memory_config.memory_layout:
+            tensor = ttnn.to_memory_config(tensor, saved_weight.memory_config)
+
+    return tensor
+
+
+def iter_weight_config_tensors(weight_config_item: WeightConfig | ttnn.Tensor | SavedWeight | None):
+    if isinstance(weight_config_item, ttnn.Tensor):
+        yield weight_config_item
+        return
+
+    if isinstance(weight_config_item, dict):
+        for value in weight_config_item.values():
+            yield from iter_weight_config_tensors(value)
+        return
+
+    if isinstance(weight_config_item, (list, tuple)):
+        for value in weight_config_item:
+            yield from iter_weight_config_tensors(value)
+
+
+def deallocate_weight_config_tensors(weight_config_item: WeightConfig | ttnn.Tensor | SavedWeight | None) -> None:
+    seen_tensor_ids: set[int] = set()
+    for tensor in iter_weight_config_tensors(weight_config_item):
+        tensor_id = id(tensor)
+        if tensor_id in seen_tensor_ids:
+            continue
+        seen_tensor_ids.add(tensor_id)
+        try:
+            ttnn.deallocate(tensor)
+        except Exception as exc:
+            logger.warning(f"Failed to deallocate converted TTNN weight tensor: {exc}")

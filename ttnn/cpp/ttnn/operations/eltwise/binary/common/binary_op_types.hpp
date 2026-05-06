@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,6 +25,10 @@ enum class BinaryOpType {
     LDEXP,
     LOGADDEXP2,
     DIV,
+    DIV_FLOOR,
+    DIV_TRUNC,
+    REMAINDER,
+    FMOD,
     RSUB,
     POWER,
     BITWISE_XOR,
@@ -44,6 +48,7 @@ enum class BinaryOpType {
     SUBALPHA,
     XLOGY,
     HYPOT,
+    ATAN2,
     WHERE_TST,
     WHERE_TTS,
 };

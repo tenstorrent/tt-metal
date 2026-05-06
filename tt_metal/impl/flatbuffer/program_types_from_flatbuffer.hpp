@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "program_types_generated.h"
+#include <variant>
+#include "kernels/kernel.hpp"
 #include <core_coord.hpp>
 #include <kernel_types.hpp>
 #include <sub_device_types.hpp>

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/distributed_context.hpp>
 

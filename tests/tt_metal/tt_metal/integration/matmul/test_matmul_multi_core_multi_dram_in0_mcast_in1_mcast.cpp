@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,14 +27,13 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
@@ -62,13 +61,13 @@ std::tuple<
     uint32_t,
     uint32_t>
 create_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
     int num_cores_c,
-    int M,
-    int N,
+    int /*M*/,
+    int /*N*/,
     int K,
     int in0_block_w,
     int out_subblock_h,
@@ -506,7 +505,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(const std::shared_ptr<dist
     auto activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     pass &= move_tiles_to_dram(device, activations, M, K, in0_dram_addr);
 
     auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
@@ -583,9 +582,9 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCastIn1MCast) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
-    for (unsigned int id = 0; id < devices_.size(); id++) {
+    for (const auto& device : devices_) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast::
-                        matmul_multi_core_multi_dram_in0_mcast_in1_mcast(devices_.at(id)));
+                        matmul_multi_core_multi_dram_in0_mcast_in1_mcast(device));
     }
 }
 

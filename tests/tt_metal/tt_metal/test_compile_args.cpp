@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            TT_ASSERT(
+            TT_FATAL(
                 num_found == 2,
                 "Expected kernel_args.csv to contain the compile args for both kernels. Instead, found {} entries",
                 num_found);

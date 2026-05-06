@@ -74,7 +74,7 @@ This proposal assumes that the devices comprising the logical mesh are connected
 
 **Crucially, Determinism is Required:** As mandated by the SPMD model for the definition phase, both the runtime itself *and* the user's application code (including workload generation functions) **must be deterministic**. This means using deterministic algorithms and data structures (e.g., avoiding hash maps with non-deterministic iteration order if the order affects workload generation). If any host process diverges due to non-determinism, the system's behavior becomes undefined.
 
-Python bindings (e.g., pybind11) require additional care regarding determinism:
+Python bindings (e.g., nanobind) require additional care regarding determinism:
 
 1.  **Python Garbage Collection (GC) and Resource Deallocation:**
     *   **Problem:** Standard Python GC timing is non-deterministic across different processes (ranks). If C++ resource deallocation (like freeing a `MeshBuffer`) directly modifies allocator state (which is necessary for correct subsequent allocations) and is tied *only* to the Python object's destruction (e.g., via `__del__`), this critical state change will occur at different times on different ranks, leading to divergence.
@@ -125,6 +125,8 @@ Python bindings (e.g., pybind11) require additional care regarding determinism:
 This architecture ensures that all host processes agree on the *what* (the global `MeshWorkload` submitted to `MeshCommandQueue`) before diverging into the *how* (the host-specific dispatch to local device `CommandQueue`s).
 
 **Single-Rank Debugging:** A significant advantage of the proposed design is that because the user's application code interacts primarily with the global view objects (`MeshDevice`, `MeshBuffer`, `MeshWorkload`) and this view is identical across all ranks/processes up to the `MeshCommandQueue` submission point, much of the application logic can often be debugged effectively by running with a single rank/process (`mpirun -np 1 ...`). This drastically simplifies the debugging process, especially for systems with a large number of hosts.
+
+**Process launch:** For TT-Metal / TTNN multi-rank jobs, production workflows typically use **`tt-run`** (wrapper around MPI) with either **auto allocation** (`--mesh-graph-descriptor` and `--hosts` or `--mock-cluster-rank-binding`) or **legacy** `--rank-binding`; see [`ttnn/ttnn/distributed/README_ttrun.md`](../../ttnn/ttnn/distributed/README_ttrun.md).
 
 In essence, the user defines *what* computation should happen on the *entire mesh* (global view), and the runtime handles *how* to distribute and execute that computation on the *local devices* managed by each host process.
 

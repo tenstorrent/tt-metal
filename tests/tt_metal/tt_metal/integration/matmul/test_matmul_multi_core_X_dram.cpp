@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,13 +31,12 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
@@ -61,7 +60,7 @@ struct MatmulConfig {
 };
 
 std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     const MatmulConfig& cfg,
     int num_cores_r,
     int num_cores_c,
@@ -241,7 +240,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
             out_subblock_h,
             out_subblock_w);
 
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program_ = workload.get_programs().at(device_range);
@@ -365,7 +364,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 }
 
 bool assign_runtime_args_to_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     distributed::MeshWorkload& workload,
     int num_cores_r,
     int num_cores_c,
@@ -606,14 +605,14 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
-    } else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
+    }
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
         log_info(tt::LogTest, "This test is disabled in WH B0");
         GTEST_SKIP();
     }
 
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        ASSERT_TRUE(
-            unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_single_dram(devices_.at(id)));
+    for (const auto& device : devices_) {
+        ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_single_dram(device));
     }
 }
 

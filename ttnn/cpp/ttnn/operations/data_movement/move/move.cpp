@@ -1,13 +1,14 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/move/move.hpp"
 
 #include "device/move_device_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -16,36 +17,18 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-bool can_deallocate(const Tensor& input_tensor) {
-    return std::visit(
-        [&input_tensor](auto&& storage) {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return storage.mesh_buffer.use_count() == 1;
-            } else {
-                return false;
-            }
-        },
-        input_tensor.storage());
-}
-
-static inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
     TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
-    if (not can_deallocate(input_tensor)) {
+    // TODO(#38697): Migrate to Tensor::deallocate(/* force = */ false)
+    if (not input_tensor.device_storage().is_sole_owner_of_device_memory()) {
         // TODO: Should this throw error?
         return input_tensor;
     }
-    // Special handling for Mesh vs single device. Needs to be consolidated after full
-    // migration
-    if (input_tensor.device_storage().mesh_buffer) {
-        input_tensor.device_storage().mesh_buffer->deallocate();
-    } else {
-        DeallocateBuffer(*input_tensor.buffer());
-    }
+    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     if (mem_config) {
         output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
@@ -101,26 +84,24 @@ static inline Tensor move(const Tensor& input_tensor, const std::optional<Memory
         (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
                                                                          : output_tensor.device()->l1_size_per_core());
 
-    MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE;
+    ttnn::prim::MoveOpParallelizationStrategy move_op_parallelization_strategy =
+        ttnn::prim::MoveOpParallelizationStrategy::MULTI_CORE;
     if ((not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and
         compute_with_storage_grid_size.y > 1) {
-        move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
+        move_op_parallelization_strategy = ttnn::prim::MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
     }
 
-    auto output = operation::run(
-                      MoveDeviceOperation{output_mem_config, move_op_parallelization_strategy},
-                      {input_tensor, output_tensor},
-                      {},
-                      {})
-                      .at(0);
-    return output;
+    return ttnn::prim::move(input_tensor, output_tensor, output_mem_config, move_op_parallelization_strategy);
 }
 
-static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
     [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
-    if (not can_deallocate(input_tensor)) {
+    auto shard_spec = input_tensor.shard_spec().value();
+
+    // TODO(#38697): Migrate to Tensor::deallocate(/* forced = */ false)
+    if (not input_tensor.device_storage().is_sole_owner_of_device_memory()) {
         TT_FATAL(
             false,
             "Expect input tensor to be deallocated after move op. Cannot deallocate before there is probably "
@@ -128,15 +109,7 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
         // TODO: Should this throw error?
         return {input_tensor};
     }
-    auto shard_spec = input_tensor.shard_spec().value();
-    // Special handling for Mesh vs single device. Needs to be consolidated after full
-    // migration
-
-    if (input_tensor.device_storage().mesh_buffer) {
-        input_tensor.device_storage().mesh_buffer->deallocate();
-    } else {
-        DeallocateBuffer(*input_tensor.buffer());
-    }
+    input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     auto output_tensor_spec = input_tensor.tensor_spec();
     if (mem_config) {
@@ -153,18 +126,21 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
             input_address);
         return {output_tensor};
     }
-    MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
-    return operation::run(
-               MoveDeviceOperation{output_tensor.memory_config(), move_op_parallelization_strategy},
-               {input_tensor, output_tensor})
-        .at(0);
-}
-
-ttnn::Tensor MoveOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    if (input_tensor.memory_config().is_sharded()) {
-        return move_sharded(input_tensor, output_mem_config);
-    }
-    return move(input_tensor, output_mem_config);
+    ttnn::prim::MoveOpParallelizationStrategy move_op_parallelization_strategy =
+        ttnn::prim::MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
+    return ttnn::prim::move(
+        input_tensor, output_tensor, output_tensor.memory_config(), move_op_parallelization_strategy);
 }
 
 }  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+    if (input_tensor.memory_config().is_sharded()) {
+        return operations::data_movement::move_sharded(input_tensor, output_mem_config);
+    }
+    return operations::data_movement::move_impl(input_tensor, output_mem_config);
+}
+
+}  // namespace ttnn

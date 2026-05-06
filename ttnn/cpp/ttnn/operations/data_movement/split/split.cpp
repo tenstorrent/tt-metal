@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,12 +7,10 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
-#include "ttnn/operations/data_movement/split/device/split_op.hpp"
+#include "ttnn/operations/data_movement/split/device/split_device_operation.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
 namespace detail {
 
@@ -20,12 +18,7 @@ constexpr auto TWO_CHUNKS = 2;
 constexpr auto RANK_FOUR = 4;
 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto& input_shape = input_tensor.padded_shape();
-    auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
-    ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-        .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    return tt::tt_metal::operation::run_with_autoformat(
-        SplitDeviceOperation{2, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
+    return ttnn::prim::split(input_tensor, 2, 3, mem_config);
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
@@ -70,7 +63,7 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
 
     const ttnn::SmallVector<int32_t> steps(input_shape.rank(), 1);
     ttnn::SmallVector<int32_t> begins(input_shape.rank(), 0), ends(input_shape.cbegin(), input_shape.cend());
-    const tt::stl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
+    const ttsl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
 
     ends[dim] = 0;
     for (const auto& s : split_sizes) {
@@ -83,11 +76,11 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
 }
 }  // namespace detail
 
-std::vector<ttnn::Tensor> SplitOperation::invoke(
+std::vector<ttnn::Tensor> split(
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& split_sizes,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+    int64_t dim,
+    const std::optional<MemoryConfig>& memory_config_arg) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
     TT_FATAL(
@@ -96,24 +89,44 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
         split_sizes);
     const auto& input_shape = input_tensor.logical_shape();
 
+    // Normalize negative dimension to positive index
+    int64_t normalized_dim = input_shape.get_normalized_index(dim);
+
     // special case to use hardcoded kernel for two chunks sometimes
     tt::tt_metal::IDevice* device = input_tensor.device();
     uint32_t grid_size_x = device->compute_with_storage_grid_size().x + 1;  // total size of grid in x direction
     bool fits_in_core_grid =
         input_shape.rank() >= 2 && (input_shape[0] * input_shape[1] <
                                     grid_size_x);  // special case parallelizes across first 2 dims without wrapping
-    if (split_sizes.size() == detail::TWO_CHUNKS && dim == input_shape.rank() - 1 &&
-        input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2 && fits_in_core_grid &&
-        input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 && input_shape[-1] / tt::constants::TILE_WIDTH >= 2) {
+    // The SplitDeviceOperation kernel always does an exact 50/50 split
+    // (prim::split(input, 2, last_dim)), so we must only enter this path when
+    // the two requested chunk sizes are equal and together cover the full
+    // dimension.  Unequal sizes (e.g. {300, 420}) would produce wrong results.
+    bool is_equal_two_way_split = split_sizes.size() == detail::TWO_CHUNKS && split_sizes[0] == split_sizes[1] &&
+                                  static_cast<uint32_t>(split_sizes[0] + split_sizes[1]) == input_shape[normalized_dim];
+    // The SplitDeviceOperation kernel also requires the number of output tiles
+    // in the split dimension to be even (divisible by TWO_CHUNKS). When the
+    // padded tile count is odd (e.g. 23 tiles from a 720-wide tensor padded to
+    // 736), the program factory sets num_cores_c=1, causing each writer to
+    // attempt writing to both output buffers. The reader only produces tiles for
+    // one output's worth of data, so the writer deadlocks on cb_wait_front
+    // waiting for tiles that will never arrive. Fall back to slice-based split
+    // in this case.
+    uint32_t padded_tiles_in_split_dim = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    bool output_tiles_evenly_split = (padded_tiles_in_split_dim % detail::TWO_CHUNKS == 0);
+    if (is_equal_two_way_split && normalized_dim == input_shape.rank() - 1 && input_tensor.layout() == Layout::TILE &&
+        input_shape.rank() >= 2 && fits_in_core_grid && input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 &&
+        input_shape[-1] / tt::constants::TILE_WIDTH >= 2 && output_tiles_evenly_split) {
         ttnn::Tensor input_tensor_4d;
         if (input_shape.rank() > detail::RANK_FOUR) {
-            input_tensor_4d = squeeze_from_ND_to_4D(input_tensor);
+            input_tensor_4d = operations::data_movement::squeeze_from_ND_to_4D(input_tensor);
         } else if (input_shape.rank() < detail::RANK_FOUR) {
-            input_tensor_4d = core::unsqueeze_to_4D(input_tensor);
+            input_tensor_4d = unsqueeze_to_4D(input_tensor);
         } else {
             input_tensor_4d = input_tensor;
         }
-        const auto outputs_4d = detail::split_last_dim_two_chunks_tiled(input_tensor_4d, memory_config);
+        const auto outputs_4d =
+            detail::split_last_dim_two_chunks_tiled(input_tensor_4d, memory_config);
         std::vector<ttnn::Tensor> outputs;
         outputs.reserve(detail::TWO_CHUNKS);
         for (const auto& t : outputs_4d) {
@@ -122,24 +135,27 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
             outputs.emplace_back(ttnn::view(t, ttnn::Shape(final_shape)));
         }
         return outputs;
-
-    } else {
-        return detail::split_with_slice_impl(input_tensor, split_sizes, dim, memory_config);
     }
+    return detail::split_with_slice_impl(input_tensor, split_sizes, normalized_dim, memory_config);
 }
 
-std::vector<ttnn::Tensor> SplitOperation::invoke(
+std::vector<ttnn::Tensor> split(
     const ttnn::Tensor& input_tensor,
-    const int64_t split_size,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+    int64_t split_size,
+    int64_t dim,
+    const std::optional<MemoryConfig>& memory_config_arg) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-    const auto num_chunks =
-        std::ceil(static_cast<float>(input_tensor.logical_shape()[dim]) / static_cast<float>(split_size));
+    TT_FATAL(split_size > 0, "split_size must be greater than 0, but got: {}", split_size);
+
+    // Normalize negative dimension to positive index
+    const auto& input_shape = input_tensor.logical_shape();
+    int64_t normalized_dim = input_shape.get_normalized_index(dim);
+
+    const auto num_chunks = std::ceil(static_cast<float>(input_shape[normalized_dim]) / static_cast<float>(split_size));
 
     const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
-    return SplitOperation::invoke(input_tensor, split_sizes, dim, memory_config);
+    return ttnn::split(input_tensor, split_sizes, normalized_dim, memory_config);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

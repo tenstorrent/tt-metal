@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -68,7 +68,7 @@ public:
     static CoreIDs& instance();
 
     std::int64_t get_python_operation_id();
-    void set_python_operation_id(std::int64_t operation_id);
+    void set_python_operation_id(std::int64_t python_operation_id_);
     std::int64_t fetch_and_increment_python_operation_id();
 
     std::int64_t get_device_operation_id();

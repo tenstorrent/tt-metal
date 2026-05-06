@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,17 @@ from tests.nightly.t3000.ccl.test_ring_attention_all_gather import (
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
-@pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
+@pytest.mark.parametrize(
+    "layout, ag_input_dtype, pcc_threshold",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16, 1.0),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0.99),
+    ],
+    ids=[
+        "tile_bfloat16",
+        "tile_bfloat8_b",
+    ],
+)
 @pytest.mark.parametrize(
     "num_links, ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor, enable_trace, num_iters",
     [
@@ -66,6 +76,7 @@ def test_ring_attention_all_gather(
     num_links,
     ag_input_dtype,
     layout,
+    pcc_threshold,
     mem_config_input,
     mem_config_ag,
     enable_trace,
@@ -89,12 +100,21 @@ def test_ring_attention_all_gather(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        pcc_threshold=pcc_threshold,
     )
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1, 2, 3], ids=["1link", "2link", "3link"])
-@pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
+@pytest.mark.parametrize(
+    "layout, ag_input_dtype, pcc_threshold",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16, 1.0),
+    ],
+    ids=[
+        "tile_bfloat16",
+    ],
+)
 @pytest.mark.parametrize(
     "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor",
     [
@@ -142,6 +162,7 @@ def test_ring_attention_all_gather_program_cache(
     num_links,
     ag_input_dtype,
     layout,
+    pcc_threshold,
     mem_config_input,
     mem_config_ag,
     enable_trace,
@@ -178,7 +199,8 @@ def test_ring_attention_all_gather_program_cache(
             all_gather_topology=all_gather_topology,
             enable_trace=enable_trace,
             num_iters=num_iters,
+            pcc_threshold=pcc_threshold,
         )
         ttnn.synchronize_device(submesh_device)
 
-    assert submesh_device.num_program_cache_entries() == 1
+    assert submesh_device.cache_entries_counter.total == 1

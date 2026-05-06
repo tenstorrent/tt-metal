@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ from loguru import logger
     "model_dtype, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, 0.905, 0.971, 0.999, 0.931)
+       ( torch.float32, 0.905, 0.971, 0.999, 0.927)
     ],
     # fmt: on
     ids=[

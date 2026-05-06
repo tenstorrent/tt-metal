@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "accessor/tensor_accessor.h"
-#include "dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Kernel that:
 // if (is_reader) {
@@ -35,8 +35,8 @@ void kernel_main() {
 
     const uint32_t first_shard_id = get_arg_val<uint32_t>(0);
 
-    auto accessor_src = TensorAccessor(args_src, bank_base_address_src, src_page_size);
-    auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst, dst_page_size);
+    auto accessor_src = TensorAccessor(args_src, bank_base_address_src);
+    auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst);
 
     for (uint32_t shard_id = first_shard_id; shard_id < num_shards; shard_id += shard_id_stride) {
         if constexpr (is_reader) {

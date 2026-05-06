@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -12,7 +12,7 @@
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "dram_prefetcher_program_factory.hpp"
 
-namespace ttnn::operations::dram_prefetcher::program {
+namespace ttnn::prim {
 
 using std::vector;
 
@@ -32,9 +32,9 @@ std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
 }
 
 DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const DramPrefetcherParams& operation_attributes,
+    const DramPrefetcherInputs& tensor_args,
+    Tensor& /*output_tensor*/) {
     const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(operation_attributes.global_cb.has_value(), "Global circular buffer must be provided");
@@ -81,9 +81,11 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
     uint32_t num_readers = tensors[0].shard_spec()->grid.num_cores();
     uint32_t num_blocks = num_readers * num_receivers_per_reader;
 
-    std::vector<uint32_t> tensor_block_num_tiles(num_tensors);
+    std::vector<uint32_t> tensor_block_num_tiles;
     std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
-    std::vector<uint32_t> tensor_tile_sizes(num_tensors);
+    std::vector<uint32_t> tensor_tile_sizes;
+    tensor_block_num_tiles.reserve(num_tensors);
+    tensor_tile_sizes.reserve(num_tensors);
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
@@ -91,8 +93,8 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
         height_in_tiles = tt::round_up(height_in_tiles, num_blocks);
         tensor_shapes[t][0] = height_in_tiles;
         tensor_shapes[t][1] = width_in_tiles;
-        tensor_block_num_tiles[t] = height_in_tiles * width_in_tiles / num_blocks;
-        tensor_tile_sizes[t] = tensor_tiles[t].get_tile_size(tensor_data_formats[t]);
+        tensor_block_num_tiles.push_back(height_in_tiles * width_in_tiles / num_blocks);
+        tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
     }
     uint32_t max_block_tiles = *std::max_element(tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
     auto max_tile_size_iterator = std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
@@ -285,15 +287,15 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
 
 void DramPrefetcherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const DramPrefetcherParams& /*operation_attributes*/,
+    const DramPrefetcherInputs& tensor_args,
+    Tensor& /*output_tensor*/) {
     auto& program = cached_program.program;
     const auto& tensor_addrs_cb = cached_program.shared_variables.tensor_addrs_cb;
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
-    auto tensor_addrs_buffer = tensor_addrs.buffer();
+    auto* tensor_addrs_buffer = tensor_addrs.buffer();
     UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
 }
 
-}  // namespace ttnn::operations::dram_prefetcher::program
+}  // namespace ttnn::prim

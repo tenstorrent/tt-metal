@@ -1,0 +1,27 @@
+# SPDX ignore configuration for tt-llk repository
+# This file contains patterns for files/directories to skip during SPDX license checking.
+
+ignore:
+  perform_check: false  # Don't check files matching patterns below
+  include:
+    # Build and environment directories
+    - build/
+    - __pycache__/
+    - .pytest_cache/
+    - .tox/
+    - dist/
+    - .egg-info/
+    - env/
+    - venv/
+    - .venv/
+
+    # Version control
+    - .git/
+
+    # IDE and editor files
+    - .vscode/
+    - .idea/
+    - .cursor/
+
+    # Third-party and external dependencies
+    - node_modules/

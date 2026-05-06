@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -121,7 +121,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     bool transpose_other = operation_attributes.transpose_other;
 
     const DeviceComputeKernelConfig& compute_kernel_config = init_device_compute_kernel_config(
-        input.device()->arch(), operation_attributes.compute_kernel_config, MathFidelity::HiFi4);
+        input.device()->arch(), operation_attributes.compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
     ;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -323,9 +323,9 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/writer_moreh_matmul.cpp";
 
     const auto reader_kernel_id =
@@ -345,7 +345,8 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     std::map<std::string, std::string> compute_defines;
 
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp";
+    const auto* const compute_kernel_file =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp";
     std::vector<uint32_t> compute_args_group_1 = {
         num_output_tiles_per_core_group_1,  // num_output_tiles
         Mt,
@@ -363,10 +364,10 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         compute_args_group_1.push_back(static_cast<uint32_t>(is_scalar_bias));
     }
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
-        unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_24] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     const auto compute_kernel_1_id = CreateComputeKernel(
@@ -470,7 +471,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
 
 void MorehMatmulOperation::MultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;

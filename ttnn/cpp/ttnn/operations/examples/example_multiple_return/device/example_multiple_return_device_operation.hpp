@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::examples {
 
@@ -70,6 +69,7 @@ struct ExampleMultipleReturnDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -90,8 +90,6 @@ struct ExampleMultipleReturnDeviceOperation {
     // Mandatory methods
 
     // Select the program factory based on the operation attributes and tensor args
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     // Validate the operation when it creates a program. Usually will have more checks
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -103,36 +101,11 @@ struct ExampleMultipleReturnDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // API call to map user arguments to operation attributes and tensor args.
-    // This is the only method that is called by the user
-    // The user will be able to call the operation using `tensor_return_value_t output =
-    // ttnn::prim::example(input_tensor)` after the op is registered
-    // `tensor_return_value_t output = ttnn::prim::exampleinput_tensor)`
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, bool return_output1, bool return_output2);
-
-    // Optional methods
-
-    // In case the operation need a custom hash function, the following method can be implemented
-    /* static tt::stl::hash::hash_t compute_program_hash(
-        const operation_attributes_t&, const tensor_args_t&);
-    */
-
-    // In case the operation needs a custom create_op_performance_model, this method can be implemented
-    /*
-    static tt::tt_metal::tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&);
-    */
 };
 
 }  // namespace ttnn::operations::examples
 
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
 namespace ttnn::prim {
-constexpr auto example_multiple_return = ttnn::register_operation<
-    "ttnn::prim::example_multiple_return",
-    ttnn::operations::examples::ExampleMultipleReturnDeviceOperation>();
+ttnn::operations::examples::ExampleMultipleReturnDeviceOperation::tensor_return_value_t example_multiple_return(
+    const Tensor& input_tensor, bool return_output1, bool return_output2);
 }  // namespace ttnn::prim

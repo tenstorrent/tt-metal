@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::reduction::detail::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
@@ -50,9 +50,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 }  // namespace
 
 FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const FastReduceNCParams& operation_attributes,
+    const FastReduceNCInputs& tensor_args,
+    Tensor& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -62,8 +62,11 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
-    const auto single_tile_size = tt::tile_size(cb_data_format);
+    // Input and output CBs may differ when the Sum precision chain requests FP32 packing.
+    const auto input_data_format = datatype_to_dataformat_converter(tensor_args.input.dtype());
+    const auto input_tile_size = tt::tile_size(input_data_format);
+    const auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
+    const auto output_tile_size = tt::tile_size(output_data_format);
     const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const auto cb_1_tile_size = tt::tile_size(cb_1_data_format);
 
@@ -125,6 +128,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
             }
         }
     }
+    bool use_sub_core_grids = operation_attributes.sub_core_grids.has_value() && !divide_by_shards;
     auto
         [num_cores_to_be_used,
          all_cores,
@@ -132,20 +136,23 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
          core_group_2,
          num_cols_per_core_group_1,
          num_cols_per_core_group_2] =
-            divide_by_shards ? dspec.core_groups_tuple()
-                             : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true);
+            divide_by_shards
+                ? dspec.core_groups_tuple()
+                : (use_sub_core_grids
+                       ? tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_output_tiles)
+                       : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;
 
-    const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format;
-    const auto intermed_cb_single_tile_size = (fp32_dest_acc_en) ? single_tile_size * 2 : single_tile_size;
+    const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : output_data_format;
+    const auto intermed_cb_single_tile_size = tt::tile_size(intermed_cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::CircularBufferConfig cb_scr0_config =
-        tt_metal::CircularBufferConfig(in0_t * single_tile_size, {{CBIndex::c_0, cb_data_format}})
-            .set_page_size(CBIndex::c_0, single_tile_size);
+        tt_metal::CircularBufferConfig(in0_t * input_tile_size, {{CBIndex::c_0, input_data_format}})
+            .set_page_size(CBIndex::c_0, input_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_scr0_config);
 
     tt_metal::CircularBufferConfig cb_scr1_config =
@@ -160,8 +167,8 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(out0_t * single_tile_size, {{CBIndex::c_16, cb_data_format}})
-            .set_page_size(CBIndex::c_16, single_tile_size);
+        tt_metal::CircularBufferConfig(out0_t * output_tile_size, {{CBIndex::c_16, output_data_format}})
+            .set_page_size(CBIndex::c_16, output_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -173,9 +180,9 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
     TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
@@ -193,7 +200,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
     tt_metal::CreateKernel(
         program,
@@ -227,7 +234,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     // Each core is assigned an output work unit in a row wise round robin
     // fashion. For a given core, the first index is i, and all subsequent
-    // indicies are increments of num_cores_to_be_used. The total number of
+    // indices are increments of num_cores_to_be_used. The total number of
     // units is num_tiles_per_group times num_cores_to_be_used.
     // For example, with 130 output tiles to be processed and no shards (shard
     // factor is 1) on an 8x8 grid
@@ -240,7 +247,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     // - etc
     // The first tile that needs to be reduced has the same as the output tile.
     // That is the starting point for the reader, which then processes all
-    // subsequent tiles to be reduced. The increment for the input indicies is
+    // subsequent tiles to be reduced. The increment for the input indices is
     // the size of the inner dimensions in tiles (inner_tile_size). The number
     // of tiles to process is the size of the reduce dimension in tiles
     // (reduce_tile_size).
@@ -248,8 +255,23 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     // It is taken into account in the num_cols_per_core_group variables and
     // the tile_offset is incremented by it for the reader to adjust it's
     // reading pattern.
+    std::vector<CoreCoord> ordered_cores;
+    if (use_sub_core_grids) {
+        for (const auto& range : all_cores.ranges()) {
+            for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                for (auto x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                    ordered_cores.emplace_back(x, y);
+                }
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+            ordered_cores.emplace_back(i % num_cores_x, i / num_cores_x);
+        }
+    }
+
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
+        CoreCoord core = ordered_cores[i];
 
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
@@ -288,26 +310,26 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
         {/* reader_kernel_id = */ reader_kernel_id,
          /* writer_kernel_id = */ writer_kernel_id,
          /* num_cores_to_be_used = */ num_cores_to_be_used,
-         /* num_cores_x = */ num_cores_x}};
+         /* num_cores_x = */ num_cores_x,
+         /* ordered_cores = */ std::move(ordered_cores)}};
 }
 
 void FastReduceNCProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const FastReduceNCParams&,
+    const FastReduceNCInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto* input_buffer = tensor_args.input.buffer();
     const auto* output_buffer = tensor_return_value.buffer();
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     const auto& num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    const auto& num_cores_x = cached_program.shared_variables.num_cores_x;
-
+    const auto& ordered_cores = cached_program.shared_variables.ordered_cores;
     auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
     auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
+        CoreCoord core = ordered_cores[i];
         auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
         reader_kernel_args[0] = input_buffer->address();
         auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
@@ -315,4 +337,4 @@ void FastReduceNCProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail::program
+}  // namespace ttnn::experimental::prim

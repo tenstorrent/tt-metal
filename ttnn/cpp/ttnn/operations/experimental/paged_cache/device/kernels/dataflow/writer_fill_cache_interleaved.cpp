@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Define the sentinel value for a page table entry that indicates a skip.
 constexpr uint32_t SKIP_PAGE_TABLE_ENTRY = (uint32_t)-1;
@@ -29,13 +29,6 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
 }
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t page_table_addr = get_arg_val<uint32_t>(1);
-    uint32_t start_row_num = get_arg_val<uint32_t>(2);
-    uint32_t num_rows = get_arg_val<uint32_t>(3);
-    // Arg 4 is either batch_idx_tensor_addr or batch_idx_fallback scalar
-    uint32_t batch_arg = get_arg_val<uint32_t>(4);
-
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(1);
     constexpr uint32_t num_heads = get_compile_time_arg_val(2);
@@ -51,6 +44,18 @@ void kernel_main() {
     constexpr uint32_t batch_idx_stick_size =
         get_compile_time_arg_val(10);  // Expected to be small (e.g., 4 for uint32)
 
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t page_table_addr = get_arg_val<uint32_t>(1);
+    uint32_t start_row_num = get_arg_val<uint32_t>(2);
+    uint32_t num_rows = get_arg_val<uint32_t>(3);
+    // Arg 4 is either batch_idx_tensor_addr or batch_idx_fallback scalar
+    uint32_t batch_arg = get_arg_val<uint32_t>(4);
+    uint32_t noop = get_arg_val<uint32_t>(5);
+
+    if (noop == 1) {
+        return;  // Early exit, no work done
+    }
+
     constexpr auto s0_args = TensorAccessorArgs<11>();
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
@@ -59,7 +64,7 @@ void kernel_main() {
     if constexpr (use_batch_idx_tensor) {
         uint32_t batch_idx_tensor_addr = batch_arg;  // Arg 4 is the address
 
-        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr, batch_idx_stick_size);
+        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr);
         cb_reserve_back(cb_id_batch_idx, 1);  // Expecting 1 element (the batch_idx)
         uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
         uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
@@ -75,9 +80,9 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
-    const auto out_gen = TensorAccessor(s0_args, dst_addr, tile_bytes);
+    const auto out_gen = TensorAccessor(s0_args, dst_addr);
 
-    const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
+    const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr);
     cb_reserve_back(cb_id_page_table, 1);
     uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
     uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(batch_idx);

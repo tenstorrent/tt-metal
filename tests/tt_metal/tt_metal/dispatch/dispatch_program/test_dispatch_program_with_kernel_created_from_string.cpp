@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -21,13 +20,15 @@ using namespace tt;
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const std::string& kernel_src_code = R"(
-    #include "debug/dprint.h"
-    #include "dataflow_api.h"
+    #include "api/debug/dprint.h"
+    #include "api/dataflow/dataflow_api.h"
 
     void kernel_main() {
 
         DPRINT_DATA0(DPRINT << "Hello, I am running a void data movement kernel on NOC 0." << ENDL());
         DPRINT_DATA1(DPRINT << "Hello, I am running a void data movement kernel on NOC 1." << ENDL());
+        DEVICE_PRINT_DATA0("Hello, I am running a void data movement kernel on NOC 0.\n");
+        DEVICE_PRINT_DATA1("Hello, I am running a void data movement kernel on NOC 1.\n");
 
     }
     )";
@@ -50,14 +51,14 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const std::string& kernel_src_code = R"(
-    #include "debug/dprint.h"
-    #include "compute_kernel_api.h"
+    #include "api/debug/dprint.h"
+    #include "api/compute/compute_kernel_api.h"
 
-    namespace NAMESPACE {
 
-    void MAIN {
+    void kernel_main() {
 
         DPRINT_MATH(DPRINT << "Hello, I am running a void compute kernel." << ENDL());
+        DEVICE_PRINT_MATH("Hello, I am running a void compute kernel.\n");
 
     }
 
@@ -85,12 +86,13 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     const std::string& kernel_src_code = R"(
-    #include "debug/dprint.h"
-    #include "dataflow_api.h"
+    #include "api/debug/dprint.h"
+    #include "api/dataflow/dataflow_api.h"
 
     void kernel_main() {
 
         DPRINT << "Hello, I am running a void ethernet kernel." << ENDL();
+        DEVICE_PRINT("Hello, I am running a void ethernet kernel.\n");
 
     }
     )";

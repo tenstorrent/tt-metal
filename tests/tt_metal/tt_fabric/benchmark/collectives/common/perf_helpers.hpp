@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,8 +66,5 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts);
 void warmup_once(HelpersFixture* fixture, PerfParams base, int iters = 1);
 
 PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_iters, int iters);
-
-// Utility used by multiple tests
-tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id);
 
 }  // namespace tt::tt_fabric::bench

@@ -6,7 +6,6 @@ We'll go through any new code section by section. This builds on top of previous
 
 To build and execute, you may use the following commands:
 ```bash
-export TT_METAL_HOME=$(pwd)
 ./build_metal.sh --build-programming-examples
 ./build/programming_examples/metal_example_eltwise_sfpu
 ```

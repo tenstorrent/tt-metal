@@ -1,20 +1,20 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "update_cache_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::kv_cache {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 
 UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.op_type == UpdateCacheOpType::FILL) {
-        return program::FillCacheMultiCoreProgramFactory{};
-    } else {
-        return program::UpdateCacheMultiCoreProgramFactory{};
+        return FillCacheMultiCoreProgramFactory{};
     }
+    return UpdateCacheMultiCoreProgramFactory{};
 }
 
 void UpdateKVCacheOperation::validate_on_program_cache_miss(
@@ -56,30 +56,20 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         "Input tensor height ({}) must equal cache tensor height ({})",
         input_tensor.padded_shape()[1],
         cache_tensor.padded_shape()[1]);
+
     TT_FATAL(
-        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Cache tensor memory layout must be INTERLEAVED but got {}",
+        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+            (cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+             cache_tensor.memory_config().created_with_nd_shard_spec() &&
+             cache_tensor.memory_config()
+                 .is_dram()),  // ND_SHARDED layout can collapse to HEIGHT_SHARDED when each bank holds single shard
+        "Cache tensor memory layout must be INTERLEAVED, ND_SHARDED, or HEIGHT_SHARDED (created from ND shard spec) "
+        "but got {}",
         cache_tensor.memory_config().memory_layout());
     if (args.op_type == UpdateCacheOpType::FILL) {
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.dtype() == cache_tensor.dtype(), "Input and cache tensors must have same dtype!");
-
-        // TODO: For interleaved, assume each core handles 1 tile of seq_len if kv_heads > 1
-        // For 56 cores and 2 heads, this effectively caps max seq len at 56 / 2 * 32 = 896
-        // Can generalize interleaved to infer and check arbitrary number of tiles along seq_len per core; or, add more
-        // robust logic in reader/writer loops to handle generic blocking of work For sharded, we infer number of tiles
-        // each core handles from shard so no issues there
-        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED and
-            input_tensor.padded_shape()[1] > 1) {
-            const uint32_t num_blocks_of_work =
-                input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
-            const auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-            TT_FATAL(
-                (num_blocks_of_work <= compute_with_storage_grid_size.x * compute_with_storage_grid_size.y),
-                "Number of work blocks ({}) must be <= total grid size ({})",
-                num_blocks_of_work,
-                compute_with_storage_grid_size.x * compute_with_storage_grid_size.y);
-        }
 
         if (input_tensor.is_sharded()) {
             TT_FATAL(
@@ -108,12 +98,6 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape()[-2],
             cache_tensor.padded_shape()[-2]);
     } else if (args.op_type == UpdateCacheOpType::UPDATE) {
-        if (input_tensor.device()->arch() == tt::ARCH::GRAYSKULL) {
-            TT_FATAL(
-                cache_tensor.dtype() == DataType::BFLOAT16,
-                "#12931: Update Cache currently produces non-deterministic output on GS when converting data types for "
-                "cache tensor");
-        }
         if (input_tensor.is_sharded()) {
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
@@ -154,19 +138,14 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
     }
 }
 
-void UpdateKVCacheOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
-spec_return_value_t UpdateKVCacheOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+TensorSpec UpdateKVCacheOperation::compute_output_specs(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache.tensor_spec();
 }
 
-tensor_return_value_t UpdateKVCacheOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+Tensor UpdateKVCacheOperation::create_output_tensors(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
     return tensor_args.cache;
 }
@@ -177,7 +156,7 @@ tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
         args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
 }
 
-std::tuple<operation_attributes_t, tensor_args_t> UpdateKVCacheOperation::invoke(
+Tensor update_cache(
     const Tensor& cache,
     const Tensor& input,
     const uint32_t batch_idx,
@@ -185,16 +164,14 @@ std::tuple<operation_attributes_t, tensor_args_t> UpdateKVCacheOperation::invoke
     const uint32_t batch_offset,
     const UpdateCacheOpType op_type,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return {
-        operation_attributes_t{
+    return ttnn::device_operation::launch<UpdateKVCacheOperation>(
+        KvCacheParams{
             .batch_idx = batch_idx,
             .update_idx = update_index,
             .batch_offset = batch_offset,
             .op_type = op_type,
             .compute_kernel_config = compute_kernel_config},
-        tensor_args_t{
-            .cache = cache,
-            .input = input,
-        }};
+        KvCacheInputs{.cache = cache, .input = input});
 }
-}  // namespace ttnn::operations::kv_cache
+
+}  // namespace ttnn::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::matmul::group_attn_matmul::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
@@ -22,8 +22,8 @@ void set_runtime_args(
     const Tensor& a,
     const Tensor& b,
     const Tensor& output,
-    const operation_attributes_t& operation_attributes,
-    const GroupAttnMatmulProgramFactory::shared_variables_t& shared_vars) {
+    const GroupAttnMatmulParams& operation_attributes,
+    const GroupAttnMatmulSharedVariables& shared_vars) {
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -318,9 +318,9 @@ void set_runtime_args(
 }  // namespace
 
 GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const GroupAttnMatmulParams& operation_attributes,
+    const GroupAttnMatmulInputs& tensor_args,
+    Tensor& tensor_return_value) {
     tt::tt_metal::Program program{};
 
     const auto& a = tensor_args.input_tensor_a;
@@ -414,13 +414,15 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
              TILE_HEIGHT, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major))
             .bounding_box()
             .grid_size();
-    std::vector<uint32_t> in1_mcast_sender_noc_x(mcast_sender_grid.x);
-    std::vector<uint32_t> in1_mcast_sender_noc_y(mcast_sender_grid.y);
+    std::vector<uint32_t> in1_mcast_sender_noc_x;
+    std::vector<uint32_t> in1_mcast_sender_noc_y;
+    in1_mcast_sender_noc_x.reserve(mcast_sender_grid.x);
+    in1_mcast_sender_noc_y.reserve(mcast_sender_grid.y);
     for (uint32_t core_idx_x = 0; core_idx_x < mcast_sender_grid.x; ++core_idx_x) {
-        in1_mcast_sender_noc_x[core_idx_x] = device->worker_core_from_logical_core({core_idx_x, 0}).x;
+        in1_mcast_sender_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
     }
     for (uint32_t core_idx_y = 0; core_idx_y < mcast_sender_grid.y; ++core_idx_y) {
-        in1_mcast_sender_noc_y[core_idx_y] = device->worker_core_from_logical_core({0, core_idx_y}).y;
+        in1_mcast_sender_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
     }
 
     // Set up CBs
@@ -624,9 +626,9 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
 
 void GroupAttnMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const GroupAttnMatmulParams& operation_attributes,
+    const GroupAttnMatmulInputs& tensor_args,
+    Tensor& tensor_return_value) {
     set_runtime_args(
         cached_program.program,
         tensor_args.input_tensor_a,
@@ -636,4 +638,4 @@ void GroupAttnMatmulProgramFactory::override_runtime_arguments(
         cached_program.shared_variables);
 }
 
-}  // namespace ttnn::operations::experimental::matmul::group_attn_matmul::program
+}  // namespace ttnn::experimental::prim

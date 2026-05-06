@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 
 #include "autograd/tensor.hpp"
 #include "serialization/serializable.hpp"
@@ -56,6 +57,8 @@ public:
     [[nodiscard]] virtual autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
     [[nodiscard]] virtual autograd::TensorPtr operator()(
         const autograd::TensorPtr& tensor, const autograd::TensorPtr& other);
+    [[nodiscard]] virtual autograd::TensorPtr operator()(
+        const autograd::TensorPtr& tensor, const std::optional<autograd::TensorPtr>& other);
 };
 
 }  // namespace ttml::modules

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"

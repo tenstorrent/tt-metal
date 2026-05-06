@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include <array>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // WRITER RUNTIME ARGS
@@ -22,9 +22,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_qv = 1;  // cb for Q, V heads tiles
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_qv);
     const DataFormat data_format = get_dataformat(cb_id_qv);
-    const auto sq = TensorAccessor(q_args, q_tensor_addr, single_tile_size_bytes);
+    const auto sq = TensorAccessor(q_args, q_tensor_addr);
 
     constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
     // TODO: This might negatively impact perf

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,26 +35,29 @@ const std::string default_mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabr
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
+    uint8_t vc_id = 0;  // 0=VC0, 2=VC2
+
+    bool use_vc2() const { return vc_id == 2; }
 
     bool operator==(const ConnectionKey& other) const {
-        return direction == other.direction && link_idx == other.link_idx;
+        return direction == other.direction && link_idx == other.link_idx && vc_id == other.vc_id;
     }
 
     bool operator<(const ConnectionKey& other) const {
-        return std::tie(direction, link_idx) < std::tie(other.direction, other.link_idx);
+        return std::tie(direction, link_idx, vc_id) < std::tie(other.direction, other.link_idx, other.vc_id);
     }
 };
 
 // Hash function for ConnectionKey to enable unordered_map
 struct ConnectionKeyHash {
     std::size_t operator()(const ConnectionKey& key) const {
-        return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1);
+        return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1) ^
+               (std::hash<uint8_t>()(key.vc_id) << 2);
     }
 };
 
@@ -103,9 +106,10 @@ public:
     // Helper: Determine required channel type for a worker type
     static FabricMuxChannelType get_required_channel_type(TestWorkerType worker_type) {
         switch (worker_type) {
-            case TestWorkerType::SENDER: return FabricMuxChannelType::FULL_SIZE_CHANNEL;      // Full payload packets
-            case TestWorkerType::RECEIVER: return FabricMuxChannelType::HEADER_ONLY_CHANNEL;  // Credit return packets
-            case TestWorkerType::SYNC: return FabricMuxChannelType::HEADER_ONLY_CHANNEL;      // Atomic inc sync packets
+            case TestWorkerType::SENDER: return FabricMuxChannelType::FULL_SIZE_CHANNEL;  // Full payload packets
+            case TestWorkerType::RECEIVER:                                                // Credit return packets
+            case TestWorkerType::SYNC:                                                    // Atomic inc sync packets
+                return FabricMuxChannelType::HEADER_ONLY_CHANNEL;
             default:
                 TT_FATAL(
                     false,
@@ -117,7 +121,11 @@ public:
 
     // Register a connection from a core in a specific direction and link
     void register_client(
-        const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type);
+        const CoreCoord& core,
+        RoutingDirection direction,
+        uint32_t link_idx,
+        TestWorkerType worker_type,
+        uint8_t vc_id = 0);
 
     // Processing: Call once at start of create_kernels()
     // local_alloc: allocator for on-demand mux core allocation
@@ -199,7 +207,8 @@ public:
         const std::vector<uint32_t>& rt_args,
         const std::vector<uint32_t>& local_args,
         uint32_t local_args_address,
-        const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const;
+        const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
+        tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default) const;
     void collect_results();
     virtual bool validate_results(std::vector<uint32_t>& data) const = 0;
     void dump_results();
@@ -243,19 +252,19 @@ public:
 struct TestSync : TestWorker {
 public:
     TestSync(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
-    void add_config(TestTrafficSenderConfig config);
+    void add_config(TestTrafficSyncConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;
 
     // stores traffic config and the corresponding fabric connection key
     // Managed by TestDevice::sync_connection_manager_
-    std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>> configs_;
+    std::vector<std::pair<TestTrafficSyncConfig, ConnectionKey>> configs_;
 };
 
 struct TestMux : TestWorker {
 public:
     TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_config(FabricMuxConfig* config, ConnectionKey connection_key);
-    bool validate_results(std::vector<uint32_t>& data) const override { return true; }  // Mux doesn't validate
+    bool validate_results(std::vector<uint32_t>& /*data*/) const override { return true; }  // Mux doesn't validate
 
     FabricMuxConfig* config_ = nullptr;
     ConnectionKey connection_key_{};
@@ -280,7 +289,7 @@ public:
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id() const;
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
-    void add_sender_sync_config(CoreCoord logical_core, TestTrafficSenderConfig sync_config);
+    void add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config);
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void add_mux_worker_config(CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key);
     void create_kernels();
@@ -307,7 +316,6 @@ public:
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
-    void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
     void set_progress_monitoring_enabled(bool enabled) { progress_monitoring_enabled_ = enabled; }
     void set_pristine_cores(std::vector<CoreCoord>&& cores) { pristine_cores_ = std::move(cores); }
 
@@ -396,7 +404,8 @@ private:
         TestWorkerType worker_type,
         FabricConnectionManager& connection_mgr,
         RoutingDirection outgoing_direction,
-        uint32_t link_idx);
+        uint32_t link_idx,
+        uint8_t vc_id = 0);
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;
@@ -415,7 +424,6 @@ private:
 
     bool benchmark_mode_ = false;
     bool global_sync_ = false;
-    uint32_t global_sync_val_ = 0;
     CoreCoord sync_core_coord_;
     bool progress_monitoring_enabled_ = false;
 
@@ -425,5 +433,4 @@ private:
     bool use_unified_connection_manager_ = false;
 };
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

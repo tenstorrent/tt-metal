@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include <iostream>
 #include <random>
-#include <stdint.h>
+#include <cstdint>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
@@ -19,10 +19,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
-
-namespace multihost_utils {
+namespace tt::tt_fabric::fabric_router_tests::multihost_utils {
 std::random_device rd;  // Non-deterministic seed source
 std::mt19937 global_rng(rd());
 
@@ -515,6 +512,21 @@ void RandomizedInterMeshUnicast(BaseFabricFixture* fixture) {
     }
 }
 
+uint32_t get_rank_for_mesh_id(uint32_t target_mesh_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& bindings = control_plane.get_global_logical_bindings();
+    MeshId target{target_mesh_id};
+
+    for (const auto& [rank, mesh_binding] : bindings) {
+        if (mesh_binding.first == target) {
+            return static_cast<uint32_t>(*rank);
+        }
+    }
+
+    TT_FATAL(false, "No rank found owning mesh_id {}", target_mesh_id);
+    return 0;
+}
+
 void InterMeshLineMcast(
     BaseFabricFixture* fixture,
     FabricNodeId mcast_sender_node,
@@ -549,7 +561,4 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
     return physical_chip_ids_mapping;
 }
 
-}  // namespace multihost_utils
-
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_router_tests::multihost_utils

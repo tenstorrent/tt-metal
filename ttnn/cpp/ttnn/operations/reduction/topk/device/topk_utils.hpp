@@ -1,22 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <algorithm>
+#include <tt-metalium/host_api.hpp>
+#include "ttnn/tensor/tensor.hpp"
+
 #include <cstdint>
 #include <optional>
-#include <vector>
 
-#include <tt-metalium/host_api.hpp>
-#include "ttnn/decorators.hpp"
-
-namespace ttnn {
-namespace operations {
-namespace reduction {
-namespace topk_utils {
-
+namespace ttnn::prim {
 uint32_t largest_power_of_two(uint32_t x);
 
 struct TopKCoreConfig {
@@ -36,10 +30,10 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     const tt::tt_metal::CoreRange& core_range,
     uint32_t l1_size,
     uint32_t value_tile_size,
-    uint32_t index_tile_size);
+    uint32_t index_tile_size,
+    uint32_t tile_width = 32);
 
 bool verify_multi_core_cost(
-    const std::vector<ttnn::Tensor>& input_tensors,
     uint32_t width,
     uint32_t min_dim,
     uint32_t max_dim,
@@ -47,11 +41,8 @@ bool verify_multi_core_cost(
     const tt::tt_metal::CoreRange& core_range,
     uint32_t l1_size,
     uint32_t value_tile_size,
-    uint32_t index_tile_size);
+    uint32_t index_tile_size,
+    uint32_t tile_width = 32);
 
-bool verify_single_core_cost(const std::vector<ttnn::Tensor>& input_tensors, uint32_t k, bool uint16_output);
-
-}  // namespace topk_utils
-}  // namespace reduction
-}  // namespace operations
-}  // namespace ttnn
+bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool uint16_output);
+}  // namespace ttnn::prim

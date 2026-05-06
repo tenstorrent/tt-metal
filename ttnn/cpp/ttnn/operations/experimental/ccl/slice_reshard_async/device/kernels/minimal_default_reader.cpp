@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -55,7 +55,7 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<5>();
     uint32_t read_size = stick_size;
-    const auto src_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
+    const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
 
     if (!is_last_chip) {
         // Read the "end" of each slice into the CB to write to the neighbor
@@ -70,7 +70,7 @@ void kernel_main() {
                 cb_reserve_back(cb_output_id, 1);
                 uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
 
-                uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
+                uint64_t src_noc_addr = src_accessor.get_noc_addr(src_stick_id);
                 noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
 
                 src_stick_id++;
@@ -98,7 +98,7 @@ void kernel_main() {
                 cb_reserve_back(cb_output_id, 1);
                 uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
 
-                uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
+                uint64_t src_noc_addr = src_accessor.get_noc_addr(src_stick_id);
                 noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
 
                 src_stick_id++;

@@ -1,138 +1,49 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import inspect
 import itertools
-import json
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal
 
-import safetensors.torch
 import torch
 from loguru import logger
 from transformers import DynamicCache
 from transformers.configuration_utils import PretrainedConfig
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, dequantize, even_int_div, get_weight_config
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div
+from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _dequantize_state_dict
+from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def load_state_dict(model_path: Path, module_path: str):
+    # Lazily load HF weights: only access tensors when keys are used.
+    from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+
+    lazy = LazyStateDict(model_path)
     if module_path:
-        module_path += "."  # So that the later matches include the separating dot
-
-    weight_paths = json.load(open(model_path / "model.safetensors.index.json", "r"))["weight_map"]
-    per_safetensor_weights = {}
-
-    for weight_name in weight_paths.keys():
-        if not weight_name.startswith(module_path):
-            continue
-        per_safetensor_weights.setdefault(weight_paths[weight_name], []).append(weight_name)
-
-    return {
-        weight_name[len(module_path) :]: safetensor_state_dict[weight_name]
-        for safetensor_file_path, weight_names in per_safetensor_weights.items()
-        for safetensor_state_dict in [safetensors.torch.load_file(model_path / safetensor_file_path)]
-        for weight_name in weight_names
-    }
+        # Ensure dot suffix so that keys are trimmed properly in the view
+        return lazy.view_with_prefix(module_path + ".")
+    return lazy
 
 
-def get_quant_scale(tensor: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
-    assert tensor.ndim == len(block_shape), "Weight tensors must have the same dimensionality as the block shape"
-    padded_tensor = torch.nn.functional.pad(
-        tensor.float(),
-        [
-            padding_size
-            for tensor_dim, block_dim in reversed(list(zip(tensor.shape, block_shape)))
-            for padding_size in [0, -tensor_dim % block_dim]
-        ],
-    )
-    blocked_tensor = padded_tensor.reshape(
-        [
-            new_tensor_dim
-            for tensor_dim, block_dim in zip(padded_tensor.shape, block_shape)
-            for new_tensor_dim in [even_int_div(tensor_dim, block_dim), block_dim]
-        ]
-    )
-
-    fp8_max = torch.finfo(torch.float8_e4m3fn).max
-    return (
-        fp8_max
-        / blocked_tensor.permute(*torch.arange(0, blocked_tensor.ndim, 2), *torch.arange(1, blocked_tensor.ndim, 2))
-        .reshape(*(blocked_tensor.shape[dim * 2] for dim in torch.arange(tensor.ndim)), -1)
-        .max(dim=-1)
-        .values
-    )
-
-
-def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
-    dequantized_state_dict = {}
-
-    for name, tensor in state_dict.items():
-        if name.endswith("_scale_inv"):
-            continue
-
-        if tensor is not None:
-            # Look for corresponding scale tensor
-            scale_name = name + "_scale_inv"
-            if scale_name in state_dict:
-                scale_tensor = state_dict[scale_name]
-                # Dequantize using the scale
-                dequantized_tensor = dequantize(
-                    tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]
-                )
-                dequantized_state_dict[name] = dequantized_tensor.to(dtype)
-            else:
-                dequantized_state_dict[name] = tensor.to(dtype)
-
-    return dequantized_state_dict
-
-
-def add_inv_scale_to_state_dict(
+def dequantize_state_dict(
     state_dict: dict[str, torch.Tensor],
-    block_shape: Sequence[int],
-    weight_names: list[str] = [
-        "up_proj",
-        "down_proj",
-        "gate_proj",
-        "q_a_proj",
-        "q_b_proj",
-        "kv_a_proj_with_mqa",
-        "kv_b_proj",
-        "o_proj",
-    ],
+    hf_config: PretrainedConfig,
+    dtype: torch.dtype = torch.bfloat16,
 ) -> dict[str, torch.Tensor]:
-    """
-    Quantizes specified weights in state_dict and adds inverse scale tensors.
-
-    Args:
-        state_dict: original model weights
-        block_shape: shape of quantization blocks (e.g., [128, 128])
-        weight_names: list of substrings to match in parameter names
-
-    Returns:
-        new state_dict with quantized weights and _scale_inv tensors
-    """
-    output_state_dict: dict[str, torch.Tensor] = {}
-    for name, tensor in state_dict.items():
-        if weight_names and not any(name.endswith(weight_name + ".weight") for weight_name in weight_names):
-            output_state_dict[name] = tensor
-            continue
-        assert tensor.ndim == len(block_shape), "Weight tensors must have the same dimensionality as the block shape"
-
-        scale_tensor = get_quant_scale(tensor, block_shape)
-        output_state_dict[name] = dequantize(tensor, scale_tensor, block_shape).to(torch.float8_e4m3fn)
-        output_state_dict[name + "_scale_inv"] = 1.0 / scale_tensor.float()
-
-    return output_state_dict
+    """Compatibility shim for older tests that still import from `test_utils`."""
+    return _dequantize_state_dict(state_dict, hf_config, dtype)
 
 
 def torch_cache_from_paged(
@@ -204,10 +115,16 @@ def paged_cache_from_torch(
     """
     if user_id is not None:
         torch_cache_line = torch_cache
+        batch_size_per_row = torch_cache_line.shape[0]
+        # Row-batched prefill helpers hand us one full row worth of cache lines.
+        # Expand back to the global user space and place that row at the row selected by `user_id`.
+        row_start = (user_id // batch_size_per_row) * batch_size_per_row
+        row_end = row_start + batch_size_per_row
         torch_cache = torch.zeros(
-            (mesh_shape[0] * USERS_PER_ROW, *torch_cache_line.shape[1:]), dtype=torch_cache_line.dtype
+            (mesh_shape[0] * batch_size_per_row, *torch_cache_line.shape[1:]),
+            dtype=torch_cache_line.dtype,
         )
-        torch_cache[user_id : user_id + 1] = torch_cache_line
+        torch_cache[row_start:row_end] = torch_cache_line
 
     batch_size, num_heads, seq_len, dim = torch_cache.shape
     batches_per_device = even_int_div(batch_size, mesh_shape[0] * mesh_shape[1])
@@ -295,23 +212,86 @@ def run_reference_with_attention(
     hf_config: PretrainedConfig,
     mode: str,
     zeroed_cache: bool,
+    collect_output: bool = True,
 ) -> tuple[torch.Tensor, DynamicCache, DynamicCache]:
-    (batch_size,) = position_ids_or_seq_lens.shape
+    """
+    Run reference model with attention, using memory optimizations for large sequences.
+
+    For long sequences, the code splits processing into chunks to limit peak memory usage.
+    All model calls are wrapped with torch.no_grad() to avoid building computation graphs and storing gradients.
+    Intermediate tensors are explicitly freed between chunks using del.
+    Attention weights are not stored by setting output_attentions=False, since they scale quadratically with sequence length.
+    """
+    activation_batch_size = activation.shape[0]
+    if position_ids_or_seq_lens.ndim != 1:
+        raise ValueError(f"position_ids_or_seq_lens must be 1D, got shape {tuple(position_ids_or_seq_lens.shape)}")
+
+    if mode == "prefill":
+        if position_ids_or_seq_lens.numel() == 1 and activation_batch_size != 1:
+            # Older tests pass a scalar seq_len even when the activation batch is larger.
+            # Expand it here so reference-mask construction follows the true batch size.
+            position_ids_or_seq_lens = position_ids_or_seq_lens.expand(activation_batch_size)
+        elif position_ids_or_seq_lens.shape[0] != activation_batch_size:
+            raise ValueError(
+                "Prefill position_ids_or_seq_lens batch must match activation batch: "
+                f"{position_ids_or_seq_lens.shape[0]} != {activation_batch_size}"
+            )
+    elif position_ids_or_seq_lens.shape[0] != activation_batch_size:
+        raise ValueError(
+            "Decode position_ids_or_seq_lens batch must match activation batch: "
+            f"{position_ids_or_seq_lens.shape[0]} != {activation_batch_size}"
+        )
+
+    batch_size = activation_batch_size
     dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
     num_layers = hf_config.num_hidden_layers
     max_position_id_or_seq_len = position_ids_or_seq_lens.max().item()
+    mask = None
+
+    # For sequences longer than the chunk size, use chunked processing.
+    # Auto-cap chunk size so the causal mask stays within a safe memory budget.
+    base_chunk_size = 8192
+    bytes_per_elem = torch.tensor([], dtype=torch.bfloat16).element_size()
+    target_mask_bytes = 128 * 1024**2
+    mask_denominator = batch_size * max_position_id_or_seq_len * bytes_per_elem
+    if mask_denominator > 0:
+        max_chunk_size = target_mask_bytes // mask_denominator
+        chunk_size = max(1, min(base_chunk_size, int(max_chunk_size)))
+    else:
+        max_chunk_size = base_chunk_size
+        chunk_size = base_chunk_size
+    use_chunked_processing = mode == "prefill" and max_position_id_or_seq_len > chunk_size
+    if mode == "prefill":
+        logger.info(
+            f"Reference attention config: seq_len={max_position_id_or_seq_len} "
+            f"chunk_size={chunk_size} use_chunked_processing={use_chunked_processing}"
+        )
 
     if mode == "prefill":
         max_seq_len = position_ids_or_seq_lens.max().item()
         position_ids = torch.arange(max_seq_len).unsqueeze(0).repeat(batch_size, 1)
-        mask = torch.triu(
-            torch.full(
-                (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
-                float("-inf"),
-                dtype=torch.bfloat16,
-            ),
-            diagonal=1,
-        )
+
+        if not use_chunked_processing:
+            if max_position_id_or_seq_len > 16384:
+                mask = torch.triu(
+                    torch.full(
+                        (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
+                        float("-inf"),
+                        dtype=torch.bfloat16,
+                        device="cpu",
+                    ),
+                    diagonal=1,
+                )
+            else:
+                mask = torch.triu(
+                    torch.full(
+                        (batch_size, 1, max_position_id_or_seq_len, max_position_id_or_seq_len),
+                        float("-inf"),
+                        dtype=torch.bfloat16,
+                    ),
+                    diagonal=1,
+                )
+
         if layer_idx is not None:
             input_cache = transformers_cache_single_layer_from_torch(
                 torch.empty((batch_size, 1, 0, dim), dtype=torch.bfloat16), layer_idx
@@ -344,20 +324,115 @@ def run_reference_with_attention(
             )
 
     kv_arg_name = "past_key_value" if layer_idx is not None else "past_key_values"
-    model_output = reference_model(
-        activation,
-        attention_mask=mask,
-        position_ids=position_ids,
-        output_attentions=True,
-        use_cache=True,
-        **{kv_arg_name: deepcopy(input_cache)},
-    )
-    if isinstance(model_output, BaseModelOutputWithPast):
-        return model_output.last_hidden_state, input_cache, model_output.past_key_values
-    elif isinstance(model_output, CausalLMOutputWithPast):
-        return model_output.logits, input_cache, model_output.past_key_values
+    deepcopied_cache = deepcopy(input_cache)
 
-    out, _, output_cache = model_output
+    def extract_output_and_cache(model_output) -> tuple[torch.Tensor, DynamicCache]:
+        if isinstance(model_output, tuple):
+            cache_idx = 2 if len(model_output) == 3 else 1
+            return model_output[0], model_output[cache_idx]
+        if hasattr(model_output, "logits"):
+            return model_output.logits, model_output.past_key_values
+        if hasattr(model_output, "last_hidden_state"):
+            return model_output.last_hidden_state, model_output.past_key_values
+        raise AttributeError(f"Model output has neither 'last_hidden_state' nor 'logits': {type(model_output)}")
+
+    if use_chunked_processing:
+        device = activation.device
+        num_chunks = (max_position_id_or_seq_len + chunk_size - 1) // chunk_size
+
+        output_chunks: list[torch.Tensor] = [] if collect_output else []
+        current_cache = deepcopy(deepcopied_cache)
+
+        with torch.no_grad():
+            for chunk_idx in range(num_chunks):
+                start_idx = chunk_idx * chunk_size
+                end_idx = min(start_idx + chunk_size, max_position_id_or_seq_len)
+                chunk_size_actual = end_idx - start_idx
+
+                # Extract chunk from activation and position_ids
+                if activation.ndim == 2:
+                    activation_chunk = activation[:, start_idx:end_idx].contiguous()
+                else:
+                    activation_chunk = activation[:, start_idx:end_idx, :].contiguous()
+                position_ids_chunk = position_ids[:, start_idx:end_idx].contiguous()
+
+                # Determine current cache length to properly construct mask
+                legacy_cache = current_cache.to_legacy_cache()
+                if layer_idx is not None:
+                    cache_tensor = legacy_cache[layer_idx][0]
+                else:
+                    cache_tensor = legacy_cache[0][0]
+                current_cache_length = cache_tensor.shape[2] if cache_tensor.numel() > 0 else 0
+
+                kv_seq_len = current_cache_length + chunk_size_actual
+                mask_bytes = batch_size * chunk_size_actual * kv_seq_len * bytes_per_elem
+                logger.info(
+                    f"Reference chunk {chunk_idx + 1}/{num_chunks}: start={start_idx} end={end_idx} "
+                    f"kv_seq_len={kv_seq_len} mask_mb={mask_bytes / (1024 ** 2):.1f}"
+                )
+
+                # Create causal mask for this chunk
+                # Tokens can attend to: (1) all cached tokens, (2) previous tokens in current chunk
+                mask_chunk = torch.full(
+                    (batch_size, 1, chunk_size_actual, kv_seq_len),
+                    float("-inf"),
+                    dtype=torch.bfloat16,
+                    device=device,
+                )
+                for i in range(chunk_size_actual):
+                    mask_chunk[:, :, i, :current_cache_length] = 0.0  # Attend to cached tokens
+                    mask_chunk[
+                        :, :, i, current_cache_length : current_cache_length + i + 1
+                    ] = 0.0  # Causal mask within chunk
+
+                # Set output_attentions=False to avoid storing attention weights that scale quadratically with sequence length
+                chunk_output = reference_model(
+                    activation_chunk,
+                    attention_mask=mask_chunk,
+                    position_ids=position_ids_chunk,
+                    output_attentions=False,
+                    use_cache=True,
+                    **{kv_arg_name: current_cache},
+                )
+
+                chunk_out, current_cache = extract_output_and_cache(chunk_output)
+                if collect_output:
+                    output_chunks.append(chunk_out)
+
+                # Free intermediate tensors to reduce memory usage
+                del activation_chunk, position_ids_chunk, mask_chunk, chunk_output
+
+            if collect_output:
+                # Concatenate all chunk outputs
+                model_output_tensor = torch.cat(output_chunks, dim=1)
+                # Clean up chunk list
+                del output_chunks
+                out = model_output_tensor
+            else:
+                # Some callers only need the cache and can skip storing large outputs.
+                out = torch.empty(0, dtype=torch.bfloat16, device=activation.device)
+            output_cache = current_cache
+    else:
+        # Standard processing for shorter sequences or decode mode
+        if mask is not None and mask.device.type == "cpu":
+            mask = mask.to(activation.device)
+
+        # Use torch.no_grad() to prevent gradient accumulation
+        with torch.no_grad():
+            # Set output_attentions=False to save memory
+            model_output_raw = reference_model(
+                activation,
+                attention_mask=mask,
+                position_ids=position_ids,
+                output_attentions=False,
+                use_cache=True,
+                **{kv_arg_name: deepcopied_cache},
+            )
+
+            out, output_cache = extract_output_and_cache(model_output_raw)
+            if not collect_output:
+                out = torch.empty(0, dtype=torch.bfloat16, device=activation.device)
+
     return out, input_cache, output_cache
 
 
@@ -428,14 +503,25 @@ def pad_or_trim_seq_len(tensor: torch.Tensor, mode: Literal["prefill", "decode"]
     return padded_tensor
 
 
-def get_model_config(ModuleClass: type[AbstractModule], mode: Literal["prefill", "decode"], *args, **kwargs) -> Any:
+def get_model_config(
+    ModuleClass: type[AbstractModule],
+    mode: Literal["prefill", "decode"],
+    *args,
+    batch_size_per_row: int | None = None,
+    **kwargs,
+) -> Any:
     """Get the module config for the given mode and kwargs."""
     if mode == "prefill":
-        return ModuleClass.prefill_model_config(*args, **kwargs)
+        config_fn = ModuleClass.prefill_model_config
     elif mode == "decode":
-        return ModuleClass.decode_model_config(*args, **kwargs)
+        config_fn = ModuleClass.decode_model_config
     else:
         raise ValueError(f"Unsupported mode: {mode}. Supported modes are 'prefill' and 'decode'.")
+
+    if batch_size_per_row is not None and "batch_size_per_row" in inspect.signature(config_fn).parameters:
+        kwargs.setdefault("batch_size_per_row", batch_size_per_row)
+
+    return config_fn(*args, **kwargs)
 
 
 def run_module_forward(ModuleClass: type[AbstractModule], mode: Literal["prefill", "decode"], *args, **kwargs) -> Any:
@@ -452,17 +538,71 @@ def assert_hidden_dim_pcc(
     tt_output_torch: torch.Tensor, reference_output: torch.Tensor, pcc_required: float = 0.98
 ) -> float:
     tt_output_torch = tt_output_torch.cpu().float()
+
+    tt_leading_shape = tt_output_torch.shape[:-2]
+    reference_leading_shape = reference_output.shape[:-2]
     assert (
         all(
             d1 == d2
-            for d1, d2 in itertools.zip_longest(tt_output_torch.shape[:-2], reference_output.shape[:-2], fillvalue=1)
+            for d1, d2 in itertools.zip_longest(
+                reversed(tt_leading_shape), reversed(reference_leading_shape), fillvalue=1
+            )
         )
         and tt_output_torch.shape[-1] == reference_output.shape[-1]
-    ), f"Model and reference output shape must match on all dimensions except for the second to last one (module leading singleton dimensions); got {tt_output_torch.shape=} and {reference_output.shape=} "
+    ), (
+        "Model and reference output shape must match on all dimensions except for the second to last one "
+        f"(module leading singleton dimensions); got {tt_output_torch.shape=} and {reference_output.shape=} "
+    )
+
+    while tt_output_torch.ndim < reference_output.ndim:
+        tt_output_torch = tt_output_torch.unsqueeze(0)
+    while reference_output.ndim < tt_output_torch.ndim:
+        reference_output = reference_output.unsqueeze(0)
 
     seq_len_or_batch_size = min(tt_output_torch.shape[-2], reference_output.shape[-2])
     tt_output_torch = tt_output_torch[..., :seq_len_or_batch_size, :]
     reference_output = reference_output[..., :seq_len_or_batch_size, :]
+
+    # For very large sequences, `comp_pcc` can OOM due to its internal clones + numpy conversion.
+    # If the full PCC is estimated to exceed a memory threshold, process the sequence dimension in chunks.
+    hidden_dim = tt_output_torch.shape[-1]
+    estimated_memory_gb = (seq_len_or_batch_size * hidden_dim * 4 * 2 * 2) / (1024**3)
+
+    MAX_MEMORY_GB = 50  # Switch to chunking if the estimated full-tensor PCC exceeds this
+    CHUNK_SIZE = 8192  # Compare up to 8K sequence positions per chunk
+
+    if estimated_memory_gb > MAX_MEMORY_GB and seq_len_or_batch_size > CHUNK_SIZE:
+        num_chunks = (seq_len_or_batch_size + CHUNK_SIZE - 1) // CHUNK_SIZE
+        chunk_pccs: list[float] = []
+        failed_chunks: list[int] = []
+
+        for chunk_idx in range(num_chunks):
+            start_idx = chunk_idx * CHUNK_SIZE
+            end_idx = min(start_idx + CHUNK_SIZE, seq_len_or_batch_size)
+
+            tt_chunk = tt_output_torch[..., start_idx:end_idx, :]
+            ref_chunk = reference_output[..., start_idx:end_idx, :]
+
+            passing, pcc = comp_pcc(tt_chunk, ref_chunk, pcc_required)
+            chunk_pccs.append(pcc)
+
+            if not passing:
+                failed_chunks.append(chunk_idx + 1)
+                logger.error(
+                    f"PCC chunk {chunk_idx + 1}/{num_chunks} failed: pcc={pcc} < required={pcc_required} "
+                    f"(seq_range=[{start_idx}:{end_idx}])"
+                )
+
+        min_pcc = min(chunk_pccs)
+        avg_pcc = sum(chunk_pccs) / len(chunk_pccs)
+        logger.info(f"PCC (chunked): min={min_pcc:.6f}, avg={avg_pcc:.6f}")
+
+        assert not failed_chunks, (
+            "Not all chunks passed PCC check. "
+            f"Min PCC: {min_pcc:.6f} (required: {pcc_required}), "
+            f"Failed chunks: {failed_chunks}"
+        )
+        return min_pcc
 
     passing, pcc = comp_pcc(tt_output_torch, reference_output, pcc_required)
     logger.info(f"PCC: {pcc}")
@@ -477,12 +617,102 @@ def get_test_weight_config(
     cache_path: Path,
     mesh_device: ttnn.Device,
     force_recalculate: bool,
+    *,
+    test_name: str | None = None,
+    real_weights: bool = True,
+    layer_id: str | int | None = None,
+    prefer_legacy_weight_cache: bool = False,
+    cache_identity: str | os.PathLike[str] | None = None,
 ) -> Any:
-    """Get the weight config, either by loading from cache or recalculating."""
-    per_test_weight_cache_path = cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST")
-    return get_weight_config(
-        ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
-    )
+    """Get the weight config, either by loading from cache or recalculating.
+
+    When ``test_name`` is provided the cache sub-directory is derived from
+    weight-relevant parameters only (``test_name``, ``ModuleClass``,
+    ``real_weights``, ``layer_id``).  Runtime parameters that do **not**
+    affect weight conversion (mode, seq_len, batch_size, position_ids, …)
+    are intentionally excluded so that e.g. decode and prefill variants share
+    the same cached weights.
+
+    ``num_hidden_layers`` and ``mesh_shape`` are already captured by
+    :func:`get_weight_config` in its internal sub-path, so they are not
+    needed here either.
+
+    When ``test_name`` is ``None`` the function falls back to
+    ``PYTEST_CURRENT_TEST`` for backward compatibility.
+
+    Args:
+        test_name: Test file name (e.g. ``"test_embedding"``).
+        real_weights: ``True`` when using real model weights,
+            ``False`` for randomly-initialised weights.
+        layer_id: Identifies which layer / sub-module the weights come from.
+            Typically a module-path string (``"model.layers.0.mlp"``), an
+            integer layer index, or a descriptive qualifier for random weights
+            (``"kv_lora_rank"``).  ``None`` when no further distinction is
+            needed.
+        prefer_legacy_weight_cache: When ``True``, prefer the historical
+            SavedWeight cache for this test case and rebuild that cache on
+            miss. Use this only for tests that intentionally compare against
+            the legacy SavedWeight emission path instead of the current direct
+            conversion path. Pair this with ``force_recalculate=True`` when a
+            test must validate the current input weights on every run.
+        cache_identity: Optional cache discriminator appended to the per-test
+            cache path. Use this when the same test/layer can legitimately run
+            against different checkpoint layouts or other distinct weight
+            sources that should not share a SavedWeight cache entry.
+    """
+    if test_name is not None:
+        parts = [test_name, ModuleClass.__name__, "real" if real_weights else "random"]
+        if layer_id is not None:
+            parts.append(str(layer_id))
+        if cache_identity is not None:
+            raw_cache_identity = os.fspath(cache_identity).strip()
+            if not raw_cache_identity:
+                raise ValueError("cache_identity must be non-empty when provided")
+            normalized_cache_identity = raw_cache_identity
+            for old, new in ((os.sep, "__"), ("/", "__"), ("\\", "__"), (" ", "_"), (":", "_")):
+                normalized_cache_identity = normalized_cache_identity.replace(old, new)
+            cache_identity_digest = hashlib.sha256(raw_cache_identity.encode("utf-8")).hexdigest()[:16]
+            parts.append(f"{normalized_cache_identity}__{cache_identity_digest}")
+        weight_config_id = "/".join(parts)
+    else:
+        weight_config_id = os.environ.get("PYTEST_CURRENT_TEST", "unknown_test")
+    per_test_weight_cache_path = cache_path / "tests_cache" / weight_config_id
+
+    if not prefer_legacy_weight_cache:
+        return get_weight_config(
+            ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
+        )
+
+    if force_recalculate:
+        return get_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=per_test_weight_cache_path,
+            mesh_device=mesh_device,
+            force_recalculate=True,
+            emit_weight_cache=True,
+        )
+
+    try:
+        return get_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=per_test_weight_cache_path,
+            mesh_device=mesh_device,
+            use_weight_cache=True,
+        )
+    except FileNotFoundError:
+        logger.info(f"DeepSeek test weight cache miss at {per_test_weight_cache_path}; regenerating it")
+        return get_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=per_test_weight_cache_path,
+            mesh_device=mesh_device,
+            emit_weight_cache=True,
+        )
 
 
 def get_rope_tensors(
@@ -500,3 +730,29 @@ def get_rope_tensors(
     if position_ids is None:
         return rope_setup.get_rot_mats_table(seq_len)
     return rope_setup.get_rot_mats(position_ids)
+
+
+# Mapping of system names to their corresponding mesh shapes
+SYSTEM_NAME_TO_MESH_SHAPE: dict[str, tuple[int, int]] = {
+    "TG": (4, 8),
+    "DUAL": (8, 8),
+    "QUAD": (16, 8),
+    "T3K": (1, 8),
+    "N300": (1, 2),
+    "N150": (1, 1),
+}
+
+
+def get_valid_system_names() -> tuple[str, ...]:
+    return tuple(SYSTEM_NAME_TO_MESH_SHAPE.keys())
+
+
+def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
+    if system_name not in SYSTEM_NAME_TO_MESH_SHAPE:
+        valid_system_names = get_valid_system_names()
+        raise ValueError(
+            f"Unsupported system name: {system_name}. Supported values are {', '.join(valid_system_names)}."
+        )
+
+    rows, cols = SYSTEM_NAME_TO_MESH_SHAPE[system_name]
+    return ttnn.MeshShape(rows, cols)

@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
@@ -92,7 +92,7 @@ void kernel_main() {
 #endif
 
     // WRITER
-    const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
+    const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     for (uint32_t b = 0; b < batch; b++) {
         for (uint32_t block = 0; block < num_blocks; block++) {

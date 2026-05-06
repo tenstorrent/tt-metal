@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     int i{0};
     const auto num_cols_per_core = get_arg_val<uint32_t>(i++);
     const auto Ht = get_arg_val<uint32_t>(i++);
@@ -116,8 +116,8 @@ void MAIN {
                 copy_tile_init_with_dt(cb_cal);
                 copy_tile(cb_cal, 0, dst1);
 
-                max_tile_init();
-                max_tile(dst0, dst1);
+                binary_max_tile_init();
+                binary_max_tile(dst0, dst1, dst0);
 #endif
                 tile_regs_commit();
 
@@ -131,22 +131,8 @@ void MAIN {
             }
         }
         // reduce f(x)
-
-        tile_regs_acquire();
-        cb_wait_front(cb_cal, onetile);
-        cb_reserve_back(cb_reduce, onetile);
-
-        reduce_init_delta_with_dt<REDUCE_OP, REDUCE_DIM>(cb_reduce, cb_cal, cb_one);
-        reduce_tile(cb_cal, cb_one, 0, 0, dst0);
-        reduce_uninit();
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_reduce);
-        tile_regs_release();
-
-        cb_pop_front(cb_cal, onetile);
-        cb_push_back(cb_reduce, onetile);
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
+            cb_cal, cb_one, cb_reduce, compute_kernel_lib::ReduceInputBlockShape::single());
 
         tile_regs_acquire();
 
@@ -173,6 +159,4 @@ void MAIN {
     if (do_mask_h) {
         cb_pop_front(cb_mask_h, onetile);
     }
-
-}  // void MAIN
-}  // namespace NAMESPACE
+}

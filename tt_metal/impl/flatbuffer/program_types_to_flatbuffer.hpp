@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 #include <kernel_types.hpp>
 #include <sub_device_types.hpp>
 #include <buffer.hpp>
+#include "kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 

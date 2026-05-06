@@ -1,0 +1,66 @@
+{
+  "operation_id": 1,
+  "operation_name": "ttnn.from_torch",
+  "args": [
+    {
+      "position": 0,
+      "value": {
+        "type": "torch.Tensor",
+        "shape": [
+          2,
+          3
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.50390625,
+            -0.57421875,
+            -0.1279296875
+          ],
+          [
+            1.453125,
+            -0.5859375,
+            1.59375
+          ]
+        ]
+      }
+    }
+  ],
+  "kwargs": {
+    "dtype": {
+      "type": "DataType",
+      "repr": "DataType.BFLOAT16"
+    },
+    "layout": {
+      "type": "Layout",
+      "repr": "Layout.TILE"
+    }
+  },
+  "return_value": {
+    "type": "ttnn.Tensor",
+    "shape": [
+      2,
+      3
+    ],
+    "dtype": "float32",
+    "values": [
+      [
+        0.50390625,
+        -0.57421875,
+        -0.1279296875
+      ],
+      [
+        1.453125,
+        -0.5859375,
+        1.59375
+      ]
+    ],
+    "original_shape": [
+      2,
+      3
+    ],
+    "original_dtype": "DataType.BFLOAT16",
+    "layout": "Layout.TILE",
+    "storage_type": "StorageType.HOST"
+  }
+}

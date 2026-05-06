@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -81,38 +81,6 @@ protected:
     tt::tt_fabric::Topology topology_;
     tt::tt_fabric::FabricEriscDatamoverOptions options_;
     std::vector<MemoryRegion> memory_regions_;
-};
-
-/**
- * Elastic channels allocator implementation.
- * The `ElasticChannelsAllocator` allocates chunks of memory in a memory pool for elastic channels.
- * The memory pool does not need to be contiguous, but each individual chunk within the pool must be
- * contiguous.
- * Each chunk is a sequence of 1 or more buffer slots (i.e. packet slots)
- */
-class ElasticChannelsAllocator : public FabricChannelAllocator {
-public:
-    /**
-     * Constructor for elastic channels allocator.
-     * @param topology Fabric topology
-     * @param options Fabric erisc datamover options
-     * @param memory_regions Available memory regions
-     * @param buffer_slot_size_bytes Size of each buffer slot in bytes, including the packet header
-     * @param min_buffers_per_chunk Minimum buffer slots per chunk
-     * @param max_buffers_per_chunk Maximum buffer slots per chunk
-     */
-    ElasticChannelsAllocator(
-        tt::tt_fabric::Topology topology,
-        const tt::tt_fabric::FabricEriscDatamoverOptions& options,
-        const std::vector<MemoryRegion>& memory_regions,
-        size_t buffer_slot_size_bytes,
-        size_t min_buffers_per_chunk,
-        size_t max_buffers_per_chunk
-        );
-
-    void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
-
-    void print(std::ostream& os) const override { os << "ElasticChannelsAllocator (not yet fully implemented)"; }
 };
 
 }  // namespace tt::tt_fabric

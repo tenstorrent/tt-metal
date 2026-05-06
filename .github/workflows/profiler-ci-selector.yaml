@@ -1,0 +1,215 @@
+name: "Profiler CI"
+run-name: "Profiler CI"
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # Run daily at 2am UTC
+  workflow_dispatch:
+    inputs:
+      run_t3k_profiler:
+        description: "T3K profiler"
+        required: false
+        type: boolean
+        default: true
+      run_galaxy_profiler:
+        description: "Galaxy profiler"
+        required: false
+        type: boolean
+        default: false
+      run_blackhole_profiler:
+        description: "Blackhole profiler"
+        required: false
+        type: boolean
+        default: true
+      run_n300_profiler:
+        description: "N300 profiler"
+        required: false
+        type: boolean
+        default: true
+      run_n150_profiler:
+        description: "N150 profiler"
+        required: false
+        type: boolean
+        default: true
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+  workflow_call:
+    inputs:
+      run_t3k_profiler:
+        description: "T3K profiler"
+        required: false
+        type: boolean
+        default: false
+      run_galaxy_profiler:
+        description: "Galaxy profiler"
+        required: false
+        type: boolean
+        default: false
+      run_blackhole_profiler:
+        description: "Blackhole profiler"
+        required: false
+        type: boolean
+        default: false
+      run_n300_profiler:
+        description: "N300 profiler"
+        required: false
+        type: boolean
+        default: false
+      run_n150_profiler:
+        description: "N150 profiler"
+        required: false
+        type: boolean
+        default: false
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+
+jobs:
+  build-artifact-profiler:
+    if: >-
+      ${{
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && (inputs.run_t3k_profiler || inputs.run_galaxy_profiler || inputs.run_blackhole_profiler || inputs.run_n300_profiler || inputs.run_n150_profiler)) ||
+        (github.event_name == 'workflow_dispatch' && (
+          github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true ||
+          github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true ||
+          github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true ||
+          github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true ||
+          github.event.inputs.run_n150_profiler == 'true' || github.event.inputs.run_n150_profiler == true
+        ))
+      }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      tracy: true
+      build-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  t3k-profiler-tests:
+    if: >-
+      ${{
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && inputs.run_t3k_profiler) ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true))
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      topology: config-t3000
+      test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh
+
+  galaxy-profiler-tests:
+    if: >-
+      ${{
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && inputs.run_galaxy_profiler) ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true))
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      topology: topology-6u
+      test-script: ./tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh
+
+  blackhole-profiler:
+    if: >-
+      ${{
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && inputs.run_blackhole_profiler) ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true))
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    with:
+      arch: blackhole
+      runner-label: P150b
+      # Full profiler regression (non post-commit)
+      post_commit_only: false
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+
+  n300-profiler:
+    if: >-
+      ${{
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && inputs.run_n300_profiler) ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true))
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: N300
+      # Full profiler regression (non post-commit)
+      post_commit_only: false
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+
+  n150-profiler:
+    if: >-
+      ${{
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_call' && inputs.run_n150_profiler) ||
+        (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_n150_profiler == 'true' || github.event.inputs.run_n150_profiler == true))
+      }}
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+      # Full profiler regression (non post-commit)
+      post_commit_only: false
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}

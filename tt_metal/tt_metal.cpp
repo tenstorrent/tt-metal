@@ -1,16 +1,22 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
+#include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
-#include <device_pool.hpp>
+#include "context/context_types.hpp"
+#include "context/metal_env_accessor.hpp"
+#include "device/device_manager.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
+#include <experimental/host_api.hpp>
+#include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <sub_device_types.hpp>
@@ -23,17 +29,17 @@
 #include <optional>
 #include <unordered_set>
 #include <utility>
+#include <type_traits>
 #include <variant>
 
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
-#include "data_types.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"
-#include "impl/context/metal_context.hpp"
+#include "context/metal_context.hpp"
 #include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
@@ -41,26 +47,31 @@
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
-#include "lightmetal_binary.hpp"
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
+#include <tt-metalium/experimental/offline_kernel_compile.hpp>
+#include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt_metal_profiler.hpp>
+#include <program.hpp>
 #include "program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
-#include "fabric/hw/inc/fabric_routing_mode.h"
-#include <tt-metalium/graph_tracking.hpp>
+#include <graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include <experimental/fabric/control_plane.hpp>
+#include "impl/buffers/circular_buffer.hpp"
 
-namespace tt {
+#ifdef TT_METAL_USE_EMULE
+#include "impl/emulation/emulated_program_runner.hpp"
+#endif
 
-namespace tt_metal {
-enum class FabricConfig : uint32_t;
+namespace tt::tt_metal {
 struct RuntimeArgsData;
 struct TraceDescriptor;
 
@@ -89,28 +100,27 @@ DataMovementConfigStatus CheckDataMovementConfig(
     DataMovementConfigStatus data_movement_config_status{
         .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
-    auto set_global_and_local_noc_usage = [&](const std::shared_ptr<Kernel>& kernel,
-                                              bool& local_noc0_usage,
-                                              bool& local_noc1_usage) {
-        int noc_value;
-        switch (programmable_core) {
-            case HalProgrammableCoreType::TENSIX:
-                noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
-                break;
-            case HalProgrammableCoreType::ACTIVE_ETH:
-            case HalProgrammableCoreType::IDLE_ETH:
-                noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
-                break;
-            default:
-                TT_THROW(
-                    "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                    enchantum::to_string(programmable_core));
-        }
-        local_noc0_usage = noc_value == 0;
-        local_noc1_usage = noc_value == 1;
-        data_movement_config_status.noc0_in_use = local_noc0_usage;
-        data_movement_config_status.noc1_in_use = local_noc1_usage;
-    };
+    auto set_global_and_local_noc_usage =
+        [&](const std::shared_ptr<Kernel>& kernel, bool& local_noc0_usage, bool& local_noc1_usage) {
+            int noc_value;
+            switch (programmable_core) {
+                case HalProgrammableCoreType::TENSIX:
+                    noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
+                    break;
+                case HalProgrammableCoreType::ACTIVE_ETH:
+                case HalProgrammableCoreType::IDLE_ETH:
+                    noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
+                    break;
+                default:
+                    TT_THROW(
+                        "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
+                        enchantum::to_string(programmable_core));
+            }
+            local_noc0_usage = noc_value == 0;
+            local_noc1_usage = noc_value == 1;
+            data_movement_config_status.noc0_in_use = local_noc0_usage;
+            data_movement_config_status.noc1_in_use = local_noc1_usage;
+        };
 
     const auto& hal = MetalContext::instance().hal();
     for (const auto& core_range : core_ranges.ranges()) {
@@ -173,43 +183,6 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range, CoreType core_type) {
-    std::optional<uint32_t> semaphore_id = std::nullopt;
-    std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
-    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-            CoreCoord logical_core(x, y);
-            auto semaphores = program.impl().semaphores_on_core(logical_core, core_type);
-            if (semaphores.size() == NUM_SEMAPHORES) {
-                TT_THROW(
-                    "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
-                    logical_core.str(),
-                    NUM_SEMAPHORES);
-            }
-
-            for (const auto& semaphore : semaphores) {
-                semaphore_histogram[semaphore.get().id()]++;
-            }
-        }
-    }
-
-    std::optional<uint32_t> uninitialized_sem_id = std::nullopt;
-    for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
-        if (semaphore_histogram.at(sem_id) == 0) {
-            uninitialized_sem_id = sem_id;
-            break;
-        }
-    }
-
-    if (uninitialized_sem_id.has_value()) {
-        semaphore_id = uninitialized_sem_id;
-    } else {
-        TT_THROW("Unable to initialize semaphores on core range {}", core_range.str());
-    }
-
-    return semaphore_id;
-}
-
 inline void SetRuntimeArgsImpl(
     const Program& program, KernelHandle kernel_id, const CoreCoord& c, stl::Span<const uint32_t> runtime_args) {
     if (!runtime_args.empty()) {
@@ -259,7 +232,7 @@ bool WriteToDeviceDRAMChannel(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
-    tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
+    MetalContext::instance().get_cluster().write_dram_vec(
         host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
     return true;
 }
@@ -274,8 +247,8 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
 
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
     bool pass = true;
-    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
-    tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+    MetalContext::instance().get_cluster().dram_barrier(device->id());
+    MetalContext::instance().get_cluster().read_dram_vec(
         host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
     return pass;
 }
@@ -295,7 +268,7 @@ bool WriteToDeviceL1(
     CoreType core_type) {
     ZoneScoped;
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
+    MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
     return true;
 }
 
@@ -315,8 +288,7 @@ bool WriteToDeviceL1(
 
 bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval) {
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-        &regval, tt_cxy_pair(device->id(), worker_core), address);
+    MetalContext::instance().get_cluster().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
 }
 
@@ -326,9 +298,9 @@ bool ReadFromDeviceL1(
     uint32_t address,
     std::span<uint8_t> host_buffer,
     CoreType core_type) {
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+    MetalContext::instance().get_cluster().read_core(
         host_buffer.data(), host_buffer.size(), tt_cxy_pair(device->id(), virtual_core), address);
     return true;
 }
@@ -340,23 +312,27 @@ bool ReadFromDeviceL1(
     uint32_t size,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    host_buffer =
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);
+    host_buffer = MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);
     return true;
 }
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval) {
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
-        &regval, tt_cxy_pair(device->id(), worker_core), address);
+    MetalContext::instance().get_cluster().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
 }
 
-std::string get_platform_architecture_name() {
-    return tt::get_string_lowercase(tt::tt_metal::get_platform_architecture({}));
+std::string get_platform_architecture_name() { return tt::get_string_lowercase(get_platform_architecture({})); }
+
+IDevice* GetActiveDevice(ChipId device_id) {
+    IDevice* device = nullptr;
+    if (MetalContext::instance().device_manager()->is_device_active(device_id)) {
+        device = MetalContext::instance().device_manager()->get_active_device(device_id);
+    }
+    return device;
 }
 
 std::map<ChipId, IDevice*> CreateDevices(
@@ -368,13 +344,11 @@ std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<uint32_t>& /*l1_bank_remap*/,
     const size_t worker_l1_size,
     bool init_profiler,
-    bool use_max_eth_core_count_on_all_devices,
+    [[maybe_unused]] bool ignored,
     bool initialize_fabric_and_dispatch_fw) {
-    // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
-    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
-    bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
-    tt::DevicePool::initialize(
+    bool is_galaxy = MetalContext::instance().get_cluster().is_galaxy_cluster();
+    MetalContext::instance().initialize_device_manager(
         device_ids,
         num_hw_cqs,
         l1_small_size,
@@ -383,10 +357,9 @@ std::map<ChipId, IDevice*> CreateDevices(
         {},
         worker_l1_size,
         init_profiler,
-        use_max_eth_core_count_on_all_devices,
         initialize_fabric_and_dispatch_fw);
 
-    const auto devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
     std::map<ChipId, IDevice*> ret_devices;
     // Only include the mmio device in the active devices set returned to the caller if we are not running
     // on a Galaxy cluster.
@@ -402,13 +375,115 @@ std::map<ChipId, IDevice*> CreateDevices(
     return ret_devices;
 }
 
+}  // namespace detail
+
+namespace experimental {
+
+std::map<ChipId, IDevice*> CreateDevices(
+    ContextId context_id,
+    const std::vector<ChipId>& device_ids,
+    uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    const DispatchCoreConfig& dispatch_core_config,
+    const std::vector<uint32_t>& /*l1_bank_remap*/,
+    size_t worker_l1_size,
+    bool init_profiler,
+    bool initialize_fabric_and_dispatch_fw) {
+    ZoneScoped;
+    auto& ctx = MetalContext::instance(context_id);
+    bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
+    ctx.initialize_device_manager(
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        {},
+        worker_l1_size,
+        init_profiler,
+        initialize_fabric_and_dispatch_fw);
+
+    const auto devices = ctx.device_manager()->get_all_active_devices();
+    std::map<ChipId, IDevice*> ret_devices;
+    for (IDevice* dev : devices) {
+        if (is_galaxy and dev->is_mmio_capable()) {
+            continue;
+        }
+        ret_devices.insert({dev->id(), dev});
+    }
+
+    return ret_devices;
+}
+
+void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
+    ZoneScoped;
+
+    auto device_id = device->id();
+
+    // Verify program was prepared by prior LaunchProgram call
+    TT_FATAL(
+        program.impl().is_finalized(),
+        "Program must be finalized before calling DispatchCompiledProgramToDevice (target device {}). "
+        "Call LaunchProgram on another device first.",
+        device_id);
+    TT_FATAL(
+        program.impl().is_compiled(),
+        "Program must be compiled on at least one device before calling DispatchCompiledProgramToDevice (target device "
+        "{}). "
+        "Call LaunchProgram on another device first.",
+        device_id);
+
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+    TT_FATAL(
+        !logical_cores_used_in_program.empty(),
+        "Program has no logical cores to dispatch to device {}. Ensure the program has kernels.",
+        device_id);
+
+    detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+    detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+
+    MetalContext::instance().get_cluster().dram_barrier(device_id);
+    MetalContext::instance().get_cluster().l1_barrier(device_id);
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+
+            // Use a thread-local copy of launch_msg to avoid racing on the shared KernelGroup state
+            dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
+            local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+
+            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                device_id,
+                physical_core,
+                local_launch_msg.view(),
+                kg->go_msg.view(),
+                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+        }
+    }
+}
+
+}  // namespace experimental
+
+namespace detail {
+
 void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
     devices_to_close.reserve(devices.size());
-    for (auto& [id, device] : devices) {
+    for (const auto& [id, device] : devices) {
         devices_to_close.push_back(device);
     }
-    tt::DevicePool::instance().close_devices(devices_to_close);
+    MetalContext::instance().device_manager()->close_devices(devices_to_close);
+}
+
+void ReleaseOwnership() {
+    experimental::DispatchContext::get().reset();
+    MetalContext::destroy_all_instances();
 }
 
 void print_page(
@@ -432,7 +507,8 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceSharded(
+    Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -442,27 +518,44 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     uint32_t page_size = buffer.page_size();
     TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
-    auto device = buffer.device();
+    auto* device = buffer.device();
     const auto& allocator = device->allocator();
 
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const size_t alignment_req = cluster.get_alignment_requirements(device->id(), page_size);
+    const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
+    const size_t remainder_bytes = page_size - aligned_bytes;
+    TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
+        if (logical_core_filter != nullptr && !logical_core_filter->contains(core)) {
+            continue;
+        }
         auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
         auto data_index = mapped_page.host_page * page_size;
-        std::span<const std::uint8_t> page(host_buffer.data() + data_index, page_size);
-        if (buffer.is_l1()) {
-            auto absolute_address =
-                buffer.address() + bank_offset + (mapped_page.device_page * buffer.aligned_page_size());
-            auto core_coordinates =
-                device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                device->id(), core_coordinates, page, absolute_address);
-        } else {
-            auto bank_local_address = buffer.address() + (mapped_page.device_page * buffer.aligned_page_size());
-            WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
-        }
+        auto write_chunk = [&](size_t offset, size_t size_in_bytes) {
+            if (size_in_bytes == 0) {
+                return;
+            }
+            std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
+            if (buffer.is_l1()) {
+                auto absolute_address =
+                    buffer.address() + bank_offset + (mapped_page.device_page * buffer.aligned_page_size()) + offset;
+                auto core_coordinates =
+                    device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
+                MetalContext::instance().get_cluster().write_core(
+                    device->id(), core_coordinates, page, absolute_address);
+            } else {
+                auto bank_local_address =
+                    buffer.address() + (mapped_page.device_page * buffer.aligned_page_size()) + offset;
+                WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
+            }
+        };
+
+        write_chunk(0, aligned_bytes);
+        write_chunk(aligned_bytes, remainder_bytes);
     }
 }
 
@@ -481,7 +574,7 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
-    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+    if (GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
 
@@ -495,34 +588,55 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     size_t page_size = buffer.page_size();
     size_t num_pages = buffer.num_pages();
 
-    auto device = buffer.device();
+    auto* device = buffer.device();
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
     size_t bank_index = 0;
     size_t data_index = 0;
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const size_t alignment_req = cluster.get_alignment_requirements(device->id(), page_size);
+    const size_t aligned_bytes = alignment_req ? (page_size / alignment_req) * alignment_req : page_size;
+    const size_t remainder_bytes = page_size - aligned_bytes;
+    TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
-        std::span<const uint8_t> page(host_buffer.data() + data_index, page_size);
-        switch (buffer.buffer_type()) {
-            case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page); break;
-            case BufferType::L1:
-            case BufferType::L1_SMALL: {
-                CoreCoord logical_core = buffer.allocator()->get_logical_core_from_bank_id(bank_index);
-                WriteToDeviceL1(device, logical_core, address, page, CoreType::WORKER);
-            } break;
-            default: TT_THROW("Unsupported buffer type to write to device!");
-        }
+        auto write_chunk = [&](size_t offset, size_t size_in_bytes) {
+            if (size_in_bytes == 0) {
+                return;
+            }
+            std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
+            switch (buffer.buffer_type()) {
+                case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address + offset, page); break;
+                case BufferType::L1:
+                case BufferType::L1_SMALL: {
+                    CoreCoord logical_core = buffer.allocator()->get_logical_core_from_bank_id(bank_index);
+                    WriteToDeviceL1(device, logical_core, address + offset, page, CoreType::WORKER);
+                } break;
+                default: TT_THROW("Unsupported buffer type to write to device!");
+            }
+        };
+
+        write_chunk(0, aligned_bytes);
+        write_chunk(aligned_bytes, remainder_bytes);
 
         bank_index = (bank_index + 1) % num_banks;
         data_index += page_size;
     }
 }
 
-void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
+        if (logical_core_filter != nullptr) {
+            TT_FATAL(
+                logical_core_filter->empty(),
+                "logical_core_filter is only supported for sharded buffer layouts (interleaved layout does not support "
+                "per-core filtering)");
+            return;
+        }
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
-        WriteToDeviceSharded(buffer, host_buffer);
+        WriteToDeviceSharded(buffer, host_buffer, logical_core_filter);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
@@ -533,7 +647,7 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
         case BufferType::L1_SMALL: {
-            WriteToDevice(buffer, host_buffer);
+            WriteToDevice(buffer, host_buffer, /*logical_core_filter=*/nullptr);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Writing to host memory is unsupported!");
@@ -546,12 +660,16 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     size_t page_size = buffer.page_size();
     size_t num_pages = buffer.num_pages();
 
-    auto device = buffer.device();
+    auto* device = buffer.device();
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
 
     size_t host_idx = 0;
     size_t bank_index = 0;
-    std::vector<uint8_t> page(page_size);
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
+
+    std::vector<uint8_t> page(aligned_page_size);
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         switch (buffer.buffer_type()) {
@@ -564,7 +682,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
                 auto core_coordinates = device->worker_core_from_logical_core(
                     buffer.allocator()->get_logical_core_from_bank_id(bank_index));
                 tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), address);
+                    page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
@@ -586,28 +704,40 @@ void read_pages_to_host_helper(
     const uint32_t& core_page_id,
     const uint32_t& bank_id) {
     uint64_t host_buffer_start = uint64_t(host_page_id) * page_size;
+    const auto& cluster = MetalContext::instance().get_cluster();
+    size_t aligned_page_size = tt::align(page_size, cluster.get_alignment_requirements(device->id(), page_size));
+
     if (dev_buffer.is_l1()) {
         auto core_coordinates =
             device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
         auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * dev_buffer.aligned_page_size());
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+        if (aligned_page_size > page_size) {
+            std::vector<uint8_t> page(aligned_page_size);
+            MetalContext::instance().get_cluster().read_core(
+                page.data(), aligned_page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+            std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
+        } else {
+            MetalContext::instance().get_cluster().read_core(
+                host_buffer + host_buffer_start,
+                page_size,
+                tt_cxy_pair(device->id(), core_coordinates),
+                absolute_address);
+        }
     } else {
-        std::vector<uint32_t> page;
-        page.resize(page_size / sizeof(uint32_t));
+        std::vector<uint8_t> page(aligned_page_size);
         auto bank_local_address = dev_buffer.address() + (core_page_id * dev_buffer.aligned_page_size());
-        ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, page_size, page);
+        ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, std::span<uint8_t>(page));
         std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
     }
 }
 
 void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
-    auto device = buffer.device();
+    auto* device = buffer.device();
 
     uint32_t page_size = buffer.page_size();
-
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
+
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
         auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
@@ -639,9 +769,9 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
         case BufferType::L1:  // fallthrough
         case BufferType::L1_SMALL: {
             if (buffer.is_dram()) {
-                tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+                MetalContext::instance().get_cluster().dram_barrier(device->id());
             } else {
-                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+                MetalContext::instance().get_cluster().l1_barrier(device->id());
             }
             ReadFromDevice(buffer, host_buffer);
         } break;
@@ -694,10 +824,16 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (!force_slow_dispatch) {
             detail::DispatchStateCheck(false);
         } else {
-            TT_ASSERT(!tt::DevicePool::instance().is_dispatch_firmware_active());
+            TT_ASSERT(!MetalContext::instance().device_manager()->is_dispatch_firmware_active());
         }
 
-        detail::CompileProgram(device, program);
+#ifdef TT_METAL_USE_EMULE
+        if (MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
+#endif
+        {
+            detail::CompileProgram(device, program);
+        }
+        program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
             program.impl().finalize_offsets(device);
         }
@@ -707,40 +843,55 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
         auto device_id = device->id();
 
-        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device_id);
-
-        // Note: the l1_barrier below is needed to be sure writes to cores that
-        // don't get the GO mailbox (eg, storage cores) have all landed
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-
-        std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-        std::unordered_set<CoreCoord> not_done_cores;
-        const auto& hal = MetalContext::instance().hal();
-        for (uint32_t programmable_core_type_index = 0;
-             programmable_core_type_index < logical_cores_used_in_program.size();
-             programmable_core_type_index++) {
-            CoreType core_type = hal.get_core_type(programmable_core_type_index);
-            for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
-                kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
-
-                auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-                not_done_cores.insert(physical_core);
-                if (force_slow_dispatch) {
-                    tt::llrt::send_reset_go_signal(device->id(), physical_core);
-                }
-
-                tt::llrt::write_launch_msg_to_core(
-                    device->id(),
-                    physical_core,
-                    kg->launch_msg.view(),
-                    kg->go_msg.view(),
-                    device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
-            }
+#ifdef TT_METAL_USE_EMULE
+        if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+            // Emulated mode always executes synchronously (slow dispatch only).
+            // The wait_until_cores_done flag is not honored; all kernels complete
+            // before this function returns.
+            emule::execute_program_emulated(device, program);
+            return;
         }
-        if (wait_until_cores_done) {
-            // Wait for all cores to be done
-            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+#endif
+        {
+            MetalContext::instance().get_cluster().dram_barrier(device_id);
+
+            // Note: the l1_barrier below is needed to be sure writes to cores that
+            // don't get the GO mailbox (eg, storage cores) have all landed
+            MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+            std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+            std::unordered_set<CoreCoord> not_done_cores;
+            const auto& hal = MetalContext::instance().hal();
+            for (uint32_t programmable_core_type_index = 0;
+                 programmable_core_type_index < logical_cores_used_in_program.size();
+                 programmable_core_type_index++) {
+                CoreType core_type = hal.get_core_type(programmable_core_type_index);
+                HalProgrammableCoreType programmable_core_type =
+                    hal.get_programmable_core_type(programmable_core_type_index);
+                for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+                    auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+                    auto runtime_id = program.get_runtime_id();
+                    kg->launch_msg.view().kernel_config().host_assigned_id() =
+                        runtime_id == 0 ? 0 : detail::EncodePerDeviceProgramID(runtime_id, device->id());
+
+                    auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+                    not_done_cores.insert(physical_core);
+                    if (force_slow_dispatch) {
+                        tt::llrt::send_reset_go_signal(device->id(), physical_core);
+                    }
+
+                    tt::llrt::write_launch_msg_to_core(
+                        device->id(),
+                        physical_core,
+                        kg->launch_msg.view(),
+                        kg->go_msg.view(),
+                        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+                }
+            }
+            if (wait_until_cores_done) {
+                // Wait for all cores to be done
+                llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+            }
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
@@ -751,17 +902,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-    std::unordered_set<CoreCoord> not_done_cores;
-    const auto& hal = MetalContext::instance().hal();
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        const auto& logical_cores = logical_cores_used_in_program[index];
-        CoreType core_type = hal.get_core_type(index);
-        for (const auto& logical_core : logical_cores) {
-            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            not_done_cores.insert(physical_core);
-        }
-    }
-    llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+    llrt::internal_::wait_for_idle(device_id, logical_cores_used_in_program);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }
@@ -780,21 +921,41 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     auto device_id = device->id();
 
-    program.impl().allocate_circular_buffers(device);
-    program.impl().validate_circular_buffer_region(device);
+    // Individual device allocators don't track mesh buffer allocations, so use the
+    // MeshDevice for validation when available to correctly detect CB/L1 buffer overlaps.
+    auto mesh_device = device->get_mesh_device();
+    const IDevice* validation_device = mesh_device ? mesh_device.get() : device;
+
+    program.impl().allocate_circular_buffers(validation_device);
+    program.impl().validate_circular_buffer_core_ranges(validation_device);
+    program.impl().validate_circular_buffer_region(validation_device);
+    program.impl().allocate_dataflow_buffers(validation_device);
+    program.impl().validate_dataflow_buffer_region(validation_device);
+
+    bool is_emulated = false;
+#ifdef TT_METAL_USE_EMULE
+    is_emulated = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+#endif
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
+    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
             KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
+            // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
+            if (!is_emulated) {
+                ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
+            }
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
+                uint64_t kernel_config_base =
+                    hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
+                const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
                 if (!cbs_on_core.empty()) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
@@ -816,18 +977,39 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         }
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
-                                remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
-                                                       UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                                remote_offset_index +
+                                ((max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                             uint32_t config_address = circular_buffer->config_address();
                             circular_buffer_config_vec[base_index] = config_address;
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);
                         }
                     }  // PROF_END("CBS")
-                    uint64_t kernel_config_base =
-                        hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
-                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    MetalContext::instance().get_cluster().write_core(
                         device_id, physical_core, circular_buffer_config_vec, addr);
+                }
+
+                if (!dfbs_on_core.empty()) {
+                    log_info(tt::LogMetal, "DFB size: {}", program.impl().get_program_config(index).dfb_size);
+                    std::vector<uint8_t> dfb_config_vec(
+                        program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
+                    uint32_t offset = 0;
+                    for (const auto& dfb : dfbs_on_core) {
+                        auto serialized = dfb->serialize_for_core(logical_core);
+                        std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
+                        offset += serialized.size();
+                    }
+                    uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
+                    log_info(
+                        tt::LogMetal,
+                        "Writing DFB config to core {} at addr 0x{:x} (kernel_config_base=0x{:x}, dfb_offset=0x{:x}) "
+                        "size: {}",
+                        physical_core.str(),
+                        addr,
+                        kernel_config_base,
+                        program.impl().get_program_config(index).dfb_offset,
+                        dfb_config_vec.size());
+                    MetalContext::instance().get_cluster().write_core(device_id, physical_core, dfb_config_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
@@ -851,9 +1033,12 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        uint64_t l1_noc_offset = hal.get_l1_noc_offset(programmable_core_type);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
             auto kernel_config = kg->launch_msg.view().kernel_config();
-            uint32_t kernel_config_base = kernel_config.kernel_config_base()[index];
+            uint64_t kernel_config_base =
+                static_cast<uint64_t>(kernel_config.kernel_config_base()[index]) + l1_noc_offset;
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -881,7 +1066,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     physical_core.str(),
                                     rt_args_addr,
                                     rt_args);
-                                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                                MetalContext::instance().get_cluster().write_core(
                                     device_id, physical_core, rt_args, rt_args_addr);
                             }
 
@@ -898,7 +1083,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                     physical_core.str(),
                                     common_rt_args_addr,
                                     common_rt_args);
-                                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                                MetalContext::instance().get_cluster().write_core(
                                     device_id, physical_core, common_rt_args, common_rt_args_addr);
                             }
                         }
@@ -916,19 +1101,35 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 
 }  // namespace detail
 
-size_t GetNumAvailableDevices() {
-    return tt::tt_metal::MetalContext::instance().get_cluster().number_of_user_devices();
+namespace experimental::core_subset_write {
+
+void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+    switch (buffer.buffer_type()) {
+        case BufferType::DRAM:  // fallthrough
+        case BufferType::L1:    // fallthrough
+        case BufferType::L1_SMALL: {
+            detail::WriteToDevice(buffer, host_buffer, &logical_core_filter);
+        } break;
+        case BufferType::SYSTEM_MEMORY: {
+            TT_THROW("Writing to host memory is unsupported!");
+        } break;
+        default: TT_THROW("Unsupported buffer type!");
+    }
 }
 
-bool IsGalaxyCluster() { return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster(); }
+}  // namespace experimental::core_subset_write
 
-size_t GetNumPCIeDevices() { return tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices(); }
+size_t GetNumAvailableDevices() { return MetalContext::instance().get_cluster().number_of_user_devices(); }
+
+bool IsGalaxyCluster() { return MetalContext::instance().get_cluster().is_galaxy_cluster(); }
+
+size_t GetNumPCIeDevices() { return MetalContext::instance().get_cluster().number_of_pci_devices(); }
 
 ChipId GetPCIeDeviceID(ChipId device_id) {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    return MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
-ClusterType GetClusterType() { return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type(); }
+ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
 
 std::string SerializeClusterDescriptor() {
     std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
@@ -950,10 +1151,10 @@ IDevice* CreateDevice(
 
     // MMIO devices do not support dispatch on galaxy cluster
     // Suggest the user to use the CreateDevices API
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         TT_FATAL(
-            !(tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() &&
-              tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
+            !(MetalContext::instance().get_cluster().is_galaxy_cluster() &&
+              MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
             "Galaxy cluster does not support dispatch on mmio devices. Please use CreateDevices API to open all "
             "devices for dispatch.");
     }
@@ -961,25 +1162,28 @@ IDevice* CreateDevice(
     // This API may not be used to create single remote device or multi chip clusters
     // CreateDevices should be used instead to ensure proper init/teardown
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
+        MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
         "CreateDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
         "must use "
         "CreateDevices().",
         device_id);
 
-    tt::DevicePool::initialize(
+    MetalContext::instance().initialize_device_manager(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
-    auto dev = tt::DevicePool::instance().get_active_device(device_id);
+    auto* dev = MetalContext::instance().device_manager()->get_active_device(device_id);
     return dev;
 }
 
 IDevice* CreateDeviceMinimal(
     ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
-    tt::tt_metal::MetalContext::instance().initialize(
-        dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
-    auto dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
+    auto& ctx = MetalContext::instance();  // runtime state
+    auto& env = ctx.get_env();             // default low level state
+    ctx.initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
+    auto* dev =
+        new Device(&env, &ctx, device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto& control_plane = MetalEnvAccessor(env).impl().get_control_plane();
+    MetalEnvAccessor(env).impl().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
     return dev;
 }
 
@@ -990,13 +1194,13 @@ bool CloseDevice(IDevice* device) {
     // This API may not be used to close single remote device or multi chip clusters
     // CloseDevices should be used instead to ensure proper init/teardown
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
+        MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
         "CloseDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
         "must use "
         "CloseDevices().",
         device_id);
 
-    return tt::DevicePool::instance().close_device(device_id);
+    return MetalContext::instance().device_manager()->close_device(device_id);
 }
 
 Program CreateProgram() { return Program(); }
@@ -1031,16 +1235,18 @@ KernelHandle CreateDataMovementKernel(
         "cores because both NOCs are in use!",
         kernel_name);
 
+    TT_FATAL(
+        config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
+        "DataMovementKernel creation failure: Data movement kernels can only be created on DM0 or DM1 processors.");
+
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto mode = control_plane.get_routing_mode();
-    if (mode != ROUTING_MODE_UNDEFINED) {
-        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
-        auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
-        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
-            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
-        }
+
+    // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
+    const auto fabric_defines = MetalContext::instance().get_control_plane().get_fabric_kernel_defines();
+    if (!fabric_defines.empty()) {
+        kernel->add_defines(fabric_defines);
     }
+
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1063,15 +1269,22 @@ KernelHandle CreateEthernetKernel(
         data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
+    TT_FATAL(
+        config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
+        "EthernetKernel creation failure: Ethernet kernels can only be created on DM0 or DM1 processors.");
+
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto mode = control_plane.get_routing_mode();
-    if (mode != ROUTING_MODE_UNDEFINED) {
-        kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
-        auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
-        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
-            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
-        }
+
+    // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
+    const auto fabric_defines = MetalContext::instance().get_control_plane().get_fabric_kernel_defines();
+    if (!fabric_defines.empty()) {
+        kernel->add_defines(fabric_defines);
+    }
+
+    // Disable watcher on ethernet cores if requested
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.watcher_eth_disabled()) {
+        kernel->add_defines({{"FORCE_WATCHER_OFF", "1"}});
     }
 
     TT_FATAL(
@@ -1094,61 +1307,182 @@ KernelHandle CreateEthernetKernel(
         "cores because both NOCs are in use!",
         kernel->name());
 
-    // Due to conflict with eth fw using noc0 at the same time, ensure each risc only uses their own noc
-    // https://github.com/tenstorrent/tt-metal/issues/25058
-    // E.g., risc0 -> noc0, risc1 -> noc1
-    if (config.processor != DataMovementProcessor::RISCV_0 && config.eth_mode != Eth::IDLE &&
-        !tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+    //
+    // Valid configurations for Blackhole ERISC
+    //
+    // |                | Valid NOC Configuration     |                             |
+    // |----------------|-----------------------------|-----------------------------|
+    // | **ERISC Mode** | **Physical ERISC0**         | **Physical ERISC1**         |
+    // | Single         | Not enabled for dispatch    | Dedicated NOC1              |
+    // | Dual           | Dedicated NOC0, Dynamic NOC | Dedicated NOC1, Dynamic NOC |
+    //
+    if (!MetalContext::instance().hal().get_eth_fw_is_cooperative() && config.eth_mode != Eth::IDLE &&
+        config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC) {
+        bool is_dual_erisc_mode = MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+        bool is_erisc0 = (config.processor == DataMovementProcessor::RISCV_0);
+        bool is_erisc1 = (config.processor == DataMovementProcessor::RISCV_1);
+
+        if (is_dual_erisc_mode) {
+            // Dual ERISC mode: ERISC0 uses NOC0, ERISC1 uses NOC1 (when in dedicated mode)
+            if (is_erisc0) {
+                TT_FATAL(
+                    config.noc == NOC::NOC_0,
+                    "EthernetKernel creation failure: In dual ERISC mode, ERISC0 in dedicated mode must use NOC0. "
+                    "Kernel: {}, Current NOC: {}, Required NOC: NOC_0. Use Dynamic NOC mode for flexible routing.",
+                    kernel->name(),
+                    config.noc);
+            } else if (is_erisc1) {
+                TT_FATAL(
+                    config.noc == NOC::NOC_1,
+                    "EthernetKernel creation failure: In dual ERISC mode, ERISC1 in dedicated mode must use NOC1. "
+                    "Kernel: {}, Current NOC: {}, Required NOC: NOC_1. Use Dynamic NOC mode for flexible routing.",
+                    kernel->name(),
+                    config.noc);
+            }
+        } else {
+            // ERISC1 must use NOC1 in dedicated mode
+            TT_FATAL(
+                config.noc == NOC::NOC_1,
+                "EthernetKernel creation failure: In single ERISC mode, ERISC0 must use NOC1. "
+                "Kernel: {}, Current NOC: {}, Required NOC: NOC_1.",
+                kernel->name(),
+                config.noc);
+        }
+    }
+
+    // Dynamic noc is not supported on single erisc mode
+    if (!MetalContext::instance().hal().get_eth_fw_is_cooperative() &&
+        !MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
         TT_FATAL(
-            static_cast<uint32_t>(config.noc) == static_cast<uint32_t>(config.processor),
-            "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
-            "cores because NOC {} is not supported for processor {}. Dynamic NOC is not supported for Ethernet "
-            "kernels.",
+            config.noc_mode == NOC_MODE::DM_DEDICATED_NOC,
+            "EthernetKernel creation failure: Dynamic NOC is not supported on single ERISC mode. "
+            "Kernel: {}, Current NOC Mode: {}, Required NOC Mode: DM_DEDICATED_NOC.",
             kernel->name(),
-            config.noc,
-            config.processor);
+            config.noc_mode);
+    }
+
+    if (MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+        // Dynamic NOC is not supported with this configuration
+        TT_FATAL(
+            config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC,
+            "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
+            "cores because NOC Mode {} is not supported on this platform",
+            kernel->name(),
+            config.noc_mode);
     }
     return program.impl().add_kernel(kernel, eth_core_type);
+}
+
+void ValidateKernelConfigDefines(const std::map<std::string, std::string>& defines) {
+    for (const auto& [key, value] : defines) {
+        if (value.find('\0') != std::string::npos) {
+            throw std::invalid_argument("Define value for key '" + key + "' contains null character");
+        }
+    }
 }
 
 KernelHandle CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    const std::variant<DataMovementConfig, ComputeConfig>& config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
+
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     KernelHandle kernel = std::visit(
-        ttsl::overloaded{
-            [&](const DataMovementConfig& cfg) {
+        [&](const auto& cfg) -> KernelHandle {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            },
-            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
-            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
+            } else {
+                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+            }
         },
         config);
 
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateKernel, kernel, program, file_name, core_spec, config);
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> cfg_variant = std::visit(
+        [&](const auto& cfg) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> { return cfg; },
+        config);
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateKernel, kernel, program, file_name, core_spec, cfg_variant);
+
     return kernel;
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
 KernelHandle CreateKernelFromString(
     Program& program,
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    const std::variant<DataMovementConfig, ComputeConfig>& config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
     return std::visit(
-        ttsl::overloaded{
-            [&](const DataMovementConfig& cfg) {
+        [&](const auto& cfg) -> KernelHandle {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            },
-            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
-            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
+            } else {
+                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+            }
         },
         config);
+}
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const EthernetConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    return CreateEthernetKernel(program, kernel_src, core_ranges, config);
+}
+
+static KernelHandle CreateDramKernel(
+    Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const DramConfig& config) {
+    TT_FATAL(
+        MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
+    TT_FATAL(
+        MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
+        "DRAM programmable cores are not enabled. Set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 to enable.");
+    std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(kernel_src, core_range_set, config);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    return CreateDramKernel(program, kernel_src, core_ranges, config);
+}
+
+KernelHandle CreateKernelFromString(
+    Program& program,
+    const std::string& kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const DramConfig& config) {
+    ValidateKernelConfigDefines(config.defines);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    return CreateDramKernel(program, kernel_src, core_ranges, config);
 }
 
 CBHandle CreateCircularBuffer(
@@ -1167,7 +1501,7 @@ const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle c
 }
 
 void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size) {
-    std::shared_ptr<CircularBuffer> circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    std::shared_ptr<CircularBufferImpl> circular_buffer = program.impl().get_circular_buffer(cb_handle);
     if (not circular_buffer->globally_allocated()) {
         program.impl().invalidate_circular_buffer_allocation();
     }
@@ -1185,11 +1519,25 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
     circular_buffer->assign_global_address();
 }
 
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset) {
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
+    circular_buffer->config().set_address_offset(address_offset);
+    circular_buffer->config().set_globally_allocated_address(buffer);
+    circular_buffer->assign_global_address();
+}
+
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
     circular_buffer->assign_global_address();
+}
+
+uint32_t CreateSemaphore(
+    Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) {
+    return CreateSemaphore(program, core_spec, initial_value, CoreType::WORKER);
 }
 
 uint32_t CreateSemaphore(
@@ -1206,24 +1554,7 @@ uint32_t CreateSemaphore(
             },
         },
         core_spec);
-    std::optional<uint32_t> semaphore_id;
-    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
-    TT_FATAL(
-        tt::tt_metal::MetalContext::instance().is_coord_in_range((crs.ranges().back()).end_coord, core_type),
-        "Coordinates out of range");
-    for (const auto& core_range : crs.ranges()) {
-        std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
-        if (!semaphore_id.has_value()) {
-            semaphore_id = semaphore_id_candidate;
-        } else {
-            semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
-        }
-    }
-    TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
-
-    program.impl().add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
-
-    return semaphore_id.value();
+    return program.impl().create_semaphore(crs, initial_value, core_type);
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
@@ -1235,6 +1566,17 @@ GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
+
+namespace experimental {
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device,
+    const CoreRangeSet& cores,
+    std::optional<uint32_t> initial_value,
+    BufferType buffer_type,
+    uint64_t address) {
+    return GlobalSemaphore(device, cores, initial_value, buffer_type, address);
+}
+}  // namespace experimental
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
@@ -1277,7 +1619,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
-    detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
+    detail::DispatchStateCheck(MetalContext::instance().rtoptions().get_fast_dispatch());
     program.impl().add_buffer(buffer);
 }
 
@@ -1312,7 +1654,7 @@ void SetRuntimeArgs(
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32VecPerCore, program, kernel, core_spec, runtime_args);
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
-        "Mistmatch between number of cores {} and number of runtime args {} getting updated",
+        "Mismatch between number of cores {} and number of runtime args {} getting updated",
         core_spec.size(),
         runtime_args.size());
     auto k = program.impl().get_kernel(kernel);
@@ -1348,6 +1690,8 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
     return program.impl().get_kernel(kernel_id)->common_runtime_args_data();
 }
 
+namespace experimental::lightmetal {
+
 // This is nop if compile time define not set.
 void LightMetalBeginCapture() {
 #if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
@@ -1374,6 +1718,8 @@ LightMetalBinary LightMetalEndCapture() {
 #endif
 }
 
+}  // namespace experimental::lightmetal
+
 void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {
     auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
     cq_stack.push_back(cq_id);
@@ -1388,6 +1734,11 @@ uint8_t PopCurrentCommandQueueIdForThread() {
 }
 
 uint8_t GetCurrentCommandQueueIdForThread() {
+    // TODO: Make GetCurrentCommandQueueIdForThread work for non-default contexts
+    // https://github.com/tenstorrent/tt-metal/issues/39819
+    if (!MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return 0;
+    }
     const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
     if (cq_stack.empty()) {
         return 0;
@@ -1421,8 +1772,193 @@ void UpdateDynamicCircularBufferAddress(
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
 }
 
+PrecompiledKernelNotFoundError::PrecompiledKernelNotFoundError(
+    std::string kernel_name,
+    size_t compile_hash,
+    std::string precompiled_dir,
+    PrecompiledKernelConfig::FallbackPolicy fallback_policy) :
+    std::runtime_error(fmt::format(
+        "Precompiled kernel binary not found. Kernel: \"{}\", compile_hash: {:#x}, searched in: \"{}\". "
+        "Either build/install the offline binaries there, set PrecompiledKernelConfig::fallback_policy to "
+        "JitCompile, or catch PrecompiledKernelNotFoundError for details.",
+        kernel_name,
+        compile_hash,
+        precompiled_dir)),
+    kernel_name_(std::move(kernel_name)),
+    compile_hash_(compile_hash),
+    precompiled_dir_(std::move(precompiled_dir)),
+    fallback_policy_(fallback_policy) {}
+
+KernelHandle CreateKernelFromPrecompiled(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig>& config,
+    const PrecompiledKernelConfig& precompiled_config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
+
+    KernelHandle kernel_handle = CreateKernel(program, file_name, core_spec, config);
+    program.impl().get_kernel(kernel_handle)->set_precompiled_config(precompiled_config);
+    return kernel_handle;
+}
+
+namespace quasar {
+
+std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnKernelGroup(
+    Program& program, const KernelGroup* kernel_group) {
+    if (kernel_group == nullptr) {
+        return {};
+    }
+    std::set<DataMovementProcessor> processors_in_use;
+    for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
+        const std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
+        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
+            const std::shared_ptr<QuasarDataMovementKernel> dm_kernel =
+                std::dynamic_pointer_cast<QuasarDataMovementKernel>(kernel);
+            TT_ASSERT(dm_kernel != nullptr);
+            const std::vector<DataMovementProcessor> dm_processors = dm_kernel->get_dm_processors();
+            processors_in_use.insert(dm_processors.begin(), dm_processors.end());
+        }
+    }
+    return processors_in_use;
+}
+
+bool DoesKernelGroupHaveComputeKernel(Program& program, const KernelGroup* kernel_group) {
+    if (kernel_group == nullptr) {
+        return false;
+    }
+    for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
+        const std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
+        if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <typename ProcessorClassType>
+std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
+    Program& program, const CoreRangeSet& core_ranges, uint32_t num_processors_per_cluster) {
+    std::set<ProcessorClassType> processors(
+        enchantum::values<ProcessorClassType>.begin(), enchantum::values<ProcessorClassType>.end());
+    std::vector<std::set<DataMovementProcessor>> dm_processors_in_use_per_kernel_group;
+
+    std::unordered_set<const KernelGroup*> kernel_groups;
+    for (const CoreRange& core_range : core_ranges.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                const KernelGroup* kernel_group = program.impl().kernels_on_core(
+                    CoreCoord(x, y),
+                    MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                kernel_groups.insert(kernel_group);
+            }
+        }
+    }
+
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
+    for (const KernelGroup* kernel_group : kernel_groups) {
+        if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+            const std::set<DataMovementProcessor> dm_processors_in_use_on_kernel_group =
+                GetDataMovementProcessorsInUseOnKernelGroup(program, kernel_group);
+            dm_processors_in_use_per_kernel_group.push_back(dm_processors_in_use_on_kernel_group);
+            for (const DataMovementProcessor dm_processor : dm_processors_in_use_on_kernel_group) {
+                processors.erase(dm_processor);
+            }
+        } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+            TT_FATAL(
+                !DoesKernelGroupHaveComputeKernel(program, kernel_group),
+                "In Quasar, each cluster can only have a single compute kernel.");
+        }
+    }
+
+    for (uint32_t i = 1; i < dm_processors_in_use_per_kernel_group.size(); i++) {
+        TT_FATAL(
+            dm_processors_in_use_per_kernel_group[i] == dm_processors_in_use_per_kernel_group[i - 1],
+            "All clusters in {} must have the same data movement processors already in use to reserve {} new data "
+            "movement processors per cluster.",
+            core_ranges,
+            num_processors_per_cluster);
+    }
+
+    while (processors.size() > num_processors_per_cluster) {
+        processors.erase(std::prev(processors.end()));
+    }
+
+    if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+        TT_FATAL(
+            processors.size() == num_processors_per_cluster,
+            "Unable to reserve {} data movement processors per cluster as only {} data movement processors per cluster "
+            "are available.",
+            num_processors_per_cluster,
+            processors.size());
+    } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+        TT_FATAL(
+            processors.size() % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE == 0,
+            "Number of compute processors reserved per cluster must be a multiple of {}.",
+            QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+        TT_FATAL(
+            processors.size() == num_processors_per_cluster,
+            "Unable to reserve {} compute processors per cluster as only {} compute processors per cluster are "
+            "available.",
+            num_processors_per_cluster,
+            processors.size());
+    }
+
+    return processors;
+}
+
+KernelHandle CreateQuasarDataMovementKernel(
+    Program& program,
+    const KernelSource& kernel_src,
+    const CoreRangeSet& core_ranges,
+    const QuasarDataMovementConfig& config) {
+    TT_FATAL(
+        1 <= config.num_threads_per_cluster && config.num_threads_per_cluster <= QUASAR_NUM_DM_CORES_PER_CLUSTER,
+        "Requested number of data movement cores per cluster must be between 1 and {} (inclusive)",
+        QUASAR_NUM_DM_CORES_PER_CLUSTER);
+    const std::set<DataMovementProcessor> dm_processors =
+        GetProcessorsPerClusterQuasar<DataMovementProcessor>(program, core_ranges, config.num_threads_per_cluster);
+    std::shared_ptr<Kernel> kernel =
+        std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_processors);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const QuasarDataMovementConfig& config) {
+    const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    return CreateQuasarDataMovementKernel(
+        program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
+}
+
+KernelHandle CreateQuasarComputeKernel(
+    Program& program,
+    const KernelSource& kernel_src,
+    const CoreRangeSet& core_ranges,
+    const QuasarComputeConfig& config) {
+    TT_FATAL(
+        1 <= config.num_threads_per_cluster && config.num_threads_per_cluster <= QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
+        "Requested number of Tensix engines per cluster must be between 1 and {} (inclusive)",
+        QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER);
+    const std::set<QuasarComputeProcessor> compute_processors = GetProcessorsPerClusterQuasar<QuasarComputeProcessor>(
+        program, core_ranges, config.num_threads_per_cluster * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+    std::shared_ptr<Kernel> kernel =
+        std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config, compute_processors);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const QuasarComputeConfig& config) {
+    const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    return CreateQuasarComputeKernel(program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
+}
+
+}  // namespace quasar
 }  // namespace experimental
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

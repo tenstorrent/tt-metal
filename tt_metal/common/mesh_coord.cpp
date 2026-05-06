@@ -1,10 +1,12 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <boost/move/utility_core.hpp>
+#include <fmt/format.h>
 #include <mesh_coord.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
@@ -55,14 +57,14 @@ bool check_mergeable(const MeshCoordinateRange& a, const MeshCoordinateRange& b)
     if (diff_dims.empty()) {
         // Ranges are identical.
         return true;
-    } else if (diff_dims.size() == 1) {
+    }
+    if (diff_dims.size() == 1) {
         // Ranges are adjacent or overlap along one dimension.
         size_t diff_dim = diff_dims[0];
         return std::max(a.start_coord()[diff_dim], b.start_coord()[diff_dim]) <=
                std::min(a.end_coord()[diff_dim], b.end_coord()[diff_dim]) + 1;
-    } else {
-        return a.contains(b) || b.contains(a);
     }
+    return a.contains(b) || b.contains(a);
 }
 
 int32_t normalize_index(int32_t index, int32_t size) {
@@ -257,9 +259,8 @@ const MeshCoordinate& MeshCoordinateRange::end_coord() const { return end_; }
 MeshCoordinate::BoundaryMode MeshCoordinateRange::get_boundary_mode() const {
     if (wraparound_shape_.has_value()) {
         return MeshCoordinate::BoundaryMode::WRAP;
-    } else {
-        return MeshCoordinate::BoundaryMode::NONE;
     }
+    return MeshCoordinate::BoundaryMode::NONE;
 }
 
 MeshShape MeshCoordinateRange::shape() const {
@@ -455,6 +456,12 @@ bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) 
     return lhs.start_coord() == rhs.start_coord() && lhs.end_coord() == rhs.end_coord();
 }
 bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) { return !(lhs == rhs); }
+bool operator<(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) {
+    if (lhs.start_coord() != rhs.start_coord()) {
+        return lhs.start_coord() < rhs.start_coord();
+    }
+    return lhs.end_coord() < rhs.end_coord();
+}
 
 std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range) {
     os << "MeshCoordinateRange(start=" << range.start_coord() << ", end=" << range.end_coord() << ")";
@@ -488,7 +495,8 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
                 ranges_.erase(it);
                 did_merge = true;
                 break;
-            } else if (merged.intersects(*it) || it->intersects(merged)) {
+            }
+            if (merged.intersects(*it) || it->intersects(merged)) {
                 // There is an intersection between `merged` and `it`.
                 // For simplicity, erase the entire `it`, but add back what isn't present in `merged`.
                 for (const auto& coord : *it) {
@@ -615,15 +623,13 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
         }
 
         return complement_set;
-    } else {
-        // Slow path: iterate over all coordinates in the parent range, and create ranges for the complement.
-        for (const auto& coord : parent) {
-            if (!intersection.contains(coord)) {
-                complement_set.merge(MeshCoordinateRange(coord, coord));
-            }
+    }  // Slow path: iterate over all coordinates in the parent range, and create ranges for the complement.
+    for (const auto& coord : parent) {
+        if (!intersection.contains(coord)) {
+            complement_set.merge(MeshCoordinateRange(coord, coord));
         }
-        return complement_set;
     }
+    return complement_set;
 }
 
 std::vector<MeshCoordinate> MeshCoordinateRangeSet::coords() const {
@@ -656,3 +662,49 @@ std::ostream& operator<<(std::ostream& os, const MeshCoordinateRangeSet& range_s
 }
 
 }  // namespace tt::tt_metal::distributed
+
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::MeshShape& shape) {
+    std::string result = "MeshShape([";
+    for (size_t i = 0; i < shape.dims(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += std::to_string(shape[i]);
+    }
+    result += "])";
+    return result;
+}
+
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    std::string result = "MeshCoordinate([";
+    for (size_t i = 0; i < coord.dims(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += std::to_string(coord[i]);
+    }
+    result += "])";
+    return result;
+}
+
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::distributed::MeshCoordinateRange& range) {
+    return fmt::format(
+        "MeshCoordinateRange(start={}, end={})",
+        ttsl::fmt_detail::to_string(range.start_coord()),
+        ttsl::fmt_detail::to_string(range.end_coord()));
+}
+
+size_t std::hash<tt::tt_metal::distributed::MeshCoordinate>::operator()(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
+}
+
+size_t std::hash<tt::tt_metal::distributed::MeshCoordinateRange>::operator()(
+    const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
+}
+
+size_t std::hash<tt::tt_metal::distributed::MeshCoordinateRangeSet>::operator()(
+    const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
+    return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
+}

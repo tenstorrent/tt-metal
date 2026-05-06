@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
@@ -40,9 +40,8 @@ void kernel_main() {
     constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto other_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
-    bool is_scalar_bias = (get_compile_time_arg_val(other_args.next_compile_time_args_offset()) == 1);
+    constexpr bool is_scalar_bias = (get_compile_time_arg_val(other_args.next_compile_time_args_offset()) == 1);
     constexpr auto bias_args = TensorAccessorArgs<other_args.next_compile_time_args_offset() + 1>();
-    bool scalar_bias_loaded = false;
 #endif
 
     // runtime args
@@ -85,15 +84,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_in4 = 4;
     constexpr uint32_t onetile = 1;
 
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
-
-    const auto s0 = TensorAccessor(input_args, input_addr, in0_tile_bytes);
-    const auto s1 = TensorAccessor(other_args, other_addr, in1_tile_bytes);
+    const auto s0 = TensorAccessor(input_args, input_addr);
+    const auto s1 = TensorAccessor(other_args, other_addr);
 
 #ifdef FUSE_BIAS
-    const uint32_t in4_tile_bytes = get_tile_size(cb_id_in4);
-    const auto s_bias = TensorAccessor(bias_args, bias_addr, in4_tile_bytes);
+    const auto s_bias = TensorAccessor(bias_args, bias_addr);
 #endif
 
     // mask
@@ -113,6 +108,16 @@ void kernel_main() {
     uint32_t output_tidx = output_tile_start_idx;
     uint32_t input_step_count = (transpose_input) ? (input_stride[1]) : (input_stride[0]);
     uint32_t other_step_count = (transpose_other) ? (other_stride[0]) : (other_stride[1]);
+
+#ifdef FUSE_BIAS
+    if (is_scalar_bias && num_output_tiles > 0) {
+        cb_reserve_back(cb_id_in4, onetile);
+        uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
+        noc_async_read_tile(0, s_bias, l1_write_addr_in4);
+        noc_async_read_barrier();
+        cb_push_back(cb_id_in4, onetile);
+    }
+#endif
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         uint32_t output_idxes[MAX_NUM_DIMENSIONS];
@@ -139,22 +144,13 @@ void kernel_main() {
             other_tidx += other_step_count;
         }
 #ifdef FUSE_BIAS
-        if (!is_scalar_bias) {
+        if constexpr (!is_scalar_bias) {
             uint32_t bias_tidx = output_idxes[0];
             cb_reserve_back(cb_id_in4, onetile);
             uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
             noc_async_read_tile(bias_tidx, s_bias, l1_write_addr_in4);
             noc_async_read_barrier();
             cb_push_back(cb_id_in4, onetile);
-        } else {
-            if (!scalar_bias_loaded) {
-                cb_reserve_back(cb_id_in4, onetile);
-                uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
-                noc_async_read_tile(0, s_bias, l1_write_addr_in4);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in4, onetile);
-                scalar_bias_loaded = true;
-            }
         }
 #endif
 

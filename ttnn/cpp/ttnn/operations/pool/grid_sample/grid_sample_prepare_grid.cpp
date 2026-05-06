@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "grid_sample_prepare_grid.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
@@ -14,9 +15,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace ttnn {
-namespace operations {
-namespace grid_sample {
+namespace ttnn::operations::grid_sample {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -30,8 +29,7 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
     const ttnn::Shape& output_shape,
     const std::string& mode,
     bool align_corners,
-    const std::vector<uint32_t>& tensor_input_shape,
-    DataType output_dtype) {
+    const std::vector<uint32_t>& tensor_input_shape) {
     auto input_buffer = tt::tt_metal::host_buffer::get_as<InputType>(input_tensor);
     std::vector<OutputType> output_buffer(output_shape.volume());
 
@@ -187,9 +185,9 @@ Tensor convert_grid_tensor(
     const ttnn::Shape& output_shape,
     const std::vector<uint32_t>& tensor_input_shape,
     DataType output_dtype) {
-    auto compute = [&](const tt::tt_metal::HostBuffer& input_host_buffer) {
+    auto compute = [&](const tt::tt_metal::HostBuffer& /*input_host_buffer*/) {
         return create_host_buffer_for_grid_preprocessing<InputType, OutputType>(
-            input_tensor, output_shape, mode, align_corners, tensor_input_shape, output_dtype);
+            input_tensor, output_shape, mode, align_corners, tensor_input_shape);
     };
 
     const TensorSpec output_spec(
@@ -198,7 +196,9 @@ Tensor convert_grid_tensor(
 
     TT_FATAL(is_cpu_tensor(input_tensor), "Prepare_grid_sample_grid only supports host tensors");
 
-    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
+    auto transformed_buffer = input_tensor.host_storage().buffer().transform(
+        compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    return Tensor(tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
 }
 
 }  // anonymous namespace
@@ -241,6 +241,4 @@ ttnn::Tensor prepare_grid_sample_grid(
     }
 }
 
-}  // namespace grid_sample
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::grid_sample

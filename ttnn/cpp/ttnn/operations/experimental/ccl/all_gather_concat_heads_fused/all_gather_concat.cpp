@@ -1,16 +1,17 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_gather_concat.hpp"
-#include <utility>
-#include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+#include <utility>
 
-ttnn::Tensor ExecuteAllGatherConcat::invoke(
+namespace ttnn::experimental {
+
+ttnn::Tensor all_gather_concat(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
     const int32_t dim,
@@ -24,7 +25,7 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-    return ttnn::operations::experimental::ccl::all_gather_concat(
+    return ttnn::experimental::prim::all_gather_concat(
         input_tensor,
         buffer_tensor,
         dim,
@@ -32,11 +33,11 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
         mesh_device,
         global_semaphore,
         num_heads,
-        use_noc1_only,
         memory_config,
+        use_noc1_only,
         num_links,
         topology_,
         subdevice_id);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

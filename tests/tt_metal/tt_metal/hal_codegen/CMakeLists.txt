@@ -1,4 +1,5 @@
-set(SOURCES codegen_test.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_executable(hal_codegen_test ${SOURCES})
 set(INTF_FILE ${CMAKE_CURRENT_BINARY_DIR}/test_msgs_intf.h)

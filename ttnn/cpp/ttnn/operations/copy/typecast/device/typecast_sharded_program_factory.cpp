@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,13 +8,13 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::copy::program {
+namespace ttnn::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -41,11 +41,26 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     uint32_t input_tile_size = tt::tile_size(act_df);
     uint32_t output_tile_size = tt::tile_size(out_df);
 
-    TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
+    // For TILE layout, input_tile_size != output_tile_size is supported (e.g., BFLOAT8_B <-> BFLOAT16).
+    // The number of tiles stays the same; only the bytes per tile changes.
+    if (input_tile_size != output_tile_size) {
+        TT_FATAL(
+            (input.layout() == Layout::TILE && output.layout() == Layout::TILE),
+            "TypecastShardedProgramFactory requires TILE layout when input and output tile sizes differ "
+            "(input_tile_size={}, output_tile_size={}).",
+            input_tile_size,
+            output_tile_size);
+    }
 
     uint32_t num_tile_per_core = 0;
 
-    if (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B) {
+    // Use dimension-based tile count if either input or output is block format
+    bool is_block_format =
+        (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B ||
+         output.dtype() == DataType::BFLOAT8_B || output.dtype() == DataType::BFLOAT4_B);
+
+    if (is_block_format) {
+        // For block formats, calculate tile count based on element dimensions
         uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
         uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
@@ -87,11 +102,27 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
 
     log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(tt::LogOp, "out_cb_id: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
-    log_debug(tt::LogOp, "input_tile_size: {}", input_tile_size);
-    log_debug(tt::LogOp, "output_tile_size: {}", output_tile_size);
+    log_debug(tt::LogOp, "input_tile_size: {}, output_tile_size: {}", input_tile_size, output_tile_size);
+    log_debug(
+        tt::LogOp,
+        "input_dtype: {}, output_dtype: {}",
+        static_cast<uint32_t>(input_dtype),
+        static_cast<uint32_t>(output_dtype));
+    log_debug(tt::LogOp, "act_df: {}, out_df: {}", static_cast<uint32_t>(act_df), static_cast<uint32_t>(out_df));
+    log_debug(
+        tt::LogOp,
+        "num_tile_per_core: {}, shard_shape: [{}, {}]",
+        num_tile_per_core,
+        shard_spec.shape[0],
+        shard_spec.shape[1]);
+    log_debug(
+        tt::LogOp,
+        "preserve_fp32_precision: {}, fp32_dest_acc_en: {}",
+        args.preserve_fp32_precision,
+        args.fp32_dest_acc_en);
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
@@ -115,25 +146,29 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         in_cb_id,
         out_cb_id};
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
-        unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[in_cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = false;
 
     std::map<std::string, std::string> unary_defines;
+    unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
+        "typecast_tile_init<{0}u, {1}u>",
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        (uint32_t)datatype_to_dataformat_converter(input_dtype),
-        (uint32_t)datatype_to_dataformat_converter(output_dtype));
+        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
+        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
 
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -146,7 +181,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         unary_reader_kernel_id,
         all_cores,
         {
-            (uint32_t)(num_tile_per_core),
+            static_cast<uint32_t>(num_tile_per_core),
         });
 
     return cached_program_t{std::move(program), {cb_src0, out_cb}};
@@ -154,17 +189,17 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
 
 void TypecastShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const TypecastParams& /*operation_attributes*/,
+    const TypecastInputs& tensor_args,
+    Tensor& output) {
     auto& program = cached_program.program;
     const auto& cb_src0 = cached_program.shared_variables.cb_src0;
     const auto& out_cb = cached_program.shared_variables.out_cb;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
-}  // namespace ttnn::operations::copy::program
+}  // namespace ttnn::prim

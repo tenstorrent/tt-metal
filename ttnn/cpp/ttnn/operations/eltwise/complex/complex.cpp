@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "complex.hpp"
 
-namespace ttnn {
-namespace operations::complex {
+namespace ttnn::operations::complex {
 
 ComplexTensor::ComplexTensor(const std::tuple<const Tensor&, const Tensor&>& real_imag) :
     m_real_imag{std::get<0>(real_imag), std::get<1>(real_imag)} {}
@@ -31,11 +30,9 @@ const Tensor& get<1>(const ComplexTensor& complex) {
     return complex.imag();
 }
 
-ComplexTensor CreateComplexTensor::invoke(const Tensor& real, const Tensor& imag) {
+ComplexTensor complex_tensor(const Tensor& real, const Tensor& imag) {
     TT_ASSERT(real.padded_shape() == imag.padded_shape(), "Tensor shapes of real and imag should be identical");
     return ComplexTensor({real, imag});
 }
 
-}  // namespace operations::complex
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::complex

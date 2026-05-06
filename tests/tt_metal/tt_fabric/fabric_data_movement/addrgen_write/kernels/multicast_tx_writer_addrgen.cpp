@@ -1,16 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "accessor/tensor_accessor.h"
-#include "accessor/tensor_accessor_args.h"
+#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/tensor_accessor_args.h"
 #include "kernel_common.hpp"
 
 using namespace tt;
@@ -199,9 +199,18 @@ void kernel_main() {
     }
 
     // For non-scatter: Use ALIGNED_PAGE_SIZE (dst) for address calculation
-    // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient but correct)
-    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/ALIGNED_PAGE_SIZE);
-    const auto scatter_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/SRC_ALIGNED_PAGE_SIZE);
+    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
+    // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient)
+    // NOTE: The scatter addrgen overload derives both the payload size and destination addresses
+    // from the same TensorAccessor page size. The CB is configured with SRC_ALIGNED_PAGE_SIZE
+    // stride, so we override the page size here to match. This is a workaround — using a page
+    // size larger than the destination buffer's aligned page size will write past the allocated
+    // page slots when src alignment > dst alignment (e.g. DRAM src → L1 dst with non-power-of-2
+    // page sizes). The proper fix is to decouple the CB stride from the destination page size in
+    // the scatter API.
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
+    const auto scatter_acc = TensorAccessor(ta_args, dst_base, SRC_ALIGNED_PAGE_SIZE);
 
     // FusedAtomicInc: compute semaphore NOC address before loop
     uint64_t sem_noc = 0;

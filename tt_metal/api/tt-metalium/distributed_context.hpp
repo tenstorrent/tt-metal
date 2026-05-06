@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/span.hpp>
-#include <optional>
 #include <cstddef>
 #include <cstdint>
 #include <complex>
@@ -101,12 +101,13 @@ struct is_supported_dtype<T, std::void_t<decltype(dtype_of_v<T>)>> : std::true_t
 template <typename T>
 inline constexpr bool is_supported_dtype_v = is_supported_dtype<T>::value;
 
-using Rank = tt::stl::StrongType<int, struct RankTag>;
-using Tag = tt::stl::StrongType<int, struct TagTag>;
-using Color = tt::stl::StrongType<int, struct ColorTag>;
-using Key = tt::stl::StrongType<int, struct KeyTag>;
-using Size = tt::stl::StrongType<int, struct SizeTag>;
-using DistributedContextId = tt::stl::StrongType<int, struct DistributedContextIdTag>;
+using Rank = ttsl::StrongType<int, struct RankTag>;
+using Tag = ttsl::StrongType<int, struct TagTag>;
+using Color = ttsl::StrongType<int, struct ColorTag>;
+using Key = ttsl::StrongType<int, struct KeyTag>;
+using Size = ttsl::StrongType<int, struct SizeTag>;
+using SubcontextId = ttsl::StrongType<int, struct SubcontextIdTag>;
+using DistributedContextId = ttsl::StrongType<int, struct DistributedContextIdTag>;
 
 class DistributedException : public std::exception {
 public:
@@ -148,14 +149,19 @@ using RequestPtr = std::shared_ptr<Request>;
 using ContextPtr = std::shared_ptr<DistributedContext>;
 class DistributedContext {
 public:
+    constexpr static const int SPLIT_COLOR_UNDEFINED = -1;
+
     static void create(int argc, char** argv);
+    /// Returns the sub-context communicator (after an optional MPI_Comm_split via TT_RUN_SUBCONTEXT_ID).
     static const ContextPtr& get_current_world();
+    /// Returns the unsplit world communicator (MPI_COMM_WORLD). rank() and size() on this handle
+    /// are global launcher ranks. Identical to get_current_world() when MPI is disabled or no split occurred.
+    static ContextPtr get_world_context();
     static void set_current_world(const ContextPtr& ctx);
 
-    // Returns true if the distributed context has already been initialized
+    // Returns true if the distributed context has already been initialized.
     static bool is_initialized();
 
-    // Returns a unique ID for this distributed context instance
     DistributedContextId id() const;
 
     //--- Topology ------------------------------------------------------------
@@ -163,77 +169,89 @@ public:
     [[nodiscard]] virtual Size size() const = 0;
     [[nodiscard]] virtual bool supports_fault_tolerance() const = 0;
 
+    //--- Sub-context layout (split jobs: TT_RUN_SUBCONTEXT_ID + TT_RUN_SUBCONTEXT_SIZES from launcher) ---
+    /// This process's sub-context id, or nullopt for a normal single-context job.
+    [[nodiscard]] virtual std::optional<SubcontextId> subcontext_id() const { return std::nullopt; }
+    /// Number of sub-contexts in the merged job (1 when not split).
+    [[nodiscard]] virtual int subcontext_count() const { return 1; }
+    /// Number of MPI ranks in the given sub-context (valid for 0 .. subcontext_count()-1).
+    [[nodiscard]] virtual Size subcontext_size(SubcontextId subcontext_id) const;
+    /// All sub-context sizes in ascending sub-context id order.
+    [[nodiscard]] virtual tt::stl::Span<const int> subcontext_sizes() const;
+    /// Translate a (subcontext_id, local_rank) pair to the corresponding world Rank.
+    [[nodiscard]] virtual Rank local_to_world_rank(SubcontextId subcontext_id, Rank local_rank) const;
+
     //--- Synchronization ----------------------------------------------------
     virtual void barrier() const = 0;
 
     //--- Point-to-point (blocking) -----------------------------------------
-    virtual void send(tt::stl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
+    virtual void send(ttsl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
 
-    virtual void ssend(tt::stl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
+    virtual void ssend(ttsl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
 
-    virtual void recv(tt::stl::Span<std::byte> buffer, Rank source, Tag tag) const = 0;
+    virtual void recv(ttsl::Span<std::byte> buffer, Rank source, Tag tag) const = 0;
 
     //--- Point-to-point (non-blocking) -------------------------------------
-    [[nodiscard]] virtual RequestPtr isend(tt::stl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
+    [[nodiscard]] virtual RequestPtr isend(ttsl::Span<std::byte> buffer, Rank dest, Tag tag) const = 0;
 
-    [[nodiscard]] virtual RequestPtr irecv(tt::stl::Span<std::byte> buffer, Rank source, Tag tag) const = 0;
+    [[nodiscard]] virtual RequestPtr irecv(ttsl::Span<std::byte> buffer, Rank source, Tag tag) const = 0;
 
     //--- Collective operations ---------------------------------------------
-    virtual void broadcast(tt::stl::Span<std::byte> buffer, Rank root) const = 0;
+    virtual void broadcast(ttsl::Span<std::byte> buffer, Rank root) const = 0;
 
-    virtual void gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const = 0;
+    virtual void gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const = 0;
 
-    virtual void scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const = 0;
+    virtual void scatter(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const = 0;
 
-    virtual void all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const = 0;
+    virtual void all_gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const = 0;
 
-    virtual void all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const = 0;
+    virtual void all_to_all(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const = 0;
 
     /// --- Reduce functions ------------------------------------------------
     virtual void all_reduce(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
 
     virtual void reduce(
-        tt::stl::Span<std::byte> send_buf,
-        tt::stl::Span<std::byte> recv_buf,
+        ttsl::Span<std::byte> send_buf,
+        ttsl::Span<std::byte> recv_buf,
         ReduceOp op,
         DType dtype,
         Rank root) const = 0;
 
     virtual void reduce_scatter(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
 
     virtual void scan(
-        tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
+        ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const = 0;
 
     // --- Reduce functions with type deduction -------------------------------
     template <class T>
         requires is_supported_dtype_v<T>
-    void all_reduce(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op) const {
+    void all_reduce(ttsl::Span<T> send_buf, ttsl::Span<T> recv_buf, ReduceOp op) const {
         all_reduce(as_writable_bytes(send_buf), as_writable_bytes(recv_buf), op, dtype_of_v<T>);
     }
     template <class T>
         requires is_supported_dtype_v<T>
-    void reduce(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op, Rank root) const {
+    void reduce(ttsl::Span<T> send_buf, ttsl::Span<T> recv_buf, ReduceOp op, Rank root) const {
         reduce(as_writable_bytes(send_buf), as_writable_bytes(recv_buf), op, dtype_of_v<T>, root);
     }
     template <class T>
         requires is_supported_dtype_v<T>
-    void scan(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op) const {
+    void scan(ttsl::Span<T> send_buf, ttsl::Span<T> recv_buf, ReduceOp op) const {
         scan(as_writable_bytes(send_buf), as_writable_bytes(recv_buf), op, dtype_of_v<T>);
     }
     template <class T>
         requires is_supported_dtype_v<T>
-    void reduce_scatter(tt::stl::Span<T> send_buf, tt::stl::Span<T> recv_buf, ReduceOp op) const {
+    void reduce_scatter(ttsl::Span<T> send_buf, ttsl::Span<T> recv_buf, ReduceOp op) const {
         reduce_scatter(as_writable_bytes(send_buf), as_writable_bytes(recv_buf), op, dtype_of_v<T>);
     }
 
     //--- Communicator management -------------------------------------------
     [[nodiscard]] virtual ContextPtr duplicate() const = 0;
     [[nodiscard]] virtual ContextPtr split(Color color, Key key) const = 0;
-    [[nodiscard]] virtual ContextPtr create_sub_context(tt::stl::Span<int> ranks) const = 0;
+    [[nodiscard]] virtual ContextPtr create_sub_context(ttsl::Span<int> ranks) const = 0;
     virtual void translate_ranks_to_other_ctx(
-        tt::stl::Span<int> ranks, const ContextPtr& other_ctx, tt::stl::Span<int> translated_ranks) const = 0;
+        ttsl::Span<int> ranks, const ContextPtr& other_ctx, ttsl::Span<int> translated_ranks) const = 0;
     //--- Error handling -----------------------------------------------------
     virtual void abort(int error_code) const = 0;
 

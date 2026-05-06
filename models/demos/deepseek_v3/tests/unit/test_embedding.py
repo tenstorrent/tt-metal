@@ -1,4 +1,4 @@
-#  SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 #  SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ DEEPSEEK_SHAPE_PAIRS = [([1, 1, 1, 32], [1, 1, 4096, 64]), ([1, 1, 1, 32], [1, 1
 VOCAB_SIZE = 2048
 
 
+@pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
 )

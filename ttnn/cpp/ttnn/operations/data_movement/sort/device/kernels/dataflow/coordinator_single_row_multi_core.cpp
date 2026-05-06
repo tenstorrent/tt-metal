@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include "sort_dataflow_common.hpp"
 
@@ -37,23 +37,17 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
-    constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    const auto input_tensor_addr_ger =
-        TensorAccessor(input_tensor_args, input_tensor_buffer_addr, input_tensor_tile_size_bytes);
+    const auto input_tensor_addr_ger = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
 
     // Output tensor config
-    const auto output_tensor_addr_gen =
-        TensorAccessor(output_tensor_args, output_tensor_buffer_addr, input_tensor_tile_size_bytes);
+    const auto output_tensor_addr_gen = TensorAccessor(output_tensor_args, output_tensor_buffer_addr);
 
     // Output index tensor config
-    const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_cb_index);
-    const auto output_index_tensor_addr_gen =
-        TensorAccessor(output_index_tensor_args, output_index_tensor_buffer_addr, index_tensor_output_tile_size_bytes);
+    const auto output_index_tensor_addr_gen = TensorAccessor(output_index_tensor_args, output_index_tensor_buffer_addr);
 
     // Semaphore setup
     volatile tt_l1_ptr uint32_t* semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cores_to_coordinator_semaphore_id);
-    noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
     const uint64_t semaphore_global_multicast_addr = get_noc_multicast_addr(
         start_core_physical_coord_x,
         start_core_physical_coord_y,
@@ -103,7 +97,7 @@ void kernel_main() {
 
         // Set signal to start processing
         noc_semaphore_set_multicast(coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
-        noc_async_atomic_barrier();
+        noc_async_write_barrier();
 
         // Calculate sorting stages
         uint32_t stages = 0;
@@ -116,7 +110,7 @@ void kernel_main() {
                 // Set signal to start processing next sub-stage
                 noc_semaphore_set_multicast(
                     coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
-                noc_async_atomic_barrier();
+                noc_async_write_barrier();
 
                 // Wait until cores will process and save data
                 noc_semaphore_wait(semaphore_ptr, number_of_confirmations);

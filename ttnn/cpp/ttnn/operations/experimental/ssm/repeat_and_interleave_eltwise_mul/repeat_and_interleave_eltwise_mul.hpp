@@ -1,30 +1,21 @@
 
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <ttnn/decorators.hpp>
+#include <tt-metalium/base_types.hpp>
 #include <ttnn/tensor/tensor.hpp>
-
-namespace ttnn::operations::experimental::ssm {
-
-struct ExecuteRepeatAndInterleaveEltwiseMul {
-    static ttnn::Tensor invoke(
-        const Tensor& a,
-        const Tensor& b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<DataType> dtype = std::nullopt,
-        std::optional<MathFidelity> math_fidelity = std::nullopt);
-};
-
-}  // namespace ttnn::operations::experimental::ssm
+#include <ttnn/types.hpp>
 
 namespace ttnn::experimental {
 
-constexpr auto repeat_and_interleave_eltwise_mul = ttnn::register_operation<
-    "ttnn::experimental::repeat_and_interleave_eltwise_mul",
-    ttnn::operations::experimental::ssm::ExecuteRepeatAndInterleaveEltwiseMul>();
+ttnn::Tensor repeat_and_interleave_eltwise_mul(
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<DataType> dtype = std::nullopt,
+    std::optional<tt::tt_metal::MathFidelity> math_fidelity = std::nullopt);
 
 }  // namespace ttnn::experimental

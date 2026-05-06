@@ -1,0 +1,211 @@
+name: "[internal] Produce GitHub Merge Queue data"
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  produce-merge-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check GitHub API rate limit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api rate_limit
+
+      - name: Compute lookback timestamp
+        id: time
+        run: |
+          echo "LOOKBACK=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+      - name: Fetch merge queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # NOTE:
+          # This query fetches up to 100 merge queue entries.
+          # Pagination is NOT implemented intentionally.
+          # Given queue size is typically small, this is acceptable.
+          # If queue size exceeds 100 in future, pagination must be added.
+
+          gh api graphql -f query='
+          query {
+            repository(owner: "tenstorrent", name: "tt-metal") {
+              mergeQueue {
+                entries(first: 100) {
+                  nodes {
+                    enqueuedAt
+                    position
+                    pullRequest {
+                      number
+                      title
+                      author { login }
+                      headRefOid
+                    }
+                  }
+                }
+              }
+            }
+          }
+          ' > merge_queue_raw.json
+
+      - name: Fetch merged PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
+
+          # NOTE:
+          # Limited to first:100 results.
+          # No pagination is implemented.
+          # Acceptable because 30-min window unlikely to exceed 100 PRs.
+
+          gh api graphql -f query="
+          query {
+            search(
+              query: \"repo:tenstorrent/tt-metal is:pr is:merged merged:>=$LOOKBACK\",
+              type: ISSUE,
+              first: 100
+            ) {
+              nodes {
+                ... on PullRequest {
+                  number
+                  title
+                  author { login }
+                  headRefOid
+                  mergedAt
+                  closedAt
+                }
+              }
+            }
+          }
+          " > merged_prs_raw.json
+
+      - name: Fetch closed PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
+
+          # NOTE:
+          # Limited to first:100 results.
+          # No pagination is implemented.
+          # Acceptable for 30-min lookback window.
+
+          gh api graphql -f query="
+          query {
+            search(
+              query: \"repo:tenstorrent/tt-metal is:pr is:closed -is:merged closed:>=$LOOKBACK\",
+              type: ISSUE,
+              first: 100
+            ) {
+              nodes {
+                ... on PullRequest {
+                  number
+                  title
+                  author { login }
+                  headRefOid
+                  closedAt
+                }
+              }
+            }
+          }
+          " > closed_prs_raw.json
+
+      - name: Build merge queue snapshot
+        run: |
+          set -euo pipefail
+
+          mkdir -p generated/merge_queue
+          COLLECTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          jq -n \
+            --arg repo "tenstorrent/tt-metal" \
+            --arg ts "$COLLECTED_AT" \
+            --slurpfile queue merge_queue_raw.json \
+            --slurpfile merged merged_prs_raw.json \
+            --slurpfile closed closed_prs_raw.json '
+          {
+            repository: $repo,
+            collected_at: $ts,
+            merge_queue:
+              (
+                [
+                  # Null-safe handling if mergeQueue is disabled or null
+                  ($queue[0].data.repository.mergeQueue.entries.nodes // [])[]? | {
+                    pr_number: .pullRequest.number,
+                    pr_title: .pullRequest.title,
+                    pr_author_login: .pullRequest.author.login,
+                    head_sha: .pullRequest.headRefOid,
+                    state: "IN_QUEUE",
+                    queue_position: .position,
+                    enqueued_at: .enqueuedAt,
+                    merged_at: null,
+                    closed_at: null,
+                    collected_at: $ts
+                  }
+                ]
+                +
+                [
+                  $merged[0].data.search.nodes[]? | {
+                    pr_number: .number,
+                    pr_title: .title,
+                    pr_author_login: .author.login,
+                    head_sha: .headRefOid,
+                    state: "MERGED",
+                    queue_position: null,
+                    enqueued_at: null,
+                    merged_at: .mergedAt,
+                    closed_at: .closedAt,
+                    collected_at: $ts
+                  }
+                ]
+                +
+                [
+                  $closed[0].data.search.nodes[]? | {
+                    pr_number: .number,
+                    pr_title: .title,
+                    pr_author_login: .author.login,
+                    head_sha: .headRefOid,
+                    state: "CLOSED",
+                    queue_position: null,
+                    enqueued_at: null,
+                    merged_at: null,
+                    closed_at: .closedAt,
+                    collected_at: $ts
+                  }
+                ]
+              )
+          }
+          ' > generated/merge_queue/merge_queue_snapshot.json
+
+          echo "Snapshot record count:"
+          jq '.merge_queue | length' generated/merge_queue/merge_queue_snapshot.json
+
+      - name: Add timestamp to filename
+        run: |
+          TS=$(date -u +"%Y%m%dT%H%M%SZ")
+          mv generated/merge_queue/merge_queue_snapshot.json \
+             generated/merge_queue/${TS}_merge_queue_snapshot.json
+
+      - name: Upload merge queue data via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_MERGE_QUEUE_WRITER_KEY }}
+          username: ${{ secrets.SFTP_MERGE_QUEUE_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_MERGE_QUEUE_WRITER_HOSTNAME }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/merge_queue_data_batchfile.txt

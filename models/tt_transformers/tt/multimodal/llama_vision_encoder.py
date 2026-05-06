@@ -1,20 +1,21 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import collections
 
-import llama_models.llama3.reference_impl.multimodal.encoder_utils as encoder_utils
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.common import build_encoder_attention_mask
 from models.tt_transformers.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
 from models.tt_transformers.tt.multimodal.llama_conv2d_patch import TtLlamaConv2dPatch
 from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 from models.tt_transformers.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
 from models.tt_transformers.tt.multimodal.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
+from models.tt_transformers.tt.multimodal.tensor_utils import from_torch_host_to_device
 
 
 def to_2tuple(x):
@@ -26,7 +27,7 @@ def to_2tuple(x):
 def pad_seq_one_tile(x, mesh_device):
     num_pad_tokens = 32 - (x.shape[2] % 32)
 
-    pad_tensor = ttnn.as_tensor(
+    pad_tensor = from_torch_host_to_device(
         torch.zeros(x.shape[0], x.shape[1], num_pad_tokens, x.shape[-1]),
         dtype=ttnn.bfloat16,
         device=mesh_device,
@@ -227,10 +228,10 @@ class TtLlamaVisionEncoder(LightweightModule):
         x, npad = pad_seq_one_tile(x, self.mesh_device)
 
         fake_x = torch.zeros(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
-        attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, max_actual_num_chunks, 1)
+        attn_mask = build_encoder_attention_mask(fake_x, ar, ntok, max_actual_num_chunks, 1)
         # Mask stripes for the extra padding required on TT hardware
         attn_mask = mask_tile_padding(attn_mask, ntok, npad, max_actual_num_chunks)
-        attn_mask = ttnn.from_torch(
+        attn_mask = from_torch_host_to_device(
             attn_mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,

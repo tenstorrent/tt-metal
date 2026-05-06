@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "cross_entropy_bw_device_operation_types.hpp"
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 
 namespace {
 
@@ -241,7 +241,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         float32_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
-    [[maybe_unused]] auto cb_exp_sum_after_refuction = create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_after_reduction = create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,

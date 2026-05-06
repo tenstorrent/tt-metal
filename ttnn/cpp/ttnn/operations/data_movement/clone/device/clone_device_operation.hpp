@@ -1,11 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement::clone {
 
@@ -47,24 +49,19 @@ struct CloneOperation {
     using program_factory_t = std::variant<ProgramFactory>;
 
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const std::optional<DataType>& dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::data_movement::clone
 
 namespace ttnn::prim {
-constexpr auto clone =
-    ttnn::register_operation<"ttnn::prim::clone", ttnn::operations::data_movement::clone::CloneOperation>();
+ttnn::Tensor clone(
+    const Tensor& input,
+    const std::optional<DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }  // namespace ttnn::prim

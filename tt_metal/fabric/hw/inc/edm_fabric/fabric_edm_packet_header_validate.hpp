@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 namespace tt::tt_fabric {
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -102,17 +103,17 @@ void validate_qkv_shapes(
     auto [batch_num_value, value_heads, seq_len_value, embedding_dim_value] =
         value->get_value().logical_shape().to_array_4D();
 
-    if (batch_num != batch_num_key || batch_num != batch_num_value || seq_len != seq_len_key ||
-        seq_len != seq_len_value || embedding_dim != embedding_dim_key || embedding_dim != embedding_dim_value) {
+    if (batch_num != batch_num_key || batch_num != batch_num_value || seq_len_key != seq_len_value ||
+        embedding_dim != embedding_dim_key) {
         throw std::invalid_argument(fmt::format(
-            "query, key, and value must have the same shape, except for the number of heads. Got shapes: "
-            "query={}, key={}, value={}",
+            "Query, key, and value must have matching batch_num. Query and key must have matching embedding_dim. "
+            "Key and value must have matching seq_len. Value embedding_dim can differ from query/key. "
+            "Got shapes: query={}, key={}, value={}",
             query->get_value().logical_shape(),
             key->get_value().logical_shape(),
             value->get_value().logical_shape()));
     }
 
-    uint32_t group_num = query_heads;  // (G) number of KV groups, H for MHA mode
     if (query_heads != key_heads || query_heads != value_heads) {
         // grouped query mode
         if (value_heads != key_heads) {
@@ -123,7 +124,7 @@ void validate_qkv_shapes(
                 key_heads,
                 value_heads));
         }
-        group_num = value_heads;
+        const uint32_t group_num = value_heads;  // (G) number of KV groups
         if (query_heads % group_num != 0) {
             throw std::invalid_argument(fmt::format(
                 "In grouped query mode, the number of query heads must be divisible by the number of key/value groups. "
@@ -136,7 +137,7 @@ void validate_qkv_shapes(
 
 }  // namespace
 
-autograd::TensorPtr scaled_dot_product_attention(
+autograd::TensorPtr scaled_dot_product_attention_composite(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
@@ -155,7 +156,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     // σQ @ K
     ttnn::Tensor qk_scaled = group_shared_matmul(q_scaled, key_tensor, /*transpose_a=*/false, /*transpose_b=*/true);
 
-    if (mask.has_value()) {
+    if (mask.has_value() && mask.value()) {
         auto mask_tensor = mask.value()->get_value();
         // ttnn::where when mask is not of the same shape as qk_scaled
         qk_scaled = ttnn::add(
@@ -234,8 +235,68 @@ autograd::TensorPtr scaled_dot_product_attention(
             value->add_grad(dL_dV);
         };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
+
+    return out;
+}
+
+autograd::TensorPtr scaled_dot_product_attention(
+    const autograd::TensorPtr& query,
+    const autograd::TensorPtr& key,
+    const autograd::TensorPtr& value,
+    const std::optional<autograd::TensorPtr>& mask,
+    float dropout_probability) {
+    validate_qkv_shapes(query, key, value);
+
+    // Kernels support (1, 1, S, S) mask shape - same mask for all batches/heads
+    std::optional<ttnn::Tensor> mask_tensor = std::nullopt;
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;
+    if (mask.has_value() && mask.value()) {
+        mask_tensor = mask.value()->get_value();
+        mask_type = ttml::metal::AttentionMaskType::Arbitrary;
+    }
+
+    // ========== Forward Pass using sdpa_fw kernel ==========
+    auto fw_result = ttml::metal::sdpa_fw(
+        query->get_value(),
+        key->get_value(),
+        value->get_value(),
+        mask_type,
+        mask_tensor,
+        dropout_probability,
+        /*return_intermediates=*/true);  // Need intermediates for backward pass
+
+    auto attn_output = fw_result[0].value();    // (B, H, S, D)
+    auto intermediates = fw_result[1].value();  // (B, H, S, 32) FP32 logsumexp per row for softmax
+
+    auto out = ttml::autograd::create_tensor(attn_output);
+
+    // ========== Register Backward Function using sdpa_bw kernel ==========
+    ttml::autograd::GradFunction grad =
+        [query, key, value, mask_type, mask_tensor, out, attn_output, intermediates, dropout_probability]() {
+            auto grad_output = out->get_grad();
+
+            // Call sdpa_bw kernel - returns [grad_Q, grad_K, grad_V]
+            // dL_dQ: (B, H, S, D)
+            // dL_dK: (B, G, S, D) for GQA, (B, H, S, D) for MHA
+            // dL_dV: (B, G, S, D) for GQA, (B, H, S, D) for MHA
+            auto [dL_dQ, dL_dK, dL_dV] = ttml::metal::sdpa_bw(
+                grad_output,
+                attn_output,
+                query->get_value(),
+                key->get_value(),
+                value->get_value(),
+                intermediates,
+                mask_type,
+                mask_tensor,
+                dropout_probability);
+
+            query->add_grad(dL_dQ);
+            key->add_grad(dL_dK);
+            value->add_grad(dL_dV);
+        };
+
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
 
     return out;
 }
@@ -301,8 +362,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
             value->add_grad(grad_v);
         };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(ttml::autograd::add_backward_node(std::move(grad), out, query, key, value));
 
     return out;
 }

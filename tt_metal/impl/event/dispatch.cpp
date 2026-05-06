@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,15 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include "allocator/allocator.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
+#include "device/device_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -29,9 +31,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt::tt_metal {
-
-namespace event_dispatch {
+namespace tt::tt_metal::event_dispatch {
 
 namespace {
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
@@ -69,8 +69,11 @@ void issue_record_event_commands(
 
     // Calculate the actual command size
     tt::tt_metal::DeviceCommandCalculator calculator;
-    for (int i = 0; i < num_worker_counters; ++i) {
+    for (uint32_t i = 0; i + 1 < num_worker_counters; ++i) {
         calculator.add_dispatch_wait();
+    }
+    if (num_worker_counters > 0) {
+        calculator.add_dispatch_wait_with_prefetch_stall();
     }
 
     calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
@@ -86,22 +89,31 @@ void issue_record_event_commands(
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         auto offset_index = *sub_device_ids[i];
         // recording an event does not have any side-effects on the dispatch completion count
         // hence clear_count is set to false, i.e. the number of workers on the dispatcher is
         // not reset
-        // We only need the write barrier for the last wait cmd.
-        /* write_barrier ensures that all writes initiated by the dispatcher are
-                                        flushed before the event is recorded */
-        command_sequence.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | (clear_count ? CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM : 0) |
-                ((i == num_worker_counters - 1) ? CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER : 0),
-            0,
-            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            expected_num_workers_completed[offset_index]);
+        // The final wait must also stall prefetch so mesh-local events cannot be published before prior relay traffic
+        // has drained through the dispatcher.
+        const uint32_t wait_flags = CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM |
+                                    (clear_count ? CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM : 0) |
+                                    ((i == num_worker_counters - 1) ? CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER : 0);
+        if (i == num_worker_counters - 1) {
+            command_sequence.add_dispatch_wait_with_prefetch_stall(
+                wait_flags,
+                0,
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                expected_num_workers_completed[offset_index]);
+        } else {
+            command_sequence.add_dispatch_wait(
+                wait_flags,
+                0,
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                expected_num_workers_completed[offset_index]);
+        }
     }
 
     std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_command_queues);
@@ -170,6 +182,26 @@ void issue_wait_for_event_commands(
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
+void read_completion_queue(
+    void* dst,
+    uint32_t size_bytes,
+    ChipId device_id,
+    uint16_t channel,
+    uint32_t addr,
+    const SystemMemoryManager& sysmem_manager) {
+    if (sysmem_manager.is_dram_backed()) {
+        const uint32_t dram_channel = tt::tt_metal::MetalContext::instance()
+                                          .device_manager()
+                                          ->get_active_device(device_id)
+                                          ->allocator_impl()
+                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            dst, size_bytes, device_id, dram_channel, addr);
+    } else {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
+    }
+}
+
 void read_events_from_completion_queue(
     ReadEventDescriptor& event_descriptor,
     ChipId mmio_device_id,
@@ -177,15 +209,23 @@ void read_events_from_completion_queue(
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager) {
+    // For mock devices, the sysmem_manager is a stubbed singleton
+    // Mock cluster.read_sysmem returns zeros, so validate that and handle gracefully
+    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().is_mock_or_emulated()) {
+        sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
+        return;
+    }
+
     uint32_t read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
     thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
         (sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE) / sizeof(uint32_t));
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+    read_completion_queue(
         dispatch_cmd_and_event.data(),
         sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE,
-        read_ptr,
         mmio_device_id,
-        channel);
+        channel,
+        read_ptr,
+        sysmem_manager);
 
     CQDispatchCmd* dispatch_cmd = reinterpret_cast<CQDispatchCmd*>(dispatch_cmd_and_event.data());
     uint32_t expected_padding_value = HugepageDeviceCommand::random_padding_value();
@@ -221,6 +261,4 @@ void read_events_from_completion_queue(
         event_descriptor.get_global_event_id());
 }
 
-}  // namespace event_dispatch
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::event_dispatch

@@ -51,6 +51,15 @@
   blackhole:
     riscv_0:
       bandwidth: 39
+
+"One to All Multicast Linked Semaphore Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 22
+  blackhole:
+    riscv_1:
+      bandwidth: 37
+
 "One to All Multicast Linked Loopback Directed Ideal 2.0":
   wormhole_b0:
     riscv_0:
@@ -58,6 +67,7 @@
   blackhole:
     riscv_0:
       bandwidth: 41
+
 "One from All Directed Ideal":
   wormhole_b0:
     riscv_1:

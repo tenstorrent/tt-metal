@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,14 @@ def tracy_message(source: str, color: int = 0xF0F8FF):
 
 def tracy_frame():
     ttnn._ttnn.profiler.tracy_frame()
+
+
+def get_latest_programs_perf_data():
+    return ttnn._ttnn.profiler.get_latest_programs_perf_data()
+
+
+def get_all_programs_perf_data():
+    return ttnn._ttnn.profiler.get_all_programs_perf_data()
 
 
 __all__ = []

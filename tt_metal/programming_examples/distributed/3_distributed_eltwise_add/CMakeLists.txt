@@ -8,6 +8,10 @@ target_link_libraries(
         pthread
 )
 
+if(TARGET TT::CommonPCH)
+    tt_reuse_precompile_headers(distributed_eltwise_add TT::CommonPCH)
+endif()
+
 target_include_directories(distributed_eltwise_add PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 set_target_properties(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -19,7 +19,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const MeshCoordinate& receive_coord,
     PointToPointOp::tensor_return_value_t& output_tensors,
     const tt::tt_metal::GlobalSemaphore& semaphore) {
-    auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
+    auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
     const auto& topology = operation_attributes.topology;
     const auto& input_tensor = tensor_args.input_tensor;
 
@@ -52,7 +52,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             .set_page_size(sender_cb_id, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_sender_config);
 
-    // allocate space for packet headers for payload sempahore
+    // allocate space for packet headers for payload semaphore
     constexpr auto packet_header_cb_id = tt::CBIndex::c_1;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;

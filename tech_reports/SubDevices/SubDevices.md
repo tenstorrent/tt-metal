@@ -177,7 +177,7 @@ The following is an example of setting up a global circular buffer for use withi
 * `CircularBufferConfig::remote_index(remote_circular_buffer_index)`
 
   Specifies that the specified cb index will be configured to enable remote interactions between the sender receiver cores of a global circular buffer.
-  Local circular buffer indices have optimal dispatch performance when starting from 0, whereas remote indicies have optimal dispatch performance starting from the max index.
+  Local circular buffer indices have optimal dispatch performance when starting from 0, whereas remote indices have optimal dispatch performance starting from the max index.
   Note that the ranges of local and remote circular buffer indices cannot overlap, that is the max local index must be less than the minimum remote index.
   Local circular buffers can be in-placed with a remote circular buffer, as this is useful for using the remote circular buffer for synchronization with other cores, while the local circular buffer is used for feeding data to the compute kernel, as the compute functions/LLKs cannot use the remote config.
 

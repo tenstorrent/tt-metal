@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -57,5 +57,7 @@ private:
     bool transpose_within_face = false;  // transpose datums within each face
     bool transpose_of_faces = false;     // transpose the face order
 };
+
+std::ostream& operator<<(std::ostream& os, const Tile& tile);
 
 }  // namespace tt::tt_metal

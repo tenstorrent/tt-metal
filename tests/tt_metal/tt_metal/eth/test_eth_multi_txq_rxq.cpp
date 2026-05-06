@@ -1,18 +1,17 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdlib.h>
+#include <cstdlib>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <cstdint>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "eth_test_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
@@ -131,8 +130,8 @@ static void run_multi_txq_rxq_test(
     uint32_t data_txq_id,
     uint32_t ack_txq_id,
     uint32_t num_messages) {
-    auto device_0 = mesh_device_0->get_devices()[0];
-    auto device_1 = mesh_device_1->get_devices()[0];
+    auto* device_0 = mesh_device_0->get_devices()[0];
+    auto* device_1 = mesh_device_1->get_devices()[0];
     // Find ethernet cores that connect device_0 and device_1 using standard metal APIs
     std::optional<CoreCoord> sender_core_0;
     std::optional<CoreCoord> receiver_core_0;
@@ -154,7 +153,7 @@ static void run_multi_txq_rxq_test(
     }
 
     // Verify we found a connection
-    TT_ASSERT(
+    TT_FATAL(
         sender_core_0.has_value() && receiver_core_0.has_value(),
         "No ethernet connection found between device_0 and device_1");
 

@@ -8,5 +8,18 @@ mesh_descriptors {
   channels { count: 2 policy: RELAXED }
 }
 
+# --- Pinnings ---------------------------------------------------------------
+
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 0
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 1
+    asic_location: 1
+  }
+}
+
 # --- Instantiation ----------------------------------------------------------
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

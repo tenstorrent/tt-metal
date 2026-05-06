@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // TODO: Should get this from somewhere
 constexpr uint32_t tile_height = 32;

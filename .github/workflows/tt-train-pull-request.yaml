@@ -1,0 +1,31 @@
+name: "[tt-train] Pull Request Validation"
+
+on:
+  pull_request:
+    paths:
+      - 'tt-train/**'
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch origin/main
+        run: git fetch origin main
+
+      - name: Run pre-commit hooks (check only)
+        continue-on-error: true
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install pre-commit
+          pre-commit install
+          pre-commit run --all-files
+          if ! git diff --exit-code; then
+            echo "Pre-commit hooks made changes, please commit them."
+            exit 1
+          fi

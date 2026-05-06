@@ -1,16 +1,16 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include <string_view>
 
-constexpr uint32_t TT_FABRIC_STAUS_MASK = 0xabc00000;
-constexpr uint32_t TT_FABRIC_STATUS_STARTED = TT_FABRIC_STAUS_MASK | 0x0;
-constexpr uint32_t TT_FABRIC_STATUS_PASS = TT_FABRIC_STAUS_MASK | 0x1;
-constexpr uint32_t TT_FABRIC_STATUS_TIMEOUT = TT_FABRIC_STAUS_MASK | 0xdead0;
-constexpr uint32_t TT_FABRIC_STATUS_BAD_HEADER = TT_FABRIC_STAUS_MASK | 0xdead1;
-constexpr uint32_t TT_FABRIC_STATUS_DATA_MISMATCH = TT_FABRIC_STAUS_MASK | 0x3;
+constexpr uint32_t TT_FABRIC_STATUS_MASK = 0xabc00000;
+constexpr uint32_t TT_FABRIC_STATUS_STARTED = TT_FABRIC_STATUS_MASK | 0x0;
+constexpr uint32_t TT_FABRIC_STATUS_PASS = TT_FABRIC_STATUS_MASK | 0x1;
+constexpr uint32_t TT_FABRIC_STATUS_TIMEOUT = TT_FABRIC_STATUS_MASK | 0xdead0;
+constexpr uint32_t TT_FABRIC_STATUS_BAD_HEADER = TT_FABRIC_STATUS_MASK | 0xdead1;
+constexpr uint32_t TT_FABRIC_STATUS_DATA_MISMATCH = TT_FABRIC_STATUS_MASK | 0x3;
 
 // indexes of return values in test results buffer
 constexpr uint32_t TT_FABRIC_STATUS_INDEX = 0;

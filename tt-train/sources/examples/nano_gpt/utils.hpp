@@ -1,23 +1,50 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
+#include <string>
 
 #include "autograd/tensor.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
+#include "optimizers/optimizer_registry.hpp"
 #include "schedulers/lambda_scheduler.hpp"
 #include "schedulers/linear_scheduler.hpp"
 #include "schedulers/scheduler_base.hpp"
 #include "schedulers/sequential_scheduler.hpp"
-#include "serialization/msgpack_file.hpp"
+#include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
+
+// Expand ${TT_METAL_RUNTIME_ROOT} in a config path string.
+// Training YAML configs use ${TT_METAL_RUNTIME_ROOT}/tt-train/... so paths are
+// absolute and binaries work regardless of the current working directory.
+// Fail fast when the placeholder is used without TT_METAL_RUNTIME_ROOT.
+inline std::string expand_config_path(const std::string &path) {
+    static const std::string kPlaceholder = "${TT_METAL_RUNTIME_ROOT}";
+    auto pos = path.find(kPlaceholder);
+    if (pos == std::string::npos) {
+        return path;
+    }
+
+    const char *env = std::getenv("TT_METAL_RUNTIME_ROOT");
+    if (env == nullptr) {
+        throw std::runtime_error(
+            "TT_METAL_RUNTIME_ROOT is not set, but model_config path uses ${TT_METAL_RUNTIME_ROOT}: " + path);
+    }
+
+    std::string result = path;
+    result.replace(pos, kPlaceholder.length(), env);
+    return std::filesystem::path(result).lexically_normal().string();
+}
 
 class LossAverageMeter {
     float m_sum = 0.0F;
@@ -46,7 +73,7 @@ void save_training_state(
     const std::unique_ptr<ttml::schedulers::LRSchedulerBase> &scheduler,
     const std::string &model_name,
     const std::string &optimizer_name) {
-    ttml::serialization::MsgPackFile serializer;
+    ttml::serialization::FlatBufferFile serializer;
     ttml::serialization::write_module(serializer, model_name, model.get());
     ttml::serialization::write_optimizer(serializer, optimizer_name, scheduler->get_optimizer().get());
     ttml::serialization::write_state_dict(serializer, "scheduler", scheduler->get_state_dict());
@@ -60,7 +87,7 @@ void load_training_state(
     const std::unique_ptr<ttml::schedulers::LRSchedulerBase> &scheduler,
     const std::string &model_name,
     const std::string &optimizer_name) {
-    ttml::serialization::MsgPackFile deserializer;
+    ttml::serialization::FlatBufferFile deserializer;
     deserializer.deserialize(model_path);
     ttml::serialization::read_module(deserializer, model_name, model.get());
     ttml::serialization::read_optimizer(deserializer, optimizer_name, scheduler->get_optimizer().get());
@@ -71,7 +98,7 @@ void load_training_state(
 
 template <typename Model>
 void load_model_parameters(std::string &model_path, Model &model, const std::string &model_name) {
-    ttml::serialization::MsgPackFile deserializer;
+    ttml::serialization::FlatBufferFile deserializer;
     deserializer.deserialize(model_path);
     ttml::serialization::read_module(deserializer, model_name, model.get());
 }
@@ -148,9 +175,9 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
             ss << "transformer";
         }
         ss << "_bs_" << batch_size;
-        ss << "_lr_" << config.learning_rate;
-        ss << "_wd_" << config.weight_decay;
-        if (config.use_kahan_summation) {
+        ss << "_lr_" << config.optimizer.lr;
+        ss << "_wd_" << config.optimizer.weight_decay;
+        if (config.optimizer.kahan_summation) {
             ss << "_kahan";
         }
 
@@ -175,6 +202,4 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
     return ss.str();
 }
 
-void initialize_device(
-    const tt::tt_metal::distributed::MeshShape &mesh_shape,
-    const std::vector<int> &device_ids);
+void initialize_device(const tt::tt_metal::distributed::MeshShape &mesh_shape, const std::vector<int> &device_ids);

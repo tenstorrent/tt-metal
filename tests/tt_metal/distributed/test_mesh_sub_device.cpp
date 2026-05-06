@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -21,12 +21,11 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -146,7 +145,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         // buffer data
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
-        for (auto device : mesh_device_->get_devices()) {
+        for (auto* device : mesh_device_->get_devices()) {
             MetalContext::instance().get_cluster().write_core(
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }

@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <fstream>
+#include <optional>
 
 #include "impl/debug/inspector/types.hpp"
 #include "mesh_coord.hpp"
@@ -31,7 +32,7 @@ private:
     std::ofstream kernels_ostream;
     std::ofstream mesh_devices_ostream;
     std::ofstream mesh_workloads_ostream;
-    bool initialized;
+    bool initialized{false};
     std::filesystem::path logging_path;
 
     int64_t convert_timestamp(const time_point& tp) const {
@@ -39,7 +40,7 @@ private:
     }
 
 public:
-    Logger(const std::filesystem::path& logging_path);
+    Logger(const std::filesystem::path& logging_path, std::optional<int> rank);
 
     std::filesystem::path get_logging_path() const noexcept {
         return logging_path;
@@ -61,6 +62,7 @@ public:
     void log_mesh_workload_add_program(const MeshWorkloadData& mesh_workload_data, const distributed::MeshCoordinateRange& device_range, std::size_t program_id) noexcept;
     void log_mesh_workload_set_program_binary_status(
         const MeshWorkloadData& mesh_workload_data, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
+    void log_runtime_entry(const MeshWorkloadRuntimeEntry& entry) noexcept;
 };
 
 }  // namespace tt::tt_metal::inspector

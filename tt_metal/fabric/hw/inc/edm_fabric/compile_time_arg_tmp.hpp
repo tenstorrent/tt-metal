@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "tt_metal/hw/inc/compile_time_args.h"
+#include "api/compile_time_args.h"
 
 ////////////////////////////////////////
 //  Conditional Arg Getters

@@ -1,16 +1,17 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-namespace tt {
+#include "impl/context/context_types.hpp"
 
-namespace tt_metal {
+namespace tt::tt_metal {
 
 // Get global device profiling state based on build flag and environment variables
-bool getDeviceProfilerState();
+bool getDeviceProfilerState(ContextId context_id = DEFAULT_CONTEXT_ID);
 
-}  // namespace tt_metal
+// Get if the device debug dump is enabled
+bool getDeviceDebugDumpEnabled(ContextId context_id = DEFAULT_CONTEXT_ID);
 
-}  // namespace tt
+}  // namespace tt::tt_metal

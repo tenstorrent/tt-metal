@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,17 +9,24 @@
 namespace tt::tt_metal::distributed {
 
 class SDMeshCommandQueue final : public MeshCommandQueueBase {
+private:
+    // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
+
 protected:
-    void write_shard_to_device(
+    bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         void* dst,
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
@@ -31,7 +38,10 @@ protected:
 
 public:
     SDMeshCommandQueue(
-        MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function);
+        MeshDevice* mesh_device,
+        uint32_t id,
+        std::function<std::lock_guard<std::mutex>()> lock_api_function,
+        std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
     ~SDMeshCommandQueue() override = default;
 
     std::optional<MeshTraceId> trace_id() const override;
@@ -55,6 +65,21 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
+
+    void enable_asynchronous_slow_dispatch();
+    void disable_asynchronous_slow_dispatch();
+    bool is_asynchronous_slow_dispatch_enabled() const { return asynchronous_slow_dispatch_enabled_; }
+
+private:
+    void wait_for_cores_idle();
+
+    std::unordered_map<ChipId, std::vector<std::vector<CoreCoord>>> logical_cores_for_previous_workload_;
+
+    bool asynchronous_slow_dispatch_enabled_ = false;
+
+    std::shared_ptr<ThreadPool> launch_thread_pool_;
+    void dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking);
+    std::mutex logical_cores_mutex_;
 };
 
 }  // namespace tt::tt_metal::distributed

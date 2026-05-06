@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,9 +6,9 @@
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& dim) {
+ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& dim) {
     const auto& original_logical_shape = input_tensor.logical_shape();
     const auto& padded_shape = input_tensor.padded_shape();
     auto input_tensor_rank = original_logical_shape.rank();
@@ -20,9 +20,9 @@ ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const tt
     auto dims = dim;
 
     // handle negative dimensions
-    for (size_t i = 0; i < dims.size(); ++i) {
-        if (dims[i] < 0) {
-            dims[i] += input_tensor_rank;
+    for (int& dim : dims) {
+        if (dim < 0) {
+            dim += input_tensor_rank;
         }
     }
     // Sort the dimensions in descending order to avoid issues with modifying new_shape in loop
@@ -67,16 +67,16 @@ ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const tt
         input_tensor, ttnn::Shape(std::move(new_logical_shape)), ttnn::Shape(std::move(new_padded_shape)));
 }
 
-ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, int dim) {
+ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, int dim) {
     ttnn::SmallVector<int> dims{dim};
-    return invoke(input_tensor, dims);
+    return squeeze(input_tensor, dims);
 }
 
-ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor) {
+ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor) {
     auto input_tensor_rank = input_tensor.logical_shape().rank();
     ttnn::SmallVector<int> dims(input_tensor_rank);
     std::iota(dims.begin(), dims.end(), 0);
-    return invoke(input_tensor, dims);
+    return squeeze(input_tensor, dims);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

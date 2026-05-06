@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@ from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.model_config import determine_device_name
 
 END_OF_TEXT = 11
 SPACE = 204
@@ -596,7 +597,7 @@ def run_falcon_demo_kv(
 
     # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets=perf_targets)
-    run_type = f"demo_{'perf' if perf_mode else 'generate'}_{mesh_device.get_num_devices()}chip"
+    run_type = "demo_perf" if perf_mode else "demo_generate"
 
     data_parallel = 1
     tensor_parallel = mesh_device.get_num_devices() // data_parallel
@@ -605,8 +606,9 @@ def run_falcon_demo_kv(
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=run_type,
-        ml_model_name=model_version,
+        ml_model_name=model_version.removeprefix("tiiuae/"),
         ml_model_type="llm",
+        device_name=determine_device_name(mesh_device),
         num_layers=num_layers,
         batch_size=batch_size,
         config_params=config_params,
@@ -622,6 +624,7 @@ def run_falcon_demo_kv(
 @pytest.mark.parametrize("greedy_sampling", (False,))
 @pytest.mark.parametrize("max_seq_len", (128,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_demo(
     perf_mode,
     greedy_sampling,
@@ -629,7 +632,7 @@ def test_demo(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    t3k_mesh_device,
+    mesh_device,
 ):
     return run_falcon_demo_kv(
         user_input=user_input,
@@ -641,7 +644,7 @@ def test_demo(
         max_seq_len=max_seq_len,
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         prefill_on_host=False,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,

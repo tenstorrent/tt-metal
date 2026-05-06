@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -25,7 +25,6 @@ using namespace tt::tt_fabric::linear::experimental;
 
 constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 constexpr uint32_t page_size = get_compile_time_arg_val(1);
-constexpr uint32_t row_size = get_compile_time_arg_val(2);
 constexpr uint32_t max_packet_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_rows_per_packet = get_compile_time_arg_val(4);
 constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(5);
@@ -88,7 +87,7 @@ void kernel_main() {
     open_connections(fabric_connection, num_connections, fab_idx);
 #else
     constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
-    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, row_size);
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
     open_connections(fabric_connection, num_connections, arg_for_fab);
 #endif
     uint8_t starts[] = {
@@ -107,9 +106,7 @@ void kernel_main() {
         scatter_route_id,
         starts,
         ranges,
-        NocUnicastScatterCommandHeader{
-            {0, 0},  // ignore
-            static_cast<uint16_t>(payload_size)},
+        NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(payload_size)}),
         payload_size * 2);
 
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
@@ -181,11 +178,10 @@ void kernel_main() {
                         fabric_connection,
                         scatter_route_id,
                         l1_read_addr,
-                        tt::tt_fabric::NocUnicastScatterCommandHeader{
+                        tt::tt_fabric::NocUnicastScatterCommandHeader(
                             {linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, 0),
-                             linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id + 1, 0)},
-                            static_cast<uint16_t>(page_size)},  // ignore
-                        page_size * 2);                         // ignore
+                             linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id + 1, 0)}),
+                        page_size * 2);
                     noc_async_writes_flushed();
                     l1_read_addr += page_size * 2;
                     row_id += 2;

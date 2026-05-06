@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include "impl/dispatch/command_queue.hpp"
 #include "llrt.hpp"
 
 namespace tt::tt_metal {

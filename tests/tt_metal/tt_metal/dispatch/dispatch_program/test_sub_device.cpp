@@ -1,12 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stddef.h>
+#include <cstddef>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/event.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <algorithm>
@@ -26,14 +25,13 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/program.hpp>
@@ -430,7 +428,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
     std::array<uint32_t, 1> common_runtime_args = {201};
 
     for (size_t i = 0; i < k_num_iters; i++) {
-        for (auto& sub_device_manager : {sub_device_manager_1, sub_device_manager_2}) {
+        for (const auto& sub_device_manager : {sub_device_manager_1, sub_device_manager_2}) {
             mesh_device->load_sub_device_manager(sub_device_manager);
             unique_runtime_args[0] += 1;
             common_runtime_args[0] += 2;

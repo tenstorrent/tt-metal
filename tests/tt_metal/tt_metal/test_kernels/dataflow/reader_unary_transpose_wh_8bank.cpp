@@ -1,11 +1,18 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#else
+#include "experimental/circular_buffer.h"
+#endif
+#include "experimental/noc.h"
+#include "experimental/tensor.h"
 
-// #include "debug/dprint.h"
+// #include "api/debug/dprint.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -14,54 +21,50 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(5);
     uint32_t Wt = get_arg_val<uint32_t>(6);
     uint32_t HtWt = get_arg_val<uint32_t>(7);
-    uint32_t scaler = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t in_id = get_compile_time_arg_val(0);
+    constexpr auto src_args = TensorAccessorArgs<1>();
+#ifdef ARCH_QUASAR
+    experimental::DataflowBuffer dfb_in(in_id);
+#else
+    experimental::CircularBuffer cb(in_id);
+#endif
+
+    experimental::Noc noc;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
-
-    if (scaler != 0) {
-        union {
-            float f;
-            uint32_t u;
-        } u;
-        u.u = scaler;
-        // DPRINT << "TWH Scaler = " << F32(u.f) << ENDL();
-        constexpr uint32_t cb_in_2 = 2;
-        cb_reserve_back(cb_in_2, 1);
-        auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
-        for (int j = 0; j < 1024; j++) {
-            ptr[j] = uint16_t(0);
-        }
-
-        for (int k = 0; k < 4; k++) {
-            for (int j = 0; j < 16; j++) {
-                ptr[k * 256 + j] = uint16_t(u.u >> 16);
-            }
-        }
-        cb_push_back(cb_in_2, 1);
-    }
+#ifdef ARCH_QUASAR
+    uint32_t tile_bytes = dfb_in.get_entry_size();
+#else
+    uint32_t tile_bytes = cb.get_tile_size();
+#endif
 
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < N; n++) {
         i_tile = i_tile_N;
         for (uint32_t w = 0; w < Wt; w++) {
             for (uint32_t h = 0; h < Ht; h++) {
-                uint64_t src_noc_addr = get_noc_addr(i_tile, s);
-                cb_reserve_back(cb_id_in0, onetile);
-                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                noc_async_read(src_noc_addr, l1_write_addr, tile_bytes);
-                noc_async_read_barrier();
+#ifdef ARCH_QUASAR
+                dfb_in.reserve_back(onetile);
 
-                cb_push_back(cb_id_in0, onetile);
+                noc.async_read(s, dfb_in, tile_bytes, {.page_id = i_tile}, {});
+                noc.async_read_barrier();
+
+                dfb_in.push_back(onetile);
+#else
+                cb.reserve_back(onetile);
+
+                noc.async_read(s, cb, tile_bytes, {.page_id = i_tile}, {});
+                noc.async_read_barrier();
+
+                cb.push_back(onetile);
+#endif
                 i_tile += Wt;  // stride in H
             }  // Ht
             i_tile -= HtWt;  // go back to H=0

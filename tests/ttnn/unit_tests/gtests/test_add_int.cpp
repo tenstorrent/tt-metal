@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <array>
 #include <memory>
 #include <optional>
@@ -12,10 +12,9 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/shape.hpp>
-#include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -32,7 +31,8 @@ struct AddUnaryParam {
     uint32_t w;
 };
 
-class AddUnaryFixture : public TTNNFixtureWithDevice, public testing::WithParamInterface<AddUnaryParam> {};
+class AddUnaryFixture : public TTNNFixtureWithSuiteDevice<AddUnaryFixture>,
+                        public testing::WithParamInterface<AddUnaryParam> {};
 
 TEST_P(AddUnaryFixture, CompareWithTorchReference) {
     auto param = GetParam();

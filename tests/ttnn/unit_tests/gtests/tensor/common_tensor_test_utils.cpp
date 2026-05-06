@@ -1,27 +1,24 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common_tensor_test_utils.hpp"
 
-#include <stdint.h>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Shape;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace test_utils {
 

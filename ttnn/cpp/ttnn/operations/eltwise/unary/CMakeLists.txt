@@ -1,7 +1,8 @@
 add_library(ttnn_op_eltwise_unary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Unary ALIAS ttnn_op_eltwise_unary)
 
-target_precompile_headers(ttnn_op_eltwise_unary REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_eltwise_unary TTNN::PCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_unary)
 set_target_properties(
     ttnn_op_eltwise_unary
     PROPERTIES
@@ -10,37 +11,41 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(
-    GLOB_RECURSE kernels
-    device/kernels/*
-    tanh_accurate/device/kernels/*
-)
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_unary
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES common/unary_op_types.hpp device/unary_composite_op.hpp unary.hpp unary_composite.hpp
+        FILES
+            common/unary_op_types.hpp
+            common/unary_op_utils.hpp
+            device/unary_composite_op.hpp
+            unary.hpp
+            unary_composite.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
         common/unary_op_utils.cpp
+        common/unary_utils.cpp
         device/unary_composite_op.cpp
         device/unary_device_operation.cpp
         device/unary_program_factory.cpp
-        device/unary_sharded_program_factory.cpp
-        tanh_accurate/device/tanh_accurate_device_operation.cpp
-        tanh_accurate/device/tanh_accurate_pgm_factory.cpp
-        tanh_accurate/device/tanh_accurate_sharded_pgm_factory.cpp
-        tanh_accurate/tanh_accurate.cpp
         unary.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_eltwise_unary PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_link_libraries(
+    ttnn_op_eltwise_unary
+    PUBLIC
+        TTNN::Core
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Eltwise::Binary
+)
 
 install(
     TARGETS

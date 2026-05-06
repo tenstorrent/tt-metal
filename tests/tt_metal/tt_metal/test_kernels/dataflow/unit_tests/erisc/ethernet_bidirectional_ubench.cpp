@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include <array>
 #include "eth_l1_address_map.h"
-#include "ethernet/dataflow_api.h"
-#include "debug/assert.h"
+#include "internal/ethernet/dataflow_api.h"
+#include "api/debug/assert.h"
 
 // FURTHER IMPROVEMENTS TO MAKE:
 // Make reader/writer indexers increment sequentially and only advance when that

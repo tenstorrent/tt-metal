@@ -8,7 +8,6 @@ so you can follow along.
 
 To build and execute, you may use the following commands:
 ```bash
-    export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/metal_example_add_2_integers_in_riscv
 ```

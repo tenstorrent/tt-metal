@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 /*
  *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------
- * This file is intended to be useable across both host and device code. Therefore.
+ * This file is intended to be usable across both host and device code. Therefore.
  *
  * DO NOT include any headers that are not host/device agnostic.
  * DO NOT use any types that do not have fixed sizes across host and device.
@@ -16,8 +16,7 @@
 #include <cstdint>
 #include <cstddef>
 
-namespace ttnn {
-namespace ccl {
+namespace ttnn::ccl {
 
 using address_t = uint32_t;
 
@@ -61,5 +60,4 @@ struct WorkerEdmInterfaceArgs {
     const uint32_t num_buffers_per_channel;
 };
 
-} // namespace ccl
-} // namespace ttnn
+}  // namespace ttnn::ccl

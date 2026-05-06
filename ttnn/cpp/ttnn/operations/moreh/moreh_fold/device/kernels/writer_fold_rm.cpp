@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -16,6 +16,8 @@ void kernel_main() {
 
     constexpr int onetile = 1;
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto s = TensorAccessor(output_args, output_addr, output_cb_page_size);
 
     for (uint32_t i = start_id; i < start_id + num_units_per_core; i++) {

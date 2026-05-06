@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,15 +8,9 @@
 
 #include "build.hpp"
 
-enum class MathFidelity : uint8_t;
-namespace tt {
-enum CBIndex : std::uint8_t;
-}  // namespace tt
-
 namespace tt::tt_metal {
 
-JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) :
-    build_env(env), fp32_dest_acc_en(false), bfp8_pack_precise(false) {}
+JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) : build_env(env), hlk_desc(env.get_max_cbs()) {}
 
 void JitBuildOptions::set_name(const std::string& n) {
     name = n;
@@ -55,6 +49,24 @@ void JitBuildOptions::set_cb_tile_dims_all_cores(
 
 void JitBuildOptions::set_cb_tile_size_all_cores(CBIndex cb_id, uint32_t tile_size) {
     hlk_desc.set_buf_tile_size((int)cb_id, tile_size);
+}
+
+void JitBuildOptions::set_cb_data_fmt_and_tile(CBIndex cb_id, DataFormat data_format, const std::optional<Tile>& tile) {
+    set_cb_dataformat_all_cores(cb_id, data_format);
+    if (tile.has_value()) {
+        set_cb_tile_dims_all_cores(
+            cb_id,
+            tile->get_num_faces(),
+            tile->get_partial_face(),
+            tile->get_face_shape()[0],
+            tile->get_narrow_tile(),
+            tile->get_tile_shape()[0],
+            tile->get_tile_shape()[1]);
+        set_cb_tile_size_all_cores(cb_id, tile->get_tile_size(data_format));
+    } else {
+        Tile default_tile;
+        set_cb_tile_size_all_cores(cb_id, default_tile.get_tile_size(data_format));
+    }
 }
 
 void JitBuildOptions::set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format) {

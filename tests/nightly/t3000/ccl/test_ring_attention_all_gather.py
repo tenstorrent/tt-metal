@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -39,6 +40,7 @@ def create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor):
     submesh_shape[rp_axis] = rp_factor
     submesh_shape[1 - rp_axis] = up_factor
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    submesh_device.cache_entries_counter = CacheEntriesCounter(submesh_device)
     return submesh_device
 
 
@@ -57,6 +59,7 @@ def run_ring_attention_all_gather_impl(
     all_gather_topology,
     num_iters=1,
     enable_trace=True,
+    pcc_threshold=0.99,
 ):
     torch.manual_seed(0)
 
@@ -132,20 +135,21 @@ def run_ring_attention_all_gather_impl(
     tt_all_gather_out_tensor_list = []
 
     def run_op(i):
-        tt_all_gather_out_tensors = ttnn.experimental.ring_attention_all_gather_async(
-            ag_input_tensor_mesh_list[i],
-            persistent_output_buffer=persistent_output_buffers[i],
-            dim=sequence_index,
-            multi_device_global_semaphore=ccl_semaphore_handles[i],
-            cluster_axis=rp_axis,
-            mesh_device=mesh_device,
-            num_links=num_links,
-            memory_config=mem_config_ag,
-            topology=all_gather_topology,
-            subdevice_id=worker_sub_device_id,
-        )
+        with mesh_device.cache_entries_counter.measure():
+            tt_all_gather_out_tensors = ttnn.experimental.ring_attention_all_gather_async(
+                ag_input_tensor_mesh_list[i],
+                persistent_output_buffer=persistent_output_buffers[i],
+                dim=sequence_index,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                cluster_axis=rp_axis,
+                mesh_device=mesh_device,
+                num_links=num_links,
+                memory_config=mem_config_ag,
+                topology=all_gather_topology,
+                subdevice_id=worker_sub_device_id,
+            )
 
-        return tt_all_gather_out_tensors
+            return tt_all_gather_out_tensors
 
     if enable_trace:
         # Compile the op
@@ -214,7 +218,7 @@ def run_ring_attention_all_gather_impl(
                 if ag_input_dtype == ttnn.bfloat16:
                     eq, output = comp_equal(tt_ag_tensor_check, torch_ag_tensor_check)
                 else:
-                    eq, output = comp_pcc(tt_ag_tensor_check, torch_ag_tensor_check)
+                    eq, output = comp_pcc(tt_ag_tensor_check, torch_ag_tensor_check, pcc_threshold)
                 assert eq, f"{i}{j} FAILED ag: {output}, iteration {i}, tensor {j}, ring {ring_idx}"
 
     mesh_device.reset_sub_device_stall_group()
@@ -223,7 +227,19 @@ def run_ring_attention_all_gather_impl(
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
-@pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
+@pytest.mark.parametrize(
+    "layout, ag_input_dtype, pcc_threshold",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16, 1.0),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0.99),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat4_b, 0.985),
+    ],
+    ids=[
+        "tile_bfloat16",
+        "tile_bfloat8_b",
+        "tile_bfloat4_b",
+    ],
+)
 @pytest.mark.parametrize(
     "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor, enable_trace, num_iters",
     [
@@ -263,6 +279,7 @@ def test_ring_attention_all_gather(
     num_links,
     layout,
     ag_input_dtype,
+    pcc_threshold,
     ag_output_shape,
     ag_num_inputs,
     rp_axis,
@@ -291,12 +308,25 @@ def test_ring_attention_all_gather(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        pcc_threshold=pcc_threshold,
     )
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
-@pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
+@pytest.mark.parametrize(
+    "layout, ag_input_dtype, pcc_threshold",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16, 1.0),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0.99),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat4_b, 0.985),
+    ],
+    ids=[
+        "tile_bfloat16",
+        "tile_bfloat8_b",
+        "tile_bfloat4_b",
+    ],
+)
 @pytest.mark.parametrize(
     "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor",
     [
@@ -344,6 +374,7 @@ def test_ring_attention_all_gather_program_cache(
     num_links,
     ag_input_dtype,
     layout,
+    pcc_threshold,
     mem_config_input,
     mem_config_ag,
     enable_trace,
@@ -380,7 +411,8 @@ def test_ring_attention_all_gather_program_cache(
             all_gather_topology=all_gather_topology,
             enable_trace=enable_trace,
             num_iters=num_iters,
+            pcc_threshold=pcc_threshold,
         )
         ttnn.synchronize_device(submesh_device)
 
-    assert submesh_device.num_program_cache_entries() == 1
+    assert submesh_device.cache_entries_counter.total == 1

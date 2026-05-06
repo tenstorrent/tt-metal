@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 constexpr inline uint32_t increment_virtual_channel(uint32_t previous_virtual_channel) {
     // Increment the virtual channel, wrapping around if it exceeds the maximum

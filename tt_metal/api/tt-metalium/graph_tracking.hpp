@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
 #include <any>
 #include <array>
@@ -21,16 +21,25 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Buffer;
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
 class Program;
+
+struct TrackedArgument {
+    std::any value;
+    std::string (*to_string_fn)(const std::any&);
+};
+
+// Forward declaration only – the definition lives in ttnn/graph/graph_serialization.hpp
+// which pulls in <reflect> and tt_stl/reflection.hpp.  This keeps the public API header
+// free of those heavyweight dependencies.
+template <typename T>
+std::string serialize_tracked_arg(const std::any& a);
 
 class IGraphProcessor {
 public:
@@ -40,6 +49,10 @@ public:
     };
 
     IGraphProcessor() = default;
+
+    // Returns false for background processors that are always
+    // registered but should not make GraphTracker::is_enabled() return true.
+    virtual bool is_capture_processor() const { return true; }
 
     virtual void track_allocate(const tt::tt_metal::Buffer* /*buffer*/) {};
 
@@ -56,14 +69,15 @@ public:
 
     virtual void track_program(tt::tt_metal::Program* /*program*/, const IDevice* /*device*/) {};
 
-    virtual void track_function_start(std::string_view /*function_name*/, std::span<std::any> /*input_parameters*/){};
+    virtual void track_function_start(
+        std::string_view /*function_name*/, std::span<TrackedArgument> /*input_parameters*/){};
 
     virtual void track_function_end() {};
     virtual void track_function_end(const std::any& /*output_tensors*/) {};
 
     virtual void begin_capture(RunMode /*mode*/){};
 
-    virtual nlohmann::json end_capture() { return nullptr; };
+    virtual nlohmann::json end_capture();
 
     virtual ~IGraphProcessor() = default;
 };
@@ -93,10 +107,7 @@ public:
     GraphTracker(const GraphTracker&) = delete;
     GraphTracker(GraphTracker&&) = delete;
 
-    static GraphTracker& instance() {
-        static GraphTracker tracker;
-        return tracker;
-    }
+    static GraphTracker& instance();
 
     bool is_enabled() const;
 
@@ -126,7 +137,8 @@ public:
         if (processors.empty()) {
             return;
         }
-        std::array<std::any, sizeof...(Args)> params{std::any(std::ref(args))...};
+        std::array<TrackedArgument, sizeof...(Args)> params{
+            TrackedArgument{std::any(std::ref(args)), &serialize_tracked_arg<std::remove_reference_t<Args>>}...};
         for (auto& it : processors) {
             it->track_function_start(function_name, params);
         }

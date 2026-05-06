@@ -1,0 +1,108 @@
+name: "[internal] Validate installation step from instructions impl"
+
+
+on:
+  workflow_call:
+
+env:
+  TT_INSTALLER_VERSION: v2.1.0
+
+jobs:
+  install-and-run-mnist:
+    name: TT-Installer and run MNIST MLP
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', 'N150') }}
+    timeout-minutes: 30
+    steps:
+      - name: Prepare system
+        run: |
+          # The runners come with docker preinstalled but we want to
+          # simulate a completely blank system for our Podman install
+          sudo apt-get purge -y docker-ce docker-ce-cli containerd.io
+
+      - name: Install TT dependencies via TT-Installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60 curl -fsSL "https://github.com/tenstorrent/tt-installer/releases/download/${TT_INSTALLER_VERSION}/install.sh" -O
+          chmod +x install.sh
+
+          timeout 600 bash ./install.sh \
+            --update-firmware=off \
+            --install-metalium-models-container \
+            --verbose \
+            --reboot-option=never \
+            --mode-non-interactive
+
+      - name: Run MNIST MLP via tt-metalium-models
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
+
+  install-and-run-falcon7b:
+    name: TT-Installer and run Falcon7b Demo
+    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    timeout-minutes: 90
+    steps:
+      - name: Prepare system
+        run: |
+          # The runners come with docker preinstalled but we want to
+          # simulate a completely blank system for our Podman install
+          sudo apt-get purge -y docker-ce docker-ce-cli containerd.io
+
+      - name: Install TT dependencies via TT-Installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 60 curl -fsSL "https://github.com/tenstorrent/tt-installer/releases/download/${TT_INSTALLER_VERSION}/install.sh" -O
+          chmod +x install.sh
+
+          timeout 600 bash ./install.sh \
+            --update-firmware=off \
+            --install-metalium-models-container \
+            --verbose \
+            --reboot-option=never \
+            --mode-non-interactive
+
+      - name: Download Falcon 7B weights from LFC
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          LFC_BASE="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface"
+          # Download under tt_dnn-models/Falcon so once workspace is mounted at /mnt/MLPerf,
+          # model_location_generator finds /mnt/MLPerf/tt_dnn-models/Falcon/tiiuae/falcon-7b-instruct
+          mkdir -p tt_dnn-models/Falcon
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P tt_dnn-models/Falcon "${LFC_BASE}/tiiuae/falcon-7b-instruct/"
+      - name: Patch tt-metalium-models to mount workspace volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          SCRIPT=$(which tt-metalium-models)
+          if [[ ! -f "$SCRIPT" ]]; then
+            echo "::error::tt-metalium-models script not found on PATH"
+            exit 1
+          fi
+          cp "$SCRIPT" "$SCRIPT.bak"
+          sed -i '/--volume=.*hugepages/a\'$'\t''--volume=$(pwd):/mnt/MLPerf \\' "$SCRIPT"
+          if diff -q "$SCRIPT" "$SCRIPT.bak" > /dev/null 2>&1; then
+            echo "::error::sed did not modify $SCRIPT — hugepages volume pattern not found"
+            echo "Script contents:"
+            cat "$SCRIPT"
+            exit 1
+          fi
+          rm "$SCRIPT.bak"
+      - name: Run Falcon7b Demo via tt-metalium-models
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          export PATH=~/.local/bin:$PATH
+          tt-metalium-models \
+            -c "pytest --timeout=600 --disable-warnings -q -s \
+              --input-method=json \
+              --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
+              models/demos/ttnn_falcon7b/demo/demo.py::test_demo"

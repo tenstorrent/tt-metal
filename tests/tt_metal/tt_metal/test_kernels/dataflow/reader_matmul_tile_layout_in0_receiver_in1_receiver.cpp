@@ -1,9 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {

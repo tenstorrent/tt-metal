@@ -1,31 +1,34 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/binary_bitwise_sfpu.h"
-#include "compute_kernel_api/binary_shift.h"
-#include "compute_kernel_api/add_int_sfpu.h"
-#include "compute_kernel_api/sub_int_sfpu.h"
-#include "compute_kernel_api/mul_int_sfpu.h"
-#include "compute_kernel_api/mul_int32_sfpu.h"
-#include "compute_kernel_api/binary_max_min.h"
-#include "compute_kernel_api/xlogy.h"
-#include "compute_kernel_api/gcd.h"
-#include "compute_kernel_api/lcm.h"
-#include "compute_kernel_api/binary_comp.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/binary_bitwise_sfpu.h"
+#include "api/compute/binary_shift.h"
+#include "api/compute/add_int_sfpu.h"
+#include "api/compute/sub_int_sfpu.h"
+#include "api/compute/mul_int_sfpu.h"
+#include "api/compute/div_int32_floor.h"
+#include "api/compute/div_int32_sfpu.h"
+#include "api/compute/binary_remainder.h"
+#include "api/compute/binary_fmod.h"
+#include "api/compute/binary_max_min.h"
+#include "api/compute/xlogy.h"
+#include "api/compute/atan2.h"
+#include "api/compute/gcd.h"
+#include "api/compute/lcm.h"
+#include "api/compute/binary_comp.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
@@ -127,20 +130,41 @@ void MAIN {
 #ifdef MUL_INT_INIT
             MUL_INT_INIT
 #endif
-#ifdef MUL_INT32_INIT
-            MUL_INT32_INIT
-#endif
 #ifdef LT_INT32_INIT
             LT_INT32_INIT
+#endif
+#ifdef LT_UINT32_INIT
+            LT_UINT32_INIT
+#endif
+#ifdef LT_UINT16_INIT
+            LT_UINT16_INIT
 #endif
 #ifdef GT_INT32_INIT
             GT_INT32_INIT
 #endif
+#ifdef GT_UINT32_INIT
+            GT_UINT32_INIT
+#endif
+#ifdef GT_UINT16_INIT
+            GT_UINT16_INIT
+#endif
 #ifdef GE_INT32_INIT
             GE_INT32_INIT
 #endif
+#ifdef GE_UINT32_INIT
+            GE_UINT32_INIT
+#endif
+#ifdef GE_UINT16_INIT
+            GE_UINT16_INIT
+#endif
 #ifdef LE_INT32_INIT
             LE_INT32_INIT
+#endif
+#ifdef LE_UINT32_INIT
+            LE_UINT32_INIT
+#endif
+#ifdef LE_UINT16_INIT
+            LE_UINT16_INIT
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT
@@ -173,4 +197,3 @@ void MAIN {
         cb_push_back(cb_out0, per_core_block_size);
     }
 }
-}  // namespace NAMESPACE

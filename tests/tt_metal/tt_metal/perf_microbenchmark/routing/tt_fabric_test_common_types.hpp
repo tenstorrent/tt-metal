@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,9 @@
 
 namespace tt::tt_fabric::fabric_tests {
 
+static constexpr uint8_t default_worker_vc_id = 0;
+static constexpr uint8_t vc2_worker_vc_id = 2;
+
 // Performance test mode - replaces separate latency_test_mode and benchmark_mode booleans
 enum class PerformanceTestMode {
     NONE,       // No performance testing (functional test only)
@@ -37,6 +40,7 @@ using DeviceIdentifier = std::variant<
     std::pair<MeshId, MeshCoordinate>  // [mesh_id, [row, col]]
     >;
 
+using CoreConfig = std::variant<tt::tt_metal::CoreCoord, std::string>;
 // A map to hold various parametrization options parsed from the YAML.
 using ParametrizationValues = std::variant<std::vector<std::string>, std::vector<uint32_t>>;
 using ParametrizationOptionsMap = std::unordered_map<std::string, ParametrizationValues>;
@@ -44,7 +48,7 @@ using ParametrizationOptionsMap = std::unordered_map<std::string, Parametrizatio
 // Parsed structures (before resolution) - use DeviceIdentifier
 struct ParsedDestinationConfig {
     std::optional<DeviceIdentifier> device;
-    std::optional<CoreCoord> core;
+    std::optional<CoreConfig> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
@@ -58,13 +62,16 @@ struct ParsedTrafficPatternConfig {
     std::optional<ParsedDestinationConfig> destination;
     std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
+    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
 };
 
 struct ParsedSenderConfig {
     DeviceIdentifier device = FabricNodeId(MeshId{0}, 0);
-    std::optional<CoreCoord> core;
+    std::optional<CoreConfig> core;
+    std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<ParsedTrafficPatternConfig> patterns;
     std::optional<uint32_t> link_id;  // Link ID for multi-link tests
+    std::optional<uint8_t> vc_id;     // VC selection: 0=VC0 (default), 2=VC2
 };
 
 // Resolved structures (after resolution) - use FabricNodeId
@@ -91,6 +98,7 @@ struct TrafficPatternConfig {
     std::optional<DestinationConfig> destination;
     std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
+    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
 
     // Credit info
     std::optional<SenderCreditInfo> sender_credit_info;  // For sender
@@ -100,8 +108,17 @@ struct TrafficPatternConfig {
 struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
     std::optional<CoreCoord> core;
+    std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<TrafficPatternConfig> patterns;
-    uint32_t link_id = 0;  // Link ID for multi-link tests
+    uint32_t link_id = 0;          // Link ID for multi-link tests
+    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
+    bool use_vc2() const { return vc_id.value_or(0) == 2; }
+};
+
+// Sync configuration for a single device
+struct SyncConfig {
+    uint32_t sync_val = 0;       // Sync value for this device
+    SenderConfig sender_config;  // Sync messages sent by this device
 };
 
 enum class HighLevelTrafficPattern {
@@ -115,8 +132,12 @@ enum class HighLevelTrafficPattern {
     HalfRing,
     AllDevicesUniformPattern,
     NeighborExchange,
+    SequentialNeighborExchange,
     SequentialAllToAll,
 };
+
+// Channel trimming mode for test config expansion
+enum class ChannelTrimmingMode { NONE, CAPTURE, REPLAY };
 
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
@@ -124,11 +145,15 @@ struct TestFabricSetup {
     std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
+    std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
+    bool enable_channel_trimming = false;     // When true, test is expanded into CAPTURE + REPLAY phases
+    bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
 };
 
 struct HighLevelPatternConfig {
     std::string type;
     std::optional<uint32_t> iterations;
+    bool is_sequential = false;
 };
 
 struct ParsedTestConfig {
@@ -142,18 +167,20 @@ struct ParsedTestConfig {
     // A test can be defined by either a concrete list of senders or a high-level pattern.
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
     // add sync sender configs here, each config contains current device and the patterns
-    std::vector<SenderConfig> global_sync_configs;
+    std::vector<SyncConfig> sync_configs;
     std::vector<ParsedSenderConfig> senders;
     std::optional<std::string> bw_calc_func;
     PerformanceTestMode performance_test_mode =
         PerformanceTestMode::NONE;   // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;  // Enable telemetry for performance testing
-    bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
-                                  // cross-chip start-skew effects
-    uint32_t global_sync_val = 0;
+    bool global_sync = false;  // Enable sync for device synchronization. Typically used for benchmarking to minimize
+                               // cross-chip start-skew effects
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
+    bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
+    bool from_sequential_pattern = false;  // True if this test was expanded from a sequential high-level pattern
+    ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE;
 };
 
 struct TestConfig {
@@ -167,17 +194,19 @@ struct TestConfig {
     // A test can be defined by either a concrete list of senders or a high-level pattern.
     std::optional<std::vector<HighLevelPatternConfig>> patterns;
     // add sync sender configs here, each config contains current device and the patterns
-    std::vector<SenderConfig> global_sync_configs;
+    std::vector<SyncConfig> sync_configs;
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
     PerformanceTestMode performance_test_mode =
         PerformanceTestMode::NONE;  // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;
-    bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
-                                  // cross-chip start-skew effects
-    uint32_t global_sync_val = 0;
+    bool global_sync = false;  // Enable sync for device synchronization. Typically used for benchmarking to minimize
+                               // cross-chip start-skew effects
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
+    bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
+    bool from_sequential_pattern = false;  // True if this test was expanded from a sequential high-level pattern
+    ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE;
 };
 
 // Latency test results structure (parallel to bandwidth results)
@@ -289,6 +318,9 @@ struct PhysicalMeshConfig {
         // Default path to the mesh descriptor.
     }
 };
+
+// Format a fabric node id with Tray/Node info, e.g. "(0,5) [T0/N5]"
+std::string format_device_label(const FabricNodeId& node_id);
 
 // Helper functions for fetching pattern parameters
 TrafficPatternConfig fetch_first_traffic_pattern(const TestConfig& config);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE, ckernel::DataLayout layout = ckernel::DataLayout::TILE>
 inline void llk_math_eltwise_binary_sfpu_max_pool_with_indices_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::max_pool_with_indices, APPROXIMATE>(
+    llk_math_eltwise_binary_sfpu_init<SfpuType::max_pool_with_indices>(
         sfpu::init_max_pool_with_indices<APPROXIMATE, layout>);
 }
 
@@ -21,14 +21,17 @@ template <
     bool is_fp32_dest_acc_en,
     int num_rows,
     int ITERATIONS = 8,
-    ckernel::DataLayout layout = ckernel::DataLayout::TILE>
-inline void llk_math_eltwise_binary_sfpu_max_pool_with_indices(
-    uint dst_index, uint32_t idx_index, int vector_mode = (int)VectorMode::RC_custom) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_max_pool_with_indices<APPROXIMATE, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout>,
+    ckernel::DataLayout layout = ckernel::DataLayout::TILE,
+    bool accumulate = false>
+inline void llk_math_eltwise_binary_sfpu_max_pool_with_indices(uint dst_index, uint32_t idx_index, uint32_t chunk) {
+    _llk_math_eltwise_binary_sfpu_params_(
+        ckernel::sfpu::
+            calculate_max_pool_with_indices<APPROXIMATE, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout, accumulate>,
         dst_index,
         idx_index,
-        vector_mode);
+        0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
+        static_cast<int>(VectorMode::RC) /* vector_mode */,
+        chunk);
 }
 
 }  // namespace ckernel

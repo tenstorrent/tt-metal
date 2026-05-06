@@ -1,15 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "circular_buffer_init.h"
+#include "internal/circular_buffer_init.h"
 
-#include "debug/assert.h"
-#include "debug/dprint.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 
-void check_cb_values(bool read, bool write, bool init_wr_tile_ptr, uint32_t initial_value, uint32_t mask) {
+void check_cb_values(bool read, bool write, bool init_wr_tile_ptr, uint32_t initial_value, uint64_t mask) {
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-        if (!(mask & (1 << i))) {
+        if (!(mask & (1ULL << i))) {
             continue;  // Skip circular buffers that are not set up
         }
         uint32_t fifo_addr = initial_value + i * 4;
@@ -21,15 +21,35 @@ void check_cb_values(bool read, bool write, bool init_wr_tile_ptr, uint32_t init
                << ", fifo_wr_ptr: " << local_interface.fifo_wr_ptr << ", fifo_rd_ptr: " << local_interface.fifo_rd_ptr
                << ", fifo_size: " << local_interface.fifo_size << ", fifo_num_pages: " << local_interface.fifo_num_pages
                << ", fifo_page_size: " << local_interface.fifo_page_size << ENDL();
+        DEVICE_PRINT(
+            "CB {} local_interface.fifo_limit: {}, fifo_wr_ptr: {}, fifo_rd_ptr: {}, fifo_size: {}, fifo_num_pages: "
+            "{}, fifo_page_size: {}\n",
+            i,
+            local_interface.fifo_limit,
+            local_interface.fifo_wr_ptr,
+            local_interface.fifo_rd_ptr,
+            local_interface.fifo_size,
+            local_interface.fifo_num_pages,
+            local_interface.fifo_page_size);
         if (local_interface.fifo_limit != fifo_addr + fifo_size) {
             DPRINT << "FIFO limit mismatch for CB " << i << ": expected " << (fifo_addr + fifo_size) << ", got "
                    << local_interface.fifo_limit << ENDL();
+            DEVICE_PRINT(
+                "FIFO limit mismatch for CB {}: expected {}, got {}\n",
+                i,
+                (fifo_addr + fifo_size),
+                local_interface.fifo_limit);
             while (true);  // Purposefully hang the kernel if FIFO limit did not arrive correctly
         }
         if (write) {
             if (local_interface.fifo_wr_ptr != fifo_addr) {
                 DPRINT << "FIFO write pointer mismatch for CB " << i << ": expected " << fifo_addr << ", got "
                        << local_interface.fifo_wr_ptr << ENDL();
+                DEVICE_PRINT(
+                    "FIFO write pointer mismatch for CB {}: expected {}, got {}\n",
+                    i,
+                    fifo_addr,
+                    local_interface.fifo_wr_ptr);
                 while (true);  // Purposefully hang the kernel if FIFO write pointer did not arrive correctly
             }
         }
@@ -37,35 +57,60 @@ void check_cb_values(bool read, bool write, bool init_wr_tile_ptr, uint32_t init
             if (local_interface.fifo_rd_ptr != fifo_addr) {
                 DPRINT << "FIFO read pointer mismatch for CB " << i << ": expected " << fifo_addr << ", got "
                        << local_interface.fifo_rd_ptr << ENDL();
+                DEVICE_PRINT(
+                    "FIFO read pointer mismatch for CB {}: expected {}, got {}\n",
+                    i,
+                    fifo_addr,
+                    local_interface.fifo_rd_ptr);
                 while (true);  // Purposefully hang the kernel if FIFO read pointer did not arrive correctly
             }
         }
         if (local_interface.fifo_size != fifo_size) {
             DPRINT << "FIFO size mismatch for CB " << i << ": expected " << fifo_size << ", got "
                    << local_interface.fifo_size << ENDL();
+            DEVICE_PRINT(
+                "FIFO size mismatch for CB {}: expected {}, got {}\n", i, fifo_size, local_interface.fifo_size);
             while (true);  // Purposefully hang the kernel if FIFO size did not arrive correctly
         }
         if (write) {
             if (local_interface.fifo_num_pages != fifo_num_pages) {
                 DPRINT << "FIFO num pages mismatch for CB " << i << ": expected " << fifo_num_pages << ", got "
                        << local_interface.fifo_num_pages << ENDL();
+                DEVICE_PRINT(
+                    "FIFO num pages mismatch for CB {}: expected {}, got {}\n",
+                    i,
+                    fifo_num_pages,
+                    local_interface.fifo_num_pages);
                 while (true);  // Purposefully hang the kernel if FIFO num pages did not arrive correctly
             }
         }
         if (local_interface.fifo_page_size != fifo_page_size) {
             DPRINT << "FIFO page size mismatch for CB " << i << ": expected " << fifo_page_size << ", got "
                    << local_interface.fifo_page_size << ENDL();
+            DEVICE_PRINT(
+                "FIFO page size mismatch for CB {}: expected {}, got {}\n",
+                i,
+                fifo_page_size,
+                local_interface.fifo_page_size);
             while (true);  // Purposefully hang the kernel if FIFO page size did not arrive correctly
         }
         if (local_interface.tiles_acked_received_init != 0) {
             DPRINT << "Tiles acked received init mismatch for CB " << i << ": expected 0, got "
                    << local_interface.tiles_acked_received_init << ENDL();
+            DEVICE_PRINT(
+                "Tiles acked received init mismatch for CB {}: expected 0, got {}\n",
+                i,
+                local_interface.tiles_acked_received_init);
             while (true);  // Purposefully hang the kernel if tiles acked received init did not arrive correctly
         }
         if (init_wr_tile_ptr) {
             if (local_interface.fifo_wr_tile_ptr != 0) {
                 DPRINT << "FIFO write tile pointer mismatch for CB " << i << ": expected 0, got "
                        << local_interface.fifo_wr_tile_ptr << ENDL();
+                DEVICE_PRINT(
+                    "FIFO write tile pointer mismatch for CB {}: expected 0, got {}\n",
+                    i,
+                    local_interface.fifo_wr_tile_ptr);
                 while (true);  // Purposefully hang the kernel if FIFO write tile pointer did not arrive correctly
             }
         }
@@ -79,12 +124,24 @@ uint32_t get_clock_lo() {
 
 template <bool read, bool write, bool init_wr_tile_ptr>
 void perform_test(uint32_t initial_value) {
-    uint32_t mask = get_arg_val<uint32_t>(0);
+    // Mask split into 32-bit halves for RISC-V efficiency (setup_local_cb_read_write_interfaces)
+    // mask_high only used on Blackhole (Wormhole uses mask_low only)
+    uint32_t mask_low = get_arg_val<uint32_t>(0);
+    uint32_t mask_high = get_arg_val<uint32_t>(1);
+    uint64_t mask = (static_cast<uint64_t>(mask_high) << 32) | mask_low;
     DPRINT << "Performing test with read: " << static_cast<uint32_t>(read)
            << ", write: " << static_cast<uint32_t>(write)
-           << ", init_wr_tile_ptr: " << static_cast<uint32_t>(init_wr_tile_ptr) << ", mask: " << mask << ENDL();
+           << ", init_wr_tile_ptr: " << static_cast<uint32_t>(init_wr_tile_ptr) << ", mask_low: " << mask_low
+           << ", mask_high: " << mask_high << ENDL();
+    DEVICE_PRINT(
+        "Performing test with read: {}, write: {}, init_wr_tile_ptr: {}, mask_low: {}, mask_high: {}\n",
+        static_cast<uint32_t>(read),
+        static_cast<uint32_t>(write),
+        static_cast<uint32_t>(init_wr_tile_ptr),
+        mask_low,
+        mask_high);
 
-    uint32_t tt_l1_ptr* cb_l1_base = get_arg_val<uint32_t tt_l1_ptr*>(1);
+    uint32_t tt_l1_ptr* cb_l1_base = get_arg_val<uint32_t tt_l1_ptr*>(2);
 
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS * 4; i++) {
         ((volatile uint32_t*)cb_l1_base)[i] = initial_value + i;
@@ -95,9 +152,15 @@ void perform_test(uint32_t initial_value) {
     }
 
     uint32_t start_time = get_clock_lo();
-    setup_local_cb_read_write_interfaces<read, write, init_wr_tile_ptr>(cb_l1_base, 0, mask);
+    // Initialize CBs 0-31
+    setup_local_cb_read_write_interfaces<read, write, init_wr_tile_ptr, false>(cb_l1_base, 0, mask_low);
+#ifdef ARCH_BLACKHOLE
+    // Initialize CBs 32-63
+    setup_local_cb_read_write_interfaces<read, write, init_wr_tile_ptr, false>(cb_l1_base, 32, mask_high);
+#endif
     uint32_t end_time = get_clock_lo();
     DPRINT << "Time taken for setup: " << (end_time - start_time) << " cycles" << ENDL();
+    DEVICE_PRINT("Time taken for setup: {} cycles\n", (end_time - start_time));
 
     check_cb_values(read, write, init_wr_tile_ptr, initial_value, mask);
 }

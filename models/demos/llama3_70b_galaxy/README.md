@@ -26,7 +26,7 @@ Read more about this model at the huggingface page for [Llama-3.3-70B-Instruct](
 #### Option 1: From Meta or Huggingface-cli
 You can download llama models [directly from Meta](https://www.llama.com/llama-downloads/), or through the `huggingface-cli` via:
 ```
-huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3-70B-Instruct
+huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3.3-70B-Instruct
 ```
 - **The downloaded weights directories** include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
 
@@ -43,6 +43,7 @@ export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
 ```
 ```
 # If you manually downloaded the weight files
+# Make sure directory contains llama name: Llama-3.3-70B-Instruct
 export HF_MODEL=<PATH_TO_HF_WEIGHTS>
 ```
 
@@ -169,7 +170,7 @@ Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/de
 #### Running the vLLM server
 To run a vLLM server on a Galaxy system with Llama-3.3-70B you can execute the following command:
 ```
-VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}' --num_scheduler_steps 30
+VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}'
 ```
 
 After the server is up and running you can interact with it by sending prompt files.

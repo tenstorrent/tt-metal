@@ -4,7 +4,7 @@
 
 * still in development, so it might not work seamlessly
 * useful for hang debug
-* if your test hangs, kill the process and run `./tools/tt-triage.py` --verbosity=4 --dev=0 to get stack traces on all RISCs on all cores (script is inside tt-metal repo)
+* if your test hangs, keep the process running, open new terminal and run `./tools/tt-triage.py --verbosity=4 --dev=0` to get stack traces on all RISCs on all cores (script is inside tt-metal repo)
 
 
 ## DPRINT
@@ -13,7 +13,7 @@ https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/kernel_print.html
 
 * useful for deterministic hang debug and pcc issues
 * simple example:
-    * include `debug/dprint.h` header in your kernel
+    * include `api/debug/dprint.h` header in your kernel
     * print variable from a kernel: `DPRINT << “my variable is ” << my_variable << ENDL();`
     * add `TT_METAL_DPRINT_CORES="(0,0)"`  to your pytest command to output dprints from the first core
 

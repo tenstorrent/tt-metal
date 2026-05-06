@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -185,33 +185,34 @@ def run_all_broadcast_impl(
         input_tensor_mesh_list.append(input_tensor_mesh)
 
     tt_out_tensor_list = []
-    if trace_mode:
-        tt_out_tensor = run_with_trace(
-            mesh_device,
-            all_broadcast_topology,
-            input_tensor_mesh_list[0],
-            num_links,
-            output_mem_config,
-            cluster_axis=cluster_axis,
-            num_iter=num_iters,
-            subdevice_id=worker_sub_device_id,
-        )
-        tt_out_tensor_list.append(tt_out_tensor)
-    else:
-        for i in range(num_iters):
-            tt_out_tensors = ttnn.all_broadcast(
-                input_tensor_mesh_list[i],
-                num_links=num_links,
-                memory_config=output_mem_config,
+    with mesh_device.cache_entries_counter.measure():
+        if trace_mode:
+            tt_out_tensor = run_with_trace(
+                mesh_device,
+                all_broadcast_topology,
+                input_tensor_mesh_list[0],
+                num_links,
+                output_mem_config,
                 cluster_axis=cluster_axis,
-                topology=all_broadcast_topology,
+                num_iter=num_iters,
                 subdevice_id=worker_sub_device_id,
             )
-            tt_out_tensor_list.append(tt_out_tensors)
+            tt_out_tensor_list.append(tt_out_tensor)
+        else:
+            for i in range(num_iters):
+                tt_out_tensors = ttnn.all_broadcast(
+                    input_tensor_mesh_list[i],
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    cluster_axis=cluster_axis,
+                    topology=all_broadcast_topology,
+                    subdevice_id=worker_sub_device_id,
+                )
+                tt_out_tensor_list.append(tt_out_tensors)
 
-        logger.info(f"Waiting for op")
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-        logger.info(f"Done op")
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            logger.info(f"Done op")
 
     passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
@@ -231,8 +232,8 @@ def run_all_broadcast_impl(
                     passed = False
                     assert eq, f"{i} FAILED: {output}"
     assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == 1 or mesh_device.cache_entries_counter.total == num_iters
+    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
     mesh_device.reset_sub_device_stall_group()
     if use_sub_devices:
         mesh_device.clear_loaded_sub_device_manager()
@@ -270,12 +271,21 @@ def run_all_broadcast_impl(
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
         (4, 1, [2, 2, 2, 16, 16], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        (
+            4,
+            1,
+            [1, 16, 1, 16, 512],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ),
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_broadcast(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     num_links,
@@ -287,7 +297,7 @@ def test_all_broadcast(
     function_level_defaults,
 ):
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,
@@ -319,8 +329,9 @@ def test_all_broadcast(
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10000}], indirect=True
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_broadcast_trace(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     output_shape,
@@ -335,7 +346,7 @@ def test_all_broadcast_trace(
         pytest.skip("bfloat8_b not supported for row-major")
 
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,
@@ -430,8 +441,9 @@ def test_all_broadcast_trace(
 )
 @pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_all_broadcast_sharded(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     output_shape,
     num_links,
@@ -449,7 +461,7 @@ def test_all_broadcast_sharded(
         pytest.skip("bfloat8_b not supported for row-major")
 
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,

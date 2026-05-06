@@ -1,0 +1,13 @@
+transformer_config:
+  model_type: "llama"
+  num_heads: 32
+  num_groups: 8  # GQA with 8 KV heads
+  embedding_dim: 4096
+  intermediate_dim: 14336
+  dropout_prob: 0.0
+  num_blocks: 32
+  vocab_size: 30_000  # LLaMA 3 vocab size, will be rounded up to be divisible by 32*8 (should be 150k but we don't support embedding layer parallelism yet)
+  max_sequence_length: 256
+  runner_type: default
+  theta: 500000.0
+  weight_tying: "disabled"

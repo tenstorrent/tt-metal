@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -29,14 +29,13 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "env_lib.hpp"
 #include "gmock/gmock.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -44,11 +43,15 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <distributed/mesh_device_impl.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -66,8 +69,7 @@ struct CBConfig {
 std::vector<CBHandle> initialize_dummy_circular_buffers(
     Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
     std::vector<CBHandle> cb_handles;
-    for (uint32_t i = 0; i < cb_configs.size(); i++) {
-        const CBConfig& cb_config = cb_configs[i];
+    for (const auto& cb_config : cb_configs) {
         const uint32_t cb_id = cb_config.cb_id;
         const uint32_t cb_num_pages = cb_config.num_pages;
         const uint32_t page_size = cb_config.page_size;
@@ -118,16 +120,16 @@ void verify_cb_config(
     MeshWorkload& workload,
     std::vector<CBConfig>& golden_cb_config,
     CoreRangeSet& crs) {
+    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
     std::vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size =
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& [device_range, _] : workload.get_programs()) {
         for (const auto& coord : device_range) {
-            if (!mesh_device->is_local(coord)) {
+            if (!mesh_device->impl().is_local(coord)) {
                 continue;
             }
-            auto device = mesh_device->get_device(coord);
+            auto* device = mesh_device->impl().get_device(coord);
             uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             for (const auto& core_range : crs.ranges()) {
                 for (const auto& core_coord : core_range) {
@@ -139,10 +141,10 @@ void verify_cb_config(
                         cb_config_vector);
 
                     uint32_t cb_addr = l1_unreserved_base;
-                    for (uint32_t i = 0; i < golden_cb_config.size(); i++) {
-                        const uint32_t index = golden_cb_config[i].cb_id * sizeof(uint32_t);
-                        const uint32_t cb_num_pages = golden_cb_config[i].num_pages;
-                        const uint32_t cb_size = cb_num_pages * golden_cb_config[i].page_size;
+                    for (const auto& config : golden_cb_config) {
+                        const uint32_t index = config.cb_id * sizeof(uint32_t);
+                        const uint32_t cb_num_pages = config.num_pages;
+                        const uint32_t cb_size = cb_num_pages * config.page_size;
                         const bool addr_match = cb_config_vector.at(index) == cb_addr;
                         const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                         const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
@@ -255,8 +257,8 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     for (int i = 0; i < num_workloads; i++) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
         for (const auto& device_coord : MeshCoordinateRange(mesh_device_->shape())) {
-            if (mesh_device_->is_local(device_coord)) {
-                IDevice* device = mesh_device_->get_device(device_coord);
+            if (mesh_device_->impl().is_local(device_coord)) {
+                IDevice* device = mesh_device_->impl().get_device(device_coord);
                 auto programs = utils::create_random_programs(
                     1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
                 workload->add_program(MeshCoordinateRange(device_coord, device_coord), std::move(*programs[0]));
@@ -373,6 +375,42 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
         }
     }
     Finish(mesh_device_->mesh_command_queue());
+}
+
+// 4x8 benchmark: 32 unique programs on 32 devices (1:1 mapping)
+// Expects parallel dispatch with thread pool.
+// This replicates the deepseek blitz case of 32 independent programs dispatched across 32 devices on a GLX
+TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
+    constexpr uint32_t num_programs = 32;
+    constexpr uint32_t num_devices = 32;
+
+    auto programs = tt::tt_metal::distributed::test::utils::create_benchmark_programs(
+        num_programs, mesh_device_->compute_with_storage_grid_size(), true);
+
+    std::vector<MeshCoordinateRange> devices;
+    devices.reserve(num_devices);
+    for (uint32_t d = 0; d < num_devices; d++) {
+        devices.emplace_back(MeshCoordinate{d / 8, d % 8});
+    }
+
+    MeshWorkload workload;
+    for (uint32_t d = 0; d < num_devices; d++) {
+        workload.add_program(devices[d], std::move(*programs[d]));
+    }
+
+    auto t0 = std::chrono::steady_clock::now();
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    auto t1 = std::chrono::steady_clock::now();
+    Finish(mesh_device_->mesh_command_queue());
+    auto t2 = std::chrono::steady_clock::now();
+
+    auto enqueue_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    auto finish_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+
+    log_info(tt::LogTest, "ParallelizationBenchmark: {} programs on {} devices", num_programs, num_devices);
+    log_info(tt::LogTest, "Enqueue time: {} ms", enqueue_ms);
+    log_info(tt::LogTest, "Finish time: {} ms", finish_ms);
+    log_info(tt::LogTest, "Total time: {} ms", enqueue_ms + finish_ms);
 }
 
 TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
@@ -519,13 +557,14 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
-    uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
+    uint32_t num_rows = mesh_device_->num_rows();
+    uint32_t num_rows_in_mesh_workload = num_rows / 2;
+    TT_FATAL(num_rows_in_mesh_workload > 0, "The MeshWorkload must be enqueued on at least one row.");
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0(
-        MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, num_cols_in_workload - 1});
+        MeshCoordinate{0, 0}, MeshCoordinate{num_rows_in_mesh_workload - 1, mesh_device_->num_cols() - 1});
     MeshCoordinateRange devices_1(
-        MeshCoordinate{0, num_cols_in_workload},
-        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+        MeshCoordinate{num_rows_in_mesh_workload, 0}, MeshCoordinate{num_rows - 1, mesh_device_->num_cols() - 1});
     mesh_workload.add_program(devices_0, std::move(*programs[0]));
     mesh_workload.add_program(devices_1, std::move(*programs[1]));
     std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
@@ -554,13 +593,13 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                     dst_vec,
                     output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                     device_coord);
-                if (device_coord[1] <= num_cols_in_workload - 1) {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 5);
+                if (device_coord[0] <= num_rows_in_mesh_workload - 1) {
+                    for (auto val : dst_vec) {
+                        EXPECT_EQ(static_cast<float>(val), 5);
                     }
                 } else {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(static_cast<float>(dst_vec[i]), 6);
+                    for (auto val : dst_vec) {
+                        EXPECT_EQ(static_cast<float>(val), 6);
                     }
                 }
             }
@@ -633,10 +672,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     }
     auto program_1 = initialize_dummy_program(worker_grid_size);
     auto mesh_workload = MeshWorkload();
-    MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, 0});
-    MeshCoordinateRange devices_1(
-        MeshCoordinate{0, mesh_device_->num_cols() - 1},
-        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, mesh_device_->num_cols() - 1});
     mesh_workload.add_program(devices_0, std::move(program));
     mesh_workload.add_program(devices_1, std::move(*program_1));
 
@@ -732,7 +769,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
 
-    for (const auto device : mesh_device_->get_devices()) {
+    for (auto* const device : mesh_device_->get_devices()) {
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values);
     }
 }
@@ -767,18 +804,18 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
     Finish(mesh_device_->mesh_command_queue());
 
     for (const auto& device_coord : devices_0) {
-        if (!mesh_device_->is_local(device_coord)) {
+        if (!mesh_device_->impl().is_local(device_coord)) {
             continue;
         }
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->impl().get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_0);
     }
 
     for (const auto& device_coord : devices_1) {
-        if (!mesh_device_->is_local(device_coord)) {
+        if (!mesh_device_->impl().is_local(device_coord)) {
             continue;
         }
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->impl().get_device(device_coord);
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values_1);
     }
 }

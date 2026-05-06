@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -6,17 +6,17 @@
 #include <optional>
 
 #include "fd_kernel.hpp"
-#include "impl/context/metal_context.hpp"
+#include "impl/context/context_descriptor.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct dispatch_s_static_config_t {
     std::optional<uint32_t> cb_base;
     std::optional<uint32_t> cb_log_page_size;
     std::optional<uint32_t> cb_size;
     std::optional<uint32_t> my_dispatch_cb_sem_id;
+    std::optional<uint32_t> dispatch_d_shutdown_sem_id;
     std::optional<uint32_t> dispatch_s_sync_sem_base_addr;
 
     std::optional<uint32_t> mcast_go_signal_addr;
@@ -36,7 +36,17 @@ struct dispatch_s_dependent_config_t {
 class DispatchSKernel : public FDKernel {
 public:
     DispatchSKernel(
-        int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection);
+        int node_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        const ContextDescriptor& descriptor,
+        dispatch_core_manager& dispatch_core_manager,
+        const GetControlPlaneFn& get_control_plane = {},
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
+        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
+        const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
@@ -49,5 +59,4 @@ private:
     dispatch_s_dependent_config_t dependent_config_;
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -1,51 +1,37 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "device/tilize_with_val_padding_op.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "tilize_with_val_padding_common.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
-namespace operations::data_movement {
+ttnn::Tensor tilize_with_val_padding(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<uint32_t>& output_padded_shape,
+    tt::tt_metal::PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<DataType> output_dtype = std::nullopt,
+    bool use_multicore = true,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-struct ExecuteTilizeWithValPadding {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::SmallVector<uint32_t>& output_padded_shape,
-        PadValue pad_value,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = true);
+ttnn::Tensor tilize_with_val_padding(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape,
+    tt::tt_metal::PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<DataType> output_dtype = std::nullopt,
+    bool use_multicore = true,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& output_padded_shape,
-        PadValue pad_value,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = true);
-};
-
-struct ExecuteTilizeWithZeroPadding {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = true);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto tilize_with_val_padding = ttnn::
-    register_operation<"ttnn::tilize_with_val_padding", ttnn::operations::data_movement::ExecuteTilizeWithValPadding>();
-
-constexpr auto tilize_with_zero_padding = ttnn::register_operation<
-    "ttnn::tilize_with_zero_padding",
-    ttnn::operations::data_movement::ExecuteTilizeWithZeroPadding>();
+ttnn::Tensor tilize_with_zero_padding(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<DataType> output_dtype = std::nullopt,
+    bool use_multicore = true,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn

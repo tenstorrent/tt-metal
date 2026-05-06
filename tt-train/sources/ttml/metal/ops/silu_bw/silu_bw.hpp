@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,11 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::silu_bw {
+namespace ttml::metal {
 
-struct SiLUBackwardOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Tensor& dL_dout_tensor);
-};
+ttnn::Tensor silu_bw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& dL_dout_tensor,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 
-}  // namespace ttml::metal::ops::silu_bw
+}  // namespace ttml::metal

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@ namespace ttsl {
 template <typename E>
     requires std::is_enum_v<E>
 constexpr auto as_underlying_type(E e) {
-    return static_cast<typename std::underlying_type<E>::type>(e);
+    return static_cast<std::underlying_type_t<E>>(e);
 }
 
 }  // namespace ttsl

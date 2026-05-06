@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "batch_norm_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt_stl/assert.hpp>
@@ -18,18 +19,18 @@ DeviceComputeKernelConfig resolve_compute_kernel_config(
         input.storage_type());
 
     const auto arch = input.device()->arch();
-    const auto input_data_format = datatype_to_dataformat_converter(input.dtype());
-    const auto default_math_fidelity = MathFidelity::HiFi4;
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto default_fp32_acc_math_fidelity =
+        (arch == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     const auto default_approx_mode = false;
-    const auto default_fp32_acc = input_data_format == tt::DataFormat::UInt32 ||
-                                  input_data_format == tt::DataFormat::Int32 ||
-                                  input_data_format == tt::DataFormat::Float32;
+    const auto default_fp32_acc = true;
     const auto default_l1_acc = true;
     const auto default_dst_full_sync_en = false;
     return init_device_compute_kernel_config(
         arch,
         compute_kernel_config,
-        default_math_fidelity,
+        default_fp32_acc_math_fidelity,
         default_approx_mode,
         default_fp32_acc,
         default_l1_acc,

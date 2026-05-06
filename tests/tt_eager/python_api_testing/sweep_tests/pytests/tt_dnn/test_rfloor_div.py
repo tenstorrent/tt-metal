@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023-24 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023-24 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest

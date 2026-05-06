@@ -1,10 +1,12 @@
-set(UNIT_TESTS_MISC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_tilize_untilize.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 # Create the test executable
 add_executable(unit_tests_misc ${UNIT_TESTS_MISC_SRC})
 
 # Enable unity build for the executable
 TT_ENABLE_UNITY_BUILD(unit_tests_misc)
+target_precompile_headers(unit_tests_misc REUSE_FROM metal_common_pch)
 
 # Link libraries
 target_link_libraries(

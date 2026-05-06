@@ -1,67 +1,87 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/reduction/prod/device/prod_op_all.hpp"
-#include <tt-metalium/constants.hpp>
+#include "prod_all_device_operation.hpp"
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace tt {
-using namespace constants;
-namespace operations {
-namespace primary {
+namespace ttnn::prim {
 
-tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
-    const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& output) {
-    tt::tt_metal::Program program{};
+using namespace tt;
+using namespace tt::tt_metal;
+
+ProgramDescriptor ProdAllDeviceOperation::ProdAllProgramFactory::create_descriptor(
+    const ProdAllParams& /*operation_attributes*/, const ProdAllInputs& tensor_args, Tensor& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    auto& output = tensor_return_value;
+
+    ProgramDescriptor desc;
 
     CoreRange core({0, 0}, {0, 0});
+    CoreRangeSet core_ranges(core);
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    uint32_t single_tile_size = tile_size(cb_data_format);
 
-    uint32_t num_tiles = a.physical_volume() / TILE_HW;
-
-    // This should allocate a DRAM buffer on the device
+    uint32_t num_tiles = input.physical_volume() / input.tensor_spec().tile().get_tile_hw();
 
     uint32_t num_input_tiles = 2;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_0, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_0, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_tiles * single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    tt_metal::CircularBufferConfig cb_inter_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_2, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_2, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_inter_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_tiles * single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    uint32_t output_cb_index = tt::CBIndex::c_3;
+    constexpr uint32_t output_cb_index = CBIndex::c_3;
     uint32_t num_output_tiles = 2;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-            .set_page_size(output_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_output_tiles * single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
-    auto src_buffer = a.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
-    tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-        core,
-        tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_ranges;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        core,
-        tt_metal::WriterDataMovementConfig{writer_compile_time_args});
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_ranges;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     std::vector<uint32_t> compute_kernel_args = {
         num_tiles,  // per_core_block_cnt
@@ -70,45 +90,27 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
-    tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp",
-        core,
-        tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args});
-
-    SetRuntimeArgs(program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles, 0});
-
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), /*num_tiles=*/1, 0});
-
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const void* operation,
-                                              const tt::tt_metal::Program& program,
-                                              const std::vector<tt::tt_metal::Tensor>& input_tensors,
-                                              const std::vector<std::optional<const tt::tt_metal::Tensor>>&,
-                                              const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-
-        auto dst_buffer = output_tensors.at(0).buffer();
-
-        CoreCoord core = {0, 0};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-        }
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_ranges;
+    compute_desc.compile_time_args = std::move(compute_kernel_args);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = false,
+        .math_approx_mode = math_approx_mode,
     };
-    return {std::move(program), override_runtime_args_callback};
+
+    CoreCoord core_coord = {0, 0};
+    reader_desc.emplace_runtime_args(core_coord, {src_buffer, num_tiles, 0u});
+    writer_desc.emplace_runtime_args(core_coord, {dst_buffer, /*num_tiles=*/1u, 0u});
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+
+    return desc;
 }
 
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+}  // namespace ttnn::prim

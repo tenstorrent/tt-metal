@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -43,6 +43,13 @@ def main():
         default=True,
     )
     parser.add_option(
+        "--op-support-count",
+        dest="op_support_count",
+        action="store",
+        help="Maximum number of ops that can be supported by the profiler",
+        type="int",
+    )
+    parser.add_option(
         "--child-functions",
         type="string",
         help="Comma separated list of child function to have their duration included for parent OPs",
@@ -64,10 +71,17 @@ def main():
         default=False,
     )
     parser.add_option(
-        "--cpp-post-process",
-        dest="cpp_post_process",
+        "--enable-sum-profiling",
+        dest="do_sum",
         action="store_true",
-        help="Use C++ to post-process profiling data",
+        help="Enable sum profiling",
+        default=False,
+    )
+    parser.add_option(
+        "--no-runtime-analysis",
+        dest="no_runtime_analysis",
+        action="store_true",
+        help="Disable C++ post-processing of profiling data (enabled by default)",
         default=False,
     )
     parser.add_option(
@@ -99,6 +113,20 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--disable-device-data-dump-to-files",
+        dest="disable_device_data_dump_to_files",
+        action="store_true",
+        help="Disable dumping collected device data to files",
+        default=False,
+    )
+    parser.add_option(
+        "--disable-device-data-push-to-tracy",
+        dest="disable_device_data_push_to_tracy",
+        action="store_true",
+        help="Disable pushing collected device data to Tracy GUI",
+        default=False,
+    )
+    parser.add_option(
         "--collect-noc-traces",
         dest="collect_noc_traces",
         action="store_true",
@@ -122,6 +150,14 @@ def main():
     )
     parser.add_option(
         "--tracy-tools-folder", dest="binary_folder", action="store", help="Tracy tools folder", type="string"
+    )
+    parser.add_option(
+        "--profiler-capture-perf-counters",
+        type="string",
+        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1, instrn, all",
+        action="callback",
+        callback=split_comma_list,
+        dest="perf_counter_groups",
     )
 
     if not sys.argv[1:]:
@@ -176,8 +212,17 @@ def main():
     if options.profile_dispatch_cores:
         os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
 
+    if options.do_sum:
+        os.environ["TT_METAL_PROFILER_SUM"] = "1"
+
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+
+    if options.disable_device_data_dump_to_files:
+        os.environ["TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES"] = "1"
+
+    if options.disable_device_data_push_to_tracy:
+        os.environ["TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY"] = "1"
 
     if options.sync_host_device:
         os.environ["TT_METAL_PROFILER_SYNC"] = "1"
@@ -191,11 +236,96 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
-    if options.cpp_post_process:
+    if options.perf_counter_groups:
+        # Bit positions match PROFILE_PERF_COUNTERS_* in perf_counters.hpp. l1_2/3/4 are BH-only.
+        counter_group_bits = {
+            "fpu": 0,
+            "pack": 1,
+            "unpack": 2,
+            "l1_0": 3,
+            "l1_1": 4,
+            "instrn": 5,
+            "l1_2": 6,
+            "l1_3": 7,
+            "l1_4": 8,
+        }
+
+        bitfield = 0
+        for group in options.perf_counter_groups:
+            group_lower = group.lower()
+            if group_lower == "all":
+                # fpu | pack | unpack | l1_0 | instrn (L1 bank 1 requires a separate run).
+                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)
+                break
+            elif group_lower in counter_group_bits:
+                bitfield |= 1 << counter_group_bits[group_lower]
+            else:
+                logger.warning(
+                    f"Unknown counter group '{group}'. "
+                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
+                )
+
+        # L1 bank mutual exclusion (one mux, one active bank) is enforced in rtoptions.cpp.
+
+        # Reject BH-only groups on non-BH architectures.
+        bh_only_groups = {"l1_2", "l1_3", "l1_4"}
+        requested_groups = {group.lower() for group in options.perf_counter_groups}
+        requested_bh_only = sorted(requested_groups & bh_only_groups)
+        if requested_bh_only:
+            declared_arch = next(
+                (
+                    os.environ.get(env_var)
+                    for env_var in ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
+                    if os.environ.get(env_var)
+                ),
+                None,
+            )
+            if declared_arch is None:
+                try:
+                    import ttnn
+
+                    device = ttnn.open_device(device_id=0)
+                    declared_arch = str(device.arch()).split(".")[-1]
+                    ttnn.close_device(device)
+                except Exception:
+                    logger.debug("Failed to detect device arch via ttnn")
+            is_blackhole = declared_arch is not None and declared_arch.strip().lower() in ("blackhole",)
+            if not is_blackhole:
+                arch_desc = declared_arch if declared_arch is not None else "undeclared"
+                raise ValueError(
+                    f"Performance counter groups {', '.join(requested_bh_only)} are supported only on Blackhole, "
+                    f"but device arch is {arch_desc}."
+                )
+
+        if bitfield > 0:
+            os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
+            logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
+
+    if not (
+        options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
+    ):
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
+    else:
+        reasons = []
+        if options.no_runtime_analysis:
+            reasons.append("--no-runtime-analysis")
+        if options.do_sum:
+            reasons.append("--enable-sum-profiling")
+        if options.profile_dispatch_cores:
+            reasons.append("--profile-dispatch-cores")
+        if options.perf_counter_groups:
+            reasons.append("--profiler-capture-perf-counters")
+
+        reason_str = ", ".join(reasons)
+        logger.warning(
+            f"Skipping runtime analysis (C++ post-processing) due to conflicting options ({reason_str}). Falling back to legacy Python processing."
+        )
 
     if options.device_memory_profiler:
         os.environ["TT_METAL_MEM_PROFILER"] = "1"
+
+    if options.op_support_count:
+        os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(options.op_support_count)
 
     if len(args) > 0:
         doReport = False
@@ -233,10 +363,10 @@ def main():
                         "__package__": None,
                         "__cached__": None,
                     }
-                except ValueError as exc:
+                except (ValueError, SyntaxError) as exc:
                     trySystem = True
                 if trySystem:
-                    subprocess.run(progname, shell=True, check=True)
+                    subprocess.run(" ".join(args), shell=True, check=True)
 
             if options.partial:
                 tracy_state.doPartial = True
@@ -255,14 +385,13 @@ def main():
             originalArgs.remove("-r")
             osCmd = " ".join(originalArgs[1:])
 
-            testCommand = f"python3 -m tracy {osCmd}"
+            testCommand = f"{sys.executable} -m tracy {osCmd}"
 
             envVars = dict(os.environ)
             if options.device:
                 envVars["TT_METAL_DEVICE_PROFILER"] = "1"
-            else:
-                if "TT_METAL_DEVICE_PROFILER" in envVars.keys():
-                    del envVars["TT_METAL_DEVICE_PROFILER"]
+            elif "TT_METAL_DEVICE_PROFILER" in envVars.keys():
+                del envVars["TT_METAL_DEVICE_PROFILER"]
 
             if port:
                 envVars["TRACY_PORT"] = port

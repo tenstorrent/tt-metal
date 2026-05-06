@@ -1,27 +1,25 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
 
 #pragma once
 
-#include <tt-metalium/core_coord.hpp>
-
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
+#include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/global_semaphore.hpp"
-
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_op.hpp"
 #include "ttnn/distributed/types.hpp"
+
+#include <tt-metalium/core_coord.hpp>
 
 namespace composite_common {
 
@@ -44,7 +42,12 @@ ttnn::Tensor composite_reduce_scatter(
     tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool use_l1_small_for_semaphores = false);
 
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,
@@ -52,7 +55,8 @@ ttnn::Tensor composite_all_gather(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    bool use_l1_small_for_semaphores = false);
 // same as above but for vector of mesh
 std::vector<ttnn::Tensor> composite_all_gather(
     const std::vector<ttnn::Tensor>& input_tensors,
@@ -60,7 +64,8 @@ std::vector<ttnn::Tensor> composite_all_gather(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    bool use_l1_small_for_semaphores = false);
 
 ttnn::Tensor composite_all_to_all(
     ttnn::Tensor input_tensor,
@@ -68,6 +73,7 @@ ttnn::Tensor composite_all_to_all(
     int32_t out_dim,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_l1_small_for_semaphores = false);
 
 }  // namespace composite_common

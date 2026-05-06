@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,14 +8,14 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteHCSumReduce::invoke(
+ttnn::Tensor hc_sum_reduce(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
-    const std::optional<MathFidelity> math_fidelity) {
+    const std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
     return ttnn::prim::hc_sum_reduce(input, memory_config, dtype, math_fidelity);
 }
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::experimental

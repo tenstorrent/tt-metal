@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "compile_time_args.h"
-#include "dataflow_api.h"
+#include "api/compile_time_args.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // run-time args

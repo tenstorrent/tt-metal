@@ -83,7 +83,7 @@ Integer operations
   add_int_tile
   sub_int_tile
   mul_int_tile
-  rsub_int32_tile
+  rsub_int_tile
   gcd_tile
   lcm_tile
   remainder_tile
@@ -115,7 +115,6 @@ Comparison and logical operations
   unary_le_tile
   unary_max_tile
   unary_min_tile
-  max_tile
   binary_max_tile
   binary_min_tile
   ltz_tile
@@ -150,7 +149,6 @@ Rounding and ceiling functions
 
 .. toctree::
 
-  ceil_tile
   round_tile
   clamp_tile
   threshold_tile
@@ -227,6 +225,7 @@ Data manipulation and processing
   identity_tile
   mask_tile
   where_tile
+  addcmul_tile
   reshuffle_rows_tile
   typecast_tile
   dropout_tile

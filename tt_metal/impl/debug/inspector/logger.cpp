@@ -1,43 +1,51 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include <iomanip>
 #include <chrono>
 
 namespace tt::tt_metal::inspector {
 
-Logger::Logger(const std::filesystem::path& logging_path)
-    : initialized(false)
-    , logging_path(logging_path)
-{
+Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> rank) : logging_path(logging_path) {
     constexpr std::string_view additional_text =
         "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment "
         "variables. Note that this will not throw an exception, but will log a warning instead. Running without "
         "Inspector logger will impact tt-triage functionality.";
 
+    // If rank is provided, append it to the logging path to allow multiple instances of the inspector on the same
+    // machine
+    if (rank.has_value()) {
+        this->logging_path /= "_rank_" + std::to_string(*rank);
+    }
+
     try {
         // Recreate the logging directory if it doesn't exist or clear it if it does.
-        std::filesystem::remove_all(logging_path);
-        std::filesystem::create_directories(logging_path);
+        std::filesystem::remove_all(this->logging_path);
+        std::filesystem::create_directories(this->logging_path);
     }
     catch (const std::exception& e) {
         TT_INSPECTOR_THROW(
-            "Failed to create logging directory: {}. Error: {}\n{}", logging_path.string(), e.what(), additional_text);
+            "Failed to create logging directory: {}. Error: {}\n{}",
+            this->logging_path.string(),
+            e.what(),
+            additional_text);
     }
 
     // Write startup information to the inspector files.
     {
         try {
-            std::ofstream inspector_startup_ostream(logging_path / "startup.yaml", std::ios::trunc);
+            std::ofstream inspector_startup_ostream(this->logging_path / "startup.yaml", std::ios::trunc);
 
             if (!inspector_startup_ostream.is_open()) {
                 TT_INSPECTOR_THROW(
                     "Failed to create inspector file: {}\n{}",
-                    (logging_path / "startup.yaml").string(),
+                    (this->logging_path / "startup.yaml").string(),
                     additional_text);
             } else {
                 // Log current system time and high_resolution_clock time_point
@@ -61,25 +69,31 @@ Logger::Logger(const std::filesystem::path& logging_path)
         }
     }
 
-    programs_ostream.open(logging_path / "programs_log.yaml", std::ios::trunc);
+    programs_ostream.open(this->logging_path / "programs_log.yaml", std::ios::trunc);
     if (!programs_ostream.is_open()) {
         TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}", (logging_path / "programs_log.yaml").string(), additional_text);
+            "Failed to create inspector file: {}\n{}",
+            (this->logging_path / "programs_log.yaml").string(),
+            additional_text);
     }
-    kernels_ostream.open(logging_path / "kernels.yaml", std::ios::trunc);
+    kernels_ostream.open(this->logging_path / "kernels.yaml", std::ios::trunc);
     if (!kernels_ostream.is_open()) {
         TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}", (logging_path / "kernels.yaml").string(), additional_text);
+            "Failed to create inspector file: {}\n{}", (this->logging_path / "kernels.yaml").string(), additional_text);
     }
-    mesh_devices_ostream.open(logging_path / "mesh_devices_log.yaml", std::ios::trunc);
+    mesh_devices_ostream.open(this->logging_path / "mesh_devices_log.yaml", std::ios::trunc);
     if (!mesh_devices_ostream.is_open()) {
         TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}", (logging_path / "mesh_devices_log.yaml").string(), additional_text);
+            "Failed to create inspector file: {}\n{}",
+            (this->logging_path / "mesh_devices_log.yaml").string(),
+            additional_text);
     }
-    mesh_workloads_ostream.open(logging_path / "mesh_workloads_log.yaml", std::ios::trunc);
+    mesh_workloads_ostream.open(this->logging_path / "mesh_workloads_log.yaml", std::ios::trunc);
     if (!mesh_workloads_ostream.is_open()) {
         TT_INSPECTOR_THROW(
-            "Failed to create inspector file: {}\n{}", (logging_path / "mesh_workloads_log.yaml").string(), additional_text);
+            "Failed to create inspector file: {}\n{}",
+            (this->logging_path / "mesh_workloads_log.yaml").string(),
+            additional_text);
     }
 
     initialized = true;
@@ -212,11 +226,11 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
             mesh_devices_ostream << "    parent_mesh_id: " << *mesh_device_data.parent_mesh_id << "\n";
         }
 
-        auto mesh_device = mesh_device_data.mesh_device;
+        const auto* mesh_device = mesh_device_data.mesh_device;
         if (mesh_device) {
             mesh_devices_ostream << "    devices: [";
             bool first = true;
-            for (const auto& device : mesh_device->get_devices()) {
+            for (const auto& device : mesh_device->get_view().get_devices()) {
                 if (!first) {
                     mesh_devices_ostream << ", ";
                 }
@@ -225,7 +239,7 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
             }
             mesh_devices_ostream << "]\n";
 
-            auto& shape = mesh_device->get_view().shape();
+            const auto& shape = mesh_device->get_view().shape();
             mesh_devices_ostream << "    shape: [";
             for (size_t i = 0; i < shape.dims(); ++i) {
                 if (i > 0) {
@@ -307,7 +321,7 @@ void Logger::log_mesh_workload_add_program(const MeshWorkloadData& mesh_workload
         mesh_workloads_ostream << "    program_id: " << program_id << "\n";
         mesh_workloads_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
         mesh_workloads_ostream << "    coordinates:\n";
-        for (auto& coordinate : device_range) {
+        for (const auto& coordinate : device_range) {
             auto vector = coordinate.coords();
             mesh_workloads_ostream << "      - [";
             for (size_t i = 0; i < vector.size(); ++i) {
@@ -348,6 +362,27 @@ void Logger::log_mesh_workload_set_program_binary_status(const MeshWorkloadData&
         mesh_workloads_ostream.flush();
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh workload set program binary status: {}", e.what());
+    }
+}
+
+void Logger::log_runtime_entry(const MeshWorkloadRuntimeEntry& entry) noexcept {
+    if (!initialized) {
+        return;
+    }
+    try {
+        mesh_workloads_ostream << "- runtime_entry:\n";
+        mesh_workloads_ostream << "    mesh_workload_id: " << entry.workload_id << "\n";
+        mesh_workloads_ostream << "    runtime_id: " << entry.runtime_id << "\n";
+        mesh_workloads_ostream << "    name: " << entry.operation_name << "\n";
+        mesh_workloads_ostream << "    parameters: '" << stringify_tensor_specs(entry.tensor_specs) << "'\n";
+        // 0xFFFFFFFF is the "not traced" sentinel, matching rpc.capnp's MeshWorkloadRuntimeEntry.traceId default.
+        mesh_workloads_ostream << "    trace_id: " << (entry.trace_id.has_value() ? **entry.trace_id : 0xFFFFFFFFu)
+                               << "\n";
+        mesh_workloads_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                               << "\n";
+        mesh_workloads_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log runtime entry: {}", e.what());
     }
 }
 

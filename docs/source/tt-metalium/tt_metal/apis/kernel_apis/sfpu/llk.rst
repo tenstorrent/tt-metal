@@ -172,10 +172,10 @@ However note that ``v_if`` and alike works via predication. In other words, both
 .. code-block:: c++
 
     v_if (a < b) {
-        DPRINT << "a < b\n";
+        DEVICE_PRINT("a < b\n");
     } v_else {
         dst_reg[0] = b;
-        DPRINT << "a >= b\n";
+        DEVICE_PRINT("a >= b\n");
     }
     v_endif;
 
@@ -348,7 +348,7 @@ Returns the count of leading (left-most) zeros of ''v'' ignoring the sign bit.
 
 .. code-block:: c++
 
-    vFloat int_to_float(vInt in, int round_mode = 1)
+    vFloat int32_to_float(vInt in, int round_mode = 1)
     vUInt float_to_fp16a(vFloat in, int round_mode = 1)
     vUInt float_to_fp16b(vFloat in, int round_mode = 1)
     vUInt float_to_uint8(vFloat in, int round_mode = 1)
@@ -490,11 +490,11 @@ loads dst_reg[0] and dst_reg[1] into temporary LREGs (as expected).
 
 The compiler will not spill registers.  Exceeding the number of registers
 available will result in the cryptic: ``error: cannot store SFPU register
-(reigster spill?) - exiting!`` without a line number.
+(register spill?) - exiting!`` without a line number.
 
 The compiler does a reasonable job with lifetime analysis when assigning
 variables to registers.  Reloading or recalculating results helps the compiler
-free up and re-use registers and is a good way to correct a spilling error.
+free up and reuse registers and is a good way to correct a spilling error.
 
 Optimizer
 ---------
@@ -574,7 +574,7 @@ Register Spilling
 
 The compiler does not implement register spilling.  Since there are only 8 general purpose
 LRegs, running out of registers is not an uncommon occurrence.  If you see the
-following: ``error: cannot store SFPU register (reigster spill?) - exiting!``
+following: ``error: cannot store SFPU register (register spill?) - exiting!``
 you have most likely run out of registers.
 
 You can potentially spill registers by storing values to ``l_reg[]`` and

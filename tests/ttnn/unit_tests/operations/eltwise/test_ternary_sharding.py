@@ -1,10 +1,15 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
 import pytest
+from functools import partial
+
+from models.common.utility_functions import torch_random
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def torch_equal_nan(a, b):
@@ -1502,3 +1507,523 @@ def test_where_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, devic
     out_pt = torch.where(predicate_pt.bool(), true_pt, false_pt)
     out_tt = ttnn.where(predicate_tt, true_tt, false_tt)
     assert torch_equal_nan(ttnn.to_torch(out_tt), out_pt)
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    ([torch.bfloat16, ttnn.bfloat16],),
+)
+@pytest.mark.parametrize(
+    "config_permutation",
+    [
+        "hwb",  # predicate=HEIGHT, true=WIDTH, false=BLOCK
+        "bwh",  # predicate=BLOCK, true=WIDTH, false=HEIGHT
+        "whb",  # predicate=WIDTH, true=HEIGHT, false=BLOCK
+        "bhw",  # predicate=BLOCK, true=HEIGHT, false=WIDTH
+        "wbh",  # predicate=WIDTH, true=BLOCK, false=HEIGHT
+        "hbw",  # predicate=HEIGHT, true=BLOCK, false=WIDTH
+    ],
+)
+@pytest.mark.parametrize(
+    "out_strategy",
+    ["dram", "height", "width", "block"],
+)
+@pytest.mark.parametrize("predicate_sharded", [True, False])
+@pytest.mark.parametrize("true_sharded", [True, False])
+@pytest.mark.parametrize("false_sharded", [True, False])
+def test_where_ttt_identical_mixed_strategy(
+    device, dtype_pt, dtype_tt, config_permutation, out_strategy, predicate_sharded, true_sharded, false_sharded
+):
+    torch.manual_seed(0)
+    predicate_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
+    true_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
+    false_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
+    output_shape = (2, 7, 32 * 2, 4 * 32)  # [2, 7, 64, 128]
+
+    # Create base sharded memory configs with different strategies
+    height_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(2 * 32 * 2, 4 * 32),  # [128, 128]
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 6))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    width_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(2 * 7 * 32 * 2, 32),  # [896, 32]
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    block_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(2 * 32 * 2, 32),  # [128, 32]
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 6))}),  # 4 rows, 7 columns = 28 cores
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Map permutation string to strategies: h=HEIGHT, w=WIDTH, b=BLOCK
+    strategy_map = {"h": height_sharded_config, "w": width_sharded_config, "b": block_sharded_config}
+
+    predicate_strategy = config_permutation[0]
+    true_strategy = config_permutation[1]
+    false_strategy = config_permutation[2]
+
+    predicate_sharded_config = strategy_map[predicate_strategy]
+    true_sharded_config = strategy_map[true_strategy]
+    false_sharded_config = strategy_map[false_strategy]
+
+    torch_predicate = torch.randint(0, 2, predicate_shape, dtype=torch.bfloat16)
+    torch_true = torch.rand(true_shape, dtype=torch.bfloat16)
+    torch_false = torch.rand(false_shape, dtype=torch.bfloat16)
+
+    predicate_tensor = ttnn.from_torch(
+        torch_predicate,
+        dtype=dtype_tt,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    if predicate_sharded:
+        predicate_tensor = ttnn.to_memory_config(predicate_tensor, predicate_sharded_config)
+
+    true_tensor = ttnn.from_torch(
+        torch_true,
+        dtype=dtype_tt,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    if true_sharded:
+        true_tensor = ttnn.to_memory_config(true_tensor, true_sharded_config)
+
+    false_tensor = ttnn.from_torch(
+        torch_false,
+        dtype=dtype_tt,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    if false_sharded:
+        false_tensor = ttnn.to_memory_config(false_tensor, false_sharded_config)
+
+    # Select output memory config based on out_strategy
+    if out_strategy == "dram":
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    elif out_strategy == "height":
+        out_mem_config = height_sharded_config
+    elif out_strategy == "width":
+        out_mem_config = width_sharded_config
+    elif out_strategy == "block":
+        out_mem_config = block_sharded_config
+
+    torch_output_tensor = torch.where(torch_predicate.bool(), torch_true, torch_false)
+    output_tensor = ttnn.where(predicate_tensor, true_tensor, false_tensor, memory_config=out_mem_config)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert torch_equal_nan(output_tensor, torch_output_tensor)
+    assert output_tensor.shape == output_shape
+
+    # Test without explicit output memory config
+    output_tensor = ttnn.where(predicate_tensor, true_tensor, false_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert torch_equal_nan(output_tensor, torch_output_tensor)
+    assert output_tensor.shape == output_shape
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    ([torch.bfloat16, ttnn.bfloat16],),
+)
+def test_where_ttt_height_bcast_mixed_strategy_mixed_L1(device, dtype_pt, dtype_tt):
+    torch.manual_seed(0)
+    predicate_shape = torch.Size([2, 7, 32 * 2, 4 * 32])  # [2, 7, 64, 128]
+    true_shape = torch.Size([1, 7, 1, 4 * 32])  # [1, 7, 1, 128] - height broadcast
+    false_shape = torch.Size([1, 7, 1, 4 * 32])  # [1, 7, 1, 128] - height broadcast
+
+    predicate_sharded_config = ttnn.create_sharded_memory_config(
+        [2 * 32 * 2, 4 * 32],  # [128, 128]
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 6))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    true_sharded_config = ttnn.create_sharded_memory_config(
+        [7 * 32, 32],  # [224, 32]
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    false_sharded_config = ttnn.create_sharded_memory_config(
+        [7 * 32, 32],  # [224, 32]
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    import itertools
+
+    input_combinations = itertools.product(
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, predicate_sharded_config],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, true_sharded_config],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, false_sharded_config],
+        [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, predicate_sharded_config],
+    )
+
+    for pred_config, true_config, false_config, out_config in input_combinations:
+        torch_predicate = torch.randint(0, 2, predicate_shape, dtype=torch.bfloat16)
+        torch_true = torch.rand(true_shape, dtype=torch.bfloat16)
+        torch_false = torch.rand(false_shape, dtype=torch.bfloat16)
+
+        predicate_tensor = ttnn.from_torch(
+            torch_predicate,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=pred_config,
+        )
+
+        true_tensor = ttnn.from_torch(
+            torch_true,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=true_config,
+        )
+
+        false_tensor = ttnn.from_torch(
+            torch_false,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=false_config,
+        )
+
+        torch_output_tensor = torch.where(torch_predicate.bool(), torch_true, torch_false)
+        output_tensor = ttnn.where(predicate_tensor, true_tensor, false_tensor, memory_config=out_config)
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert torch_equal_nan(output_tensor, torch_output_tensor)
+        assert output_tensor.shape == predicate_shape
+
+        # Test without explicit output memory config
+        torch_output_tensor = torch.where(torch_predicate.bool(), torch_true, torch_false)
+        output_tensor = ttnn.where(predicate_tensor, true_tensor, false_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert torch_equal_nan(output_tensor, torch_output_tensor)
+        assert output_tensor.shape == predicate_shape
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    ([torch.bfloat16, ttnn.bfloat16],),
+)
+def test_ternary_sharded_bcast_identical_sdxl(device, dtype_pt, dtype_tt):
+    torch.manual_seed(0)
+    a_shape = torch.Size([1, 1, 4096, 640])
+    b_shape = torch.Size([1, 1, 4096, 640])
+    c_shape = torch.Size([1, 1, 4096, 640])
+
+    a_sharded_config = ttnn.create_sharded_memory_config(
+        [512, 128],
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 7))}),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_combinations = ((ttnn.L1_MEMORY_CONFIG, a_sharded_config, a_sharded_config),)
+
+    for a_config, b_config, c_config in input_combinations:
+        a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+        b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
+        c_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(c_shape)
+
+        a_tt = ttnn.from_torch(
+            a_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=a_config,
+        )
+        b_tt = ttnn.from_torch(
+            b_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=b_config,
+        )
+        c_tt = ttnn.from_torch(
+            c_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=c_config,
+        )
+
+        out_pt = torch.addcmul(a_pt, b_pt, c_pt)
+        out_tt_sharded = ttnn.addcmul(a_tt, b_tt, c_tt)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert_with_pcc(out_pt, out_tt_sharded)
+
+
+def test_ternary_reshard(device):
+    torch.manual_seed(0)
+    # Create input tensors (32x8192 = 1x256 tiles)
+    torch_a = torch.randn(32, 8192, dtype=torch.bfloat16)
+    torch_b = torch.randn(32, 8192, dtype=torch.bfloat16)
+    torch_c = torch.randn(32, 8192, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors on device (DRAM interleaved)
+    a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT)
+    b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT)
+    c = ttnn.from_torch(torch_c, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Shard both inputs to 64 cores (8x8 grid)
+    shard_spec_64 = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        (32, 128),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config_64 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec_64)
+
+    # Output shard spec: 32 cores (first 4 columns of 8x8 grid)
+    shard_spec_32 = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        (32, 256),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mem_config_32 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec_32)
+
+    expected = torch.addcmul(torch_a, torch_b, torch_c)
+    a_sharded = ttnn.to_memory_config(a, mem_config_64)
+    b_sharded = ttnn.to_memory_config(b, mem_config_64)
+    c_sharded = ttnn.to_memory_config(c, mem_config_64)
+    result = ttnn.addcmul(a_sharded, b_sharded, c_sharded, memory_config=mem_config_32)
+    result = ttnn.to_torch(result)
+    assert_with_pcc(expected, result)
+
+    a_sharded = ttnn.to_memory_config(a, mem_config_32)
+    b_sharded = ttnn.to_memory_config(b, mem_config_32)
+    c_sharded = ttnn.to_memory_config(c, mem_config_32)
+    result = ttnn.addcmul(a_sharded, b_sharded, c_sharded, memory_config=mem_config_64)
+    result = ttnn.to_torch(result)
+    assert_with_pcc(expected, result)
+
+
+@pytest.mark.parametrize(
+    "output_memory_config",
+    [
+        ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+    ],
+)
+@pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+def test_ternary_sharded_half_mem_config(device, input_shard_orientation, output_memory_config):
+    """Test ternary addcmul with generic sharded memory configs that inherit shard spec from inputs"""
+    torch.manual_seed(0)
+    torch_input_a = torch.rand((32, 32, 64), dtype=torch.bfloat16)
+    torch_input_b = torch.rand((32, 32, 64), dtype=torch.bfloat16)
+    torch_input_c = torch.rand((32, 32, 64), dtype=torch.bfloat16)
+    torch_output = torch.addcmul(torch_input_a, torch_input_b, torch_input_c)
+
+    # Create sharded input configuration
+    if output_memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        shard_config = ttnn.create_sharded_memory_config(
+            shape=(32, 64),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=input_shard_orientation,
+            use_height_and_width_as_shard_shape=True,
+        )
+    else:  # WIDTH_SHARDED or BLOCK_SHARDED
+        shard_config = ttnn.create_sharded_memory_config(
+            shape=(1024, 64),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.WIDTH
+            if output_memory_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            else ttnn.ShardStrategy.BLOCK,
+            orientation=input_shard_orientation,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device)
+    input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device)
+    input_c = ttnn.from_torch(torch_input_c, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device)
+
+    output = ttnn.addcmul(input_a, input_b, input_c, memory_config=output_memory_config)
+    output = ttnn.to_torch(output)
+    assert_with_pcc(torch_output, output)
+
+
+def test_ternary_bcast_sharded_output_half_mem_config(device):
+    """Test ternary addcmul broadcast with generic sharded memory config inheriting from sharded input"""
+    torch.manual_seed(0)
+    # Use same rank (4) for b/c as output so adjust_to_shape gets correct "height" volume when inheriting shard spec.
+    # a (2,7,64,128) + b,c (1,1,64,128) -> output (2,7,64,128)
+    torch_input_a = torch.rand((2, 7, 64, 128), dtype=torch.bfloat16)
+    torch_input_b = torch.rand((1, 1, 64, 128), dtype=torch.bfloat16)
+    torch_input_c = torch.rand((1, 1, 64, 128), dtype=torch.bfloat16)
+    torch_output = torch.addcmul(torch_input_a, torch_input_b, torch_input_c)
+
+    # Create height sharded config for inputs B and C (2 rows x 1 col grid); shard shape (32, 128) for height 64
+    b_shard_config = ttnn.create_sharded_memory_config(
+        shape=(32, 128),
+        core_grid=ttnn.CoreGrid(y=2, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=b_shard_config, device=device)
+    input_c = ttnn.from_torch(torch_input_c, layout=ttnn.TILE_LAYOUT, memory_config=b_shard_config, device=device)
+
+    output = ttnn.addcmul(input_a, input_b, input_c, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+    output = ttnn.to_torch(output)
+    assert_with_pcc(torch_output, output)
+
+    # swap a with b (a now sharded, b unsharded); need a shard config that fits a's shape (2,7,64,128) -> height 896
+    a_shard_config = ttnn.create_sharded_memory_config(
+        shape=(448, 128),  # 896/2 cores
+        core_grid=ttnn.CoreGrid(y=2, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_a_sharded = ttnn.from_torch(
+        torch_input_a, layout=ttnn.TILE_LAYOUT, memory_config=a_shard_config, device=device
+    )
+    input_b_dram = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.addcmul(input_a_sharded, input_b_dram, input_c, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+    output = ttnn.to_torch(output)
+    assert_with_pcc(torch_output, output)
+
+
+def test_ternary_resolve_mem_config_from_largest_shard_grid(device):
+    """Test that when memory_config is not passed, output config is resolved from the input with most cores.
+    Exercises resolve_mem_config_actual(): pick A/B/C with largest num_cores() (not grid.size())."""
+    torch.manual_seed(0)
+    # Same shape for addcmul; tensor (32, 32, 64) -> 1024 rows, 64 cols for HEIGHT sharding
+    shape = (32, 32, 64)
+    torch_input_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_b = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_c = torch.rand(shape, dtype=torch.bfloat16)
+    torch_output = torch.addcmul(torch_input_a, torch_input_b, torch_input_c)
+
+    # The input with most cores (input_b with 8 cores) for output config.
+    shard_config_2_cores = ttnn.create_sharded_memory_config(
+        shape=(512, 64),
+        core_grid=ttnn.CoreGrid(y=2, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    shard_config_4_cores = ttnn.create_sharded_memory_config(
+        shape=(256, 64),
+        core_grid=ttnn.CoreGrid(y=4, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    shard_config_8_cores = ttnn.create_sharded_memory_config(
+        shape=(128, 64),
+        core_grid=ttnn.CoreGrid(y=8, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, memory_config=shard_config_2_cores, device=device)
+    input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=shard_config_8_cores, device=device)
+    input_c = ttnn.from_torch(torch_input_c, layout=ttnn.TILE_LAYOUT, memory_config=shard_config_4_cores, device=device)
+
+    # Do not pass memory_config: forces resolution from inputs (largest num_cores = input_b, 8 cores)
+    output_tt = ttnn.addcmul(input_a, input_b, input_c)
+
+    # Verify that the correct input was chosen: output should inherit from input_b (8 cores) -> shard shape (128, 64)
+    out_mem = ttnn.get_memory_config(output_tt)
+    assert out_mem.shard_spec is not None, "Output should be sharded when resolving from inputs"
+    assert (
+        out_mem.shard_spec.shape[0] == 128 and out_mem.shard_spec.shape[1] == 64
+    ), "Output should use 8-core config from input_b (shard shape (128, 64)), not 2 or 4 cores"
+    if hasattr(out_mem.shard_spec.grid, "num_cores"):
+        assert out_mem.shard_spec.grid.num_cores() == 8, "Output grid should have 8 cores (from input_b)"
+
+    output = ttnn.to_torch(output_tt)
+    assert_with_pcc(torch_output, output)
+
+
+def test_ternary_resolve_mem_config_with_grid_size_two(device):
+    """One input uses a CoreRangeSet with 2 ranges (grid.size() == 2) and most cores; others use 1 range.
+    Resolution is by num_cores(), so output comes from B (12 cores, grid.size() == 2)."""
+    torch.manual_seed(0)
+    shape = (1, 24, 32, 64)  # 768 rows, divisible by 4, 8, 12
+    torch_input_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_b = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_c = torch.rand(shape, dtype=torch.bfloat16)
+    torch_output = torch.addcmul(torch_input_a, torch_input_b, torch_input_c)
+
+    # A: 4 cores, 1 range (2x2) -> grid.size() == 1
+    shard_config_4_1_range = ttnn.create_sharded_memory_config(
+        shape=(192, 64),  # 768/4
+        core_grid=ttnn.CoreGrid(y=2, x=2),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    # B: 12 cores, 2 ranges (row 0: 6 cores, row 1: 6 cores) -> grid.size() == 2, most cores
+    grid_2_ranges = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange((0, 0), (0, 5)),  # 6 cores
+            ttnn.CoreRange((1, 0), (1, 5)),  # 6 cores
+        }
+    )
+    shard_config_12_2_ranges = ttnn.create_sharded_memory_config(
+        shape=(64, 64),  # 768/12
+        core_grid=grid_2_ranges,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    # C: 8 cores, 1 range (2x4) -> grid.size() == 1
+    shard_config_8_1_range = ttnn.create_sharded_memory_config(
+        shape=(96, 64),  # 768/8
+        core_grid=ttnn.CoreGrid(y=2, x=4),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_a = ttnn.from_torch(
+        torch_input_a, layout=ttnn.TILE_LAYOUT, memory_config=shard_config_4_1_range, device=device
+    )
+    input_b = ttnn.from_torch(
+        torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=shard_config_12_2_ranges, device=device
+    )
+    input_c = ttnn.from_torch(
+        torch_input_c, layout=ttnn.TILE_LAYOUT, memory_config=shard_config_8_1_range, device=device
+    )
+
+    # B has grid.size() == 2 and 12 cores (most). Resolution by num_cores picks B -> output grid.size() == 2.
+    output_tt = ttnn.addcmul(input_a, input_b, input_c)
+
+    out_mem = ttnn.get_memory_config(output_tt)
+    assert out_mem.shard_spec is not None
+    assert out_mem.shard_spec.shape[0] == 64 and out_mem.shard_spec.shape[1] == 64
+    if hasattr(out_mem.shard_spec.grid, "num_cores"):
+        assert out_mem.shard_spec.grid.num_cores() == 12
+    if hasattr(out_mem.shard_spec.grid, "size"):
+        assert out_mem.shard_spec.grid.size() == 2, "Output came from B (2 ranges, 12 cores)"
+
+    output = ttnn.to_torch(output_tt)
+    assert_with_pcc(torch_output, output)

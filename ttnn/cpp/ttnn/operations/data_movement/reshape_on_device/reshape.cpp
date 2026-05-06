@@ -1,22 +1,21 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "clone/clone.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "reshape.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
 
 #include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
-namespace ttnn::operations::data_movement {
-
-namespace detail {
+namespace ttnn::operations::data_movement::detail {
 
 static Tensor manual_insertion(
     const Tensor& input_tensor,
@@ -31,23 +30,24 @@ static Tensor manual_insertion(
         logical_shape.volume(),
         input_tensor.logical_volume());
     auto cpu_tensor = input_tensor.cpu();
-    auto output =
-        Tensor(
-            cpu_tensor.storage(),
-            TensorSpec(
-                logical_shape,
-                TensorLayout::fromPaddedShape(
-                    DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)),
-            cpu_tensor.tensor_topology())
-            .to_layout(Layout::ROW_MAJOR);
+    auto output_spec = TensorSpec(
+        logical_shape,
+        TensorLayout::fromPaddedShape(
+            DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape));
+    auto output = Tensor(tt::tt_metal::HostTensor(
+                             cpu_tensor.host_storage().buffer(), std::move(output_spec), cpu_tensor.tensor_topology()))
+                      .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);
     }
     return output;
 }
-}  // namespace detail
 
-ttnn::Tensor ReshapeOperation::invoke(
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+ttnn::Tensor reshape_on_device(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
@@ -61,9 +61,12 @@ ttnn::Tensor ReshapeOperation::invoke(
         // since handled within the tensor reshape method
         return ttnn::experimental::view(input_tensor, logical_output_shape, padded_output_shape);
     }
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     if (input_tensor.padded_shape() == padded_output_shape) {
-        return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
-            input_tensor, output_mem_config);
+        if (input_tensor.memory_config() != output_mem_config) {
+            return ttnn::clone(input_tensor, std::nullopt, output_mem_config, std::nullopt);
+        }
+        return input_tensor;
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
     if (input_tensor.layout() == Layout::ROW_MAJOR &&
@@ -76,30 +79,31 @@ ttnn::Tensor ReshapeOperation::invoke(
             "Input tensor dtype must be BFLOAT16 for this reshape operation but got {}",
             input_tensor.dtype());
 
-        return detail::manual_insertion(
+        return operations::data_movement::detail::manual_insertion(
             (tt::tt_metal::Tensor)input_tensor,
             logical_output_shape,
             padded_output_shape,
             input_tensor.device(),
             output_mem_config);
     }
-    return tt::tt_metal::operation::run(
-               ReshapeDeviceOperation{logical_output_shape, padded_output_shape, output_mem_config}, {input_tensor})
-        .at(0);
+    return ttnn::prim::reshape_on_device(input_tensor, logical_output_shape, padded_output_shape, output_mem_config);
 }
 
-ttnn::Tensor ReshapeOperation::invoke(
+ttnn::Tensor reshape_on_device(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
+    return reshape_on_device(input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
 }
 
-ttnn::Tensor ReshapeOperation::invoke(
+ttnn::Tensor reshape_on_device(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int32_t> shape_vector,
+    ttsl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
+    return reshape_on_device(
+        input_tensor,
+        operations::data_movement::detail::infer_dims_for_reshape(input_tensor, shape_vector),
+        memory_config_arg);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

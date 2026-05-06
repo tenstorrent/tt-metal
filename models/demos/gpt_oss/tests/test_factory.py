@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -41,7 +41,7 @@ class TestFactory:
         mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
         # Setup CCL
-        ccl_manager = CCLManager(mesh_device)
+        ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
 
         config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
         # state_dict = TestFactory._generate_dummy_state_dict(config)
@@ -120,7 +120,7 @@ def parametrize_mesh_with_fabric():
         raise ValueError(f"Invalid number of devices: {num_devices}")
     fabric_params = [
         pytest.param(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 30000000}, id="fabric_1d_ring"
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 100000000}, id="fabric_1d_ring"
         ),
     ]
 
@@ -133,10 +133,16 @@ def parametrize_mesh_with_fabric():
     return decorator
 
 
-def parametrize_batch_seq(configs=None):
+def parametrize_batch_seq(configs=None, ids=None):
     """Universal batch/seq parametrization"""
     configs = configs or [(1, 1), (1, 32)]
-    return pytest.mark.parametrize("batch_size, seq_len", configs)
+    ids = ids or [
+        f"prefill_{seq_len//1024 if seq_len > 1024 else seq_len}" + ("k" if seq_len > 1024 else "")
+        if seq_len > 1
+        else "decode_mode"
+        for batch_size, seq_len in configs
+    ]
+    return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)
 
 
 def parametrize_weights(use_real=False):

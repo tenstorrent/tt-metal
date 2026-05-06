@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 #include "softmax_device_operation_types.hpp"
 
 namespace {
@@ -225,7 +225,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         float32_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
-    [[maybe_unused]] auto cb_exp_sum_after_refuction = create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_after_reduction = create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,

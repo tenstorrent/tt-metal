@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
+#include <cstddef>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -24,14 +24,13 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "eth_test_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "hal.hpp"
 #include "multi_device_fixture.hpp"
@@ -73,8 +72,8 @@ bool chip_to_chip_dram_buffer_transfer(
     const DataMovementProcessor& processor) {
     bool pass = true;
 
-    auto sender_device = sender_mesh_device->get_devices()[0];
-    auto receiver_device = receiver_mesh_device->get_devices()[0];
+    auto* sender_device = sender_mesh_device->get_devices()[0];
+    auto* receiver_device = receiver_mesh_device->get_devices()[0];
 
     distributed::DeviceLocalBufferConfig sender_dram_config{
         .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false};
@@ -376,7 +375,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     }
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
-    const auto sender_device = sender_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -426,7 +425,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
     }
     const auto& sender_mesh_device = devices_.at(1);
     const auto& receiver_mesh_device = devices_.at(0);
-    const auto sender_device = sender_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -474,8 +473,8 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
-    const auto sender_device = sender_mesh_device->get_devices()[0];
-    const auto receiver_device = receiver_mesh_device->get_devices()[0];
+    auto* const sender_device = sender_mesh_device->get_devices()[0];
+    auto* const receiver_device = receiver_mesh_device->get_devices()[0];
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
@@ -561,9 +560,9 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
     uint32_t page_size = 2 * 32 * 32;
     uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
     for (const auto& sender_mesh_device : devices_) {
-        const auto sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            const auto receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
             if (sender_device->id() == receiver_device->id()) {
                 continue;
             }
@@ -651,9 +650,9 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& sender_mesh_device : devices_) {
-        const auto sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            const auto receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }
@@ -727,9 +726,9 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& sender_mesh_device : devices_) {
-        const auto sender_device = sender_mesh_device->get_devices()[0];
+        auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            const auto receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
             if (sender_device->id() >= receiver_device->id()) {
                 continue;
             }

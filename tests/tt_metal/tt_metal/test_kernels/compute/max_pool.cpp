@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-// #include "compute_kernel_api.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/reduce.h"
+// #include "api/compute/compute_kernel_api.h"
+#include "api/compute/tilize.h"
+#include "api/compute/reduce.h"
 // #include "tools/profiler/kernel_profiler.hpp"
 
 #define DEBUG_PRINT 0
@@ -85,7 +85,7 @@ inline void reduce_h(
         uint32_t dst_i = 0;  // TODO [AS]: Use more than one dst tile at a time
         for (uint32_t hw_i = 0; hw_i < in_ntiles_hw; ++hw_i) {
             uint32_t tile_i = base_tile_id + hw_i;
-            reduce_tile(in_cb_id, in_scalar_cb_id, tile_i, 0, dst_i);
+            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(in_cb_id, in_scalar_cb_id, tile_i, 0, dst_i);
         }
         pack_tile(dst_i, out_cb_id);
         release_dst();
@@ -96,9 +96,7 @@ inline void reduce_h(
     cb_pop_front(in_cb_id, in_ntiles_hwc * out_nelems);
 }
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t in_cb_id = tt::CBIndex::c_0;
     constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t in_tiled_cb_id = tt::CBIndex::c_24;
@@ -152,5 +150,3 @@ void MAIN {
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }
-
-}  // namespace NAMESPACE

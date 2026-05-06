@@ -9,8 +9,8 @@ fi
 fail=0
 
 echo "Running nightly tests for WH B0 only"
-env pytest -n auto tests/nightly/wh_b0_only_eth ; fail+=$?
-env pytest -n auto tests/nightly/wh_b0_only ; fail+=$?
+env pytest tests/nightly/wh_b0_only_eth ; fail+=$?
+env pytest tests/nightly/wh_b0_only ; fail+=$?
 
 if [[ $fail -ne 0 ]]; then
   exit 1

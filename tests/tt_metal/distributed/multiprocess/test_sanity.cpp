@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <numeric>
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
@@ -17,6 +18,8 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/distributed/dummy_mesh_command_queue.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -41,24 +44,22 @@ INSTANTIATE_TEST_SUITE_P(
     BigMeshDualRankMeshShapeSweepFixture,
     ::testing::Values(
         MeshShape(2, 4),
-        /* Issue #25355: Cannot create a MeshDevice with only one rank active.
         MeshShape(1, 1),
         MeshShape(1, 2),
         MeshShape(2, 1),
         MeshShape(2, 2),
-        */
         MeshShape(1, 8),
         MeshShape(8, 1)));
 
 using BigMeshDualRankTest2x4 = MeshDevice2x4Fixture;
 
 TEST(BigMeshDualRankTest, DistributedContext) {
-    auto& dctx = MetalContext::instance().global_distributed_context();
+    const auto& dctx = MetalContext::instance().global_distributed_context();
     EXPECT_EQ(dctx.size(), multihost::Size(2));
 }
 
 TEST(BigMeshDualRankTest, LocalRankBinding) {
-    auto& global_context = MetalContext::instance().global_distributed_context();
+    const auto& global_context = MetalContext::instance().global_distributed_context();
     auto& control_plane = MetalContext::instance().get_control_plane();
 
     tt_fabric::MeshHostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
@@ -101,9 +102,9 @@ TEST(BigMeshDualRankTest, LocalRankBinding) {
 TEST_P(BigMeshDualRankMeshShapeSweepFixture, MeshDeviceValidation) { EXPECT_EQ(mesh_device_->shape(), GetParam()); }
 
 TEST_F(BigMeshDualRankTest2x4, SystemMeshValidation) {
-    ASSERT_NO_THROW({ SystemMesh::instance(); });
+    ASSERT_NO_THROW({ MetalContext::instance().get_system_mesh(); });
 
-    const auto& system_mesh = SystemMesh::instance();
+    const auto& system_mesh = MetalContext::instance().get_system_mesh();
     EXPECT_EQ(system_mesh.local_shape(), MeshShape(2, 2));
 
     auto mapped_devices = system_mesh.get_mapped_devices(MeshShape(2, 4));
@@ -205,9 +206,40 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
         auto shard_col = i % global_buffer_shape.width();
         auto device_row = shard_row / shard_shape.height();
         auto device_col = shard_col / shard_shape.width();
-        if (mesh_device_->is_local(MeshCoordinate(device_row, device_col))) {
+        if (mesh_device_->impl().is_local(MeshCoordinate(device_row, device_col))) {
             EXPECT_EQ(dst_vec[i], src_vec[i]) << "Mismatch at index: " << i;
         }
+    }
+}
+
+TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
+    auto submesh = mesh_device_->create_submesh(MeshShape(2, 2));
+    ASSERT_NE(submesh, nullptr);
+    EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
+
+    // Make sure the inactive rank returns a DummyMeshCommandQueue
+    if (submesh->get_view().get_devices().empty()) {
+        auto& cq = submesh->mesh_command_queue();
+        EXPECT_TRUE(dynamic_cast<DummyMeshCommandQueue*>(&cq) != nullptr);
+    }
+}
+
+TEST_F(BigMeshDualRankTest2x4, SubmeshCreationMultipleSubmeshes) {
+    auto submeshes = mesh_device_->create_submeshes(MeshShape(2, 2));
+    EXPECT_EQ(submeshes.size(), 2);
+    for (const auto& submesh : submeshes) {
+        ASSERT_NE(submesh, nullptr);
+        EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
+    }
+}
+
+TEST(UnitMeshesDualRankTest2x4, UnitMeshesCreation) {
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
+    auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    for (auto& [_, dev] : devs) {
+        ASSERT_NE(dev, nullptr);
+        EXPECT_EQ(dev->shape(), MeshShape(1, 1));
     }
 }
 

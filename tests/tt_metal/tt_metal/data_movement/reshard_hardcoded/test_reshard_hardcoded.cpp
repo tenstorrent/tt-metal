@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,7 +38,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const R
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // Kernels
     auto receiver_kernel = CreateKernel(

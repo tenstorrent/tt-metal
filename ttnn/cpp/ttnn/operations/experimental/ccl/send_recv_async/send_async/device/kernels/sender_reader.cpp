@@ -1,12 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "dataflow_api.h"
-#include "tt_metal/hw/inc/accessor/tensor_accessor.h"
-
+#include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -31,7 +30,7 @@ void kernel_main() {
     uint32_t num_pages_remainder = get_arg_val<uint32_t>(4);  // remainder pages
 
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
-    auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr, input_page_size);
+    auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr);
 
     // TODO #24995: Instead of page by page transfers, we can transfer bank by bank
 

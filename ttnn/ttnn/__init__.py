@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,9 @@ import json
 import importlib
 import os
 import pathlib
+import pkgutil
 import re
+import sys
 from types import ModuleType
 
 from loguru import logger
@@ -78,14 +80,26 @@ logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 
 
 @contextlib.contextmanager
-def manage_config(name, value):
+def manage_config(name: str, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
     logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
     yield
-    setattr(CONFIG, name, original_value)
-    logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+    try:
+        setattr(CONFIG, name, original_value)
+        logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+    except Exception as e:
+        # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
+        # afuller
+        if original_value is None:
+            try:
+                setattr(CONFIG, name, "")
+                logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+            except Exception as e2:
+                logger.error(f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)")
+        else:
+            logger.error(f"{e}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to {original_value}")
 
 
 from ttnn._ttnn.multi_device import (
@@ -108,6 +122,22 @@ from ttnn._ttnn.multi_device import (
     aggregate_tensor,
     distribute_tensor,
     using_distributed_env,
+    Rank,
+    Size,
+    SubcontextId,
+    init_distributed_context,
+    is_initialized as distributed_context_is_initialized,
+    get_rank as distributed_context_get_rank,
+    get_size as distributed_context_get_size,
+    barrier as distributed_context_barrier,
+    allgather_int as distributed_context_allgather_int,
+    subcontext_id as distributed_context_subcontext_id,
+    subcontext_count as distributed_context_subcontext_count,
+    subcontext_sizes as distributed_context_subcontext_sizes,
+    subcontext_size as distributed_context_subcontext_size,
+    local_to_world_rank as distributed_context_local_to_world_rank,
+    world_rank as distributed_context_world_rank,
+    world_size as distributed_context_world_size,
 )
 
 from ttnn._ttnn.events import (
@@ -133,7 +163,22 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, FabricTensixConfig, set_fabric_config
+from ttnn._ttnn.fabric import (
+    FabricConfig,
+    FabricReliabilityMode,
+    FabricTensixConfig,
+    FabricUDMMode,
+    FabricManagerMode,
+    FabricRouterConfig,
+    set_fabric_config,
+    get_fabric_config,
+    get_tt_fabric_packet_header_size_bytes,
+    get_tt_fabric_max_payload_size_bytes,
+    MeshId,
+    FabricNodeId,
+    setup_fabric_connection,
+    setup_routing_plane_connection,
+)
 
 # Import cluster functions and types
 from ttnn._ttnn import cluster
@@ -151,11 +196,19 @@ from ttnn._ttnn.mesh_socket import (
     SocketMemoryConfig,
     SocketConnection,
     MeshCoreCoord,
+    SocketEndpoint,
+)
+
+from ttnn._ttnn.hd_socket import (
+    H2DSocket,
+    D2HSocket,
+    H2DMode,
 )
 
 from ttnn.types import (
     TILE_SIZE,
     DataType,
+    DumpTensorMode,
     uint8,
     uint16,
     int32,
@@ -182,7 +235,10 @@ from ttnn.types import (
     CoreRangeSet,
     CoreRange,
     CoreCoord,
+    corerange_to_cores,
+    get_optimal_worker_cores_for_sharded_tensor,
     Tile,
+    OverlappedTensor,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -197,7 +253,6 @@ from ttnn.types import (
     ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
-    GrayskullComputeKernelConfig,
     MeshShape,
     MeshCoordinate,
     MeshCoordinateRange,
@@ -208,18 +263,32 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    DataMovementProcessor,
+    NOC,
+    NOC_MODE,
+    TileDescriptor,
     CBFormatDescriptor,
     CBDescriptor,
     ReaderConfigDescriptor,
     WriterConfigDescriptor,
+    DataMovementConfigDescriptor,
     ComputeConfigDescriptor,
     KernelDescriptor,
+    RuntimeArgs,
+    RuntimeArgsColProxy,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    MeshProgramDescriptor,
+    merge_program_descriptors,
+    cb_descriptor_from_sharded_tensor,
+    get_cb_address,
+    UnpackToDestMode,
+    compute_program_descriptor_hash,
     TensorAccessorArgs,
 )
 
 from ttnn.device import (
+    Arch,
     Device,
     DispatchCoreType,
     DispatchCoreAxis,
@@ -231,6 +300,11 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,
+    get_dram_alignment,
+    get_l1_alignment,
+    get_optimal_dram_bank_to_logical_worker_assignment,
+    enable_asynchronous_slow_dispatch,
+    disable_asynchronous_slow_dispatch,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -241,8 +315,6 @@ from ttnn.device import (
     ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
-    format_input_tensor,
-    format_output_tensor,
     pad_to_tile_shape,
     SubDevice,
     SubDeviceId,
@@ -251,7 +323,14 @@ from ttnn.device import (
     SetRootDir,
 )
 
-from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+from ttnn.profiler import (
+    start_tracy_zone,
+    stop_tracy_zone,
+    tracy_message,
+    tracy_frame,
+    get_latest_programs_perf_data,
+    get_all_programs_perf_data,
+)
 
 # TODO: remove this after the distributed module is fully integrated
 from ttnn.distributed import *
@@ -271,8 +350,13 @@ from ttnn.core import (
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
+    split_work_to_cores,
+    grid_to_cores,
     get_current_command_queue_id_for_thread,
 )
+
+tile_size = ttnn._ttnn.tensor.tile_size
+element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
 import ttnn.database
@@ -306,11 +390,38 @@ def auto_register_ttnn_cpp_operations(module):
 
 auto_register_ttnn_cpp_operations(ttnn._ttnn)
 
+import ttnn.operations
+
 import ttnn.experimental_loader
 import ttnn.experimental_loader.golden_functions
 
-import ttnn.operations
+# After experimental_loader creates ttnn.experimental, append all submodules from _experimental
+# This allows us to add new experimental modules without conflicting with experimental_loader
+if "ttnn.experimental" in sys.modules:
+    import ttnn._experimental
 
+    # Discover all submodules in _experimental
+    for _, name, ispkg in pkgutil.iter_modules(ttnn._experimental.__path__):
+        # Import the submodule
+        submodule = importlib.import_module(f"ttnn._experimental.{name}")
+
+        # Add it to the experimental module created by experimental_loader
+        setattr(sys.modules["ttnn.experimental"], name, submodule)
+
+        # Also register it as a submodule in sys.modules for import statements
+        sys.modules[f"ttnn.experimental.{name}"] = submodule
+
+        # Recursively register sub-submodules if it's a package
+        if ispkg and hasattr(submodule, "__path__"):
+            for _, subname, _ in pkgutil.walk_packages(submodule.__path__, f"{name}."):
+                full_internal_name = f"ttnn._experimental.{subname}"
+                full_external_name = f"ttnn.experimental.{subname}"
+                sub_submodule = importlib.import_module(full_internal_name)
+                sys.modules[full_external_name] = sub_submodule
+
+from ttnn.operations.unary import SigmoidMode
+
+divide = ttnn.div
 sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
@@ -318,7 +429,7 @@ mul_ = ttnn.multiply_
 div_ = ttnn.divide_
 
 
-# TODO: pybind the overloaded operators below
+# TODO: nanobind the overloaded operators below
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
@@ -339,6 +450,12 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    MatmulParams,
+    MatmulInputs,
+    MatmulDeviceOperation,
+    MatmulMultiCoreReuseOptimizedProgramFactory,
+    create_matmul_attributes,
 )
 
 from ttnn.operations.normalization import (
@@ -347,13 +464,25 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
-    LayerNormDistributedDefaultProgramConfig,
+    LayerNormType,
+    DistributedLayerNormStage,
+    LayerNormParams,
+    LayerNormInputs,
+    LayerNormDeviceOperation,
+    LayerNormMultiCoreProgramFactory,
+    LayerNormShardedProgramFactory,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
+    create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    determine_expected_group_norm_dram_grid_size,
+    get_group_norm_cores_across_channel,
     dram_group_norm_params_from_torch,
+    layernorm_default_compute_config,
+    rmsnorm_default_compute_config,
+    create_layernorm_program_config,
 )
 
 from ttnn.operations.embedding import (
@@ -368,10 +497,11 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology
+from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
+    PaddingMode,
     get_conv_output_dim,
     Conv2dSliceConfig,
     Conv2dDRAMSliceHeight,
@@ -383,11 +513,11 @@ from ttnn.operations.conv2d import (
     prepare_conv_transpose2d_weights,
     prepare_conv_transpose2d_bias,
     SlidingWindowParallelConfig,
-)
-from ttnn._ttnn.operations.conv import (
-    convert_conv_weight_tensor_to_tiled_layout,
-    convert_conv_weight_tensor_to_special_padding_tiled_layout,
-    convert_conv_weight_tensor_to_grouped_layout,
+    Op2DSliceConfig,
+    Op2DDRAMSliceHeight,
+    Op2DDRAMSliceWidth,
+    Op2DL1Full,
+    Op2DL1FullSliceConfig,
 )
 
 from ttnn.operations.pool import (
@@ -395,7 +525,11 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
+
+# Expose disaggregation in experimental namespace
+experimental.disaggregation = disaggregation
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
@@ -414,6 +548,12 @@ def get_arch_name():
 
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
+from ttnn._ttnn.operations.data_movement import (
+    SliceParams,
+    SliceInputs,
+    SliceDeviceOperation,
+    SliceTileProgramFactory,
+)
 
 import pathlib
 import importlib.util
@@ -438,3 +578,25 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir
 
     SetRootDir(str(root_dir))
+
+import atexit as _atexit
+
+
+def _ttnn_cleanup():
+    """Release Python-side references to C++ operation wrappers before interpreter shutdown.
+
+    nanobind's leak checker fires before module dicts are fully cleared on some
+    Python versions. Explicitly clearing REGISTERED_OPERATIONS ensures the
+    reference count on C++ wrapper objects reaches zero before the check.
+    """
+    try:
+        from ttnn.decorators import REGISTERED_OPERATIONS
+
+        REGISTERED_OPERATIONS.operations.clear()
+    except Exception as e:
+        # Best-effort cleanup: ignore errors during interpreter shutdown but log for diagnosis.
+        logger.debug("Failed to clear ttnn REGISTERED_OPERATIONS during atexit cleanup: {}", e)
+
+
+_atexit.register(_ttnn_cleanup)
+del _atexit

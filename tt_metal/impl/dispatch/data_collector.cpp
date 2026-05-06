@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "data_collector.hpp"
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
@@ -40,7 +41,7 @@ public:
         outfile << fmt::format("\t\tnum_writes           = {}\n", num_writes);
         outfile << fmt::format("\t\ttotal_write_size     = {}\n", total_write_size);
         outfile << "\t\ttransaction_counts   = [";
-        for (auto& size_and_count : raw_data) {
+        for (const auto& size_and_count : raw_data) {
             outfile << size_and_count.first << ":" << size_and_count.second << " ";
         }
         outfile << "]\n";
@@ -52,8 +53,8 @@ void DispatchData::Update(uint32_t transaction_size, std::optional<HalProcessorI
 }
 
 void DispatchData::Merge(const DispatchData& other) {
-    for (auto& [processor, processor_data] : other.data) {
-        for (auto& [size, count] : processor_data) {
+    for (const auto& [processor, processor_data] : other.data) {
+        for (const auto& [size, count] : processor_data) {
             this->data[processor][size] += count;
         }
     }
@@ -69,10 +70,10 @@ void DispatchData::DumpStats(std::ofstream& outfile) const {
     // Track stats for all RISCS, as well as per RISC
     DispatchStats total_stats;
     std::map<uint32_t, uint32_t> total_data;
-    for (auto& [processor, processor_data] : data) {
+    for (const auto& [processor, processor_data] : data) {
         // Go through all data and update stats
         DispatchStats processor_stats;
-        for (auto& [size, count] : processor_data) {
+        for (const auto& [size, count] : processor_data) {
             processor_stats.Update(size, count);
             total_data[size] += count;
         }

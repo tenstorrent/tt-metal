@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,8 @@ import pytest
 import torch
 
 import ttnn
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize(

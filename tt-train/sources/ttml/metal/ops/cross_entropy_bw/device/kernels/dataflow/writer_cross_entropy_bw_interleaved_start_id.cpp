@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,11 @@
 #include <cstdint>
 #include <cstring>
 
-#include "dataflow_api.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -27,7 +28,7 @@ void kernel_main() {
     const float scaler = uint32_to_float(scaler_bits);
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
     constexpr auto output_args = TensorAccessorArgs<3>();
-    const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
+    const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
     uint32_t end_row = start_row + num_rows_to_process;
 
@@ -71,12 +72,8 @@ void kernel_main() {
                 ++target_indices_idx;
             }
 
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++idx) {
-                noc_async_write_tile(idx, output_addr_generator, l1_read_addr);
-                l1_read_addr += tile_bytes;
-            }
-            noc_async_write_barrier();
-            cb_pop_front(cb_output_idx, block_size);
+            write_tiles_by_row(cb_output_idx, output_addr_generator, idx, block_size, tile_bytes, block_size);
+            idx += block_size;
         }
 
         cb_pop_front(cb_target_idx, onetile);

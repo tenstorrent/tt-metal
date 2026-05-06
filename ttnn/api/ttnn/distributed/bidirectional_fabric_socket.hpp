@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,8 @@ public:
 
     tt::tt_metal::distributed::multihost::Rank get_rank() const override;
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context() const override;
+
+    const std::vector<tt::tt_metal::distributed::SocketConnection>& get_socket_connections() const;
 
     static std::unique_ptr<BidirectionalFabricSocket> create(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,

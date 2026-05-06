@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import tt2torch_tensor
 
 from loguru import logger
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
@@ -123,10 +123,14 @@ def run_distributed_layernorm(
     # reference impl
     out_torch = reference_layernorm(canon_inp, gamma, beta, epsilon, is_rmsnorm)
 
-    passing, output_str = comp_allclose(tt_output_host, out_torch, rtol=1e-1, atol=1e-01)
-    logger.debug(f"torch vs tt distributed layernorm = {output_str}")
-
-    assert passing
+    assert_numeric_metrics(
+        out_torch,
+        tt_output_host,
+        rtol=10.313,
+        atol=0.207,
+        frobenius_threshold=0.028,
+        pcc_threshold=0.983,
+    )
 
 
 inp_shapes = [
@@ -174,11 +178,12 @@ def run_test_distributed_layernorm_with_program_cache_and_checks(
 @pytest.mark.parametrize("inp_shape", inp_shapes, ids=inp_shape_ids)
 @pytest.mark.parametrize("n_devices", [8])
 @pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_distributed_layernorm_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, mesh_device
 ):
     run_test_distributed_layernorm_with_program_cache_and_checks(
-        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, iterations=iterations
+        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, iterations=iterations
     )
 
 

@@ -1,24 +1,18 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
-#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
 
-struct NonZeroIndicesOperation {
-    static std::vector<ttnn::Tensor> invoke(
-        const ttnn::Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto nonzero =
-    ttnn::register_operation<"ttnn::nonzero", ttnn::operations::data_movement::NonZeroIndicesOperation>();
+std::vector<Tensor> nonzero(
+    const Tensor& input_tensor, const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn

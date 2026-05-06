@@ -1,15 +1,184 @@
 # This file defines the maximum allowed timeout (in minutes) for tests
 # belonging to a given team and workflow.
+# These budgets are enforced during the load-test-matrix step in pipelines.
 
 # This is part of an effort to reorganize the pipelines for clearer resource allocation and ownership.
-# For more information please refer to https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/1396506680/Proposed+pipeline+and+test+organization+changes
 
-# Team: ops
-ops:
-  # Workflow: sanity
+# Entries are grouped by team -> pipeline -> sku (machine type in CI) : time_budget (in minutes)
+
+# Team names are currently assigned to tests by best guess.
+#   Please message #tt-metal-infra if there are any concerns.
+# Sku names do not make the distinction between baremetal/vm, or viommu/non-viommu.
+#   This will be determined per pipeline based on need.
+
+# Example:
+metal_infra:
+  smoke: # intended category for PR gate and merge gate
+    CPU: 0
+    N150: 0
+    N300: 0
+    wh_llmbox: 0
+  sanity: # APC will be renamed to sanity
+    CPU: 0
+    N150: 0
+    N300: 0
+    P100: 0
+    P100a: 0
+    P150: 0
+    P150b: 0
+    P300: 0
+    wh_llmbox: 0
+    bh_llmbox: 0
+    bh_loudbox: 0
+    bh_qb: 0
+  unit:
+    N150: 0
+    N300: 0
+    P100: 0
+    P100a: 0
+    P150: 0
+    P150b: 0
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+  integration:
+    N150: 0
+    N300: 0
+    P100: 0
+    P100a: 0
+    P150: 0
+    P150b: 0
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+  e2e:
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+  perf:
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+  demo:
+    wh_llmbox: 0
+    wh_galaxy: 0
+    bh_galaxy: 0
+
+# Current time budgets are based on sums of existing tests.
+# No official decision has been made yet for division of budgets per team.
+ttnn:
   sanity:
-    skus:
-      N300:
-        time_budget: 540
-      P150b:
-        time_budget: 540
+    wh_n300_civ2: 545
+    bh_p100: 545
+    bh_p150b_civ2: 545
+  unit:
+    wh_llmbox: 50
+  e2e:
+    wh_llmbox: 90
+    wh_galaxy: 70
+    bh_galaxy: 70
+  integration:
+    wh_llmbox: 30
+    wh_galaxy: 350
+
+shield:
+  e2e:
+    wh_llmbox: 45
+
+# Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
+scaleout:
+  unit:
+    wh_llmbox: 60
+  integration:
+    wh_llmbox: 40
+  health:
+    wh_galaxy: 15
+    bh_galaxy: 10
+  sanity:
+    wh_galaxy: 20
+  e2e:
+    wh_llmbox: 185
+    wh_galaxy: 100
+    bh_galaxy: 60
+    bh_sp1: 90
+    bh_sp4: 150
+
+runtime:
+  sanity:
+    wh_n150_civ2: 13
+    bh_p150b_civ2: 13
+    bh_quietbox: 5
+    bh_loudbox: 5
+  unit:
+    wh_n150_civ2: 217
+    wh_n300_civ2: 74
+    bh_p150b_civ2: 205
+    bh_p150b_civ2_viommu: 5
+    bh_p100a_civ2_viommu: 74
+    bh_quietbox: 20
+    wh_galaxy: 35
+  integration:
+    wh_n150_civ2: 360
+    bh_p150b_civ2: 360
+    bh_quietbox: 25
+  perf:
+    wh_n300_civ2: 55
+    bh_p150_perf: 40
+
+llk:
+  unit:
+    wh_n150_civ2: 100
+    bh_p150b_civ2: 70
+
+models:
+  sanity:
+    wh_galaxy_perf: 10
+  e2e:
+    wh_llmbox: 198
+    wh_llmbox_perf: 312
+    wh_n150: 100
+    wh_n300: 15
+    wh_galaxy_perf: 120
+  unit:
+    wh_llmbox: 175
+    wh_llmbox_perf: 230
+    wh_n150: 130
+    wh_n300: 15
+    wh_galaxy_perf: 45
+  integration:
+    wh_llmbox: 422
+  perf:
+    wh_llmbox_perf: 685
+    wh_galaxy: 280
+    wh_galaxy_perf: 150
+  device_perf:
+    wh_n150: 10
+    bh_p150: 10
+    bh_p300: 10
+
+  demo:
+    wh_llmbox_perf: 200
+    wh_llmbox_perf_release: 1090
+    wh_galaxy: 0
+    wh_galaxy_perf: 150
+    wh_galaxy_release: 345
+    bh_galaxy: 30
+    wh_n150: 500
+    wh_n150_civ2: 300
+    wh_n300: 600
+    wh_n300_civ2: 400
+    wh_n300_perf: 200
+    bh_p150: 250
+    bh_p150_perf: 420
+    bh_p150b_civ2: 250
+    bh_p150b_civ2_viommu: 50
+    bh_deskbox: 250
+    bh_llmbox: 1200
+    bh_loudbox: 1200
+
+    bh_p300: 800
+    bh_quietbox_2: 280
+  sweep:
+    wh_n150: 10
+    wh_llmbox_perf: 30
+    wh_galaxy: 30

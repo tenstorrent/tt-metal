@@ -1,13 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "dataflow_api.h"
-
-#include "utils/bfloat16.h"
 #include "argmax_common.hpp"
+#include "api/numeric/bfloat16.h"
+#include "api/dataflow/dataflow_api.h"
+
+#include <cstdint>
 
 /**
  * @brief Finds the argmax (argument of maximum value) for a specific core in a multicore reduction operation.
@@ -236,7 +234,6 @@ void kernel_main() {
     // This CB holds intermediate outputs (values) in each core
     constexpr uint32_t red_vals_cb_idx = get_compile_time_arg_val(3);
 
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(4);
     constexpr uint32_t dst_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t red_idx_size_per_core = get_compile_time_arg_val(6);
     constexpr uint32_t red_val_size_per_core = get_compile_time_arg_val(7);
@@ -294,8 +291,8 @@ void kernel_main() {
     // Flag to identify if this core will collate intermediate outputs
     const bool is_reduce_core = (core_id == reduce_core_id);
 
-    const auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
-    const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
+    const auto s_src = TensorAccessor(s_src_args, src_base_addr);
+    const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
 
     // CB in L1 memory for storing input
     constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
@@ -366,7 +363,7 @@ void kernel_main() {
                     noc_semaphore_set_multicast(start_sem_local_addr, start_sem_noc_addr1, num_cores1);
                 }
 
-                noc_async_atomic_barrier();
+                noc_async_write_barrier();
             }
         }
 

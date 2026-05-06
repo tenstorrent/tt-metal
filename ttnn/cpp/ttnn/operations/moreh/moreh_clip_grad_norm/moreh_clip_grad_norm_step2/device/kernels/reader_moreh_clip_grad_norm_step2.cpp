@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     int i{0};
@@ -14,10 +14,8 @@ void kernel_main() {
     const auto cb_id_input = cb_id++;
     const auto cb_id_decimal = cb_id++;
 
-    const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-
     constexpr auto input_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto s = TensorAccessor(input_args, input_addr);
 
     fill_cb_with_value(cb_id_decimal, decimal);
 

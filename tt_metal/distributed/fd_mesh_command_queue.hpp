@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,16 +6,23 @@
 
 #include "mesh_command_queue_base.hpp"
 
-#include "impl/dispatch/command_queue.hpp"
-
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
+#include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+
+// Forward declaration of the FDMeshCQTestAccessor class
+// This is used to access the system memory manager from cq test fixtures
+namespace tt::tt_metal::tt_dispatch_tests::Common {
+class FDMeshCQTestAccessor;
+}  // namespace tt::tt_metal::tt_dispatch_tests::Common
+
+#include "trace/trace_node.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -34,6 +41,10 @@ struct DeviceMemoryAddress {
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
+    // This class can now access private members of FDMeshCommandQueue
+    // This is used to access the system memory manager from cq test fixtures
+    friend class tt_dispatch_tests::Common::FDMeshCQTestAccessor;
+
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
     CoreCoord virtual_program_dispatch_core() const;
@@ -44,29 +55,6 @@ private:
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-    // Trace capture utility functions
-    // Captures dispatch commands associated with running a program on a Virtual Mesh subgrid
-    // inside the appropriate trace staging vector (corresponding to the specified subgrid)
-    void capture_program_trace_on_subgrid(
-        const MeshCoordinateRange& sub_grid,
-        ProgramCommandSequence& program_cmd_seq,
-        bool stall_first,
-        bool stall_before_program,
-        uint32_t program_runtime_id);
-    // Captures a dispatch command to reset the expected number of workers. Used when the worker
-    // counter on the host overflows.
-    void capture_expected_worker_count_reset_cmd(uint32_t previous_expected_workers, SubDeviceId sub_device);
-    // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Go signals
-    // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
-    // When running trace, the dispatch commands responsible for forwarding go signals must be
-    // captured on these subgrids.
-    void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRangeSet& active_sub_grids_set,
-        const SubDeviceId& sub_device_id,
-        uint32_t expected_num_workers_completed,
-        bool mcast_go_signals,
-        bool unicast_go_signals,
-        const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
@@ -74,8 +62,7 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
-        std::unordered_set<uint32_t>& chip_ids_in_workload,
-        uint32_t program_runtime_id);
+        std::unordered_set<uint32_t>& chip_ids_in_workload);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it.  Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signals to these subgrids.
@@ -86,13 +73,6 @@ private:
         bool mcast_go_signals,
         bool unicast_go_signals,
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
-    // When the device profiler is not enabled, launch messages are identical across all physical devices running the
-    // same program, to reduce state managed on host. When the profiler is enabled, the host_assigned_id field in the
-    // launch message must be unique across physical devices to accurately capture program execution time on host and
-    // device. This API is responsible for updating the launch message before writing it to each device (see
-    // tt_metal/api/tt-metalium/dev_msgs.h for a description of how the host_assigned_id field is generated).
-    void update_launch_messages_for_device_profiler(
-        ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
     // Access a reference system memory manager, which acts as a global host side state manager for
@@ -120,11 +100,18 @@ private:
     DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
+    struct MeshTraceNode {
+        std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
+        bool multicast_go_signals{false};
+        bool unicast_go_signals{false};
+        SubDeviceId sub_device_id;
+    };
+
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
     // i.e. between record_begin() and record_end() being called
     std::optional<MeshTraceId> trace_id_;
     std::shared_ptr<MeshTraceDescriptor> trace_ctx_;
-    std::vector<MeshTraceStagingMetadata> ordered_mesh_trace_md_;
+    std::vector<MeshTraceNode> trace_nodes_;
 
     CoreCoord dispatch_core_;
     const CoreType dispatch_core_type_;
@@ -189,17 +176,23 @@ private:
     // so the main thread can handle the exception
     std::atomic<bool> thread_exception_state_ = false;
 
+    // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
+
 protected:
-    void write_shard_to_device(
+    bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         void* dst,
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory,
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
@@ -216,7 +209,8 @@ public:
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
         std::shared_ptr<ThreadPool>& reader_thread_pool,
         std::shared_ptr<CQSharedState>& cq_shared_state,
-        std::function<std::lock_guard<std::mutex>()> lock_api_function);
+        std::function<std::lock_guard<std::mutex>()> lock_api_function,
+        std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context);
 
     ~FDMeshCommandQueue() override;
 

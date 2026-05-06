@@ -1,0 +1,10 @@
+{
+    "dim": 5120,
+    "n_layers": 40,
+    "n_heads": 40,
+    "n_kv_heads": 10,
+    "vocab_size": 100352,
+    "intermediate_size": 17920,
+    "norm_eps": 1e-05,
+    "rope_theta": 250000.0
+}

@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_eth_readback.hpp"
 #include "impl/context/metal_context.hpp"
 
@@ -63,7 +64,7 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
                             uint32_t physical_chip_id) {
         // Skip if link is down or already in temp_buffer_map
         if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core) ||
-            temp_buffer_map[fabric_node_id].count(eth_core)) {
+            temp_buffer_map[fabric_node_id].contains(eth_core)) {
             return;
         }
 
@@ -83,7 +84,7 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
     for (const auto& [coord, test_device] : test_devices_) {
         auto device_id = test_device.get_node_id();
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
-        auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+        const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
 
         // Process registered fabric connections

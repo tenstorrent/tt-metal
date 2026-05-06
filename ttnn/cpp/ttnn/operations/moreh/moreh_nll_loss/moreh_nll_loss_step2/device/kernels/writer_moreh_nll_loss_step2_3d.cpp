@@ -1,11 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto output_addr = get_arg_val<uint32_t>(i++);
     auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
@@ -17,9 +18,7 @@ void kernel_main() {
 
     constexpr auto output_args = TensorAccessorArgs<0>();
 
-    const uint32_t output_tile_bytes = get_tile_size(cb_output);
-
-    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
+    const auto output_addrg = TensorAccessor(output_args, output_addr);
 
     uint32_t Wf = (W + FACE_WIDTH - 1) / FACE_WIDTH;
     uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;

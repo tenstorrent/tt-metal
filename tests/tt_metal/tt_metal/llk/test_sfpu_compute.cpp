@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
@@ -25,12 +25,11 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -40,6 +39,8 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 namespace tt::tt_metal {
 
@@ -67,43 +68,50 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 bfloat16 sfpu_function(const std::string& op_name, const bfloat16& input) {
     if (op_name == "relu") {
         return bfloat16(fmaxf(static_cast<float>(input), 0.0f));
-    } else if (op_name == "exponential") {
+    }
+    if (op_name == "exponential") {
         return bfloat16(std::exp(static_cast<float>(input)));
-    } else if (op_name == "reciprocal") {
+    }
+    if (op_name == "reciprocal") {
         return bfloat16(1 / static_cast<float>(input));
-    } else if (op_name == "gelu") {
+    }
+    if (op_name == "gelu") {
         static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
         auto x = static_cast<float>(input);
         auto x3 = x * x * x;
         float result = x * 0.5 * (1.0 + tanhf(alpha * (x + 0.044715 * x3)));
         return bfloat16(result);
-    } else if (op_name == "sqrt") {
+    }
+    if (op_name == "sqrt") {
         return bfloat16(sqrtf(static_cast<float>(input)));
-    } else if (op_name == "sigmoid") {
+    }
+    if (op_name == "sigmoid") {
         auto x = static_cast<float>(input);
         float result = 1 / (1 + std::exp(-x));
         return bfloat16(result);
-    } else if (op_name == "log") {
-        return bfloat16(logf(static_cast<float>(input)));
-    } else if (op_name == "tanh") {
-        return bfloat16(std::tanh(static_cast<float>(input)));
-    } else if (op_name == "sign") {
-        return bfloat16(
-            (0.0f < static_cast<float>(input)) ? 1.0f : ((static_cast<float>(input) < 0.0f) ? -1.0f : 0.0f));
-    } else {
-        TT_THROW("Unsupported op_name in test");
-        return bfloat16(0.0f);
     }
+    if (op_name == "log") {
+        return bfloat16(logf(static_cast<float>(input)));
+    }
+    if (op_name == "tanh") {
+        return bfloat16(std::tanh(static_cast<float>(input)));
+    }
+    if (op_name == "sign") {
+        float val = static_cast<float>(input);
+        float result = static_cast<float>((val > 0.0f) - (val < 0.0f));
+        return bfloat16(result);
+    }
+    TT_THROW("Unsupported op_name in test");
 }
 vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std::string& op_name, const int seed) {
     if ((op_name == "sqrt") or (op_name == "log")) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.0001f, 4.0f, numel, seed);
-    } else if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
+    }
+    if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
-    } else {
-        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
     }
+    return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
 }
 
 bool is_close_packed_sfpu_output(
@@ -111,19 +119,21 @@ bool is_close_packed_sfpu_output(
     if (op_name == "tanh") {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
-    } else if ((op_name == "gelu") or (op_name == "relu")) {
+    }
+    if ((op_name == "gelu") or (op_name == "relu")) {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.15f); });
-    } else if ((op_name == "exponential")) {
+    }
+    if ((op_name == "exponential")) {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.1f, 0.1f); });
-    } else if ((op_name == "log")) {
+    }
+    if ((op_name == "log")) {
         return is_close_packed_vectors<bfloat16, uint32_t>(
             vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.03f, 0.02f); });
-    } else {
-        return is_close_packed_vectors<bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.06f, 0.006f); });
     }
+    return is_close_packed_vectors<bfloat16, uint32_t>(
+        vec_a, vec_b, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.06f, 0.006f); });
 }
 
 }  // namespace unit_tests::sfpu_util
@@ -155,7 +165,7 @@ bool run_sfpu_all_same_buffer(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -164,11 +174,6 @@ bool run_sfpu_all_same_buffer(
     uint32_t input_dram_byte_address = input_dram_buffer->address();
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
-
-    vector<uint32_t> compute_kernel_args = {
-        uint32_t(test_config.num_tiles),  // per_core_block_cnt
-        1                                 // per_core_block_cnt
-    };
 
     // Input
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
@@ -196,29 +201,70 @@ bool run_sfpu_all_same_buffer(
     };
 
     for (const CoreRange& core_range : test_config.cores.ranges()) {
-        tt_metal::CircularBufferConfig l1_input_cb_config =
-            tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
-                .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
-        tt_metal::CreateCircularBuffer(program_, core_range, l1_input_cb_config);
+        uint32_t in_dfb = 0;
+        uint32_t out_dfb = 0;
+        KernelHandle reader_kernel;
+        KernelHandle writer_kernel;
+        KernelHandle compute_kernel;
 
-        tt_metal::CircularBufferConfig l1_output_cb_config =
-            tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
-                .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
-        tt_metal::CreateCircularBuffer(program_, core_range, l1_output_cb_config);
+        if (device->arch() == ARCH::QUASAR) {
+            tt_metal::experimental::dfb::DataflowBufferConfig in_dfb_config = {
+                .entry_size = test_config.tile_byte_size,
+                .num_entries = test_config.num_tiles,
+                .num_producers = 1,
+                .num_consumers = 1,
+                .enable_implicit_sync = false,
+                .data_format = test_config.l1_input_data_format};
 
-        auto reader_kernel = tt_metal::CreateKernel(
-            program_,
-            "tt_metal/kernels/dataflow/reader_unary.cpp",
-            test_config.cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            tt_metal::experimental::dfb::DataflowBufferConfig out_dfb_config = {
+                .entry_size = test_config.tile_byte_size,
+                .num_entries = test_config.num_tiles,
+                .num_producers = 1,
+                .num_consumers = 1,
+                .enable_implicit_sync = false,
+                .data_format = test_config.l1_output_data_format};
 
-        auto writer_kernel = tt_metal::CreateKernel(
-            program_,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
-            test_config.cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            in_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core_range, in_dfb_config);
+            out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core_range, out_dfb_config);
+
+            reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/reader_unary.cpp",
+                test_config.cores,
+                tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = {in_dfb}});
+
+            writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/writer_unary.cpp",
+                test_config.cores,
+                tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = {out_dfb}});
+        } else {
+            tt_metal::CircularBufferConfig l1_input_cb_config =
+                tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
+                    .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
+            tt_metal::CreateCircularBuffer(program_, core_range, l1_input_cb_config);
+
+            tt_metal::CircularBufferConfig l1_output_cb_config =
+                tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
+                    .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
+            tt_metal::CreateCircularBuffer(program_, core_range, l1_output_cb_config);
+
+            reader_kernel = tt_metal::CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/reader_unary.cpp",
+                test_config.cores,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+
+            writer_kernel = tt_metal::CreateKernel(
+                program_,
+                "tt_metal/kernels/dataflow/writer_unary.cpp",
+                test_config.cores,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+        }
 
         std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
 
@@ -232,14 +278,37 @@ bool run_sfpu_all_same_buffer(
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
 
-        tt_metal::CreateKernel(
-            program_,
-            "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-            test_config.cores,
-            tt_metal::ComputeConfig{
-                .math_approx_mode = test_config.approx_mode,
-                .compile_args = compute_kernel_args,
-                .defines = sfpu_defines});
+        vector<uint32_t> compute_kernel_args = {
+            uint32_t(test_config.num_tiles),  // per_core_block_cnt
+            1                                 // per_core_block_dim
+        };
+
+        if (device->arch() == ARCH::QUASAR) {
+            compute_kernel_args.push_back(in_dfb);
+            compute_kernel_args.push_back(out_dfb);
+            compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+                program_,
+                "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                test_config.cores,
+                tt_metal::experimental::quasar::QuasarComputeConfig{
+                    .num_threads_per_cluster = 1,
+                    .math_approx_mode = test_config.approx_mode,
+                    .compile_args = compute_kernel_args,
+                    .defines = sfpu_defines});
+            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+                program_, in_dfb, reader_kernel, compute_kernel);
+            tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+                program_, out_dfb, compute_kernel, writer_kernel);
+        } else {
+            compute_kernel = tt_metal::CreateKernel(
+                program_,
+                "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                test_config.cores,
+                tt_metal::ComputeConfig{
+                    .math_approx_mode = test_config.approx_mode,
+                    .compile_args = compute_kernel_args,
+                    .defines = sfpu_defines});
+        }
 
         for (const CoreCoord& core_coord : core_range) {
             SetRuntimeArgs(program_, writer_kernel, core_coord, writer_rt_args);
@@ -250,6 +319,7 @@ bool run_sfpu_all_same_buffer(
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
@@ -257,7 +327,7 @@ bool run_sfpu_all_same_buffer(
 
 }  // namespace unit_tests::compute::sfpu
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
-    : public MeshDeviceFixture,
+    : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
     size_t num_tiles = std::get<0>(GetParam());
@@ -301,8 +371,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign")));
+
 class SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture
-    : public MeshDeviceFixture,
+    : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
 
 TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) {
@@ -313,21 +384,20 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "exponential")) or
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log"))) {
         GTEST_SKIP();
-    } else {
-        CoreRange core_range({0, 0}, {0, 0});
-        CoreRangeSet core_range_set({core_range});
-        unit_tests::compute::sfpu::SfpuConfig test_config = {
-            .num_tiles = num_tiles,
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .cores = core_range_set,
-            .sfpu_op = sfpu_op,
-            .approx_mode = true};
-        log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
-        }
+    }
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .cores = core_range_set,
+        .sfpu_op = sfpu_op,
+        .approx_mode = true};
+    log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
     }
 }
 INSTANTIATE_TEST_SUITE_P(
@@ -352,157 +422,5 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "log"),
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign")));
-
-TEST_F(MeshDeviceFixture, DISABLED_TensixMultiContinguousCoreSingleTileSfpuApproxCompute) {
-    CoreRange core_range({0, 0}, {1, 0});
-    CoreRangeSet core_range_set({core_range});
-    unit_tests::compute::sfpu::SfpuConfig test_config = {
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = core_range_set,
-        .approx_mode = true};
-
-    auto arch = this->arch_;
-
-    if (arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    CoreRangeSet core_set({core_range});
-    test_config.cores = core_set;
-
-    test_config.num_tiles = 1;
-    test_config.sfpu_op = "relu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "exponential";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "reciprocal";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "gelu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sqrt";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sigmoid";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "log";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "tanh";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-}
-
-TEST_F(MeshDeviceFixture, DISABLED_TensixMultiContinguousCoreMultiTileSfpuApproxCompute) {
-    CoreRange core_range({0, 0}, {1, 0});
-    CoreRangeSet core_range_set({core_range});
-    unit_tests::compute::sfpu::SfpuConfig test_config = {
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = core_range_set,
-        .approx_mode = true};
-
-    auto arch = this->arch_;
-
-    if (arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    CoreRangeSet core_set({core_range});
-    test_config.cores = core_set;
-
-    test_config.num_tiles = 4;
-
-    test_config.sfpu_op = "relu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "exponential";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "reciprocal";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "gelu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sqrt";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sigmoid";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "log";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "tanh";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-}
-TEST_F(MeshDeviceFixture, DISABLED_TensixAllCoreSingleTileSfpuApproxCompute) {
-    unit_tests::compute::sfpu::SfpuConfig test_config = {
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = CoreRangeSet(),
-        .approx_mode = true};
-
-    auto arch = this->arch_;
-
-    if (arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
-    CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
-
-    CoreRangeSet core_set({core_range});
-    test_config.cores = core_set;
-
-    test_config.num_tiles = 1;
-    test_config.sfpu_op = "relu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "exponential";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "reciprocal";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "gelu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sqrt";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sigmoid";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "log";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "tanh";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-}
-TEST_F(MeshDeviceFixture, DISABLED_TensixAllCoreMultiTileSfpuApproxCompute) {
-    unit_tests::compute::sfpu::SfpuConfig test_config = {
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = CoreRangeSet(),
-        .approx_mode = true};
-
-    auto arch = this->arch_;
-
-    if (arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
-    CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
-
-    CoreRangeSet core_set({core_range});
-    test_config.cores = core_set;
-    test_config.num_tiles = 4;
-    test_config.sfpu_op = "relu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "exponential";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "reciprocal";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "gelu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sqrt";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sigmoid";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "log";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "tanh";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-}
 
 }  // namespace tt::tt_metal

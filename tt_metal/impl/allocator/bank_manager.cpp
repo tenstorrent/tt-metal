@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,9 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 BankManager::AllocatorDependencies::AllocatorDependencies() = default;
 
@@ -124,7 +122,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool 
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
     std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {
         7, 12, 20, 48, 56, 63, 70, 72, 80, 94, 108, 110, 117, 120, 124, 126, 130, 140};
-    bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.count(num_banks) > 0;
+    bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.contains(num_banks);
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {
         TT_THROW(
@@ -140,11 +138,12 @@ BankManager::BankManager(
     const std::vector<int64_t>& bank_offsets,
     DeviceAddr size_bytes,
     uint32_t alignment_bytes,
+    uint32_t dram_alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
     const AllocatorDependencies& dependencies) :
     buffer_type_(buffer_type),
-    interleaved_address_limit_(0),
+
     alignment_bytes_(alignment_bytes),
     allocator_dependencies_(dependencies) {
     unsigned int bank_id = 0;
@@ -156,7 +155,8 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    // Pass in the DRAM alignment to ensure L1<->DRAM or DRAM<->DRAM data transfers are aligned
+    this->init_allocators(size_bytes, dram_alignment_bytes, alloc_offset);
 }
 
 BankManager::BankManager(
@@ -165,6 +165,7 @@ BankManager::BankManager(
     DeviceAddr size_bytes,
     DeviceAddr interleaved_address_limit,
     uint32_t alignment_bytes,
+    uint32_t dram_alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
     const AllocatorDependencies& dependencies) :
@@ -176,7 +177,8 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    // Pass in the DRAM alignment to ensure L1<->DRAM or DRAM<->DRAM data transfers are aligned
+    this->init_allocators(size_bytes, dram_alignment_bytes, alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }
@@ -194,7 +196,7 @@ int64_t BankManager::bank_offset(uint32_t bank_id) const {
 
 void BankManager::validate_bank_id(uint32_t bank_id) const {
     TT_FATAL(
-        bank_id_to_bank_offset_.find(bank_id) != bank_id_to_bank_offset_.end(),
+        bank_id_to_bank_offset_.contains(bank_id),
         "Expected bank {} to be tracked!",
         bank_id,
         bank_id_to_bank_offset_.size());
@@ -276,7 +278,10 @@ const std::vector<std::pair<DeviceAddr, DeviceAddr>>& BankManager::compute_merge
 }
 
 std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_addresses(
-    BankManager::AllocatorDependencies::AllocatorID allocator_id, DeviceAddr size_per_bank, DeviceAddr address_limit) {
+    BankManager::AllocatorDependencies::AllocatorID allocator_id,
+    DeviceAddr size_per_bank,
+    DeviceAddr address_limit,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
@@ -380,6 +385,25 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     std::vector<std::pair<DeviceAddr, DeviceAddr>> updated_available_ranges =
         subtract_ranges(available_ranges, allocated_ranges_in_dependent_allocators);
 
+    // Also subtract additional occupied ranges (e.g., from device-level per-bank allocators passed at allocation time)
+    if (!additional_occupied_ranges.empty()) {
+        // Sort and coalesce additional ranges before subtracting
+        auto sorted_additional = additional_occupied_ranges;
+        std::sort(sorted_additional.begin(), sorted_additional.end(), [](const auto& a, const auto& b) {
+            return a.first < b.first;
+        });
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> coalesced;
+        coalesced.reserve(sorted_additional.size());
+        for (const auto& r : sorted_additional) {
+            if (coalesced.empty() || r.first > coalesced.back().second) {
+                coalesced.push_back(r);
+            } else {
+                coalesced.back().second = std::max(coalesced.back().second, r.second);
+            }
+        }
+        updated_available_ranges = subtract_ranges(updated_available_ranges, coalesced);
+    }
+
     return updated_available_ranges;
 }
 
@@ -389,7 +413,8 @@ uint64_t BankManager::allocate_buffer(
     bool bottom_up,
     const CoreRangeSet& compute_grid,
     std::optional<uint32_t> num_shards,
-    BankManager::AllocatorDependencies::AllocatorID allocator_id) {
+    BankManager::AllocatorDependencies::AllocatorID allocator_id,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
@@ -405,7 +430,8 @@ uint64_t BankManager::allocate_buffer(
             num_compute_banks);
         num_banks = num_shards.value();
     }
-    DeviceAddr size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
+    DeviceAddr size_per_bank =
+        tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
     DeviceAddr address_limit = 0;
     if (!is_sharded and buffer_type_ == BufferType::L1) {
         address_limit = interleaved_address_limit_;
@@ -420,16 +446,32 @@ uint64_t BankManager::allocate_buffer(
     // vs. top-down allocation
     if (dependent_allocators.empty()) {
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
-        TT_FATAL(
-            address.has_value(),
-            "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-            "store {} B, but bank size is only {} B",
-            size,
-            enchantum::to_string(buffer_type_),
-            num_banks,
-            size_per_bank,
-            bank_size());
+        if (!address.has_value()) {
+            auto mem_stats = alloc->get_statistics();
+            TT_FATAL(
+                false,
+                "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
+                "store {} B, but bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+                size,
+                enchantum::to_string(buffer_type_),
+                num_banks,
+                size_per_bank,
+                bank_size(),
+                mem_stats.total_allocated_bytes,
+                mem_stats.total_free_bytes,
+                mem_stats.largest_free_block_bytes);
+        }
         allocated_buffers_[allocator_id.get()].insert(address.value());
+
+        // Track allocation high water mark
+        if (tracking_high_water_mark_) {
+            // Calculate end address in interleaved space: address + size_per_bank
+            // Bank offsets don't need to be accounted for here since overlap comparisons
+            // are done in interleaved space where both allocations have the same bank offset applied
+            DeviceAddr end_address = address.value() + size_per_bank;
+            allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
+        }
+
         // No neighbors, nothing to invalidate
         return address.value();
     }
@@ -437,7 +479,7 @@ uint64_t BankManager::allocate_buffer(
     // Get available address ranges after subtracting dependencies
     // The pair represents (start, end) of the available address range(s)
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges =
-        this->compute_available_addresses(allocator_id, size_per_bank, address_limit);
+        this->compute_available_addresses(allocator_id, size_per_bank, address_limit, additional_occupied_ranges);
 
     // Choose an address from the allowed ranges respecting alignment and direction
     // Addresses should already be aligned to alignment_bytes_
@@ -461,14 +503,21 @@ uint64_t BankManager::allocate_buffer(
         }
     }
 
-    TT_FATAL(
-        chosen.has_value(),
-        "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
-        "per bank)",
-        size,
-        enchantum::to_string(buffer_type_),
-        num_banks,
-        size_per_bank);
+    if (!chosen.has_value()) {
+        auto mem_stats = alloc->get_statistics();
+        TT_FATAL(
+            false,
+            "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
+            "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+            size,
+            enchantum::to_string(buffer_type_),
+            num_banks,
+            size_per_bank,
+            bank_size(),
+            mem_stats.total_allocated_bytes,
+            mem_stats.total_free_bytes,
+            mem_stats.largest_free_block_bytes);
+    }
     TT_FATAL(
         chosen.value() % alignment_bytes_ == 0,
         "Chosen address {} is not aligned to {} B",
@@ -478,6 +527,16 @@ uint64_t BankManager::allocate_buffer(
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());
+
+    // Track allocation high water mark
+    if (tracking_high_water_mark_) {
+        // Calculate end address in interleaved space: address + size_per_bank
+        // Bank offsets don't need to be accounted for here since overlap comparisons
+        // are done in interleaved space where both allocations have the same bank offset applied
+        DeviceAddr end_address = address.value() + size_per_bank;
+        allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
+    }
+
     // Allocation in this allocator invalidates caches in allocators that depend on this allocator
     this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
     return address.value();
@@ -486,6 +545,17 @@ uint64_t BankManager::allocate_buffer(
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
+
+    // Track deletion high water mark - remember the extent of buffers being freed
+    if (tracking_high_water_mark_) {
+        auto size_opt = alloc->get_allocation_size(address);
+        if (size_opt.has_value()) {
+            // Update deletion high water mark with the end address of the buffer being deallocated
+            DeviceAddr end_address = address + size_opt.value();
+            deletion_high_water_mark_ = std::max(deletion_high_water_mark_, end_address);
+        }
+    }
+
     alloc->deallocate(address);
     allocated_buffers_[allocator_id.get()].erase(address);
     // Deallocation in this allocator invalidates caches in allocators that depend on this allocator
@@ -544,6 +614,25 @@ Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::Alloc
     const auto* alloc = this->get_allocator_from_id(allocator_id);
     return alloc ? alloc->get_statistics() : Statistics();
 }
+
+void BankManager::begin_high_water_mark_tracking() {
+    tracking_high_water_mark_ = true;
+    allocation_high_water_mark_ = 0;
+    deletion_high_water_mark_ = 0;
+}
+
+DeviceAddr BankManager::end_high_water_mark_tracking() {
+    tracking_high_water_mark_ = false;
+    return std::max(allocation_high_water_mark_, deletion_high_water_mark_);
+}
+
+DeviceAddr BankManager::get_high_water_mark() const {
+    return std::max(allocation_high_water_mark_, deletion_high_water_mark_);
+}
+
+DeviceAddr BankManager::get_allocation_high_water_mark() const { return allocation_high_water_mark_; }
+
+DeviceAddr BankManager::get_deletion_high_water_mark() const { return deletion_high_water_mark_; }
 
 void BankManager::dump_blocks(std::ostream& out, BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);
@@ -634,6 +723,43 @@ AllocatorState::BufferTypeState BankManager::extract_merged_state() const {
     return merged_state;
 }
 
+void BankManager::mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size) {
+    auto* alloc = get_allocator_from_id(allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
+    // Skip if this address is already marked (e.g., multiple devices mirroring the same address)
+    if (allocated_buffers_[allocator_id.get()].contains(address)) {
+        return;
+    }
+    auto stats = alloc->get_statistics();
+    auto result = alloc->allocate_at_address(address, size);
+    TT_FATAL(
+        result.has_value(),
+        "Failed to mirror allocation at address {} of size {} in allocator {} "
+        "(num_allocators={}, bank_size={}, alloc_stats: total_alloc={}, total_free={}, largest_free={})",
+        address,
+        size,
+        allocator_id.get(),
+        allocator_dependencies_.num_allocators(),
+        bank_size(),
+        stats.total_allocated_bytes,
+        stats.total_free_bytes,
+        stats.largest_free_block_bytes);
+    allocated_buffers_[allocator_id.get()].insert(address);
+    invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
+}
+
+void BankManager::mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address) {
+    auto* alloc = get_allocator_from_id(allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized for ID {}", allocator_id.get());
+    // Skip if this address is not marked (e.g., was deduplicated during mirroring)
+    if (!allocated_buffers_[allocator_id.get()].contains(address)) {
+        return;
+    }
+    alloc->deallocate(address);
+    allocated_buffers_[allocator_id.get()].erase(address);
+    invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
+}
+
 void BankManager::apply_state(
     const AllocatorState::BufferTypeState& state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
     // Validate compatibility
@@ -702,6 +828,4 @@ bool BankManager::can_apply_state(const AllocatorState::BufferTypeState& state) 
            alignment_bytes_ == state.alignment_bytes;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

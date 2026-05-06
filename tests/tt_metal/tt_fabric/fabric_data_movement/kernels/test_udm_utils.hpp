@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,8 @@
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm_impl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 // Function to notify receiver about incoming data (for both reads and writes)
 // Used by sender to inform receiver about incoming packets
@@ -90,4 +90,12 @@ inline void print_udm_control_fields(volatile tt_l1_ptr uint32_t* packet_start_a
     DPRINT << "  risc_id: " << (uint32_t)header->udm_control.write.risc_id << "\n";
     DPRINT << "  transaction_id: " << (uint32_t)header->udm_control.write.transaction_id << "\n";
     DPRINT << "  posted: " << (uint32_t)header->udm_control.write.posted << "\n";
+    DEVICE_PRINT("UDM Control Fields (Packet {}):\n", packet_index);
+    DEVICE_PRINT("  src_chip_id: {}\n", (uint32_t)header->udm_control.write.src_chip_id);
+    DEVICE_PRINT("  src_mesh_id: {}\n", (uint32_t)header->udm_control.write.src_mesh_id);
+    DEVICE_PRINT("  src_noc_x: {}\n", (uint32_t)header->udm_control.write.src_noc_x);
+    DEVICE_PRINT("  src_noc_y: {}\n", (uint32_t)header->udm_control.write.src_noc_y);
+    DEVICE_PRINT("  risc_id: {}\n", (uint32_t)header->udm_control.write.risc_id);
+    DEVICE_PRINT("  transaction_id: {}\n", (uint32_t)header->udm_control.write.transaction_id);
+    DEVICE_PRINT("  posted: {}\n", (uint32_t)header->udm_control.write.posted);
 }

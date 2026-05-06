@@ -1,7 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
+#include "context/context_types.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
@@ -9,40 +12,43 @@
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
+#include "impl/sub_device/sub_device_impl.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <map>
 #include <optional>
 #include <set>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include "allocator.hpp"
+#include "common/env_lib.hpp"
 #include <tt_stl/assert.hpp>
-#include "dispatch/command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
+#include "memory_tracking/memory_stats_shm.hpp"
+#include "memory_tracking/shm_tracking_processor.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include "core_coord.hpp"
 #include "device.hpp"
-#include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/dispatch_query_manager.hpp"
 #include "hal_types.hpp"
-#include "jit_build/build.hpp"
+#include "impl/context/metal_context.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
@@ -52,7 +58,6 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
-#include "sub_device/sub_device_manager_tracker.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -60,26 +65,15 @@
 #include <impl/debug/watcher_server.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
-namespace tt {
-
-namespace tt_metal {
-
-uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
-    return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
-}
-
-uint64_t IDevice::get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
-    return MetalContext::instance().hal().get_dev_size(this->get_programmable_core_type(virtual_core), addr_type);
-}
+namespace tt::tt_metal {
 
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
     this->get_program_cache().set_cache_misses_allowed(allowed);
 }
 
-Device::Device(Device&& other) noexcept = default;
-Device& Device::operator=(Device&& other) noexcept = default;
-
 Device::Device(
+    MetalEnv* env,
+    MetalContext* context,
     ChipId device_id,
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
@@ -87,31 +81,33 @@ Device::Device(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
     uint32_t /*worker_thread_core*/,
-    uint32_t completion_queue_reader_core,
+    uint32_t /*completion_queue_reader_core*/,
     size_t worker_l1_size) :
-    id_(device_id), completion_queue_reader_core_(completion_queue_reader_core) {
+    context_(context), env_(env), id_(device_id) {
     ZoneScoped;
+    TT_FATAL(env != nullptr, "env is nullptr");
+    TT_FATAL(context != nullptr, "context is nullptr");
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
-    return tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(
+    return MetalEnvAccessor(*env_).impl().get_control_plane().get_active_ethernet_cores(
         this->id_, skip_reserved_tunnel_cores);
 }
 
 bool Device::is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores) const {
     auto active_ethernet_cores = this->get_active_ethernet_cores(skip_reserved_tunnel_cores);
-    return active_ethernet_cores.find(logical_core) != active_ethernet_cores.end();
+    return active_ethernet_cores.contains(logical_core);
 }
 
 std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const {
-    return tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
+    return MetalEnvAccessor(*env_).impl().get_control_plane().get_inactive_ethernet_cores(this->id_);
 }
 
 bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     auto inactive_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
-    return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
+        MetalEnvAccessor(*env_).impl().get_control_plane().get_inactive_ethernet_cores(this->id_);
+    return inactive_ethernet_cores.contains(logical_core);
 }
 
 uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
@@ -119,64 +115,47 @@ uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
 }
 
 std::tuple<ChipId, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_connected_ethernet_core(
         std::make_tuple(this->id_, eth_core));
 }
 
 std::vector<CoreCoord> Device::get_ethernet_sockets(ChipId connected_chip_id) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_sockets(this->id_, connected_chip_id);
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_ethernet_sockets(this->id_, connected_chip_id);
 }
 
 bool Device::is_mmio_capable() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->id_) == this->id_;
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_associated_mmio_device(this->id_) == this->id_;
 }
 
-CoreRangeSet Device::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
+CoreRangeSet Device::worker_cores(HalProgrammableCoreType /*core_type*/, SubDeviceId /*sub_device_id*/) const {
+    TT_FATAL(false, "worker_cores is deprecated for device");
+    return CoreRangeSet{};
 }
 
-uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).num_cores(core_type);
+uint32_t Device::num_worker_cores(HalProgrammableCoreType /*core_type*/, SubDeviceId /*sub_device_id*/) const {
+    TT_FATAL(false, "num_worker_cores is deprecated for device");
+    return 0U;
 }
 
-void Device::initialize_default_sub_device_state(
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t worker_l1_unreserved_start,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
-    // Create the default sub-device manager representing the entire chip
-    const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    const auto& active_eth_cores = this->get_active_ethernet_cores(true);
-    std::vector<CoreRange> active_eth_core_ranges;
-    active_eth_core_ranges.reserve(active_eth_cores.size());
-    for (const auto& core : active_eth_cores) {
-        active_eth_core_ranges.emplace_back(core, core);
-    }
-
-    auto sub_devices = {SubDevice(std::array{
-        CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
-        CoreRangeSet(std::move(active_eth_core_ranges))})};
-
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this,
-        this->initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap),
-        sub_devices);
-}
-
-std::unique_ptr<Allocator> Device::initialize_allocator(
+std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
+    auto& dispatch_core_manager = context_->get_dispatch_core_manager();
     auto config = L1BankingAllocator::generate_config(
+        dispatch_core_manager,
+        MetalEnvAccessor(*env_).impl(),
         this->id(),
         this->num_hw_cqs(),
         l1_small_size,
         trace_region_size,
         worker_l1_unreserved_start,
         {l1_bank_remap.begin(), l1_bank_remap.end()});
+    config.allocator_mode =
+        context_->rtoptions().get_allocator_mode_hybrid() ? AllocatorMode::HYBRID : AllocatorMode::LOCKSTEP;
 
     for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->ethernet_cores_.insert({core.x, core.y});
@@ -189,9 +168,9 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
 
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch
 // cores
-void Device::configure_command_queue_programs() {
+void Device::configure_command_queue_programs(DispatchTopology* dispatch_topology) {
     ChipId device_id = this->id();
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId mmio_device_id = MetalEnvAccessor(*env_).impl().get_cluster().get_associated_mmio_device(device_id);
 
     std::vector<uint32_t> zero = {0x0};  // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
@@ -204,104 +183,116 @@ void Device::configure_command_queue_programs() {
     // Reset host-side command queue pointers for all channels controlled by this mmio device
     if (this->is_mmio_capable()) {
         for (ChipId serviced_device_id :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device_id)) {
-            uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-                serviced_device_id);
-            uint32_t host_issue_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
-                CommandQueueHostAddrType::ISSUE_Q_RD);
-            uint32_t host_issue_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
-                CommandQueueHostAddrType::ISSUE_Q_WR);
-            uint32_t host_completion_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
-                CommandQueueHostAddrType::COMPLETION_Q_WR);
-            uint32_t host_completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
-                CommandQueueHostAddrType::COMPLETION_Q_RD);
-            uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
-                CommandQueueHostAddrType::UNRESERVED);
+             MetalEnvAccessor(*env_).impl().get_cluster().get_devices_controlled_by_mmio_device(device_id)) {
+            uint16_t channel =
+                MetalEnvAccessor(*env_).impl().get_cluster().get_assigned_channel_for_device(serviced_device_id);
+            uint32_t host_issue_q_rd_ptr =
+                context_->dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
+            uint32_t host_issue_q_wr_ptr =
+                context_->dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+            uint32_t host_completion_q_wr_ptr =
+                context_->dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+            uint32_t host_completion_q_rd_ptr =
+                context_->dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t cq_start =
+                context_->dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
             pointers.resize(cq_start / sizeof(uint32_t));
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 // Reset the host manager's pointer for this command queue
                 this->sysmem_manager_->reset(cq_id);
 
-                pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] =
-                    (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-                pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] =
-                    (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-                pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) +
-                     get_absolute_cq_offset(channel, cq_id, cq_size)) >>
-                    4;
-                pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) +
-                     get_absolute_cq_offset(channel, cq_id, cq_size)) >>
-                    4;
+                const uint32_t cq_offset =
+                    this->sysmem_manager_->is_dram_backed()
+                        ? get_absolute_cq_offset(
+                              channel, cq_id, cq_size, this->sysmem_manager_->get_dram_region_base_addr())
+                        : get_absolute_cq_offset(channel, cq_id, cq_size);
 
-                tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
-                    pointers.data(),
-                    pointers.size() * sizeof(uint32_t),
-                    get_absolute_cq_offset(channel, cq_id, cq_size),
-                    mmio_device_id,
-                    get_umd_channel(channel));
+                pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
+                pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
+                pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
+                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
+                pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
+                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
+
+                if (this->sysmem_manager_->is_dram_backed()) {
+                    MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
+                        pointers.data(), pointers.size() * sizeof(uint32_t), this->id(), 0, cq_offset);
+                } else {
+                    MetalEnvAccessor(*env_).impl().get_cluster().write_sysmem(
+                        pointers.data(),
+                        pointers.size() * sizeof(uint32_t),
+                        cq_offset,
+                        mmio_device_id,
+                        get_umd_channel(channel));
+                }
             }
         }
     }
 
     // Write device-side cq pointers
-    configure_dispatch_cores(this);
+    TT_ASSERT(
+        dispatch_topology != nullptr,
+        "Dispatch topology required for configure_command_queue_programs (fast dispatch)");
+    dispatch_topology->configure_dispatch_cores(this);
 
     // Run the cq program
     command_queue_program.impl().finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
+    MetalEnvAccessor(*env_).impl().get_cluster().l1_barrier(this->id());
 }
 
 void Device::init_command_queue_host() {
-    sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    // SystemMemoryManager now has internal stubs for mock/emulated devices
+    sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, this->num_hw_cqs());
 
-    auto cq_shared_state = std::make_shared<CQSharedState>();
-    cq_shared_state->sub_device_cq_owner.resize(1);
+    // For mock/emulated devices, skip HWCommandQueue creation (they don't need real command queues)
+    if (MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
+        return;
+    }
+
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(std::make_unique<HWCommandQueue>(
-            this, cq_shared_state, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
+        command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, k_dispatch_downstream_noc));
     }
 }
 
-void Device::init_command_queue_device() {
-    this->command_queue_programs_.push_back(get_compiled_cq_program(this));
+void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
+    TT_ASSERT(topo != nullptr, "Dispatch topology required for init_command_queue_device_with_topology");
+    this->command_queue_programs_.push_back(topo->get_compiled_cq_program(this));
     TT_ASSERT(this->command_queue_programs_.size() == 1);
-    this->configure_command_queue_programs();
+    this->configure_command_queue_programs(topo);
     Program& command_queue_program = *this->command_queue_programs_[0];
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+    auto& cluster = env_impl.get_cluster();
+    const auto& hal = env_impl.get_hal();
 
     // Write 0 to all workers launch message read pointer. Need to do this since dispatch cores are written new on each
     // Device init. TODO: remove this once dispatch init moves to one-shot.
-    auto reset_launch_message_rd_ptr = [&](const CoreCoord& logical_core, const CoreType& core_type) {
-        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            id_, logical_core, core_type);
-        auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint64_t launch_msg_buffer_read_ptr_addr = MetalContext::instance().hal().get_dev_addr(
-            programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+    auto reset_launch_message_rd_ptr_virtual = [&](const CoreCoord& virtual_core,
+                                                   HalProgrammableCoreType programmable_core_type) {
+        uint64_t launch_msg_buffer_read_ptr_addr =
+            hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
         uint32_t zero = 0;
-        MetalContext::instance().get_cluster().write_core(
-            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
+        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
+    };
+    auto reset_launch_message_rd_ptr = [&](const CoreCoord& logical_core, const CoreType& core_type) {
+        CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
+        auto programmable_core_type = get_programmable_core_type(virtual_core);
+        reset_launch_message_rd_ptr_virtual(virtual_core, programmable_core_type);
     };
     auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
-        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            id_, logical_core, core_type);
+        CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint32_t go_message_addr =
-            MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+        uint64_t go_message_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
         uint32_t zero = 0;
-        MetalContext::instance().get_cluster().write_core(
-            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(id_);
-        uint32_t go_message_index_addr =
-            MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
-        MetalContext::instance().get_cluster().write_core(
-            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
+        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
+        cluster.l1_barrier(id_);
+        uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
-        watcher_lock = MetalContext::instance().watcher_server()->get_lock();
+    if (MetalEnvAccessor(*env_).impl().get_rtoptions().get_watcher_enabled()) {
+        watcher_lock = context_->watcher_server()->get_lock();
     }
     for (uint32_t y = 0; y < logical_grid_size().y; y++) {
         for (uint32_t x = 0; x < logical_grid_size().x; x++) {
@@ -311,17 +302,27 @@ void Device::init_command_queue_device() {
         }
     }
     for (const auto& logical_core : this->get_active_ethernet_cores()) {
+        if (!has_flag(env_impl.get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     for (const auto& logical_core : this->get_inactive_ethernet_cores()) {
+        if (!has_flag(env_impl.get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
+    }
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        for (const auto& dram_core : cluster.get_soc_desc(id_).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+            reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
+        }
     }
     if (watcher_lock) {
         watcher_lock.value().unlock();
     }
 
     std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.impl().logical_cores();
-    const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_dispatch_cores = logical_cores[index];
         CoreType core_type = hal.get_core_type(index);
@@ -335,16 +336,38 @@ void Device::init_command_queue_device() {
                 virtual_core,
                 msg.view(),
                 go_msg,
-                this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
+                hal.get_dev_addr(this->get_programmable_core_type(virtual_core), HalL1MemAddrType::LAUNCH));
         }
     }
+
+    // Precompute NOC data for go signals and set on dispatch command queues
+    const auto& active_eth_cores = get_active_ethernet_cores(true);
+    std::vector<CoreRange> active_eth_core_ranges;
+    active_eth_core_ranges.reserve(active_eth_cores.size());
+    for (const auto& core : active_eth_cores) {
+        active_eth_core_ranges.emplace_back(core, core);
+    }
+
+    const NOC noc_index = context_->get_dispatch_query_manager().go_signal_noc();
+    uint32_t idx = 0U;
+    vector_aligned<uint32_t> noc_mcast_unicast_data;
+    for (uint32_t i = 0U; i < num_sub_devices(); ++i) {
+        for (const auto& core_range : active_eth_core_ranges) {
+            noc_mcast_unicast_data.resize(idx + core_range.size());
+            for (const auto& core : core_range) {
+                const auto virtual_core = virtual_core_from_logical_core(core, CoreType::ETH);
+                noc_mcast_unicast_data[idx++] = get_noc_unicast_encoding(noc_index, virtual_core);
+            }
+        }
+    }
+
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
     for (auto& hw_cq : this->command_queues_) {
-        hw_cq->set_go_signal_noc_data_and_dispatch_sems(
-            sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
-            sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
+        hw_cq->set_go_signal_noc_data_and_dispatch_sems(num_sub_devices(), noc_mcast_unicast_data);
     }
 }
+
+void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
 bool Device::compile_fabric() {
     fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
@@ -365,9 +388,10 @@ void Device::configure_fabric() {
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox have all landed
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+    env_impl.get_cluster().l1_barrier(this->id());
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = env_impl.get_hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
@@ -379,16 +403,14 @@ void Device::configure_fabric() {
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
-                this->id(), physical_core, msg, go_msg, this->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+                this->id(),
+                physical_core,
+                msg,
+                go_msg,
+                hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
-}
-
-// backward compatibility
-void Device::init_fabric() {
-    this->compile_fabric();
-    this->configure_fabric();
 }
 
 bool Device::initialize(
@@ -411,9 +433,10 @@ bool Device::initialize(
         num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS,
         "num_hw_cqs can be between 1 and {}",
         dispatch_core_manager::MAX_NUM_HW_CQS);
-    using_fast_dispatch_ = MetalContext::instance().rtoptions().get_fast_dispatch();
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+    using_fast_dispatch_ = env_impl.get_rtoptions().get_fast_dispatch();
     num_hw_cqs_ = num_hw_cqs;
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = env_impl.get_hal();
     if (worker_l1_size == 0) {
         worker_l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     }
@@ -428,17 +451,73 @@ bool Device::initialize(
         worker_l1_size,
         max_worker_l1_size);
     log_debug(tt::LogMetal, "Worker L1 size: {} Max: {}", worker_l1_size, max_worker_l1_size);
-    std::uint32_t max_alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1));
-    uint32_t worker_l1_unreserved_start = tt::align(
+
+    const uint32_t max_alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1));
+    const uint32_t worker_l1_unreserved_start = tt::align(
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
             hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size,
         max_alignment);
-    this->initialize_default_sub_device_state(
-        l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
+    default_allocator_ =
+        initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal) {
         return true;
+    }
+
+    // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1)
+    if (!MetalContext::instance().rtoptions().get_shm_tracking_disabled()) {
+        // Use UMD's chip_unique_ids for globally unique chip identification.
+        // This ID is computed by topology discovery from hardware-reported board_id and asic_location,
+        // and is consistent across all board types (P300, N300, UBB Wormhole, UBB Blackhole, etc.).
+        uint64_t asic_id = 0;
+
+        try {
+            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            auto* cluster_desc = cluster.get_cluster_desc();
+
+            if (cluster_desc) {
+                const auto& unique_ids = cluster_desc->get_chip_unique_ids();
+                auto it = unique_ids.find(this->id_);
+                if (it != unique_ids.end()) {
+                    asic_id = it->second;
+                    log_debug(
+                        tt::LogMetal,
+                        "Device {}: using UMD chip_unique_id=0x{:x} for SHM tracking",
+                        this->id_,
+                        asic_id);
+                } else {
+                    asic_id = this->id_;
+                    log_warning(
+                        tt::LogMetal, "Device {} not found in chip_unique_ids, using device_id as asic_id", this->id_);
+                }
+            } else {
+                asic_id = this->id_;
+                log_warning(
+                    tt::LogMetal,
+                    "ClusterDescriptor not available for device {}, using device_id as asic_id",
+                    this->id_);
+            }
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "Error getting asic_id for device {}: {}. Using device_id as fallback.",
+                this->id_,
+                e.what());
+            asic_id = this->id_;
+        }
+
+        shm_stats_provider_ = std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_);
+        log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
+
+        // Register ShmTrackingProcessor globally once (when first device with SHM is created)
+        static bool shm_processor_registered = false;
+        if (!shm_processor_registered) {
+            tt::tt_metal::GraphTracker::instance().push_processor(
+                std::make_shared<tt::tt_metal::ShmTrackingProcessor>());
+            log_debug(tt::LogMetal, "ShmTrackingProcessor registered with GraphTracker");
+            shm_processor_registered = true;
+        }
     }
 
     this->initialized_ = true;
@@ -455,12 +534,16 @@ bool Device::close() {
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
-    sub_device_manager_tracker_.reset(nullptr);
+    default_allocator_.reset();
 
     this->ethernet_cores_.clear();
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
+
+    // Clean up shared memory stats provider
+    this->shm_stats_provider_.reset();
+
     this->initialized_ = false;
 
     return true;
@@ -473,54 +556,53 @@ Device::~Device() {
     }
 }
 
-tt::ARCH Device::arch() const { return tt::tt_metal::MetalContext::instance().get_cluster().arch(); }
+tt::ARCH Device::arch() const { return MetalEnvAccessor(*env_).impl().get_cluster().arch(); }
 
 int Device::num_dram_channels() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_num_dram_views();
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).get_num_dram_views();
 }
 
 uint32_t Device::l1_size_per_core() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).worker_l1_size;
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).worker_l1_size;
 }
 uint32_t Device::dram_size_per_channel() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).dram_view_size;
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).dram_view_size;
 }
 
-CoreCoord Device::grid_size() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).grid_size;
-}
+int Device::get_clock_rate_mhz() const { return MetalEnvAccessor(*env_).impl().get_cluster().get_device_aiclk(id_); }
+
+CoreCoord Device::grid_size() const { return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).grid_size; }
 
 CoreCoord Device::logical_grid_size() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_grid_size(CoreType::TENSIX);
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).get_grid_size(CoreType::TENSIX);
 }
 
 CoreCoord Device::dram_grid_size() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_dram_grid_size();
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).get_dram_grid_size();
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
+    const auto& dispatch_core_config = context_->get_dispatch_core_manager().get_dispatch_core_config();
+    return tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
 }
 
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y || this->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
-    } else {
-        const auto& grid_size = this->grid_size();
-        // Coordinate in Physical NOC0 Space. Convert to Virtual.
-        coord = this->virtual_core_from_physical_core(coord);
-        // Derive virtual coord in noc_index space.
-        CoreCoord virtual_coord = {
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
-            MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
-        return virtual_coord;
     }
+    const auto& grid_size = this->grid_size();
+    // Coordinate in Physical NOC0 Space. Convert to Virtual.
+    coord = this->virtual_core_from_physical_core(coord);
+    // Derive virtual coord in noc_index space.
+    const Hal& hal = MetalEnvAccessor(*env_).impl().get_hal();
+    CoreCoord virtual_coord = {
+        hal.noc_coordinate(noc_index, grid_size.x, coord.x), hal.noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return virtual_coord;
 }
 
 CoreCoord Device::physical_worker_core_from_logical_core(const CoreCoord& logical_core) const {
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
     return soc_desc.get_physical_tensix_core_from_logical(logical_core);
 }
 
@@ -542,12 +624,12 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
 }
 
 CoreCoord Device::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_virtual_coordinate_from_logical_coordinates(
         this->id_, logical_coord, core_type);
 }
 
 CoreCoord Device::virtual_core_from_physical_core(const CoreCoord& physical_coord) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_virtual_coordinate_from_physical_coordinates(
         this->id_, physical_coord);
 }
 
@@ -560,61 +642,62 @@ CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord& logical_core)
 }
 
 CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_logical_ethernet_core_from_virtual(
         this->id(), ethernet_core);
 }
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
     auto virtual_noc_coord = this->virtual_noc0_coordinate(noc_index, core);
-    return tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_noc_coord.x, virtual_noc_coord.y);
+    return MetalEnvAccessor(*env_).impl().get_hal().noc_xy_encoding(virtual_noc_coord.x, virtual_noc_coord.y);
 }
 
 uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
     auto virtual_noc_start = this->virtual_noc0_coordinate(noc_index, cores.start_coord);
     auto virtual_noc_end = this->virtual_noc0_coordinate(noc_index, cores.end_coord);
-
+    const auto& hal = MetalEnvAccessor(*env_).impl().get_hal();
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
-        return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+        return hal.noc_multicast_encoding(
             virtual_noc_start.x, virtual_noc_start.y, virtual_noc_end.x, virtual_noc_end.y);
-    } else {
-        return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
-            virtual_noc_end.x, virtual_noc_end.y, virtual_noc_start.x, virtual_noc_start.y);
     }
+    return hal.noc_multicast_encoding(virtual_noc_end.x, virtual_noc_end.y, virtual_noc_start.x, virtual_noc_start.y);
 }
 
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const { return default_allocator_; }
+
 const std::unique_ptr<Allocator>& Device::allocator() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
+    const auto& allocator{this->allocator_impl()};
+    return allocator->view();
+}
+
+const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId /*sub_device_id*/) const {
+    return default_allocator_;
 }
 
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+    const auto& allocator{this->allocator_impl(sub_device_id)};
+    return allocator->view();
 }
 
-uint32_t Device::num_sub_devices() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
-}
+uint32_t Device::num_sub_devices() const { return 1U; }
 
 CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel, NOC noc) const {
-    return tt::tt_metal::MetalContext::instance()
-        .get_cluster()
-        .get_soc_desc(id_)
-        .get_preferred_worker_core_for_dram_view(dram_channel, noc);
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).get_preferred_worker_core_for_dram_view(
+        dram_channel, noc);
 }
 
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_logical_core_for_dram_view(
-        dram_channel);
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).get_logical_core_for_dram_view(dram_channel);
 }
 
 uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_dram_channel_from_logical_core(
+    return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).get_dram_channel_from_logical_core(
         logical_core);
 }
 
 uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
-    uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
+    const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
+    uint32_t num_nocs = MetalEnvAccessor(*env_).impl().get_hal().get_num_nocs();
     for (uint32_t noc = 0; noc < num_nocs; noc++) {
         for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
             if (soc_desc.get_preferred_worker_core_for_dram_view(channel, noc) == virtual_core) {
@@ -626,23 +709,30 @@ uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) c
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
-    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
+    return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> sub_device_ids) const {
-    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
+    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) const {
+    return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
-CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
+HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch_);
-    if (!using_fast_dispatch_) {
-        return *(CommandQueue*)(IDevice*)this;
-    }
+    TT_FATAL(using_fast_dispatch_, "Fast dispatch must be enabled to use command_queue");
     auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *command_queues_[actual_cq_id];
+}
+
+SystemMemoryManager& Device::sysmem_manager() {
+    // SystemMemoryManager handles mock devices internally with stubs
+    // For mock devices, ensure lazy initialization if not already done
+    if (!sysmem_manager_) {
+        sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, 1);
+    }
+    return *sysmem_manager_;
 }
 
 void Device::enable_program_cache() {
@@ -663,73 +753,82 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
-void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
-void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
-bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
+bool Device::has_noc_mcast_txns(SubDeviceId /*sub_device_id*/) const {
+    TT_FATAL(false, "has_noc_mcast_txns is deprecated for device");
+    return false;
 }
 
-uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
+uint8_t Device::num_noc_unicast_txns(SubDeviceId /*sub_device_id*/) const {
+    TT_FATAL(false, "num_noc_unicast_txns is deprecated for device");
+    return 0U;
 }
 
-uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
+uint8_t Device::noc_data_start_index(SubDeviceId /*sub_device_id*/, bool unicast_data) const {
     if (unicast_data) {
-        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
-            sub_device_id);
-    } else {
-        return 0;
+        TT_FATAL(false, "noc_data_start_index is deprecated for unicast mode for device");
     }
+    return 0U;
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
+    if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
+        return CoreCoord{0, 0};  // Return default for mock devices
+    }
     return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 
-SubDeviceManagerId Device::get_active_sub_device_manager_id() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->id();
-}
+SubDeviceManagerId Device::get_active_sub_device_manager_id() const { return SubDeviceManagerId{0U}; }
 
-SubDeviceManagerId Device::get_default_sub_device_manager_id() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
+SubDeviceManagerId Device::get_default_sub_device_manager_id() const { return SubDeviceManagerId{0U}; }
+
+SubDeviceManagerId Device::create_sub_device_manager(
+    std::initializer_list<SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
+    TT_FATAL(false, "create_sub_device_manager is deprecated for device");
+    return SubDeviceManagerId{0U};
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(
-    std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
+    tt::stl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
+    TT_FATAL(false, "create_sub_device_manager is deprecated for device");
+    return SubDeviceManagerId{0U};
 }
 
-SubDeviceManagerId Device::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
+void Device::load_sub_device_manager(SubDeviceManagerId /*sub_device_manager_id*/) {
+    TT_FATAL(false, "load_sub_device_manager is deprecated for device");
 }
 
-void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
-    sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
+void Device::clear_loaded_sub_device_manager() {
+    TT_FATAL(false, "clear_loaded_sub_device_manager is deprecated for device");
 }
 
-void Device::clear_loaded_sub_device_manager() { sub_device_manager_tracker_->clear_loaded_sub_device_manager(); }
-
-void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
-    sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
+void Device::remove_sub_device_manager(SubDeviceManagerId /*sub_device_manager_id*/) {
+    TT_FATAL(false, "remove_sub_device_manager is deprecated for device");
 }
 
 const std::vector<SubDeviceId>& Device::get_sub_device_ids() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
+    static std::vector<SubDeviceId> ids;
+    TT_FATAL(false, "get_sub_device_ids is deprecated for device");
+    return ids;
 }
 
 const std::vector<SubDeviceId>& Device::get_sub_device_stall_group() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_stall_group();
+    static std::vector<SubDeviceId> ids;
+    TT_FATAL(false, "get_sub_device_stall_group is deprecated for device");
+    return ids;
 }
 
-void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    sub_device_manager_tracker_->get_active_sub_device_manager()->set_sub_device_stall_group(sub_device_ids);
+void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+    TT_FATAL(false, "set_sub_device_stall_group is deprecated for device");
 }
 
 void Device::reset_sub_device_stall_group() {
-    sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
+    TT_FATAL(false, "reset_sub_device_stall_group is deprecated for device");
 }
 
 std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
@@ -748,14 +847,16 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         // Get physical coordinates of DRAM Controller NOC end-points
         uint32_t num_dram_banks = this->num_dram_channels();
 
-        const auto& hal = MetalContext::instance().hal();
-        bool noc_translation_enabled =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
-                this->id());
+        const auto& hal = MetalEnvAccessor(*env_).impl().get_hal();
+        bool noc_translation_enabled = true;
+        if (!MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
+            noc_translation_enabled =
+                MetalEnvAccessor(*env_).impl().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
+                    this->id());
+        }
         bool dram_is_virtualized =
             noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
-        const metal_SocDescriptor& soc_d =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
+        const metal_SocDescriptor& soc_d = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
         for (int i = 0; i < num_dram_banks; ++i) {
             auto dram_core = this->dram_core_from_dram_channel(i, noc);
@@ -774,12 +875,14 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             }
         }
         // Get the physical rows and cols  (y, x) in the worker grid
-        std::vector<uint32_t> worker_phy_y = std::vector<uint32_t>(num_cores_y);
+        std::vector<uint32_t> worker_phy_y;
+        worker_phy_y.reserve(num_cores_y);
         for (int i = 0; i < num_cores_y; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(0, i));
-            worker_phy_y.at(i) = core_phy.y;
+            worker_phy_y.push_back(core_phy.y);
         }
-        std::vector<uint32_t> worker_phy_x = std::vector<uint32_t>(num_cores_x);
+        std::vector<uint32_t> worker_phy_x;
+        worker_phy_x.reserve(num_cores_x);
         for (int i = 0; i < num_cores_x; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
             worker_phy_x.push_back(core_phy.x);
@@ -788,8 +891,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(
             this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y);
 
-        const metal_SocDescriptor& soc_desc =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+        const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
         // Convert to physical worker coordinates to logical. This gets returned to the user.
         for (auto physical_worker_core : physical_worker_cores) {
             tt::umd::CoreCoord logical_coord_translated =
@@ -807,7 +909,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 }
 
 HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_core) const {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_)) {
+    if (!MetalEnvAccessor(*env_).impl().get_cluster().is_ethernet_core(virtual_core, this->id_)) {
         return HalProgrammableCoreType::TENSIX;
     }
 
@@ -821,16 +923,83 @@ HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_cor
 }
 
 HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) &&
-        !tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_)) {
+    if (!MetalEnvAccessor(*env_).impl().get_cluster().is_ethernet_core(virtual_core, this->id_) &&
+        !MetalEnvAccessor(*env_).impl().get_cluster().is_worker_core(virtual_core, this->id_)) {
         return HalMemType::DRAM;
-    } else {
-        return HalMemType::L1;
     }
+    return HalMemType::L1;
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 
-}  // namespace tt_metal
+// Program tracking for accurate CB memory reporting
+void Device::register_program(detail::ProgramImpl* program) {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+    active_programs_.insert(program);
+}
 
-}  // namespace tt
+void Device::unregister_program(detail::ProgramImpl* program) {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+    active_programs_.erase(program);
+}
+
+uint64_t Device::get_total_cb_allocated() const {
+    std::lock_guard<std::mutex> lock(active_programs_mutex_);
+
+    // For PHYSICAL CB tracking accounting for address reuse:
+    // Collect L1 regions per core and merge overlapping addresses
+    // This handles cached/traced programs that share the same physical L1 addresses on the same core
+
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> device_regions_per_core;
+
+    for (const auto* program : active_programs_) {
+        size_t num_devices = program->get_num_cb_devices();
+
+        // Get L1 regions per core for this program on this device
+        auto program_regions = program->get_cb_l1_regions_per_core(this->id(), num_devices);
+
+        // Merge into device-wide map
+        for (const auto& [core, regions] : program_regions) {
+            auto& core_regions = device_regions_per_core[core];
+            core_regions.insert(core_regions.end(), regions.begin(), regions.end());
+        }
+    }
+
+    // Merge overlapping regions per core to get actual physical usage
+    uint64_t total_physical = 0;
+
+    for (auto& [core, regions] : device_regions_per_core) {
+        if (regions.empty()) {
+            continue;
+        }
+
+        // Sort by start address
+        std::sort(regions.begin(), regions.end());
+
+        // Merge overlapping ranges
+        std::vector<std::pair<uint64_t, uint64_t>> merged;
+        merged.push_back(regions[0]);
+
+        for (size_t i = 1; i < regions.size(); i++) {
+            auto& last = merged.back();
+            const auto& current = regions[i];
+
+            if (current.first <= last.second) {
+                // Overlapping - merge
+                last.second = std::max(last.second, current.second);
+            } else {
+                // Non-overlapping - add new region
+                merged.push_back(current);
+            }
+        }
+
+        // Sum merged regions for this core
+        for (const auto& [start, end] : merged) {
+            total_physical += (end - start);
+        }
+    }
+
+    return total_physical;
+}
+
+}  // namespace tt::tt_metal

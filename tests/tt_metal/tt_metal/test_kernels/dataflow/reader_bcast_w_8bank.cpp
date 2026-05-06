@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     uint32_t src0_addr  = get_arg_val<uint32_t>(0);
@@ -34,8 +34,8 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t i_bcast = 0;
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, in1_tile_bytes);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {

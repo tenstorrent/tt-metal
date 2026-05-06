@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -47,7 +47,7 @@ import csv
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import profiler, is_wormhole_b0, is_blackhole
 from pathlib import Path
 import os
 import numpy as np
@@ -360,19 +360,13 @@ def test_matmul_2d_host_perf(
                     fused_activation=None,
                 )
 
-                if is_grayskull():
-                    compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                        math_fidelity=math_fidelity,
-                        math_approx_mode=True,
-                    )
-                else:
-                    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                        math_fidelity=math_fidelity,
-                        math_approx_mode=True,
-                        fp32_dest_acc_en=False,
-                        packer_l1_acc=True,
-                        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
-                    )
+                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=math_fidelity,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                    throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
+                )
 
                 if out_sharded:
                     out_mem_config = ttnn.MemoryConfig(
@@ -612,9 +606,9 @@ def test_matmul_2d_host_perf_out_of_box(
         for dtype, use_trace in matmul_configs_oob:
             matmul_shapes = matmul_shapes_oob
             if dtype == ttnn.bfloat16:
-                math_fidelity = ttnn.MathFidelity.HiFi4  # to match hand-tuned
-            elif dtype == ttnn.bfloat8_b:
                 math_fidelity = ttnn.MathFidelity.HiFi2
+            elif dtype == ttnn.bfloat8_b:
+                math_fidelity = ttnn.MathFidelity.LoFi
             elif dtype == ttnn.bfloat4_b:
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:

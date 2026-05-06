@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -103,9 +103,10 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
             .set_page_size(tt::CBIndex::c_24, intermed_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
+    uint32_t intermed1_single_tile_size = tt::tile_size(intermed1_cb_data_format);
     tt::tt_metal::CircularBufferConfig cb_intermed1_config =
-        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_25, intermed1_cb_data_format}})
-            .set_page_size(tt::CBIndex::c_25, intermed_single_tile_size);
+        tt::tt_metal::CircularBufferConfig(intermed1_single_tile_size, {{tt::CBIndex::c_25, intermed1_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_25, intermed1_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
@@ -153,9 +154,9 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
         origin_W,
     };
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
-        unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_24] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     tt::tt_metal::CreateKernel(
         program,
@@ -228,7 +229,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
 
 void MorehSumOperation::MorehSumWFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
@@ -238,8 +239,8 @@ void MorehSumOperation::MorehSumWFactory::override_runtime_arguments(
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
     log_debug(tt::LogOp, "{}:{} args_callback ", __func__, __LINE__);
-    auto src_dram_buffer = tensor_args.input.buffer();
-    auto dst_dram_buffer = tensor_return_value.buffer();
+    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* dst_dram_buffer = tensor_return_value.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

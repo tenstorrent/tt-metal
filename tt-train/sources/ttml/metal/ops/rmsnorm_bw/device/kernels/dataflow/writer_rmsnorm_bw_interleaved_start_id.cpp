@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 // CBs with input data
 constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
@@ -23,19 +24,6 @@ constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
-constexpr uint32_t onetile = 1;
-
-template <typename AddrGen>
-inline void write_cb_block_to_dram(
-    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t block_size, uint32_t tile_bytes) {
-    cb_wait_front(cb_idx, block_size);
-    uint32_t l1_read_addr = get_read_ptr(cb_idx);
-    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        noc_async_write_tile(start_idx + block_idx, addr_gen, l1_read_addr);
-        l1_read_addr += tile_bytes;
-    }
-}
-
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t da_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -46,8 +34,8 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_dL_da_idx);
     constexpr auto da_args = TensorAccessorArgs<2>();
     constexpr auto dgamma_args = TensorAccessorArgs<da_args.next_compile_time_args_offset()>();
-    const auto da_output_addr_generator = TensorAccessor(da_args, da_output_addr, tile_bytes);
-    const auto dgamma_output_addr_generator = TensorAccessor(dgamma_args, dgamma_output_addr, tile_bytes);
+    const auto da_output_addr_generator = TensorAccessor(da_args, da_output_addr);
+    const auto dgamma_output_addr_generator = TensorAccessor(dgamma_args, dgamma_output_addr);
 
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
@@ -59,14 +47,13 @@ void kernel_main() {
             uint32_t start_idx = (r * Wt) + c;
 
             // Write dL_da block
-            write_cb_block_to_dram(cb_dL_da_idx, da_output_addr_generator, start_idx, block_size, tile_bytes);
+            write_tiles_by_row</* UseBarrier = */ false>(
+                cb_dL_da_idx, da_output_addr_generator, start_idx, block_size, tile_bytes, block_size);
 
             // Write dL_dgamma_components block
-            write_cb_block_to_dram(
-                cb_dL_dgamma_components, dgamma_output_addr_generator, start_idx, block_size, tile_bytes);
-            noc_async_write_barrier();
-
-            cb_pop_front(cb_dL_dgamma_components, block_size);
+            write_tiles_by_row(
+                cb_dL_dgamma_components, dgamma_output_addr_generator, start_idx, block_size, tile_bytes, block_size);
+            // Barrier called by write_tiles_by_row with UseBarrier=true above
             cb_pop_front(cb_dL_da_idx, block_size);
         }
     }

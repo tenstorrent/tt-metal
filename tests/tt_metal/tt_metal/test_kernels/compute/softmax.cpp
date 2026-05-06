@@ -1,17 +1,14 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/softmax.h"
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/bcast.h"
+#include "api/compute/softmax.h"
+#include "api/compute/reduce.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -23,8 +20,7 @@ ALWI void REL() { release_dst(); }
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
     const uint32_t Ht = get_arg_val<uint32_t>(1);
     const uint32_t Wt = get_arg_val<uint32_t>(2);
@@ -125,11 +121,11 @@ void MAIN {
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_tile(cb_exps, cb_bcast_scaler, wt, bcast_scaler0, dst0);
+            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_exps, cb_bcast_scaler, wt, bcast_scaler0, dst0);
         }
         reduce_uninit();
         recip_tile_init();
@@ -142,7 +138,7 @@ void MAIN {
         cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
 
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
-        // by now we already did a umulative wait for Wt tiles in cb_exps
+        // by now we already did a cumulative wait for Wt tiles in cb_exps
         mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             ACQ();
@@ -162,4 +158,3 @@ void MAIN {
     // cb_pop_front(cb_bcast_scaler, 1); // we don't actually have to do this
     // cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
 }
-}  // namespace NAMESPACE

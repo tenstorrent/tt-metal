@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,10 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
-#include "models/common/transformer_common.hpp"
-#include "modules/embedding_module.hpp"
-#include "modules/gpt_block.hpp"
-#include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "serialization/safetensors.hpp"
 #include "serialization/serializable.hpp"
+
 namespace {
 
 static std::vector<float> transpose_2d_flat(const std::vector<float> &flat, int64_t rows, int64_t cols) {
@@ -125,7 +122,7 @@ Transformer::Transformer(const TransformerConfig &config) {
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(
-    const ttml::autograd::TensorPtr &x, const ttml::autograd::TensorPtr &mask) {
+    const ttml::autograd::TensorPtr &x, const std::optional<ttml::autograd::TensorPtr> &mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = (*pos_emb)(tok_emb_out);
     for (auto &block : blocks) {
@@ -161,7 +158,7 @@ TransformerConfig read_config(const YAML::Node &config) {
     transformer_config.embedding_dim = config["embedding_dim"].as<uint32_t>();
     transformer_config.dropout_prob = config["dropout_prob"].as<float>();
     transformer_config.num_blocks = config["num_blocks"].as<uint32_t>();
-    transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
+    transformer_config.vocab_size = config["vocab_size"].as<uint32_t>(0U);
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
     transformer_config.positional_embedding_type = read_positional_embedding_type(config);
     transformer_config.runner_type = common::transformer::read_runner_type(config);

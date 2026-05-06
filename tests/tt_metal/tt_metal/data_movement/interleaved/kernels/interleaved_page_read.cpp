@@ -1,14 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 
-// #include "debug/dprint.h"
-// #include "debug/dprint_pages.h"
+// #include "api/debug/dprint.h"
+// #include "api/debug/dprint_pages.h"
 
 template <uint32_t num_of_transactions, uint32_t num_pages, uint32_t page_size_bytes, typename AddrGen>
 FORCE_INLINE void noc_read_helper(const uint32_t l1_write_addr, const AddrGen& s) {
@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr bool default_noc = get_compile_time_arg_val(6) == 1;
 
     constexpr auto src_args = TensorAccessorArgs<7>();
-    const auto s = TensorAccessor(src_args, src_addr, page_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t transaction_size_bytes = page_size_bytes;
     DeviceTimestampedData("Number of transactions", num_of_transactions * num_pages);

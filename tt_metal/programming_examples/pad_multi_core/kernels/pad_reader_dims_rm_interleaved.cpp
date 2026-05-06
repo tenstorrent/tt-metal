@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include <cstring>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
@@ -59,7 +59,7 @@ void kernel_main() {
     constexpr uint32_t cb_pad = tt::CBIndex::c_1;
     constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
 
-    const auto s = TensorAccessor(src_args, src_addr, stick_size_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // Prepare pad pattern
     fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);

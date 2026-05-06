@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
  * This kernel writes tiles from the output buffer to interleaved dram.
  */
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     constexpr uint32_t output_cb = get_compile_time_arg_val(0);
@@ -23,7 +23,7 @@ void kernel_main() {
     const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(2);
 
-    const auto output_accessor = TensorAccessor(output_args, output_addr, tile_bytes);
+    const auto output_accessor = TensorAccessor(output_args, output_addr);
 
     constexpr uint32_t head_stride = num_tile_rows * head_dim_tiles;
 

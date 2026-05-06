@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include "moreh_linear_backward_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -23,7 +22,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     using namespace tt::tt_metal;
 
     Program program{};
-    auto& output_grad = tensor_args.output_grad;
+    const auto& output_grad = tensor_args.output_grad;
 
     const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
@@ -86,17 +85,13 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const ::bfloat16 bfloat_scaler_value = ::bfloat16(1.0f);
-    const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args{packed_scaler_value};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
+    std::vector<uint32_t> reader_compile_time_args = TensorAccessorArgs(output_grad.buffer()).get_compile_time_args();
+    std::vector<uint32_t> writer_compile_time_args = TensorAccessorArgs(bias_grad.buffer()).get_compile_time_args();
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_h.cpp";
 
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
@@ -109,12 +104,12 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     std::map<std::string, std::string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
-        unpack_to_dest_mode[tt::CBIndex::c_25] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_25] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_multi_core_h.cpp";
 
     const auto compute_kernel_1_id = CreateComputeKernel(
@@ -206,7 +201,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
 
 void MorehBiasAddBackwardOperation::MultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
@@ -215,8 +210,8 @@ void MorehBiasAddBackwardOperation::MultiCoreProgramFactory::override_runtime_ar
     auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto output_grad_buffer = tensor_args.output_grad.buffer();
-    auto bias_grad_buffer = tensor_return_value.buffer();
+    auto* output_grad_buffer = tensor_args.output_grad.buffer();
+    auto* bias_grad_buffer = tensor_return_value.buffer();
 
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,7 +47,8 @@ tt::tt_metal::distributed::multihost::Rank FabricSocket::get_rank() const {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (check_if_send_socket(mesh_socket_)) {
         return mesh_socket_.get_config().sender_rank;
-    } else if (check_if_recv_socket(mesh_socket_)) {
+    }
+    if (check_if_recv_socket(mesh_socket_)) {
         return mesh_socket_.get_config().receiver_rank;
     }
 

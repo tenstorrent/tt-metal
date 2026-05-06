@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -306,13 +306,13 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
     (
-        ("prefill", 1, 32, 0, 62, 0.37 + 0.04, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 128, 0, 60, 0.39 + 0.04, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 2048, 0, 60, 0.94 + 0.1, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 32, 0, 60, 0.42 + 0.04, 60, "BFLOAT16-DRAM"),
-        ("prefill", 1, 128, 0, 60, 0.46 + 0.04, 60, "BFLOAT16-DRAM"),
-        ("prefill", 1, 2048, 0, 60, 1.18 + 0.1, 60, "BFLOAT16-DRAM"),
-        ("decode", 32, 1, 128, 60, 0.21 + 0.02, 60, "BFLOAT8_B-SHARDED"),
+        ("prefill", 1, 32, 0, 62, 0.11 + 0.02, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 128, 0, 60, 0.11 + 0.03, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 2048, 0, 60, 0.67 + 0.05, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 32, 0, 60, 0.11 + 0.02, 60, "BFLOAT16-DRAM"),
+        ("prefill", 1, 128, 0, 60, 0.11 + 0.02, 60, "BFLOAT16-DRAM"),
+        ("prefill", 1, 2048, 0, 60, 0.95 + 0.07, 60, "BFLOAT16-DRAM"),
+        ("decode", 32, 1, 128, 60, 0.13 + 0.02, 60, "BFLOAT8_B-SHARDED"),
     ),
     ids=[
         "prefill_seq32_bfp8",
@@ -330,6 +330,7 @@ def run_test_FalconCausalLM_end_to_end(
     ids=["falcon_40b"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_perf_bare_metal(
     num_devices,
     model_version,
@@ -342,7 +343,7 @@ def test_perf_bare_metal(
     num_layers,
     request,
     model_config_str,
-    t3k_mesh_device,
+    mesh_device,
     is_ci_env,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -352,14 +353,14 @@ def test_perf_bare_metal(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     run_test_FalconCausalLM_end_to_end(
-        t3k_mesh_device,
+        mesh_device,
         model_version,
         llm_mode,
         batch,
@@ -394,6 +395,7 @@ def test_perf_bare_metal(
     ids=["falcon_40b"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_device_perf_bare_metal(
     num_devices,
     model_version,
@@ -406,7 +408,7 @@ def test_device_perf_bare_metal(
     num_layers,
     request,
     model_config_str,
-    t3k_mesh_device,
+    mesh_device,
     is_ci_env,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -416,14 +418,14 @@ def test_device_perf_bare_metal(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     run_test_FalconCausalLM_end_to_end(
-        t3k_mesh_device,
+        mesh_device,
         model_version,
         llm_mode,
         batch,

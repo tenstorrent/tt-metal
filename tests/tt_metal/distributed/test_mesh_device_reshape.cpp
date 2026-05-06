@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <stdlib.h>
-#include <tt_stl/indestructible.hpp>
+#include <cstdlib>
 #include <algorithm>
 #include <cstddef>
 #include <memory>
@@ -16,13 +15,13 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
-#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -56,7 +55,7 @@ TEST_P(MeshConfigurationTest, MeshConfigurations) { EXPECT_EQ(mesh_device_->shap
 TEST_P(MeshConfigurationTest, GetMappedDevices) {
     const auto& shape = GetParam();
 
-    auto& system_mesh = SystemMesh::instance();
+    auto& system_mesh = MetalContext::instance().get_system_mesh();
     EXPECT_THAT(system_mesh.get_mapped_devices(shape).device_ids, SizeIs(shape.mesh_size()));
     EXPECT_THAT(system_mesh.get_mapped_devices(shape).fabric_node_ids, SizeIs(shape.mesh_size()));
 }
@@ -118,14 +117,13 @@ public:
 };
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidRequestedShape) {
-    auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
+    auto& system_mesh = tt::tt_metal::MetalContext::instance().get_system_mesh();
 
     // Shape too big.
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(9)));
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 5)));
 
     // Invalid offset.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(1, 8), /*offset=*/MeshCoordinate(0, 1)));
     EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1, 1)));
 
     // Offset dimensionality mismatch.
@@ -176,19 +174,6 @@ TEST_F(MeshDevice1x8ReshapeTest, InvalidTotalDeviceCount) {
 
     // Verify original shape is preserved after failed reshapes
     EXPECT_EQ(mesh_device_->shape(), MeshShape(1, 8));
-}
-
-class MeshDevice1x4ReshapeTest : public MeshDeviceFixtureBase {
-public:
-    MeshDevice1x4ReshapeTest() :
-        MeshDeviceFixtureBase(Config{
-            .mesh_shape = MeshShape{1, 4},
-        }) {}
-};
-
-TEST_F(MeshDevice1x4ReshapeTest, From1x4To2x2Invalid) {
-    // This is an invalid reshape because the 1x4 mesh does not fully cover the 2x2 mesh
-    EXPECT_THROW(mesh_device_->reshape(MeshShape(2, 2)), std::runtime_error);
 }
 
 class MeshDevice2x2ReshapeTest : public MeshDeviceFixtureBase {

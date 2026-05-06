@@ -1,7 +1,6 @@
-elasticsearch
 termcolor
 beautifultable
-faster-fifo
+faster-fifo; platform_machine != "aarch64"  # no aarch64 Linux wheel; sdist broken
 # For PostgreSQL database connectivity
-psycopg-binary == 3.2.9
+psycopg2-binary == 2.9.11
 ijson

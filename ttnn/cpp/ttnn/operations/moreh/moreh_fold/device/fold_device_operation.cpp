@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fold_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -10,7 +11,7 @@
 namespace ttnn::operations::moreh::moreh_fold {
 void MorehFoldOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& input = tensor_args.input;
+    const auto& input = tensor_args.input;
     auto input_shape = input.logical_shape();
 
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Fold: only support input in ROW_MAJOR");
@@ -48,19 +49,9 @@ void MorehFoldOperation::validate_inputs(
             output_shape[output_rank - 1] == operation_attributes.output_size[1], "Fold: Invalid output shape size");
         TT_FATAL(output_rank == 4 || output_rank == 3, "Fold: Only support 4D and 3D output tensor");
     }
-}
-
-MorehFoldOperation::program_factory_t MorehFoldOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
 };
 
 void MorehFoldOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehFoldOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
@@ -101,7 +92,8 @@ MorehFoldOperation::tensor_return_value_t MorehFoldOperation::create_output_tens
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tensor_args_t> MorehFoldOperation::invoke(
+std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tensor_args_t>
+moreh_fold_build_operation_args(
     const Tensor& input,
     const std::optional<Tensor>& output,
     const std::vector<uint32_t>& output_size,
@@ -111,8 +103,27 @@ std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tenso
     const std::vector<uint32_t>& stride,
     const std::optional<MemoryConfig>& memory_config) {
     return {
-        operation_attributes_t{
+        MorehFoldOperation::operation_attributes_t{
             output_size, kernel_size, dilation, padding, stride, memory_config.value_or(input.memory_config())},
-        tensor_args_t{input, output}};
+        MorehFoldOperation::tensor_args_t{input, output}};
 }
+
 }  // namespace ttnn::operations::moreh::moreh_fold
+
+namespace ttnn::prim {
+
+Tensor moreh_fold(
+    const Tensor& input,
+    const std::optional<Tensor>& output,
+    const std::vector<uint32_t>& output_size,
+    const std::vector<uint32_t>& kernel_size,
+    const std::vector<uint32_t>& dilation,
+    const std::vector<uint32_t>& padding,
+    const std::vector<uint32_t>& stride,
+    const std::optional<MemoryConfig>& memory_config) {
+    auto [attrs, tensor_args] = operations::moreh::moreh_fold::moreh_fold_build_operation_args(
+        input, output, output_size, kernel_size, dilation, padding, stride, memory_config);
+    return ttnn::device_operation::launch<operations::moreh::moreh_fold::MorehFoldOperation>(attrs, tensor_args);
+}
+
+}  // namespace ttnn::prim

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,15 +8,13 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "hc_sum_reduce_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const HcSumReduceParams& operation_attributes, const HcSumReduceInputs& tensor_args, Tensor& output) {
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
@@ -52,7 +50,8 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input.dtype());
     const uint32_t input_tile_size = tt::tile_size(input_format);
 
-    const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
+    const tt::DataFormat intermediary_format =
+        (input_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
     const uint32_t cb_size = 2;
@@ -81,9 +80,7 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
     const uint32_t output_cb_id = tt::CBIndex::c_16;
     create_circular_buffer(output_cb_id, cb_size, input_tile_size, input_format);
 
-    const bfloat16 bfloat_scaler_value = bfloat16(1.0f);
-    const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         intermed_cb_id1,
@@ -190,9 +187,9 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
 
 void HCSumReduceProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const HcSumReduceParams& /*operation_attributes*/,
+    const HcSumReduceInputs& tensor_args,
+    Tensor& tensor_return_value) {
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
@@ -244,4 +241,4 @@ void HCSumReduceProgramFactory::override_runtime_arguments(
     SetRuntimeArgs(program, shared_variables.compute_kernel_id, shared_variables.cores, compute_runtime_args);
 }
 
-}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program
+}  // namespace ttnn::experimental::prim

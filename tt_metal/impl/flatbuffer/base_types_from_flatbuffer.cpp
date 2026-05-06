@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,12 @@ DataMovementProcessor from_flatbuffer(flatbuffer::DataMovementProcessor in) {
     switch (in) {
         case flatbuffer::DataMovementProcessor::RISCV_0: return DataMovementProcessor::RISCV_0;
         case flatbuffer::DataMovementProcessor::RISCV_1: return DataMovementProcessor::RISCV_1;
+        case flatbuffer::DataMovementProcessor::RISCV_2: return DataMovementProcessor::RISCV_2;
+        case flatbuffer::DataMovementProcessor::RISCV_3: return DataMovementProcessor::RISCV_3;
+        case flatbuffer::DataMovementProcessor::RISCV_4: return DataMovementProcessor::RISCV_4;
+        case flatbuffer::DataMovementProcessor::RISCV_5: return DataMovementProcessor::RISCV_5;
+        case flatbuffer::DataMovementProcessor::RISCV_6: return DataMovementProcessor::RISCV_6;
+        case flatbuffer::DataMovementProcessor::RISCV_7: return DataMovementProcessor::RISCV_7;
     }
     TT_THROW("Unsupported DataMovementProcessor from flatbuffer.");
 }
@@ -72,10 +78,12 @@ tt::DataFormat from_flatbuffer(flatbuffer::DataFormat input) {
         case flatbuffer::DataFormat::Bfp2_b: return tt::DataFormat::Bfp2_b;
         case flatbuffer::DataFormat::Lf8: return tt::DataFormat::Lf8;
         case flatbuffer::DataFormat::Fp8_e4m3: return tt::DataFormat::Fp8_e4m3;
+        case flatbuffer::DataFormat::MxFp4: return tt::DataFormat::MxFp4;
         case flatbuffer::DataFormat::Int8: return tt::DataFormat::Int8;
         case flatbuffer::DataFormat::Tf32: return tt::DataFormat::Tf32;
         case flatbuffer::DataFormat::UInt8: return tt::DataFormat::UInt8;
         case flatbuffer::DataFormat::UInt16: return tt::DataFormat::UInt16;
+        case flatbuffer::DataFormat::Int16: return tt::DataFormat::Int16;
         case flatbuffer::DataFormat::Int32: return tt::DataFormat::Int32;
         case flatbuffer::DataFormat::UInt32: return tt::DataFormat::UInt32;
         case flatbuffer::DataFormat::RawUInt8: return tt::DataFormat::RawUInt8;

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@ import torch.nn as nn
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.pool.test_upsample import upsample_multicore_common
+from ttnn.operations.pool import golden_upsample
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -30,7 +31,10 @@ from tests.ttnn.unit_tests.operations.pool.test_upsample import upsample_multico
     "dtype_torch, dtype_ttnn",
     [[torch.bfloat16, ttnn.bfloat8_b], [torch.float32, ttnn.float32], [torch.bfloat16, ttnn.bfloat16]],
 )
-def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, memory_layout, dtype_torch, dtype_ttnn):
+@pytest.mark.parametrize("run_twice", [True])
+def test_upsample_nearest_interleaved(
+    device, input_shapes, scale_h, scale_w, memory_layout, dtype_torch, dtype_ttnn, run_twice
+):
     # Skip block datatypes if memory layout is not tiled
     if dtype_ttnn == ttnn.bfloat8_b and memory_layout != ttnn.TILE_LAYOUT:
         pytest.skip("Block datatypes require TILE_LAYOUT")
@@ -38,27 +42,33 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
     batch_size, num_channels, height, width = input_shapes
     torch.manual_seed(0)
 
-    # Generate appropriate test data based on dtype
-    input = torch.rand(input_shapes, dtype=dtype_torch)
-    tt_input = input.permute(0, 2, 3, 1)
+    if dtype_torch == torch.float32:
+        torch_input_nhwc = torch.rand((batch_size, height, width, num_channels), dtype=torch.float32)
+    else:
+        torch_input_nhwc = torch.rand((batch_size, height, width, num_channels), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(
-        tt_input, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=dtype_ttnn
+        torch_input_nhwc, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=dtype_ttnn
     )
 
     if input_tensor.padded_shape != input_tensor.shape and memory_layout == ttnn.TILE_LAYOUT:
         pytest.skip("Disabled until different logical and padded shapes are supported for TILE_LAYOUT")
 
     scale_factor = (scale_h, scale_w)
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
-    torch_result = torch_upsample(input)
 
-    scale_factor = (scale_h, scale_w)
+    torch_result = golden_upsample(
+        input_tensor=torch_input_nhwc,
+        scale_factor=scale_factor,
+        mode="nearest",
+    )
 
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
 
+    if run_twice:
+        ttnn.deallocate(output_tensor, True)
+        output_tensor = ttnn.upsample(input_tensor, scale_factor)
+
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch_result = torch_result.permute(0, 2, 3, 1)
     pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor, 0.9999)
     logger.info(pcc_message)
 
@@ -79,6 +89,7 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
+@pytest.mark.parametrize("run_twice", [True])
 def test_bilinear_interleaved_memory(
     device,
     batch_size,
@@ -89,22 +100,26 @@ def test_bilinear_interleaved_memory(
     scale_w,
     math_fidelity,
     math_approx_mode,
+    run_twice,
 ):
     # Performs bilinear upsampling on interleaved inputs
     # Automatically height shards the input tensor
 
     torch.manual_seed(0)
 
-    input_shape = [batch_size, num_channels, height, width]
-
     mode = "bilinear"
 
-    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
-    tt_input = torch_input.permute(0, 2, 3, 1)
-    input_tensor = ttnn.from_torch(tt_input, device=device)
+    from ttnn.operations.pool import golden_upsample
+
+    torch_input_nhwc = torch.rand((batch_size, height, width, num_channels), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_nhwc, device=device)
     scale_factor = (scale_h, scale_w)
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode)
-    torch_result = torch_upsample(torch_input)
+
+    torch_result = golden_upsample(
+        input_tensor=torch_input_nhwc,
+        scale_factor=scale_factor,
+        mode=mode,
+    )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=math_fidelity,
@@ -113,9 +128,15 @@ def test_bilinear_interleaved_memory(
     )
 
     output_tensor = ttnn.upsample(input_tensor, scale_factor, mode=mode, compute_kernel_config=compute_kernel_config)
+
+    if run_twice:
+        ttnn.deallocate(output_tensor, True)
+        output_tensor = ttnn.upsample(
+            input_tensor, scale_factor, mode=mode, compute_kernel_config=compute_kernel_config
+        )
+
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch_result = torch_result.permute(0, 2, 3, 1)
     pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor, pcc=0.999)
     logger.info(pcc_message)
     allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
@@ -137,7 +158,8 @@ def test_bilinear_interleaved_memory(
         [((0, 0), (4, 3))],
     ],
 )
-def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_range):
+@pytest.mark.parametrize("run_twice", [True])
+def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_range, run_twice):
     (torch_result, output_tensor) = upsample_multicore_common(
         device=device,
         input_shape=input_shape,
@@ -146,9 +168,8 @@ def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_rang
         shard_strategy=ttnn.ShardStrategy.BLOCK,
         shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
         core_range=core_range,
+        run_twice=run_twice,
     )
-    ## compare the results
-    torch_result = torch_result.permute(0, 2, 3, 1)
 
     isequal = torch.equal(output_tensor, torch_result)
 
@@ -171,7 +192,10 @@ def test_rectangle_core_grid_bs(device, input_shape, scale_h, scale_w, core_rang
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 120}], indirect=True)
-def test_upsample_various(device, input_shape, core_range, scale_h, scale_w, shard_strategy, shard_orientation):
+@pytest.mark.parametrize("run_twice", [True])
+def test_upsample_various(
+    device, input_shape, core_range, scale_h, scale_w, shard_strategy, shard_orientation, run_twice
+):
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8 cores on y axis")
     (torch_result, output_tensor) = upsample_multicore_common(
@@ -182,9 +206,8 @@ def test_upsample_various(device, input_shape, core_range, scale_h, scale_w, sha
         shard_strategy=shard_strategy,
         shard_orientation=shard_orientation,
         core_range=core_range,
+        run_twice=run_twice,
     )
-    ## compare the results
-    torch_result = torch_result.permute(0, 2, 3, 1)
 
     isequal = torch.equal(output_tensor, torch_result)
 
@@ -193,13 +216,15 @@ def test_upsample_various(device, input_shape, core_range, scale_h, scale_w, sha
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 37888}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, num_channels, height, width, scale_h, scale_w, num_slices",
+    "batch_size, num_channels, height, width, scale_h, scale_w",
     (
-        (1, 256, 64, 128, 2, 2, 2),
-        (1, 128, 64, 128, 2, 2, 2),
+        (1, 256, 32, 64, 2, 2),
+        (1, 256, 64, 128, 2, 2),
+        (1, 128, 64, 128, 2, 2),
     ),
 )
-def test_panoptic_upsample_sliced(device, batch_size, num_channels, height, width, scale_h, scale_w, num_slices):
+@pytest.mark.parametrize("run_twice", [True])
+def test_panoptic_upsample(device, batch_size, num_channels, height, width, scale_h, scale_w, run_twice):
     input_shape_nchw = [batch_size, num_channels, height, width]
     scale_factor = (scale_h, scale_w)
     mode_pytorch = "nearest"  # we only did nearest in panoptic due to pcc dropping very little and bilinear not being able to fit in memory as of now
@@ -208,51 +233,70 @@ def test_panoptic_upsample_sliced(device, batch_size, num_channels, height, widt
     dtype_ttnn = ttnn.bfloat16
 
     batch_size, channels, input_h, input_w = input_shape_nchw
-    assert channels % num_slices == 0, "Channels must be divisible by num_slices"
-    slice_channels = channels // num_slices
 
-    logger.info(f"Running Panoptic Upsample with Channel Slicing (slices={num_slices})")
-
-    torch.manual_seed(0)
-    torch_input_nchw = torch.rand(input_shape_nchw, dtype=dtype_torch)
-
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode_pytorch)
-    torch_output_nchw = torch_upsample(torch_input_nchw)
-
-    ttnn_input_nhwc = ttnn.from_torch(
-        torch_input_nchw.permute(0, 2, 3, 1), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype_ttnn
+    logger.info(
+        f"Running Panoptic Upsample: {channels} ch @ {input_h}x{input_w}, scale={scale_factor}, mode={mode_ttnn}"
     )
 
-    sliced_results = []
-    for slice_idx in range(num_slices):
-        start_ch = slice_idx * slice_channels
-        end_ch_exclusive = (slice_idx + 1) * slice_channels
+    torch.manual_seed(0)
+    torch_input_nhwc = torch.rand((batch_size, input_h, input_w, channels), dtype=dtype_torch)
 
-        x_slice_nhwc = ttnn.slice(
-            ttnn_input_nhwc, [0, 0, 0, start_ch], [batch_size, input_h, input_w, end_ch_exclusive]
-        )
+    torch_output_nhwc = golden_upsample(torch_input_nhwc, scale_factor=scale_factor, mode=mode_pytorch)
 
-        x_slice_upsampled = ttnn.upsample(
-            x_slice_nhwc,
+    ttnn_input_nhwc = ttnn.from_torch(torch_input_nhwc, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype_ttnn)
+
+    ttnn_output_nhwc = ttnn.upsample(
+        ttnn_input_nhwc,
+        scale_factor=scale_factor,
+        mode=mode_ttnn,
+    )
+
+    if run_twice:
+        ttnn.deallocate(ttnn_output_nhwc, True)
+        ttnn_output_nhwc = ttnn.upsample(
+            ttnn_input_nhwc,
             scale_factor=scale_factor,
             mode=mode_ttnn,
         )
-        x_slice_upsampled = ttnn.to_memory_config(x_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
-        sliced_results.append(x_slice_upsampled)
 
-        ttnn.deallocate(x_slice_nhwc)
+    ttnn_output_nhwc = ttnn.to_memory_config(ttnn_output_nhwc, ttnn.DRAM_MEMORY_CONFIG)
 
     ttnn.deallocate(ttnn_input_nhwc)
-
-    ttnn_output_nhwc = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    for slice_result in sliced_results:
-        ttnn.deallocate(slice_result)
-
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1)
 
     ttnn_output_torch_nhwc = ttnn.to_torch(ttnn_output_nhwc)
 
     passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch_nhwc, pcc=0.99)
     logger.info(pcc_message)
     assert passed, f"PCC check failed. {pcc_message}"
+
+
+# ============================================================================
+# Float scale factor tests with sharded memory
+# ============================================================================
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 64, 8, 8],
+        [1, 128, 16, 16],
+        [2, 64, 8, 8],
+        [1, 32, 4, 4],
+        [1, 64, 32, 32],
+        [1, 128, 56, 56],
+        [1, 32, 8, 8],
+        [1, 256, 8, 8],
+        [1, 512, 8, 8],
+    ],
+)
+@pytest.mark.parametrize("scale_h, scale_w", [(2.0, 2.0), (1.5, 1.5), (2.5, 2.5), (0.5, 0.5), (0.75, 0.75), (2.0, 1.5)])
+@pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
+def test_upsample_nearest_float_sharded(device, input_shape, scale_h, scale_w, shard_strategy):
+    """Test upsample with float scale factors using sharded memory."""
+    torch_result, output_tensor = upsample_multicore_common(
+        device, input_shape, scale_h, scale_w, shard_strategy, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    passing, pcc_msg = assert_with_pcc(torch_result, output_tensor, pcc=0.9999)
+    logger.info(pcc_msg)
+    assert passing

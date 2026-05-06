@@ -260,8 +260,9 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
 
             for (const job of jobs) {
               const jobName = (job && job.name) ? String(job.name) : 'gtest';
+              const jobUrl = (job && job.url) ? String(job.url) : '';
               const files = Array.isArray(job.files) ? job.files : [];
-              core.info(`[GTEST] Processing job: name='${jobName}', files=${files.length}`);
+              core.info(`[GTEST] Processing job: name='${jobName}', url='${jobUrl ? 'present' : 'none'}', files=${files.length}`);
               let lastSeenTestName = undefined; // persist across files in this job
               for (const rel of files) {
                 if (out.length >= maxSnippets) break;
@@ -298,7 +299,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                       }
                       if (!labelName) labelName = lastSeenTestName || 'unknown gtest';
                       // Do not assign owners here; only return raw snippet with inferred job/test via label for hint
-                      out.push({ label: `${jobName}: ${labelName}`, job: jobName, test: labelName, snippet: msg });
+                      out.push({ label: `${jobName}: ${labelName}`, job: jobName, job_url: jobUrl, test: labelName, snippet: msg });
                       snippetsAdded++;
                       core.info(`[GTEST]     Added snippet for '${labelName}' (len=${msg.length}) @ line ${lineNo}`);
                     }
@@ -385,8 +386,8 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
       core.warning(`Failed gtest log parsing for run ${runId}: ${e.message}`);
     }
 
-    // If other logs (non-gtest) are available for this run, extract job names from file names
-    // Don't parse the logs, just use the file names to determine job names
+    // If other logs (non-gtest) are available for this run, use job names from GitHub API
+    // Don't parse the logs, just use the stored job names from the API
     try {
       const otherLogsDir = getOtherLogsDirForRunId(runId);
       if (otherLogsDir && fs.existsSync(otherLogsDir)) {
@@ -401,33 +402,48 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             // Continue to annotations
           }
           if (logsListData) {
-            const files = Array.isArray(logsListData.files) ? logsListData.files : [];
-            core.info(`[OTHER LOGS] Files detected: ${files.length}`);
+            // Use failing_jobs array with URLs if available (new format)
+            // Fall back to job_names array (old format) or file path extraction (legacy)
+            const jobsMap = new Map(); // Map<jobName, jobUrl>
 
-            // Extract job names from file paths (e.g., "extract/1_job-name/step.txt" -> "job-name")
-            const jobNamesSet = new Set();
-            for (const filePath of files) {
-              try {
-                // Parse the path to extract job name
-                // Expected format: extract/<step>_<job-name>/<file>.txt
-                const parts = filePath.split(path.sep);
-                if (parts.length >= 2) {
-                  const folderName = parts[1]; // e.g., "1_job-name"
-                  // Remove leading step number and underscore
-                  const jobName = folderName.replace(/^\d+_/, '').trim();
-                  if (jobName) {
-                    jobNamesSet.add(jobName);
+            if (Array.isArray(logsListData.failing_jobs) && logsListData.failing_jobs.length > 0) {
+              // New format: array of {name, url} objects
+              for (const job of logsListData.failing_jobs) {
+                if (job && job.name && typeof job.name === 'string') {
+                  let cleanedName = job.name.trim().replace(/\.txt$/i, '').trim();
+                  cleanedName = cleanedName.replace(/\s+_\s+/g, ' / ');
+                  if (cleanedName) {
+                    jobsMap.set(cleanedName, job.url || '');
                   }
                 }
-              } catch (_) { /* ignore */ }
+              }
+              core.info(`[OTHER LOGS] Using ${jobsMap.size} job(s) with URLs from GitHub API for run ${runId}`);
+            } else if (Array.isArray(logsListData.job_names) && logsListData.job_names.length > 0) {
+              // Old format: array of job name strings (no URLs)
+              for (const jobName of logsListData.job_names) {
+                if (jobName && typeof jobName === 'string') {
+                  let cleanedName = jobName.trim().replace(/\.txt$/i, '').trim();
+                  cleanedName = cleanedName.replace(/\s+_\s+/g, ' / ');
+                  if (cleanedName) {
+                    jobsMap.set(cleanedName, '');
+                  }
+                }
+              }
+              core.info(`[OTHER LOGS] Using ${jobsMap.size} job name(s) from GitHub API for run ${runId} (no URLs - old format)`);
+            } else {
+              // No API job names available - skip file path extraction as it cannot
+              // distinguish passing from failing jobs and produces false positives.
+              // Fall through to the annotations path instead.
+              core.info(`[OTHER LOGS] No API job names found for run ${runId}, skipping file path extraction (unreliable). Will fall through to annotations.`);
             }
 
-            // Create snippets with job names, but blank test and informative error message
+            // Create snippets with job names and URLs
             const out = [];
-            for (const jobName of jobNamesSet) {
+            for (const [jobName, jobUrl] of jobsMap) {
               out.push({
                 label: jobName,
                 job: jobName,
+                job_url: jobUrl,
                 test: '',
                 snippet: 'currently aggregate-workflow-data is not able to parse these kinds of errors'
               });
@@ -441,7 +457,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               snippets = filterGenericExitSnippets(snippets);
               return snippets;
             } else {
-              core.info(`[OTHER LOGS] No job names extracted from logs for run ${runId}`);
+              core.info(`[OTHER LOGS] No job names found for run ${runId}`);
             }
           }
         }
@@ -466,6 +482,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             const seen = new Set();
             for (const a of arr) {
               const job = a.job_name || '';
+              const jobUrl = a.job_url || '';
               const title = a.title || '';
               const level = a.annotation_level || '';
               const message = a.message || '';
@@ -476,7 +493,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               const dedupeKey = `${job}|${title}|${levelLc}|${msgTrim}`;
               if (seen.has(dedupeKey)) continue;
               seen.add(dedupeKey);
-              snippets.push({ label, job, snippet: message });
+              snippets.push({ label, job, job_url: jobUrl, snippet: message });
               if (snippets.length >= maxSnippets) break;
             }
           }

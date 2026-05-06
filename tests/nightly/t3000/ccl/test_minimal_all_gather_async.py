@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -109,6 +109,9 @@ def run_all_gather_impl(
     num_l1_banks=64,
     all_gather_function=ttnn.experimental.all_gather_async,
     use_semaphore_free_all_gather_impl=False,
+    sub_core_grids=None,
+    use_broadcast=False,
+    use_explicit_subdevice_id=True,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -221,32 +224,40 @@ def run_all_gather_impl(
     def run_op(i):  # absolutely disgusting if-else condition because changing every call site is a humongous PITA
         if use_semaphore_free_all_gather_impl and all_gather_function == ttnn.experimental.all_gather_async:
             logger.info(f"Using new all-gather")
-            tt_all_gather_out_tensor = ttnn.all_gather(
-                input_tensor_mesh_list[i],
-                dim=dim,
-                cluster_axis=cluster_axis,
-                num_links=num_links,
-                memory_config=mem_config_ag,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
-            )
+            all_gather_kwargs = {
+                "dim": dim,
+                "cluster_axis": cluster_axis,
+                "num_links": num_links,
+                "memory_config": mem_config_ag,
+                "topology": all_gather_topology,
+                "chunks_per_sync": chunks_per_sync,
+                "num_workers_per_link": num_workers_per_link,
+                "num_buffers_per_channel": num_buffers_per_channel,
+                "sub_core_grids": sub_core_grids,
+            }
+            if use_explicit_subdevice_id:
+                all_gather_kwargs["subdevice_id"] = worker_sub_device_id
+            tt_all_gather_out_tensor = ttnn.all_gather(input_tensor_mesh_list[i], **all_gather_kwargs)
         else:
             logger.info(f"Using experimental all-gather")
-            tt_all_gather_out_tensor = all_gather_function(
-                input_tensor_mesh_list[i],
-                persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
-                dim=dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
-                num_links=num_links,
-                memory_config=mem_config_ag,
-                topology=all_gather_topology,
-                subdevice_id=worker_sub_device_id,
-                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
-                cluster_axis=cluster_axis,
-                chunks_per_sync=chunks_per_sync,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=num_buffers_per_channel,
-            )
+            all_gather_async_kwargs = {
+                "persistent_output_buffer": persistent_output_buffers[i] if use_persistent_buffers else None,
+                "dim": dim,
+                "multi_device_global_semaphore": ccl_semaphore_handles[i],
+                "num_links": num_links,
+                "memory_config": mem_config_ag,
+                "topology": all_gather_topology,
+                "barrier_semaphore": barrier_semaphore_handles[i] if use_barrier else None,
+                "cluster_axis": cluster_axis,
+                "chunks_per_sync": chunks_per_sync,
+                "num_workers_per_link": num_workers_per_link,
+                "num_buffers_per_channel": num_buffers_per_channel,
+                "sub_core_grids": sub_core_grids,
+                "use_broadcast": use_broadcast,
+            }
+            if use_explicit_subdevice_id:
+                all_gather_async_kwargs["subdevice_id"] = worker_sub_device_id
+            tt_all_gather_out_tensor = all_gather_function(input_tensor_mesh_list[i], **all_gather_async_kwargs)
 
         return tt_all_gather_out_tensor
 
@@ -328,12 +339,188 @@ def run_all_gather_impl(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["mesh_1,8"])
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold, mem_config_input, mem_config_ag",
+    [
+        (
+            [1, 1, 32, 128 * 128],
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            30,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                    (1, 128 * 128),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 2048),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),
+        (
+            [1, 8, 32, 2112],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            35,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 288),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0)),
+                        }
+                    ),
+                    (32 * 8, 64),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),
+        (
+            [1, 1, 32, 128 * 128],
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            30,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                    (1, 128 * 128),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.L1,
+            ),
+        ),
+        (
+            [1, 8, 32, 2112],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            35,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 288),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.L1,
+            ),
+        ),
+    ],
+    ids=["RM_sharded", "TILED_sharded", "RM_interleaved", "TILED_interleaved"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring", "fabric_linear"],
+)
+def test_all_gather_async_broadcast(
+    mesh_device,
+    num_links,
+    ag_output_shape,
+    dim,
+    layout,
+    ag_input_dtype,
+    enable_trace,
+    num_iters,
+    use_barrier,
+    use_persistent_buffers,
+    mem_config_input,
+    mem_config_ag,
+    all_gather_topology,
+    pcc_threshold,
+):
+    run_all_gather_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
+        use_semaphore_free_all_gather_impl=False,
+        allowed_pcc=pcc_threshold,
+        use_broadcast=True,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers",
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold",
     [
-        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, True),  # perf, barrier_with_persistent
+        (
+            [1, 1, 1024, 5120],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            10,
+            True,
+            True,
+            1.0,
+        ),  # perf, barrier_with_persistent
         (
             [8, 1, 512, 512],
             0,
@@ -343,6 +530,7 @@ def run_all_gather_impl(
             1,
             True,
             False,
+            1.0,
         ),  # check, barrier_without_persistent
         (
             [1, 1, 1024, 1024],
@@ -353,10 +541,53 @@ def run_all_gather_impl(
             10,
             False,
             True,
+            1.0,
         ),  # perf, no_barrier_with_persistent
-        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, True),  # check, barrier_with_persistent
+        (
+            [1, 1, 1024, 1024],
+            -1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            10,
+            False,
+            True,
+            1.0,
+        ),  # perf, no_barrier_with_persistent
+        (
+            [1, 1, 48, 1024],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+            True,
+            True,
+            1.0,
+        ),  # check, barrier_with_persistent
+        (
+            [1, 1, 48, 1024],
+            -1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+            True,
+            True,
+            1.0,
+        ),  # check, barrier_with_persistent
         # Composite-AG tests
-        ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, False),  # perf, barrier_without_persistent
+        (
+            [1, 1, 1, 8],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            10,
+            True,
+            False,
+            1.0,
+        ),  # perf, barrier_without_persistent
         (
             [1, 16, 32, 32],
             1,
@@ -366,15 +597,30 @@ def run_all_gather_impl(
             1,
             False,
             True,
+            1.0,
         ),  # check, no_barrier_with_persistent
+        (
+            [1, 1, 1024, 5120],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            False,
+            1,
+            True,
+            True,
+            0.9999,
+        ),  # perf, barrier_with_persistent
     ],
     ids=[
         "sd35_spatial-perf-barrier_with_persistent",
         "gather_dim_0-check-barrier_without_persistent",
         "gather_dim_2-perf-no_barrier_with_persistent",
+        "gather_dim_negative_2-perf-no_barrier_with_persistent",
         "gather_dim_3_padded_dim_2-check-barrier_with_persistent",
+        "gather_dim_negative_1_padded_dim_2-check-barrier_with_persistent",
         "composite_ag_test_two-perf-barrier_without_persistent",
         "composite_ag_test_four-check-no_barrier_with_persistent",
+        "sd35_spatial-perf-barrier_with_persistent_bfloat8_b",
     ],
 )
 @pytest.mark.parametrize(
@@ -409,6 +655,7 @@ def test_all_gather_async(
     mem_config_input,
     mem_config_ag,
     all_gather_topology,
+    pcc_threshold,
 ):
     run_all_gather_impl(
         mesh_device,
@@ -426,6 +673,7 @@ def test_all_gather_async(
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
         use_semaphore_free_all_gather_impl=False,
+        allowed_pcc=pcc_threshold,
     )
 
 
@@ -433,15 +681,15 @@ def test_all_gather_async(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, chunks_per_sync, num_workers_per_link, num_buffers_per_channel,",
     [
-        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # perf
-        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
-        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # perf
-        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
+        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
+        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
         # Composite-AG tests
-        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10),  # perf
-        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
+        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, None, None, None),  # check
     ],
     ids=[
         "dit_shape-perf",  # this one triggers the default chunks_per_sync
@@ -479,6 +727,9 @@ def test_ttnn_all_gather(
     ag_input_dtype,
     enable_trace,
     num_iters,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
     mem_config_input,
     mem_config_ag,
     all_gather_topology,
@@ -496,7 +747,92 @@ def test_ttnn_all_gather(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
         use_semaphore_free_all_gather_impl=True,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
+    [
+        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # perf
+        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
+        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # perf
+        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
+    ],
+    ids=[
+        "dit_shape-perf",  # this one triggers the default chunks_per_sync
+        "sd35_prompt-check",
+        "gather_dim_1-perf",
+        "gather_dim_2_padded_dim_3-check",
+    ],
+)
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    (
+        # multiple disjoint cores
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            ]
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize("use_new_allgather", [True, False])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring", "fabric_linear"],
+)
+def test_all_gather_subgrid(
+    mesh_device,
+    num_links,
+    ag_output_shape,
+    dim,
+    layout,
+    ag_input_dtype,
+    enable_trace,
+    num_iters,
+    mem_config_input,
+    mem_config_ag,
+    all_gather_topology,
+    sub_core_grids,
+    use_new_allgather,
+):
+    run_all_gather_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_semaphore_free_all_gather_impl=use_new_allgather,
+        sub_core_grids=sub_core_grids,
     )
 
 

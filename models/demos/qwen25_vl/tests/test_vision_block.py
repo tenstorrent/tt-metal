@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -36,7 +36,6 @@ def test_vision_block_inference(
     dtype = ttnn.bfloat8_b
     pccs = [0.99] * n_layers
     pccs[24:] = [0.85] * (n_layers - 24)
-    print(pccs)
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # Example inputs
@@ -60,17 +59,17 @@ def test_vision_block_inference(
 
         # Get the state dict of the reference model
         state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
-        state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
+        state_dict = convert_hf_to_meta(state_dict, model_args.vision_head_dim)
         state_dict_prefix = model_args.get_state_dict_prefix("VisionBlock", layer_num)
         state_dict = {f"{state_dict_prefix}{k}": v for k, v in state_dict.items()}
 
         # Example inputs and preprocessing
-        pt_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
+        pt_input = torch.randn(1, 1, ref_seq_len, model_args.vision_dim)
         # pt_input = torch.load(f"ref_x_{layer_num - 1}.pt").unsqueeze(0).unsqueeze(0)
         cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
             seq_len=ref_seq_len,
             grid_thw=image_grid_thw,
-            head_dim=model_args.head_dim,
+            head_dim=model_args.vision_head_dim,
             spatial_merge_size=model_args.hf_config.vision_config.spatial_merge_size,
             window_size=model_args.hf_config.vision_config.window_size,
             patch_size=model_args.hf_config.vision_config.patch_size,
@@ -101,7 +100,7 @@ def test_vision_block_inference(
 
         rot_mats = [cos, sin]
 
-        transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+        transformation_mat_torch = get_rot_transformation_mat(model_args.vision_head_dim)
 
         transformation_mats_prefill = ttnn.as_tensor(
             transformation_mat_torch,
@@ -144,14 +143,18 @@ def test_vision_block_inference(
             tt_out,
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
         )
-        tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [batch, seq, hidden_dim]
+        tt_output_torch = tt_out[:, 0:1, :, : model_args.vision_dim].view(
+            batch_size, seq_len, -1
+        )  # [batch, seq, hidden_dim]
 
         # Remove sequence padding
         tt_output_torch = tt_output_torch[0, :ref_seq_len, :]
 
-        # Run reference model
+        # Cast input to reference model dtype (e.g. bfloat16 for 32B) to avoid mat1/mat2 dtype mismatch
+        ref_dtype = next(reference_model.parameters()).dtype
+        pt_ref_input = pt_input.squeeze(0).squeeze(0).to(ref_dtype)
         reference_output = reference_model(
-            pt_input.squeeze(0).squeeze(0),
+            pt_ref_input,
             cu_seqlens=cu_seqlens,
             rotary_pos_emb=None,
             position_embeddings=position_embeddings,

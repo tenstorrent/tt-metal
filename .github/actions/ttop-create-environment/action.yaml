@@ -1,0 +1,98 @@
+name: 'Create SSH Environment'
+description: 'A composable action to create an SSH environment'
+
+inputs:
+  environmentName:
+    description: 'Environment name'
+    required: true
+  allocationName:
+    description: 'Allocation name'
+    required: true
+  allocationNamespace:
+    description: 'Allocation namespace'
+    required: false
+    default: 'ttop-ci'
+  workerRepository:
+    description: 'Worker repository'
+    required: true
+  workerTag:
+    description: 'Worker tag'
+    required: true
+  sharedVolumeEnabled:
+    description: 'Whether to mount volume shared with the runner (multihost-with-nfs runner required)'
+    required: false
+    default: 'false'
+  timeout:
+    description: 'Timeout duration'
+    required: false
+    default: '5m'
+  namespace:
+    description: 'Target namespace for the environment'
+    required: false
+    default: 'ttop-ci'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate SSH key
+      shell: bash
+      run: |
+        if [ ! -f /home/runner/.ssh/id_ed25519 ]; then
+          ssh-keygen -t ed25519 -f /home/runner/.ssh/id_ed25519 -N ""
+        fi
+        echo "SSH_PUBLIC_KEY=$(cat /home/runner/.ssh/id_ed25519.pub)" >> $GITHUB_ENV
+    - name: Construct Environment manifest
+      shell: bash
+      id: explicit
+      run: |
+        cat <<EOF >> $GITHUB_ENV
+        ENVIRONMENT_MANIFEST<<ENVIRONMENT_EOF
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: ${{ inputs.environmentName }}
+        spec:
+          interval: 5m
+          chart:
+            spec:
+              chart: ./charts/ttop-ssh
+              reconcileStrategy: Revision
+              sourceRef:
+                kind: GitRepository
+                name: tt-orchestration
+                namespace: ttop
+          values:
+            nodeSelector:
+              allocation.tenstorrent.com/allocated-by: ${{inputs.allocationNamespace}}--${{ inputs.allocationName }}
+            image:
+              repository: ${{ inputs.workerRepository }}
+              tag: ${{ inputs.workerTag }}
+            deviceMountTypes:
+              hostPath: true
+              devicePlugin: false
+            cardsPerHost: $TT_CARDS_PER_HOST
+            clientAuthorizedKeys: $SSH_PUBLIC_KEY
+            volume:
+              enabled: ${{ inputs.sharedVolumeEnabled }}
+              pvcName: $HOSTNAME
+              mountPath: "/ci"
+        ENVIRONMENT_EOF
+        EOF
+
+    - name: Create Environment
+      shell: bash
+      run: |
+        echo "Creating environment..."
+        echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl -n ${{ inputs.namespace }} apply -f -
+
+    - name: Wait for environment
+      shell: bash
+      run: |
+        echo "Waiting for environment to be ready..."
+        kubectl -n ${{ inputs.namespace }} wait --for=condition=Ready helmrelease/${{ inputs.environmentName }} --timeout=${{ inputs.timeout }}
+
+    - name: Connect to the environment
+      shell: bash
+      run: |
+        echo "Connecting to environment..."
+        /home/runner/ttop/ssh-setup.sh "${{ inputs.namespace }}" "${{ inputs.environmentName }}"

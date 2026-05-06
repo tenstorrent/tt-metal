@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,9 +20,8 @@ namespace ckernel {
  * from different input positions are accumulated into their corresponding embedding rows.
  *
  */
-template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_reshuffle_rows_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reshuffle_rows, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::reshuffle_rows>();
 }
 
 /**
@@ -47,8 +46,7 @@ inline void llk_math_eltwise_unary_sfpu_reshuffle_rows_init() {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_reshuffle_rows(
     uint dst_index, uint32_t idx_addr, int vector_mode = (int)VectorMode::RC_custom) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        sfpu::calculate_reshuffle_rows<APPROXIMATE>, dst_index, vector_mode, idx_addr);
+    _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_reshuffle_rows<APPROXIMATE>, dst_index, vector_mode, idx_addr);
 }
 
 }  // namespace ckernel

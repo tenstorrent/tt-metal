@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,8 @@ import ttnn
 from math import pi
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
+
+pytestmark = pytest.mark.use_module_device
 
 
 def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, pcc=0.9999):

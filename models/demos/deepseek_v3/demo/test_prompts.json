@@ -766,5 +766,773 @@
   },
   {
     "prompt": "When did the fall of the Berlin Wall occur?"
+  },
+  {
+    "prompt": "What is the boiling point of water in Celsius?"
+  },
+  {
+    "prompt": "How many continents are there on Earth?"
+  },
+  {
+    "prompt": "What is the capital of Japan?"
+  },
+  {
+    "prompt": "Who painted the Mona Lisa?"
+  },
+  {
+    "prompt": "What is the square root of 144?"
+  },
+  {
+    "prompt": "How many legs does a spider have?"
+  },
+  {
+    "prompt": "What is the chemical formula for water?"
+  },
+  {
+    "prompt": "Who discovered penicillin?"
+  },
+  {
+    "prompt": "What planet is known as the Red Planet?"
+  },
+  {
+    "prompt": "How many bones are in the adult human body?"
+  },
+  {
+    "prompt": "What is the tallest mountain in the world?"
+  },
+  {
+    "prompt": "What language has the most native speakers?"
+  },
+  {
+    "prompt": "What year was the internet invented?"
+  },
+  {
+    "prompt": "What is the smallest prime number?"
+  },
+  {
+    "prompt": "How many teeth does an adult human have?"
+  },
+  {
+    "prompt": "What is the hardest natural substance on Earth?"
+  },
+  {
+    "prompt": "Who invented the telephone?"
+  },
+  {
+    "prompt": "What is the largest ocean on Earth?"
+  },
+  {
+    "prompt": "How many planets are in our solar system?"
+  },
+  {
+    "prompt": "What does DNA stand for?"
+  },
+  {
+    "prompt": "What is the freezing point of water in Fahrenheit?"
+  },
+  {
+    "prompt": "Who wrote Romeo and Juliet?"
+  },
+  {
+    "prompt": "What is the capital of Australia?"
+  },
+  {
+    "prompt": "What element does the symbol Fe represent?"
+  },
+  {
+    "prompt": "How many hours are in a day?"
+  },
+  {
+    "prompt": "What is the largest mammal on Earth?"
+  },
+  {
+    "prompt": "Who was the first president of the United States?"
+  },
+  {
+    "prompt": "What is the currency of the United Kingdom?"
+  },
+  {
+    "prompt": "How many sides does a hexagon have?"
+  },
+  {
+    "prompt": "What gas do plants absorb from the atmosphere?"
+  },
+  {
+    "prompt": "What is the capital of France?"
+  },
+  {
+    "prompt": "How many strings does a standard guitar have?"
+  },
+  {
+    "prompt": "What is the largest desert in the world?"
+  },
+  {
+    "prompt": "Who developed the theory of relativity?"
+  },
+  {
+    "prompt": "What is the atomic number of carbon?"
+  },
+  {
+    "prompt": "How many weeks are in a year?"
+  },
+  {
+    "prompt": "What is the closest star to Earth?"
+  },
+  {
+    "prompt": "What organ pumps blood through the body?"
+  },
+  {
+    "prompt": "What is the capital of Germany?"
+  },
+  {
+    "prompt": "How many colors are in a rainbow?"
+  },
+  {
+    "prompt": "What is the tallest animal in the world?"
+  },
+  {
+    "prompt": "Who invented the light bulb?"
+  },
+  {
+    "prompt": "What is the main ingredient in bread?"
+  },
+  {
+    "prompt": "How many minutes are in an hour?"
+  },
+  {
+    "prompt": "What is the largest continent by area?"
+  },
+  {
+    "prompt": "What does HTTP stand for?"
+  },
+  {
+    "prompt": "What is the chemical symbol for sodium?"
+  },
+  {
+    "prompt": "Who wrote The Great Gatsby?"
+  },
+  {
+    "prompt": "What is the capital of Brazil?"
+  },
+  {
+    "prompt": "How many chambers does the human heart have?"
+  },
+  {
+    "prompt": "What is the fastest land animal?"
+  },
+  {
+    "prompt": "What year did the Titanic sink?"
+  },
+  {
+    "prompt": "What is the smallest country in the world?"
+  },
+  {
+    "prompt": "How many days are in a leap year?"
+  },
+  {
+    "prompt": "What is the most abundant gas in Earth's atmosphere?"
+  },
+  {
+    "prompt": "Who painted Starry Night?"
+  },
+  {
+    "prompt": "What is the capital of Canada?"
+  },
+  {
+    "prompt": "How many sides does a triangle have?"
+  },
+  {
+    "prompt": "What is the largest planet in our solar system?"
+  },
+  {
+    "prompt": "What is the pH of pure water?"
+  },
+  {
+    "prompt": "Who wrote Pride and Prejudice?"
+  },
+  {
+    "prompt": "What is the speed of sound in air approximately?"
+  },
+  {
+    "prompt": "How many chromosomes do humans have?"
+  },
+  {
+    "prompt": "What is the capital of Italy?"
+  },
+  {
+    "prompt": "What metal is the most conductive?"
+  },
+  {
+    "prompt": "How many seconds are in a minute?"
+  },
+  {
+    "prompt": "What is the largest bird in the world?"
+  },
+  {
+    "prompt": "Who discovered gravity?"
+  },
+  {
+    "prompt": "What is the national flower of Japan?"
+  },
+  {
+    "prompt": "How many degrees are in a circle?"
+  },
+  {
+    "prompt": "What is the deepest ocean trench?"
+  },
+  {
+    "prompt": "What does CPU stand for?"
+  },
+  {
+    "prompt": "What is the capital of Spain?"
+  },
+  {
+    "prompt": "How many players are on a soccer team?"
+  },
+  {
+    "prompt": "What vitamin does the sun help produce?"
+  },
+  {
+    "prompt": "Who invented the printing press?"
+  },
+  {
+    "prompt": "What is the largest lake in the world?"
+  },
+  {
+    "prompt": "How many vertices does a cube have?"
+  },
+  {
+    "prompt": "What is the capital of South Korea?"
+  },
+  {
+    "prompt": "What is the lightest element?"
+  },
+  {
+    "prompt": "How many keys are on a standard piano?"
+  },
+  {
+    "prompt": "What animal is known as the king of the jungle?"
+  },
+  {
+    "prompt": "Who composed the Four Seasons?"
+  },
+  {
+    "prompt": "What is the capital of Egypt?"
+  },
+  {
+    "prompt": "How many syllables are in a haiku?"
+  },
+  {
+    "prompt": "What is the most spoken language in the world?"
+  },
+  {
+    "prompt": "What does RAM stand for?"
+  },
+  {
+    "prompt": "What is the capital of Mexico?"
+  },
+  {
+    "prompt": "How many faces does a dodecahedron have?"
+  },
+  {
+    "prompt": "What is the main gas in the sun?"
+  },
+  {
+    "prompt": "Who wrote the Odyssey?"
+  },
+  {
+    "prompt": "What is the hardest rock?"
+  },
+  {
+    "prompt": "How many planets have rings in our solar system?"
+  },
+  {
+    "prompt": "What is the capital of Argentina?"
+  },
+  {
+    "prompt": "What is the chemical symbol for potassium?"
+  },
+  {
+    "prompt": "How many feet are in a mile?"
+  },
+  {
+    "prompt": "What is the largest organ in the human body?"
+  },
+  {
+    "prompt": "Who invented the airplane?"
+  },
+  {
+    "prompt": "What is the capital of India?"
+  },
+  {
+    "prompt": "How many ounces are in a pound?"
+  },
+  {
+    "prompt": "What is the hottest planet in our solar system?"
+  },
+  {
+    "prompt": "Who discovered America?"
+  },
+  {
+    "prompt": "What is the capital of Russia?"
+  },
+  {
+    "prompt": "How many edges does a tetrahedron have?"
+  },
+  {
+    "prompt": "What is the most common blood type?"
+  },
+  {
+    "prompt": "Who wrote Hamlet?"
+  },
+  {
+    "prompt": "What is the capital of Turkey?"
+  },
+  {
+    "prompt": "How many bits are in a byte?"
+  },
+  {
+    "prompt": "What is the fastest bird in the world?"
+  },
+  {
+    "prompt": "What does HTML stand for?"
+  },
+  {
+    "prompt": "What is the capital of Thailand?"
+  },
+  {
+    "prompt": "How many elements are in the periodic table?"
+  },
+  {
+    "prompt": "What is the largest reptile in the world?"
+  },
+  {
+    "prompt": "Who composed Moonlight Sonata?"
+  },
+  {
+    "prompt": "What is the capital of Nigeria?"
+  },
+  {
+    "prompt": "How many grams are in a kilogram?"
+  },
+  {
+    "prompt": "What is the driest continent on Earth?"
+  },
+  {
+    "prompt": "What is the chemical symbol for silver?"
+  },
+  {
+    "prompt": "What is the capital of Sweden?"
+  },
+  {
+    "prompt": "How many cards are in a standard deck?"
+  },
+  {
+    "prompt": "What is the longest bone in the human body?"
+  },
+  {
+    "prompt": "Who invented the steam engine?"
+  },
+  {
+    "prompt": "What is the capital of Poland?"
+  },
+  {
+    "prompt": "How many Olympic rings are there?"
+  },
+  {
+    "prompt": "What is the smallest ocean on Earth?"
+  },
+  {
+    "prompt": "What does WiFi stand for?"
+  },
+  {
+    "prompt": "What is the capital of Kenya?"
+  },
+  {
+    "prompt": "How many moons does Mars have?"
+  },
+  {
+    "prompt": "What is the most abundant element in the universe?"
+  },
+  {
+    "prompt": "Who discovered electricity?"
+  },
+  {
+    "prompt": "What is the capital of Norway?"
+  },
+  {
+    "prompt": "How many points does a Star of David have?"
+  },
+  {
+    "prompt": "What is the densest naturally occurring element?"
+  },
+  {
+    "prompt": "Who wrote Don Quixote?"
+  },
+  {
+    "prompt": "What is the capital of Vietnam?"
+  },
+  {
+    "prompt": "How many zeros are in a million?"
+  },
+  {
+    "prompt": "What is the largest species of shark?"
+  },
+  {
+    "prompt": "What does NASA stand for?"
+  },
+  {
+    "prompt": "What is the capital of Chile?"
+  },
+  {
+    "prompt": "How many strings does a violin have?"
+  },
+  {
+    "prompt": "What is the most poisonous animal in the world?"
+  },
+  {
+    "prompt": "Who invented the telescope?"
+  },
+  {
+    "prompt": "What is the capital of Portugal?"
+  },
+  {
+    "prompt": "How many bones are in the human hand?"
+  },
+  {
+    "prompt": "What planet has the most moons?"
+  },
+  {
+    "prompt": "What is the chemical formula for table salt?"
+  },
+  {
+    "prompt": "What is the capital of Colombia?"
+  },
+  {
+    "prompt": "How many squares are on a chess board?"
+  },
+  {
+    "prompt": "What is the fastest fish in the ocean?"
+  },
+  {
+    "prompt": "Who painted The Last Supper?"
+  },
+  {
+    "prompt": "What is the capital of Greece?"
+  },
+  {
+    "prompt": "How many muscles are in the human body?"
+  },
+  {
+    "prompt": "What is the largest island in the world?"
+  },
+  {
+    "prompt": "What does SCUBA stand for?"
+  },
+  {
+    "prompt": "What is the capital of Finland?"
+  },
+  {
+    "prompt": "How many ribs does a human have?"
+  },
+  {
+    "prompt": "What is the coldest planet in our solar system?"
+  },
+  {
+    "prompt": "Who invented dynamite?"
+  },
+  {
+    "prompt": "What is the capital of Peru?"
+  },
+  {
+    "prompt": "How many states are in the United States?"
+  },
+  {
+    "prompt": "What is the largest waterfall in the world by volume?"
+  },
+  {
+    "prompt": "What is the chemical symbol for lead?"
+  },
+  {
+    "prompt": "What is the capital of Switzerland?"
+  },
+  {
+    "prompt": "How many teeth does a dog have?"
+  },
+  {
+    "prompt": "What is the largest flower in the world?"
+  },
+  {
+    "prompt": "Who wrote War and Peace?"
+  },
+  {
+    "prompt": "What is the capital of Ireland?"
+  },
+  {
+    "prompt": "How many valves does a trumpet have?"
+  },
+  {
+    "prompt": "What is the deepest lake in the world?"
+  },
+  {
+    "prompt": "What does LASER stand for?"
+  },
+  {
+    "prompt": "What is the capital of Morocco?"
+  },
+  {
+    "prompt": "How many vertices does an octahedron have?"
+  },
+  {
+    "prompt": "What is the most common mineral on Earth?"
+  },
+  {
+    "prompt": "Who invented the vaccine?"
+  },
+  {
+    "prompt": "What is the capital of Cuba?"
+  },
+  {
+    "prompt": "How many carats is pure gold?"
+  },
+  {
+    "prompt": "What is the longest living animal?"
+  },
+  {
+    "prompt": "What is the chemical symbol for mercury?"
+  },
+  {
+    "prompt": "What is the capital of Austria?"
+  },
+  {
+    "prompt": "How many tentacles does an octopus have?"
+  },
+  {
+    "prompt": "What is the smallest planet in our solar system?"
+  },
+  {
+    "prompt": "Who composed Swan Lake?"
+  },
+  {
+    "prompt": "What is the capital of Denmark?"
+  },
+  {
+    "prompt": "How many Great Lakes are there?"
+  },
+  {
+    "prompt": "What is the most expensive spice by weight?"
+  },
+  {
+    "prompt": "What does RADAR stand for?"
+  },
+  {
+    "prompt": "What is the capital of New Zealand?"
+  },
+  {
+    "prompt": "How many chambers does a fish heart have?"
+  },
+  {
+    "prompt": "What is the largest coral reef in the world?"
+  },
+  {
+    "prompt": "Who invented the wheel?"
+  },
+  {
+    "prompt": "What is the capital of Saudi Arabia?"
+  },
+  {
+    "prompt": "How many innings are in a baseball game?"
+  },
+  {
+    "prompt": "What is the heaviest naturally occurring element?"
+  },
+  {
+    "prompt": "Who wrote The Art of War?"
+  },
+  {
+    "prompt": "What is the capital of Iran?"
+  },
+  {
+    "prompt": "How many pairs of cranial nerves do humans have?"
+  },
+  {
+    "prompt": "What is the tallest tree species?"
+  },
+  {
+    "prompt": "What is the chemical symbol for tin?"
+  },
+  {
+    "prompt": "What is the capital of Belgium?"
+  },
+  {
+    "prompt": "How many dots are on a pair of dice?"
+  },
+  {
+    "prompt": "What is the most common eye color in the world?"
+  },
+  {
+    "prompt": "Who invented the compass?"
+  },
+  {
+    "prompt": "What is the capital of Hungary?"
+  },
+  {
+    "prompt": "How many taste buds does a human tongue have?"
+  },
+  {
+    "prompt": "What is the saltiest body of water on Earth?"
+  },
+  {
+    "prompt": "What does JPEG stand for?"
+  },
+  {
+    "prompt": "What is the capital of Philippines?"
+  },
+  {
+    "prompt": "How many points is a touchdown worth in football?"
+  },
+  {
+    "prompt": "What is the most visited country in the world?"
+  },
+  {
+    "prompt": "Who discovered X-rays?"
+  },
+  {
+    "prompt": "What is the capital of Czech Republic?"
+  },
+  {
+    "prompt": "How many miles is a marathon?"
+  },
+  {
+    "prompt": "What is the rarest blood type?"
+  },
+  {
+    "prompt": "What is the chemical formula for carbon dioxide?"
+  },
+  {
+    "prompt": "What is the capital of Israel?"
+  },
+  {
+    "prompt": "How many planets rotate clockwise in our solar system?"
+  },
+  {
+    "prompt": "What is the loudest animal on Earth?"
+  },
+  {
+    "prompt": "Who wrote One Hundred Years of Solitude?"
+  },
+  {
+    "prompt": "What is the capital of Malaysia?"
+  },
+  {
+    "prompt": "How many holes are on a standard golf course?"
+  },
+  {
+    "prompt": "What is the most common element in Earth's crust?"
+  },
+  {
+    "prompt": "What does SOS stand for?"
+  },
+  {
+    "prompt": "What is the capital of Romania?"
+  },
+  {
+    "prompt": "How many legs does a lobster have?"
+  },
+  {
+    "prompt": "What is the fastest growing plant?"
+  },
+  {
+    "prompt": "Who invented the microscope?"
+  },
+  {
+    "prompt": "What is the capital of Ukraine?"
+  },
+  {
+    "prompt": "How many years are in a century?"
+  },
+  {
+    "prompt": "What is the largest species of penguin?"
+  },
+  {
+    "prompt": "What is the chemical symbol for tungsten?"
+  },
+  {
+    "prompt": "What is the capital of Singapore?"
+  },
+  {
+    "prompt": "How many neck vertebrae does a giraffe have?"
+  },
+  {
+    "prompt": "What is the oldest university in the world?"
+  },
+  {
+    "prompt": "Who composed The Magic Flute?"
+  },
+  {
+    "prompt": "What is the capital of Pakistan?"
+  },
+  {
+    "prompt": "How many layers does the Earth have?"
+  },
+  {
+    "prompt": "What is the most consumed beverage in the world?"
+  },
+  {
+    "prompt": "What does PDF stand for?"
+  },
+  {
+    "prompt": "What is the capital of Bangladesh?"
+  },
+  {
+    "prompt": "How many humps does a Bactrian camel have?"
+  },
+  {
+    "prompt": "What is the largest volcano on Earth?"
+  },
+  {
+    "prompt": "Who invented the sewing machine?"
+  },
+  {
+    "prompt": "What is the capital of Ethiopia?"
+  },
+  {
+    "prompt": "How many stomachs does a cow have?"
+  },
+  {
+    "prompt": "What is the deepest point in the ocean?"
+  },
+  {
+    "prompt": "What is the chemical symbol for copper?"
+  },
+  {
+    "prompt": "What is the capital of Scotland?"
+  },
+  {
+    "prompt": "How many chambers does a bird heart have?"
+  },
+  {
+    "prompt": "What is the most populated city in the world?"
+  },
+  {
+    "prompt": "Who wrote The Divine Comedy?"
+  },
+  {
+    "prompt": "What is the capital of Croatia?"
+  },
+  {
+    "prompt": "How many countries are in the European Union?"
+  },
+  {
+    "prompt": "What is the largest species of whale?"
+  },
+  {
+    "prompt": "What does USB stand for?"
+  },
+  {
+    "prompt": "What is the capital of Bulgaria?"
+  },
+  {
+    "prompt": "How many bones does a shark have?"
   }
 ]

@@ -1,14 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -42,7 +44,7 @@ struct LoopbackConfig {
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const LoopbackConfig& test_config) {
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -77,14 +79,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
         (uint32_t)test_config.test_id};
 
     // Kernels
-    auto sender_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
-        master_core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = test_config.noc_id,
-            .compile_args = sender_compile_args});
+    KernelHandle sender_kernel;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        sender_kernel = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
+            master_core_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = sender_compile_args});
+    } else {
+        sender_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender.cpp",
+            master_core_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = test_config.noc_id,
+                .compile_args = sender_compile_args});
+    }
 
     // Semaphores
     CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
@@ -130,23 +142,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
         device, test_config.master_core_coord, subordinate_l1_byte_address, transaction_size_bytes, packed_output);
 
     // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-    if (!pcc) {
-        log_error(LogTest, "PCC Check failed");
+    bool is_equal = (packed_output == packed_golden);
+    if (!is_equal) {
+        log_error(LogTest, "Equality Check failed");
         log_info(LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
         log_info(LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
-    return pcc;
+    return is_equal;
 }
 }  // namespace unit_tests::dm::core_loopback
 
 /* ========== Test case for loopback data movement; ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
     auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->get_device(0)->arch();
+    auto arch_ = mesh_device->impl().get_device(0)->arch();
 
     // Parameters
     uint32_t max_transactions = 256;

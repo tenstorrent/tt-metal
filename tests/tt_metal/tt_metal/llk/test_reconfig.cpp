@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/bfloat8.hpp>
 #include <bit>
 #include <functional>
@@ -20,11 +20,10 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include "device_fixture.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -35,11 +34,9 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -113,7 +110,7 @@ bool single_core_reconfig(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_bfp16b{
         .device = device,
@@ -183,7 +180,7 @@ bool single_core_reconfig(
     vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines;
 
-    defines["DST_ACCUM_MODE"] = "1";  // Needed always in order for reader kernel to load data from CB2
+    defines["LOAD_BUF2_DATA"] = "1";  // Needed always in order for reader kernel to load data from CB2
     defines["EXPLICIT_RECONFIG"] = test_config.explicit_reconfig ? "1" : "0";
     defines["SPLIT_SRC_RECONFIG"] = test_config.split_src_reconfig ? "1" : "0";
     defines["BLOCK_COPY"] = test_config.block_copy ? "1" : "0";
@@ -329,6 +326,7 @@ bool single_core_reconfig(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     // ////////////////////////////////////////////////////////////////////////////
     // //                      Comparison Checking
@@ -364,11 +362,7 @@ bool single_core_reconfig(
 // - pack_reconfig_l1_acc
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
+TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -405,11 +399,7 @@ TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
+TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);

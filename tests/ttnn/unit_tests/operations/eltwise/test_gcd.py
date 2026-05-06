@@ -1,12 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal, compare_pcc
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal, compare_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize(

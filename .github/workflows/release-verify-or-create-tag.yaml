@@ -45,6 +45,8 @@ jobs:
           fetch-depth: ${{ inputs.fetch_depth }}
           fetch-tags: true
           ref: stable
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
 
       - name: Calculate version
         id: calculate-version

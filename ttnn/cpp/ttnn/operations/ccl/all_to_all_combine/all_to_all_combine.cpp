@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_to_all_combine.hpp"
 #include "device/all_to_all_combine_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -13,9 +13,10 @@
 #include "ttnn/operations/full/full.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn {
+using namespace ttnn::operations::ccl;
 
-ttnn::Tensor ExecuteAllToAllCombine::invoke(
+ttnn::Tensor all_to_all_combine(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,
@@ -27,7 +28,7 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     const std::optional<uint32_t>& output_shard_dim,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     uint32_t shard_dim = output_shard_dim.value_or(1);
@@ -84,4 +85,4 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
         shard_dim);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn

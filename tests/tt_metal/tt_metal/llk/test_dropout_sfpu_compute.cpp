@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <limits.h>
-#include <stdint.h>
-#include <stdlib.h>
+#include <climits>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <algorithm>
@@ -24,22 +24,19 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include "device_fixture.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -118,7 +115,7 @@ bool test_dropout_standalone(
         Program program = CreateProgram();
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        const auto device = mesh_device->get_devices()[0];
+        auto* const device = mesh_device->get_devices()[0];
 
         constexpr CoreCoord core = {0, 0};
         constexpr uint32_t single_tile_size = 2 * 1024;
@@ -218,6 +215,7 @@ bool test_dropout_standalone(
              num_tiles});
 
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail
@@ -281,7 +279,7 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
 
 }  // namespace unit_tests::compute::sfpu::dropout
 
-TEST_F(MeshDeviceFixture, TensixComputeDropout) {
+TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
     srand(0);
     int num_tests = 5;
     float fill_constant = 9.0;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,22 +6,22 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct FastReduceNCParams {
     const int32_t dim;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    const std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+    // When set, packer writes this dtype instead of input.dtype() (used by the Sum precision chain).
+    const std::optional<tt::tt_metal::DataType> output_dtype;
 };
 
-struct tensor_args_t {
+struct FastReduceNCInputs {
     const Tensor input;
     std::optional<Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::experimental::prim

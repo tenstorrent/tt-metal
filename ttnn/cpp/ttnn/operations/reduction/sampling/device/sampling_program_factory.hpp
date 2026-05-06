@@ -1,15 +1,18 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#pragma once
 
-namespace ttnn::operations::reduction::detail {
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_device_operation_types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
-tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
-    const std::vector<Tensor>& input_tensors,
-    const std::optional<uint32_t>& seed,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    Tensor& output_tensor);
+namespace ttnn::prim {
 
-}  // namespace ttnn::operations::reduction::detail
+struct SamplingProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor);
+};
+
+}  // namespace ttnn::prim

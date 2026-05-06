@@ -1,14 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t arg_index = 0;
     uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
     uint32_t start_c = get_arg_val<uint32_t>(arg_index++);
@@ -49,4 +48,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

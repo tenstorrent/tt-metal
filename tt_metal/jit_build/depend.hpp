@@ -1,7 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
+#include <iosfwd>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -23,12 +26,15 @@ void write_dependency_hashes(
 
 // Reads dependencies from .d file and writes their hashes to .hash file.
 // Deletes the .hash file on any failure.
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj);
+void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path);
 
 // Returns true if all dependencies' hashes match those stored in `hash_file`.
 bool dependencies_up_to_date(std::istream& hash_file);
 
 // Returns true if all dependencies' hashes match those stored in the .hash file.
 bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj);
+
+// Clears process-local cache of dependency file hashes.
+void clear_file_hash_cache();
 
 }  // namespace tt::jit_build

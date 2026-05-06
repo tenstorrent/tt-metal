@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,16 +15,17 @@
 #include "c_tensix_core.h"
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
-#include "firmware_common.h"
+#include "internal/firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "dev_msgs.h"
-#include "risc_attribs.h"
-#include "circular_buffer.h"
-#include "dataflow_api.h"
+#include "hostdev/dev_msgs.h"
+#include "internal/risc_attribs.h"
+#include "internal/circular_buffer_interface.h"
 
-#include "debug/watcher_common.h"
-#include "debug/waypoint.h"
-#include "debug/stack_usage.h"
+#include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
+#include "api/debug/waypoint.h"
+#include "api/debug/device_print.h"
+#include "internal/debug/stack_usage.h"
 
 uint8_t noc_index;
 
@@ -38,6 +39,11 @@ uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
+
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint8_t my_logical_x_ __attribute__((used));
@@ -47,16 +53,27 @@ uint8_t my_relative_y_ __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 // c_tensix_core core;
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_IERISC_MAILBOX_BASE);
+tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
+inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
+    // Posting heartbeat at this address is only needed for Wormhole
+#if !defined(ARCH_BLACKHOLE)
+    invalidate_l1_cache();
+    volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
+    heartbeat++;
+    ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
+#endif
+}
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -81,14 +98,14 @@ void set_deassert_addresses() {
 inline void run_subordinate_eriscs(uint32_t enables) {
 #if defined(ARCH_BLACKHOLE)
     if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1))) {
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->dm1 = RUN_SYNC_MSG_GO;
     }
 #endif
 }
 
 inline void wait_subordinate_eriscs(uint32_t& heartbeat) {
     WAYPOINT("SEW");
-    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+    while (subordinate_sync->all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
         RISC_POST_HEARTBEAT(heartbeat);
     }
@@ -108,9 +125,9 @@ int main() {
 
     risc_init();
 
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    subordinate_sync->all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
 #ifdef ARCH_BLACKHOLE
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+    subordinate_sync->dm1 = RUN_SYNC_MSG_INIT;
 #endif
     set_deassert_addresses();
     // device_setup();
@@ -120,12 +137,13 @@ int main() {
         noc_local_state_init(n);
     }
 
+    DEVICE_PRINT_INITIALIZE_LOCK();
     deassert_all_reset();  // Bring all riscs on eth cores out of reset
     // Wait for all subordinate ERISCs to be ready before reporting the core is done initializing.
     wait_subordinate_eriscs(heartbeat);
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
-    // Cleanup profiler buffer incase we never get the go message
+    // Cleanup profiler buffer in case we never get the go message
 
     DeviceProfilerInit();
     while (1) {
@@ -149,13 +167,13 @@ int main() {
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            flush_erisc_icache();
+            manually_flush_icache();
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);
 
             uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, PROCESSOR_INDEX);
+                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, internal_::get_hw_thread_idx());
 
             // Run the ERISC kernel
             int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
@@ -171,6 +189,7 @@ int main() {
             wait_subordinate_eriscs(heartbeat);
 
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            DEVICE_PRINT_KERNEL_FINISHED();
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {

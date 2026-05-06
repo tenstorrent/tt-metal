@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,6 +14,7 @@ namespace tt::tt_metal {
 // Fwd declares
 struct ProgramDescriptor;
 class CircularBuffer;
+class Program;
 
 namespace detail {
 class ProgramImpl;
@@ -24,7 +25,13 @@ using ProgramId = std::uint64_t;
 class Program {
 public:
     Program();
+
+    // Alternative "ProgramDescriptor" API, created for TTNN generic op
     explicit Program(const ProgramDescriptor& descriptor);
+
+    // Internal: construct from an already-built ProgramImpl.
+    explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
+
     ~Program() noexcept;
 
     Program(const Program& other) = delete;
@@ -46,7 +53,7 @@ public:
     //////////////////////////////
 
     // Used in ops.
-    std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
+    std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }

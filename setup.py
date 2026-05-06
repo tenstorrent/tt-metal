@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -195,7 +195,7 @@ class CMakeBuild(build_ext):
     def get_build_env():
         return {
             **os.environ.copy(),
-            "CXX": "clang++-17",
+            "CXX": "clang++-20",
         }
 
     @staticmethod
@@ -265,6 +265,14 @@ class CMakeBuild(build_ext):
                         ]
                     )
 
+                # Add LTO flags if enabled
+                if os.environ.get("CIBW_ENABLE_LTO") == "ON":
+                    cmake_args.extend(
+                        [
+                            "-DTT_ENABLE_LTO=ON",
+                        ]
+                    )
+
                 cmake_args.extend(["-S", source_dir])
 
                 subprocess.check_call(cmake_args)
@@ -291,7 +299,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
+        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so"]
         runtime_patterns = [
             "hw/**/*",
         ]
@@ -324,15 +332,17 @@ class CMakeBuild(build_ext):
             "api/ttnn/tensor/enum_types.hpp",
         ]
         ttnn_cpp_patterns = [
-            "ttnn/deprecated/**/kernels/**/*",
+            "ttnn/kernel/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
+            "ttnn/operations/**/shared_with_host/**/*",
             "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
-            "ttnn/operations/normalization/kernel_util/compute/*",
+            "ttnn/kernel_lib/*",
+            "ttnn/operations/normalization/kernel_util/**/*",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
@@ -349,15 +359,16 @@ class CMakeBuild(build_ext):
             "fabric/mesh_graph_descriptors/*.textproto",
             "fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
             "fabric/impl/kernels/tt_fabric_mux.cpp",
-            "lite_fabric/hw/**/*",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
             "impl/dispatch/kernels/**/*",
             "include/**/*",
             "kernels/**/*",
-            "third_party/tt_llk/**/*",
+            "tt-llk/**/*",
             "tools/profiler/**/*",
             "soc_descriptors/*.yaml",
+            "sfpi-version",
+            "pre-compiled/**/*",
         ]
         copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)
         copy_tree_with_patterns(build_dir, self.build_lib + "/ttnn/build/lib", ["sfpi-version.json"])

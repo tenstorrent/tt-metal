@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,11 +6,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 
-namespace ttnn {
-
-namespace operations {
-
-namespace compute_throttle_utils {
+namespace ttnn::operations::compute_throttle_utils {
 
 void add_stagger_defines_if_needed(
     const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines) {
@@ -58,13 +54,13 @@ void throttle_mm_perf(
     // Limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
     // This will slow down the OP if UNPACK/PACK threads are capable of feeding data sufficiently fast (MATH compute
     // bound)
-    const bool mm_throttle_env_enabled = std::getenv("TT_MM_THROTTLE_PERF");
+    const char* mm_throttle_env = std::getenv("TT_MM_THROTTLE_PERF");
 
     uint32_t uint_throttle_level = static_cast<uint32_t>(throttle_level);
 
     // If environment variable is set, this overrides the throttle level parameter
-    if (mm_throttle_env_enabled) {
-        uint_throttle_level = std::stoi(std::getenv("TT_MM_THROTTLE_PERF"));
+    if (mm_throttle_env) {
+        uint_throttle_level = std::stoi(mm_throttle_env);
     }
 
     // No throttling requested
@@ -106,8 +102,4 @@ bool should_sync_after_in1_dram(const tt::ARCH arch) {
     return sync_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
 }
 
-}  // namespace compute_throttle_utils
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::compute_throttle_utils

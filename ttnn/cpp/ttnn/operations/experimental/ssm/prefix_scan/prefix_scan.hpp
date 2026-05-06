@@ -1,29 +1,21 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <ttnn/decorators.hpp>
+#include <tt-metalium/base_types.hpp>
 #include <ttnn/tensor/tensor.hpp>
-
-namespace ttnn::operations::experimental::ssm {
-
-struct ExecutePrefixScan {
-    static ttnn::Tensor invoke(
-        const Tensor& a,
-        const Tensor& bx,
-        const Tensor& h_prev,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<DataType> dtype = std::nullopt,
-        std::optional<MathFidelity> math_fidelity = std::nullopt);
-};
-
-}  // namespace ttnn::operations::experimental::ssm
+#include <ttnn/types.hpp>
 
 namespace ttnn::experimental {
 
-constexpr auto prefix_scan = ttnn::
-    register_operation<"ttnn::experimental::prefix_scan", ttnn::operations::experimental::ssm::ExecutePrefixScan>();
+ttnn::Tensor prefix_scan(
+    const Tensor& a,
+    const Tensor& bx,
+    const Tensor& h_prev,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<DataType> dtype = std::nullopt,
+    std::optional<tt::tt_metal::MathFidelity> math_fidelity = std::nullopt);
 
 }  // namespace ttnn::experimental

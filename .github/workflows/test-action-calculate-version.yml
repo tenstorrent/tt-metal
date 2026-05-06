@@ -902,10 +902,203 @@ jobs:
           echo "  - Force bump type to none"
           echo "  - Ignore commits using short SHA"
 
+  test-dev-tag-rc-comparison:
+    name: Test Dev Tag RC vs Semver Comparison
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+
+      # Test 1: RC tag is bigger than semver tag
+      - name: Test 1 - RC tag bigger than semver (v1.4.0 vs v1.5.0-rc3)
+        run: |
+          git tag v1.4.0
+          git tag v1.5.0-rc1
+          git tag v1.5.0-rc2
+          git tag v1.5.0-rc3
+          echo "Created tags: v1.4.0 (semver), v1.5.0-rc1, rc2, rc3"
+
+      - name: Dev tag should bump from bigger RC tag
+        id: test-dev-from-bigger-rc
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev bumps from bigger RC
+        run: |
+          echo "Dev tag from bigger RC results:"
+          echo "  Latest semver: ${{ steps.test-dev-from-bigger-rc.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-from-bigger-rc.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-from-bigger-rc.outputs.final_version }}"
+
+          # Should use v1.5.0 (from rc) and bump minor -> v1.6.0
+          if [ "${{ steps.test-dev-from-bigger-rc.outputs.new_version }}" != "v1.6.0" ]; then
+            echo "❌ FAILED: Expected v1.6.0 but got ${{ steps.test-dev-from-bigger-rc.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "✅ PASS: Dev tag correctly bumped from bigger RC tag"
+
+      # Test 2: Semver tag is bigger than RC tag
+      - name: Test 2 - Semver tag bigger than RC (v2.0.0 vs v1.9.0-rc5)
+        run: |
+          git tag -d $(git tag -l) || true
+          git tag v1.9.0-rc1
+          git tag v1.9.0-rc5
+          git tag v2.0.0
+          echo "Created tags: v1.9.0-rc1, rc5 (rc), v2.0.0 (semver)"
+
+      - name: Dev tag should bump from bigger semver
+        id: test-dev-from-bigger-semver
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev bumps from bigger semver
+        run: |
+          echo "Dev tag from bigger semver results:"
+          echo "  Latest semver: ${{ steps.test-dev-from-bigger-semver.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-from-bigger-semver.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-from-bigger-semver.outputs.final_version }}"
+
+          # Should use v2.0.0 (semver, bigger) and bump minor -> v2.1.0
+          if [ "${{ steps.test-dev-from-bigger-semver.outputs.new_version }}" != "v2.1.0" ]; then
+            echo "❌ FAILED: Expected v2.1.0 but got ${{ steps.test-dev-from-bigger-semver.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "✅ PASS: Dev tag correctly bumped from bigger semver tag"
+
+      # Test 3: RC and semver are equal (same major.minor.patch)
+      - name: Test 3 - RC and semver equal version numbers (v3.2.1-rc2 vs v3.2.1)
+        run: |
+          git tag -d $(git tag -l) || true
+          git tag v3.2.0
+          git tag v3.2.1-rc1
+          git tag v3.2.1-rc2
+          git tag v3.2.1
+          echo "Created tags: v3.2.0, v3.2.1-rc1, rc2 (rc equal), v3.2.1 (semver)"
+
+      - name: Dev tag with equal versions should use semver
+        id: test-dev-equal-versions
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev uses semver when versions equal
+        run: |
+          echo "Dev tag with equal versions results:"
+          echo "  Latest semver: ${{ steps.test-dev-equal-versions.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-equal-versions.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-equal-versions.outputs.final_version }}"
+
+          # Should use v3.2.1 (semver, when equal prefer semver) and bump minor -> v3.3.0
+          if [ "${{ steps.test-dev-equal-versions.outputs.new_version }}" != "v3.3.0" ]; then
+            echo "❌ FAILED: Expected v3.3.0 but got ${{ steps.test-dev-equal-versions.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "✅ PASS: Dev tag correctly uses semver when versions equal"
+
+      # Test 4: RC major version bigger
+      - name: Test 4 - RC major version bigger (v1.9.9 vs v2.0.0-rc1)
+        run: |
+          git tag -d $(git tag -l) || true
+          git tag v1.9.9
+          git tag v2.0.0-rc1
+          echo "Created tags: v1.9.9 (semver), v2.0.0-rc1 (rc, bigger major)"
+
+      - name: Dev tag should bump from RC with bigger major
+        id: test-dev-rc-bigger-major
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev bumps from RC with bigger major
+        run: |
+          echo "Dev tag from RC bigger major results:"
+          echo "  Latest semver: ${{ steps.test-dev-rc-bigger-major.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-rc-bigger-major.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-rc-bigger-major.outputs.final_version }}"
+
+          # Should use v2.0.0 (from rc, bigger major) and bump minor -> v2.1.0
+          if [ "${{ steps.test-dev-rc-bigger-major.outputs.new_version }}" != "v2.1.0" ]; then
+            echo "❌ FAILED: Expected v2.1.0 but got ${{ steps.test-dev-rc-bigger-major.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "✅ PASS: Dev tag correctly bumped from RC with bigger major"
+
+      # Test 5: RC minor version bigger (same major)
+      - name: Test 5 - RC minor version bigger (v2.5.0 vs v2.6.0-rc1)
+        run: |
+          git tag -d $(git tag -l) || true
+          git tag v2.5.0
+          git tag v2.6.0-rc1
+          echo "Created tags: v2.5.0 (semver), v2.6.0-rc1 (rc, bigger minor)"
+
+      - name: Dev tag should bump from RC with bigger minor
+        id: test-dev-rc-bigger-minor
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev bumps from RC with bigger minor
+        run: |
+          echo "Dev tag from RC bigger minor results:"
+          echo "  Latest semver: ${{ steps.test-dev-rc-bigger-minor.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-rc-bigger-minor.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-rc-bigger-minor.outputs.final_version }}"
+
+          # Should use v2.6.0 (from rc, bigger minor) and bump minor -> v2.7.0
+          if [ "${{ steps.test-dev-rc-bigger-minor.outputs.new_version }}" != "v2.7.0" ]; then
+            echo "❌ FAILED: Expected v2.7.0 but got ${{ steps.test-dev-rc-bigger-minor.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "✅ PASS: Dev tag correctly bumped from RC with bigger minor"
+
+      # Test 6: RC patch version bigger (same major.minor)
+      - name: Test 6 - RC patch version bigger (v3.1.5 vs v3.1.6-rc1)
+        run: |
+          git tag -d $(git tag -l) || true
+          git tag v3.1.5
+          git tag v3.1.6-rc1
+          echo "Created tags: v3.1.5 (semver), v3.1.6-rc1 (rc, bigger patch)"
+
+      - name: Dev tag should bump from RC with bigger patch
+        id: test-dev-rc-bigger-patch
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify dev bumps from RC with bigger patch
+        run: |
+          echo "Dev tag from RC bigger patch results:"
+          echo "  Latest semver: ${{ steps.test-dev-rc-bigger-patch.outputs.latest_semver }}"
+          echo "  New version: ${{ steps.test-dev-rc-bigger-patch.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-dev-rc-bigger-patch.outputs.final_version }}"
+
+          # Should use v3.1.6 (from rc, bigger patch) and bump minor -> v3.2.0
+          if [ "${{ steps.test-dev-rc-bigger-patch.outputs.new_version }}" != "v3.2.0" ]; then
+            echo "❌ FAILED: Expected v3.2.0 but got ${{ steps.test-dev-rc-bigger-patch.outputs.new_version }}"
+            exit 1
+          fi
+
+          echo "✅ PASS: Dev tag correctly bumped from RC with bigger patch"
+
   final-test-summary:
     name: Final Test Summary
     runs-on: ubuntu-latest
-    needs: [test-calculate-version, test-version-bumping, test-dev-tag-versioning, test-dev-tag-consistency, test-edge-cases, integration-test, test-force-bump-and-ignore-commits]
+    needs: [test-calculate-version, test-version-bumping, test-dev-tag-versioning, test-dev-tag-consistency, test-edge-cases, integration-test, test-force-bump-and-ignore-commits, test-dev-tag-rc-comparison]
     steps:
       - name: Test summary
         run: |

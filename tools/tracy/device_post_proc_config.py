@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -166,6 +166,11 @@ class default_setup(metaclass=MergeMetaclass):
             "type": "op_first_last",
             "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
             "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
+        },
+        "perf_counter_data": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "BRISC"},
         },
     }
 
@@ -428,6 +433,10 @@ class test_dispatch_cores(default_setup):
         },
     }
     detectOps = False
+
+
+class test_dispatch_cores_extended_worker(test_dispatch_cores):
+    pass
 
 
 class test_ethernet_dispatch_cores(default_setup):

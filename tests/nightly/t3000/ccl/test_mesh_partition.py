@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -147,22 +147,23 @@ def run_mesh_partition_test(
 
     def run_op(n_iters, store_all_results=True):
         tt_output_list = []
-        for i in range(n_iters):
-            buffer_index = 0 if trace_mode else i
-            tt_out_tensor = ttnn.mesh_partition(
-                tt_input_tensors_list[buffer_index],
-                dim,
-                cluster_axis=cluster_axis,
-                memory_config=output_memory_config,
-            )
-            if not trace_mode:
-                ttnn.synchronize_device(mesh_device)
+        with mesh_device.cache_entries_counter.measure():
+            for i in range(n_iters):
+                buffer_index = 0 if trace_mode else i
+                tt_out_tensor = ttnn.mesh_partition(
+                    tt_input_tensors_list[buffer_index],
+                    dim,
+                    cluster_axis=cluster_axis,
+                    memory_config=output_memory_config,
+                )
+                if not trace_mode:
+                    ttnn.synchronize_device(mesh_device)
+                if store_all_results:
+                    tt_output_list.append(tt_out_tensor)
             if store_all_results:
-                tt_output_list.append(tt_out_tensor)
-        if store_all_results:
-            return tt_output_list
-        else:
-            return [tt_out_tensor]
+                return tt_output_list
+            else:
+                return [tt_out_tensor]
 
     if trace_mode:
         # compile run:
@@ -229,10 +230,10 @@ def run_mesh_partition_test(
             failed_indices = torch.where(tt_torch_tensor != output_tensor_goldens_list[tensor_index])
             break
 
-    logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
+    logger.info(f"Device has {mesh_device.cache_entries_counter.total} program cache entries")
     assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-    ), f"Device {mesh_device.id} has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == 1 or mesh_device.cache_entries_counter.total == num_iters
+    ), f"Device {mesh_device.id} has {mesh_device.cache_entries_counter.total} program cache entries"
 
     if not passed:
         logger.info(f"Failed indices: {failed_indices}")
@@ -341,6 +342,49 @@ def test_mesh_partition_rm(
         num_iters,
         warmup_iters,
         trace_mode,
+        dtype,
+        layout,
+        cluster_axis,
+        mesh_axes,
+        mesh_shape,
+        input_memory_config,
+        output_memory_config,
+        scheme="random",
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("per_device_output_shape, dim", [((1, 4, 1, 576), 1), ((1, 4, 1, 576), 3)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("mesh_axes", [[0, 1]])
+@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG])
+def test_mesh_partition_tile(
+    mesh_device,
+    mesh_shape,
+    per_device_output_shape,
+    dtype,
+    layout,
+    dim,
+    cluster_axis,
+    mesh_axes,
+    input_memory_config,
+    output_memory_config,
+):
+    num_iters = 2
+    warmup_iters = 0
+
+    run_mesh_partition_test(
+        mesh_device,
+        per_device_output_shape,
+        dim,
+        num_iters,
+        warmup_iters,
+        False,
         dtype,
         layout,
         cluster_axis,

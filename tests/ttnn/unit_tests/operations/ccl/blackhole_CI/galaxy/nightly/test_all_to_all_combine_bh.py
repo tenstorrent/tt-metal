@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -139,8 +139,6 @@ def test_all_to_all_combine_no_trace(
     dtype,
     test_skew,
 ):
-    if topology == ttnn.Topology.Ring:
-        pytest.skip("Galaxy is currently mesh only")
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
     experts = experts_per_device * devices

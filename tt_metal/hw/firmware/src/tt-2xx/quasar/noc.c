@@ -1,7 +1,8 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 
 #include "noc.h"
 #include <stdint.h>

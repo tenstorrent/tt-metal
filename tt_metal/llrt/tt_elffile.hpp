@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,7 @@ public:
 
     struct Segment {
         std::vector<offset_t> relocs;      // 32-bit relocs to apply
-        std::span<word_t const> contents;  // Non-owning span
+        std::span<const word_t> contents;  // Non-owning span
         address_t address = 0;             // Byte execution address (0 for
                                            // XIP)
         address_t lma = 0;                 // Byte load address
@@ -59,6 +59,9 @@ public:
 
     std::vector<Segment> const& GetSegments() const { return segments_; }
 
+    // Get the contents of a named section. Returns empty span if not found.
+    std::span<std::byte> GetSectionContents(std::string_view section_name, uint64_t& virtual_address) const;
+
     // Release the implementation data, leaving the segments and
     // contents. Use this, after processing, if the elf object is long-lived.
     void ReleaseImpl();
@@ -74,6 +77,13 @@ public:
     // strong (can be non-data symbols).  Names can be exact or simple
     // globs ending in '*'.
     void WeakenDataSymbols(std::span<std::string_view const> strong_names);
+
+    // Convert the executable to a relinkable object file. Relocations
+    // are removed, allocatable sections are placed at zero, their
+    // symbols are adjusted to remain section-relative. The elf type
+    // becomes 'ET_REL'. Remember, objectifying people is bad, but
+    // objectifying an executable is perfectly fine (if a little strange).
+    void ObjectifyExecutable();
 
     // XIPify
     void MakeExecuteInPlace();

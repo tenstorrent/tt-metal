@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -18,11 +18,10 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include "device_fixture.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -35,11 +34,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -90,7 +87,7 @@ void run_single_core_cumsum(
     Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -199,6 +196,7 @@ void run_single_core_cumsum(
     tt_metal::detail::WriteToBuffer(src_dram_buffer, input_packed_tilized);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> output_packed_tilized;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, output_packed_tilized);
@@ -213,12 +211,7 @@ void run_single_core_cumsum(
 }
 }  // namespace unit_tests::compute::cumsum
 
-TEST_F(MeshDeviceFixture, TensixComputeCumsumColumnwise) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();  // Not implemented for GRAYSKULL
-    }
-
+TEST_F(LLKMeshDeviceFixture, TensixComputeCumsumColumnwise) {
     for (int i = 1; i <= 3; i++) {
         for (int j = 1; j <= 3; j++) {
             for (int k = 1; k <= 3; k++) {
@@ -229,12 +222,7 @@ TEST_F(MeshDeviceFixture, TensixComputeCumsumColumnwise) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixComputeCumsumRowwise) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();  // Not implemented for GRAYSKULL
-    }
-
+TEST_F(LLKMeshDeviceFixture, TensixComputeCumsumRowwise) {
     for (int i = 1; i <= 3; i++) {
         for (int j = 1; j <= 3; j++) {
             for (int k = 1; k <= 3; k++) {

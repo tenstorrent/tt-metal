@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,9 +12,27 @@
 #include "moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
+
+namespace {
+
+template <typename OutputDataType, typename InputDataType>
+std::vector<OutputDataType> cast_vec(ttsl::Span<const InputDataType> data_to_convert) {
+    std::vector<OutputDataType> converted_data;
+    for (auto datum : data_to_convert) {
+        if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
+            converted_data.push_back(static_cast<float>(datum));
+        } else if constexpr (std::is_same_v<OutputDataType, uint32_t> and std::is_same_v<InputDataType, bfloat16>) {
+            converted_data.push_back((uint32_t)std::bit_cast<uint16_t>(datum));
+        } else {
+            converted_data.push_back(static_cast<OutputDataType>(datum));
+        }
+    }
+    return converted_data;
+}
+}  // namespace
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
@@ -24,7 +42,11 @@ inline uint32_t get_num_device_cores(IDevice* device) {
     return num_cores_x * num_cores_y;
 }
 
-Tensor MorehClipGradNorm::invoke(
+}  // namespace ttnn::operations::moreh::moreh_clip_grad_norm
+
+namespace ttnn {
+
+Tensor moreh_clip_grad_norm(
     const std::vector<Tensor>& inputs,
     float max_norm,
     float norm_type,
@@ -41,21 +63,23 @@ Tensor MorehClipGradNorm::invoke(
             "`error_if_nonfinite=False`",
             norm_type);
     }
-    auto device = inputs.at(0).device();
+    auto* device = inputs.at(0).device();
     const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
 
     // Loop variable
-    const auto max_num_inputs = get_num_device_cores(device);
+    const auto max_num_inputs = operations::moreh::moreh_clip_grad_norm::get_num_device_cores(device);
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]
     auto tmp_pow_sum = create_device_tensor(
-        Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
-        inputs.at(0).dtype(),
-        Layout::TILE,
-        device,
-        memory_config.value_or(inputs.at(0).memory_config()));
+        ttnn::TensorSpec(
+            Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
+            tt::tt_metal::TensorLayout(
+                inputs.at(0).dtype(),
+                tt::tt_metal::PageConfig(Layout::TILE),
+                memory_config.value_or(inputs.at(0).memory_config()))),
+        device);
 
     // Run Step 1
     // Sum[|e|^p]
@@ -85,12 +109,11 @@ Tensor MorehClipGradNorm::invoke(
         norm_type,
         total_norm,
         memory_config,
-        init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, MathFidelity::HiFi4));
+        init_device_compute_kernel_config(inputs.at(0).device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4));
 
     if (error_if_nonfinite) {
-        const auto fp32_total_norm = tt::tt_metal::tensor_impl::cast_vec<float>(
-                                         tt::tt_metal::host_buffer::get_as<bfloat16>(output_total_norm.cpu()))
-                                         .at(0);
+        const auto fp32_total_norm =
+            cast_vec<float>(tt::tt_metal::host_buffer::get_as<bfloat16>(output_total_norm.cpu())).at(0);
         TT_FATAL(
             std::isfinite(fp32_total_norm),
             "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "
@@ -131,4 +154,4 @@ Tensor MorehClipGradNorm::invoke(
     return output_total_norm;
 }
 
-}  // namespace ttnn::operations::moreh::moreh_clip_grad_norm
+}  // namespace ttnn

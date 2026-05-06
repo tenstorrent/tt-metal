@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,16 @@ void close_device(MeshDevice& device) { device.close(); }
 bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE; }
 
 void deallocate_buffers(IDevice* device) { device->allocator()->deallocate_buffers(); }
+
+// Device management for auto-formatting
+// Note: This functionality is planned for deprecation in the future.
+namespace {
+MeshDevice* default_device = nullptr;
+}  // namespace
+
+void SetDefaultDevice(MeshDevice* dev) { default_device = dev; }
+
+MeshDevice* GetDefaultDevice() { return default_device; }
 
 }  // namespace device
 

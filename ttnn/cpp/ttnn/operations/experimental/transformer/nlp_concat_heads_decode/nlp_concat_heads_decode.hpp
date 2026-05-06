@@ -1,29 +1,19 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations::experimental::transformer {
+namespace ttnn::experimental {
 
-struct NLPConcatHeadsDecodeOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        uint32_t num_heads,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-};
-}  // namespace operations::experimental::transformer
+ttnn::Tensor nlp_concat_heads_decode(
+    const Tensor& input_tensor,
+    uint32_t num_heads,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-namespace experimental {
-
-constexpr auto nlp_concat_heads_decode = ttnn::register_operation<
-    "ttnn::experimental::nlp_concat_heads_decode",
-    ttnn::operations::experimental::transformer::NLPConcatHeadsDecodeOperation>();
-
-}  // namespace experimental
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental

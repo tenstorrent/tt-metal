@@ -25,6 +25,16 @@ on:
       run-perf-tests:
         type: boolean
         default: true
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
+      enable-ops-recording:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Tracy ops recording for all tests"
 
 jobs:
   define-demo-tests:
@@ -35,8 +45,6 @@ jobs:
       matrix:
         default-demo-tests:
           [[
-            { name: "falcon7b", runner-label: "N150", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
-            { name: "llama3", runner-label: "N150", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
             { name: "vgg", runner-label: "N150", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
             { name: "bert_tiny", runner-label: "N150", performance: false, cmd: run_bert_tiny_func, owner_id: U024A4EFV6U}, # Brian Liu
             { name: "bert", runner-label: "N150", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
@@ -60,8 +68,6 @@ jobs:
             { name: "swin_v2", runner-label: "N150", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
             { name: "swin_s", runner-label: "N300", performance: false, cmd: run_swin_s_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga (HariniMohan0102)
             { name: "vit", runner-label: "N300", performance: false, cmd: run_vit_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga
-            { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
-            { name: "llama3", runner-label: "N300", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
             { name: "vgg", runner-label: "N300", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
             { name: "bert_tiny", runner-label: "N300", performance: false, cmd: run_bert_tiny_func, owner_id: U024A4EFV6U}, # Brian Liu
             { name: "bert", runner-label: "N300", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
@@ -71,26 +77,15 @@ jobs:
             { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, #Joseph Chu
             { name: "mobilenetv2", runner-label: "N300", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "ufld_v2", runner-label: "N300", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "mistral7b", runner-label: "N150", performance: false, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
-            { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
-            { name: "llama3", runner-label: "N300", performance: true, cmd: run_llama3_perf, owner_id: U03PUAKE719}, # Miguel Tairum
-            { name: "falcon7b", runner-label: "N300", performance: true, cmd: run_falcon7b_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
             { name: "efficientnet_b0", runner-label: "N300", performance: false, cmd: run_efficientnet_b0_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-            { name: "whisper", runner-label: "N300", performance: true, cmd: run_whisper_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
-  #          { name: "mamba", runner-label: "N300", performance: true, cmd: run_mamba_perf, owner_id: U06ECNVR0EN}, # Evan Smal
             { name: "segformer", runner-label: "N300", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (vguduruTT)
             { name: "sentence_bert", runner-label: "N300", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
             { name: "vanilla_unet", runner-label: "N300", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
             { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
             { name: "vovnet", runner-label: "N300", performance: false, cmd: run_vovnet_demo, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "swin_v2", runner-label: "N300", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
-            # Moved to t3k tests until OOM on single card runners resolved
-            # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
-            { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_perfunc, owner_id: U07RY6B5FLJ},  #Gongyu Wang
             { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, owner_id: U07RY6B5FLJ, civ2-compatible: true},  #Gongyu Wang
-            # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
-            { name: "gemma3", runner-label: "N300", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
-            { name: "phi4", runner-label: "N300", performance: false, cmd: run_phi4_func, owner_id: U094PKWHNJ0, civ2-compatible: true},  # Petar Milojevic
+            { name: "bge_m3", runner-label: "N150", performance: false, cmd: run_bge_m3_demo, owner_id: U082LLYBLSW,civ2-compatible: true}, # Gio Tobar
           ]]
     steps:
       - name: Compute tests
@@ -169,7 +164,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: >-
         --device /dev/tenstorrent ${{ matrix.test-group.civ2-compatible == true && '-e TT_GH_CI_INFRA=1' || '' }} --cap-add=ALL --security-opt seccomp=unconfined --ulimit nproc=65536:65536 --ulimit nofile=65536:65536 --privileged -v /sys:/sys
     defaults:
@@ -177,8 +172,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -208,9 +208,27 @@ jobs:
       - name: Run demo regression tests
         timeout-minutes: 60
         shell: bash
+        env:
+          # When ops recording is enabled, wrap pytest with Tracy profiler
+          # Tracy flags: -r (report), -p (device profiler), --dump-device-data-mid-run (prevent buffer overflow)
+          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run --op-support-count=30000 -m pytest' || 'pytest' }}
         run: |
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
+      - name: Prepare Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: ./docker-job/.github/actions/prepare-tracy-reports
+        with:
+          profiler-dir: /work/generated/profiler
+          model-name: ${{ matrix.test-group.name }}
+          card: ${{ matrix.test-group.runner-label }}
+      - name: Upload Tracy profiler reports (operations recording)
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        with:
+          path: /work/generated/profiler/reports
+          prefix: "tracy_ops_${{ matrix.test-group.name }}_${{ matrix.test-group.runner-label }}_"
       - name: Save environment data
         id: save-environment-data
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() }}
@@ -225,18 +243,13 @@ jobs:
           fi
       - name: Upload benchmark data
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - uses: ./.github/actions/slack-report
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -248,3 +261,31 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand
+
+  aggregate-ops-recording:
+    needs: single-card-demo-tests
+    if: ${{ !cancelled() && inputs.enable-ops-recording }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all Tracy profiler reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: tracy_ops_*
+          path: all_tracy_reports
+          merge-multiple: false
+
+      - name: Aggregate operations report
+        id: aggregate
+        uses: ./.github/actions/aggregate-ops-report
+        with:
+          reports-path: all_tracy_reports
+          output-path: aggregated_ops
+
+      - name: Upload aggregated operations report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: aggregated-device-operations
+          path: aggregated_ops/

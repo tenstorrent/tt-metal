@@ -1,11 +1,11 @@
-cmake_minimum_required(VERSION 3.24...3.30)
+cmake_minimum_required(VERSION 3.24...4.2)
 
-# Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
+# Forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
 endif()
 
-# Clear any compile options that may have been set by consuming projects that have leaked into us.
+# Clear any compile options that may have been set by consuming projects that have leaked.
 set_directory_properties(
     PROPERTIES
         COMPILE_OPTIONS
@@ -35,15 +35,33 @@ project(
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
-message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
-
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-# FIXME: Why are we setting these ourselves?
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG -fno-omit-frame-pointer")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG -fno-omit-frame-pointer")
 
-# Defining build types is the pervue of the top-level project
+# Augment CMake's built-in per-config flags rather than replacing them wholesale.
+# Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
+# discarding toolchain-file settings and CMake defaults.  add_compile_options() with
+# config generators appends cleanly and composes correctly with toolchain files.
+#
+# Flags already provided by CMake defaults and therefore omitted here:
+#   Debug:          -O0 -g
+#   RelWithDebInfo: -O2 -g -DNDEBUG  (we keep -O3 below to preserve existing behaviour)
+add_compile_options(
+    # Richer debug info: include macro definitions and use GNU pubnames for faster GDB lookup
+    "$<$<CONFIG:Debug,RelWithDebInfo>:-g3>"
+    "$<$<CONFIG:Debug,RelWithDebInfo>:-ggnu-pubnames>"
+    # Keep frame pointers for profiling and stack unwinding in non-Release builds
+    "$<$<CONFIG:Debug,RelWithDebInfo>:-fno-omit-frame-pointer>"
+    # Non-standard DEBUG macro (CMake convention is absence of NDEBUG, but this preserves
+    # existing behaviour for code that gates on #ifdef DEBUG).
+    # Restricted to CXX: the original set(CMAKE_CXX_FLAGS_DEBUG …) never applied to C, and
+    # some C sources in third_party redefine DEBUG as a function-like macro which would
+    # conflict with -DDEBUG=1 and produce a -Wmacro-redefined error.
+    "$<$<AND:$<CONFIG:Debug,RelWithDebInfo>,$<COMPILE_LANGUAGE:CXX>>:-DDEBUG>"
+    # RelWithDebInfo: restore -O3 to match previous behaviour (CMake default is -O2)
+    "$<$<CONFIG:RelWithDebInfo>:-O3>"
+)
+
+# Defining build types is the purview of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
     include(sanitizers)
 endif()
@@ -99,14 +117,16 @@ endif()
 include(compilers)
 CHECK_COMPILERS()
 
-# TODO(afuller): Re-enable this after we sort out compatibility with old tools.
-# include(linking)
+include(linking)
 
 # We're not currently using C++20 modules, so don't bother scanning for them
 set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
 
 # Promote all IMPORTED targets discovered by find_package() to a GLOBAL scope
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
+
+# Suppress all "-- Installing:" messages during install steps (e.g. cmake --install / target install)
+set(CMAKE_INSTALL_MESSAGE NEVER)
 
 ############################################################################################################################
 # Project Options
@@ -118,7 +138,6 @@ message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
-message(STATUS "Build TT Telemetry Server: ${BUILD_TELEMETRY}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with LTO: ${TT_LTO_ENABLED}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
@@ -168,20 +187,19 @@ target_link_libraries(
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
+    -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
     -Wall
     -Werror
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-fpch-preprocess>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-int-in-bool-context>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-restrict>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-sign-compare>"
@@ -262,26 +280,26 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(metal_common_pch)
+endif()
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
 
+include(helper_functions)
 add_subdirectory(tt_stl)
+
 add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
-
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif()
 
-if(BUILD_TELEMETRY)
-    add_subdirectory(${PROJECT_SOURCE_DIR}/tt_telemetry)
-endif()
-
 ############################################################################################################################
-# Install targets for build artifacts and pybinds
+# Install targets for build artifacts and nanobinds
 #   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################

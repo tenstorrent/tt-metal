@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <unistd.h>
@@ -22,10 +22,9 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include "device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include "llk_device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -36,11 +35,9 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -52,14 +49,14 @@ namespace unit_tests::compute::matmul {
 
 void create_CBs_for_fused_matmul(
     distributed::MeshWorkload& workload,
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
     uint32_t M,
     uint32_t N,
     uint32_t in0_block_w,
-    uint32_t out_subblock_h) {
+    uint32_t /*out_subblock_h*/) {
     uint32_t num_bytes_for_df = 2;
     uint32_t in0_cb = 0;
     uint32_t in1_cb = 1;
@@ -201,7 +198,7 @@ bool single_tile_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
     const uint32_t out_cb_index = 16;
     const size_t byte_size = 1 * 2 * 32 * 32;
 
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -309,6 +306,7 @@ bool single_tile_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
@@ -340,7 +338,7 @@ bool single_block_matmul(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
         .device = device,
@@ -463,7 +461,7 @@ bool single_block_matmul(
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    sleep(1);
+    distributed::Finish(cq);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
@@ -502,7 +500,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_0{
         .device = device,
@@ -640,7 +638,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         });
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    sleep(1);
+    distributed::Finish(cq);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
@@ -660,22 +658,22 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 }
 }  // namespace unit_tests::compute::matmul
 
-TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmul) {
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(this->devices_.at(id)));
     }
 }
-TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileComputeMatmul) {
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 1, 1, 1));
     }
 }
-TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulationComputeMatmul) {
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileAccumulationComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 1, 2, 1));
     }
 }
-TEST_F(MeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumulationComputeMatmul) {
+TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleBlockSingleTileNoAccumulationComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 2, 1, 2));
     }

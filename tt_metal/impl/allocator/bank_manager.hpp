@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,9 +22,7 @@
 #include "hal_types.hpp"
 #include <tt-metalium/allocator_state.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 enum class BufferType;
 namespace allocator {
 class Algorithm;
@@ -44,7 +42,7 @@ public:
      * AllocatorDependencies is created from an unordered map of allocator IDs with their dependencies.
      * Some nuances:
         - Default value (AllocatorDependencies() or AllocatorDependencies{}) represents a single independent allocator.
-        - The presence of alloctor IDs in keys or values implies the existence of previous allocator IDs.
+        - The presence of allocator IDs in keys or values implies the existence of previous allocator IDs.
           Eg. 3: {0, 1} (read as: 3 depends on 0 and 1) implies that 0: {3}, 1: {3}, 2: {}, 3: {0, 1}.
         - Undirected adjacency lists means that 0: 1 implies 1: 0 (as seen in the example above).
           Eg. 0: {1}, 1: {2}, 2: {3} implies 0: {1}, 1: {0, 2}, 2: {1, 3}, 3: {2}.
@@ -68,20 +66,24 @@ public:
         bool operator!=(const AllocatorDependencies& other) const noexcept { return !(*this == other); }
     };
 
+    // The DRAM alignment bytes is used to initialize the allocator. The alignment_bytes needs to be compatible with the
+    // DRAM alignment.
     BankManager(
         const BufferType& buffer_type,
-        const std::vector<int64_t>& bank_descriptors,
+        const std::vector<int64_t>& bank_offsets,
         DeviceAddr size_bytes,
         uint32_t alignment_bytes,
+        uint32_t dram_alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
         const AllocatorDependencies& dependencies = AllocatorDependencies());
     BankManager(
         const BufferType& buffer_type,
-        const std::unordered_map<uint32_t, int64_t>& bank_id_to_descriptor,
+        const std::unordered_map<uint32_t, int64_t>& bank_id_to_bank_offset,
         DeviceAddr size_bytes,
         DeviceAddr interleaved_address_limit,
         uint32_t alignment_bytes,
+        uint32_t dram_alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
         const AllocatorDependencies& dependencies = AllocatorDependencies());
@@ -98,7 +100,8 @@ public:
         bool bottom_up,
         const CoreRangeSet& compute_grid,
         std::optional<uint32_t> num_shards,
-        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0},
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
 
     void deallocate_buffer(
         DeviceAddr address, AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
@@ -125,6 +128,19 @@ public:
         bool bottom_up = true,
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
+
+    // High water mark tracking for all allocations (both bottom-up and top-down)
+    // Tracks the maximum address extent reached during the tracking period, including deallocated buffers
+    void begin_high_water_mark_tracking();
+    DeviceAddr end_high_water_mark_tracking();
+    DeviceAddr get_high_water_mark() const;
+    DeviceAddr get_allocation_high_water_mark() const;
+    DeviceAddr get_deletion_high_water_mark() const;
+
+    // Cross-allocator mirroring: mark a region as allocated/deallocated in a specific sub-allocator.
+    // Used to mirror lockstep allocations from the mesh-level allocator into per-device allocators.
+    void mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size);
+    void mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address);
 
     // AllocatorState Methods
     // Extracts the state of the given allocator.
@@ -169,6 +185,11 @@ private:
     // Per-allocator cache of: merged allocated ranges of all other dependent allocators
     ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> allocated_ranges_cache_{};
 
+    // High water mark tracking for allocations and deallocations
+    bool tracking_high_water_mark_ = false;
+    DeviceAddr allocation_high_water_mark_ = 0;
+    DeviceAddr deletion_high_water_mark_ = 0;
+
     /*********************************
      * Allocator-independent methods *
      *********************************/
@@ -198,11 +219,12 @@ private:
         AllocatorDependencies::AllocatorID allocator_id);
 
     // Compute available address ranges for the given allocator and request, after subtracting merged neighbor
-    // allocations
+    // allocations and any additional occupied ranges (e.g., from device-level allocators at mesh level)
     std::vector<std::pair<DeviceAddr, DeviceAddr>> compute_available_addresses(
-        AllocatorDependencies::AllocatorID allocator_id, DeviceAddr size_per_bank, DeviceAddr address_limit);
+        AllocatorDependencies::AllocatorID allocator_id,
+        DeviceAddr size_per_bank,
+        DeviceAddr address_limit,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

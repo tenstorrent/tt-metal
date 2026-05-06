@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t input_addr = get_compile_time_arg_val(0);

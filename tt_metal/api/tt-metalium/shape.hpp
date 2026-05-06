@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <ostream>
+#include <string>
 #include <tuple>
+
+#include <fmt/core.h>
 
 #include <tt-metalium/shape_base.hpp>
 #include <tt_stl/small_vector.hpp>
@@ -19,9 +22,13 @@ class Shape final : protected ShapeBase {
 public:
     using ShapeBase::ShapeBase;
     using ShapeBase::operator[];
+    using ShapeBase::begin;
     using ShapeBase::cbegin;
     using ShapeBase::cend;
+    using ShapeBase::Container;
+    using ShapeBase::coord_type;
     using ShapeBase::empty;
+    using ShapeBase::end;
     using ShapeBase::size;
     using ShapeBase::view;
 
@@ -39,9 +46,10 @@ public:
 
     uint32_t get_normalized_index(std::int64_t index) const;
 
-    // Needed for reflect / fmt
-    static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(this->value_); }
+    // Needed for reflect / fmt.
+    // Uses view() to hash/format the original (unpadded) dimensions.
+    static constexpr auto attribute_names = std::forward_as_tuple("shape");
+    auto attribute_values() const { return std::make_tuple(this->view()); }
 
     std::array<uint32_t, 4> to_array_4D() const;
     Shape to_rank(size_t new_rank) const;
@@ -51,9 +59,49 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape);
 
-tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
+ttsl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
+
+/**
+ * @brief Computes a flat (linear) index from multi-dimensional indices and strides.
+ *
+ * This function converts a set of multi-dimensional indices into a single
+ * linear index using the provided strides. The computation is equivalent to
+ * a dot product between the indices and their corresponding strides
+ *
+ * @param indices  A span of per-dimension indices.
+ * @param strides  A span of per-dimension strides corresponding to the layout.
+ *
+ * @return The computed flat (linear) index.
+ *
+ * @note The `indices` and `strides` spans must have the same length.
+ */
+std::size_t compute_flat_indices(ttsl::Span<const uint32_t> indices, ttsl::Span<const size_t> strides);
 
 }  // namespace tt::tt_metal
+
+// Out-of-line string conversion (defined in shape.cpp).
+// Placed outside tt::tt_metal to avoid hiding std::to_string via ADL.
+namespace ttsl::fmt_detail {
+std::string to_string(const tt::tt_metal::Shape& shape);
+}  // namespace ttsl::fmt_detail
+
+// Lightweight fmt::formatter – delegates to out-of-line to_string().
+template <>
+struct fmt::formatter<tt::tt_metal::Shape> : fmt::formatter<std::string_view> {
+    auto format(const tt::tt_metal::Shape& val, fmt::format_context& ctx) const {
+        return fmt::formatter<std::string_view>::format(ttsl::fmt_detail::to_string(val), ctx);
+    }
+};
+
+// Forward declarations of json trait templates (avoids pulling in reflection.hpp)
+namespace ttsl::json {
+template <typename T>
+struct to_json_t;
+template <typename T>
+struct from_json_t;
+}  // namespace ttsl::json
+
+#include <nlohmann/json_fwd.hpp>
 
 template <>
 struct ttsl::json::to_json_t<tt::tt_metal::Shape> {

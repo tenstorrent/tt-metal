@@ -1,15 +1,14 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <errno.h>
+#include <cerrno>
 #include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <time.h>
+#include <cstdint>
+#include <cstdlib>
+#include <ctime>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>

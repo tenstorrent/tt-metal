@@ -13,11 +13,11 @@ target_sources(
     INTERFACE
         FILE_SET api
         TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        BASE_DIRS ${FixmeOpAPIDir}
         FILES # None (yet)
         FILE_SET kernels
         TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES pad_tile.hpp
 )
 

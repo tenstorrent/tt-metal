@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device.hpp"
 
-#include <core/ttnn_all_includes.hpp>
+#include "tt-metalium/device.hpp"
 
 namespace ttml::core {
 

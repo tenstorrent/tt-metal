@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,14 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+
+// Import functions from the new namespace
+using ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::experimental::prim::line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+using ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments;
 
 namespace ttnn::operations::ccl {
 
@@ -24,19 +31,22 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     // create semaphores
     // 3 semaphores used for within op synchronizations
+    auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
+                                                                            : tt::tt_metal::BufferType::L1;
     std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores = {
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0),
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0),
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
     };
     // 1 barrier semaphore used to ensure that all the buffers are allocated
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {sd_id};
-    auto barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0);
+    auto barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated
 
@@ -62,13 +72,13 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
     const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
     const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
     tt::tt_metal::Program program{};
 
     // Get mesh and axis related information
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     uint32_t target_ring_size =
         ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
 
@@ -120,17 +130,19 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         barrier_semaphore,
         false,  // since we don't have a persistent intermediate buffer option, this must be false
         operation_attributes.subdevice_id,
-        no_fuse,       // never fusing with this
-        std::nullopt,  // use chunks per sync decision making tree
-        std::nullopt,  // use num workers per link decision making tree
-        std::nullopt,  // use num buffers per channel decision making tree
-        first_coord);  // first core in the subdevice is our offset as we don't use this version for fusions
+        no_fuse,  // never fusing with this
+        operation_attributes.chunks_per_sync,
+        operation_attributes.num_workers_per_link,
+        operation_attributes.num_buffers_per_channel,
+        first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
+        operation_attributes.compute_kernel_config);
 
-    return {
-        std::move(program),
-        {.multidevice_semaphores = multidevice_semaphores,
-         .barrier_semaphore = barrier_semaphore,
-         .program_artifacts = reduce_scatter_program_artifacts}};
+    shared_variables_t shared_vars{
+        .multidevice_semaphores = multidevice_semaphores,
+        .barrier_semaphore = barrier_semaphore,
+        .program_artifacts = reduce_scatter_program_artifacts};
+
+    return {std::move(program), std::move(shared_vars)};
 }
 
 void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_arguments(
@@ -159,6 +171,7 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
             shared_variables.program_artifacts.num_workers_per_direction,
             shared_variables.program_artifacts.num_mux_cores_per_direction_per_link,
             shared_variables.program_artifacts.num_cores_per_link,
+            shared_variables.program_artifacts.normalized_dim,
             shared_variables.barrier_semaphore,
             shared_variables.multidevice_semaphores,
             tensor_args.input_tensor,

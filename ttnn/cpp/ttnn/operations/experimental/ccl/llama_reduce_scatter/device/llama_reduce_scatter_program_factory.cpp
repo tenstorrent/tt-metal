@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -186,8 +185,8 @@ std::vector<std::vector<ReadRequest>> distribute_work_evenly(
 std::vector<ReadRequest> flatten_schedule(const std::vector<std::vector<ReadRequest>>& schedule) {
     // create a flattened schedule
     std::vector<ReadRequest> schedule_flattened;
-    for (uint32_t i = 0; i < schedule.size(); ++i) {
-        schedule_flattened.insert(schedule_flattened.end(), schedule[i].begin(), schedule[i].end());
+    for (const auto& chunk : schedule) {
+        schedule_flattened.insert(schedule_flattened.end(), chunk.begin(), chunk.end());
     }
     return schedule_flattened;
 }
@@ -195,10 +194,9 @@ std::vector<ReadRequest> flatten_schedule(const std::vector<std::vector<ReadRequ
 std::string schedule_to_string(const std::vector<std::vector<ReadRequest>>& schedule) {
     auto flattened_schedule = flatten_schedule(schedule);
     std::string result = "{";
-    for (uint32_t i = 0; i < flattened_schedule.size(); ++i) {
-        result += "{" + std::to_string(flattened_schedule[i].bank_id) + ", " +
-                  std::to_string(flattened_schedule[i].read_offset) + ", " +
-                  std::to_string(flattened_schedule[i].read_size) + "}, ";
+    for (const auto& entry : flattened_schedule) {
+        result += "{" + std::to_string(entry.bank_id) + ", " + std::to_string(entry.read_offset) + ", " +
+                  std::to_string(entry.read_size) + "}, ";
     }
     result += "}";
     return result;
@@ -340,13 +338,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     using namespace ttnn::ccl;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t ring_devices =
         (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
 
-    auto target_device = mesh_device->get_device(mesh_coordinate);
+    auto* target_device = mesh_device->get_device(mesh_coordinate);
 
     const uint32_t ring_size = operation_attributes.ring_devices;
     const uint32_t num_devices = ring_size;
@@ -360,19 +358,28 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
                                         ? mesh_view.get_devices_on_column(mesh_coordinate[1])
                                         : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+    const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
+                                     ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
+                                     : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);
 
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     for (uint32_t i = 0; i < ring_size; ++i) {
         if (devices.at(i) == target_device) {
             ring_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
                 backward_device = devices.at(ring_size - 1);
+                backward_fabric_node_id = fabric_node_ids.at(ring_size - 1);
             }
             if (i != ring_size - 1) {
                 forward_device = devices.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
                 forward_device = devices.at(0);
+                forward_fabric_node_id = fabric_node_ids.at(0);
             }
         }
     }
@@ -406,9 +413,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     uint32_t input_shard_cores_per_device = ncores_input / num_devices;
     uint32_t output_cores_per_device = ncores_output;
 
-    auto input_tensor_buffer = input_tensor.buffer();
-    auto output_tensor_buffer = output_tensor.buffer();
-    auto packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
+    auto* input_tensor_buffer = input_tensor.buffer();
+    auto* output_tensor_buffer = output_tensor.buffer();
+    auto* packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_page_size = tile_size(cb_data_format);
@@ -720,7 +727,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         fabric_receiver_cb_index, output_cb_index, num_devices, output_tiles_per_core_width, num_pages_per_packet};
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/compute/reduction.cpp";
     const auto compute_kernel_id = tt_metal::CreateKernel(
         program,
@@ -787,13 +794,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
             writer_runtime_args.push_back(forward_fabric_connection);
             if (forward_fabric_connection) {
-                const auto target_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                const auto forward_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device_fabric_node_id,
-                    forward_device_fabric_node_id,
+                    forward_fabric_node_id.value(),
                     link_idx,
                     program,
                     core,
@@ -802,13 +806,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
             writer_runtime_args.push_back(backward_fabric_connection);
             if (backward_fabric_connection) {
-                const auto target_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                const auto backward_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     target_device_fabric_node_id,
-                    backward_device_fabric_node_id,
+                    backward_fabric_node_id.value(),
                     link_idx,
                     program,
                     core,
@@ -859,18 +860,18 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
     const LlamaReduceScatterDeviceOperation::operation_attributes_t& operation_attributes,
     const LlamaReduceScatterDeviceOperation::tensor_args_t& tensor_args,
     LlamaReduceScatterDeviceOperation::tensor_return_value_t& tensor_return_value) {
-    auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
+    const auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
+    const auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& intermediate_packet_buffer = tensor_args.intermediate_packet_buffer;
     auto& output_tensor = tensor_return_value;
 
-    auto input_tensor_buffer = input_tensor.buffer();
-    auto output_tensor_buffer = output_tensor.buffer();
-    auto packet_buffer = intermediate_packet_buffer.buffer();
+    auto* input_tensor_buffer = input_tensor.buffer();
+    auto* output_tensor_buffer = output_tensor.buffer();
+    auto* packet_buffer = intermediate_packet_buffer.buffer();
 
-    auto& all_cores_grid = shared_variables.core_range;
+    const auto& all_cores_grid = shared_variables.core_range;
 
     auto cores = corerange_to_cores(all_cores_grid, std::nullopt);
 

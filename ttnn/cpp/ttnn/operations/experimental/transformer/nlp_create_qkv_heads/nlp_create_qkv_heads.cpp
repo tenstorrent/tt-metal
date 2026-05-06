@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,16 +6,16 @@
 
 #include <utility>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
     const Tensor& input_tensor_q,
     const std::optional<Tensor>& input_tensor_kv,
     const uint32_t num_q_heads,
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors) {
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
     uint32_t head_dim;
     if (input_tensor_kv.has_value()) {
@@ -42,4 +42,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::in
         optional_output_tensors);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

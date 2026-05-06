@@ -1,12 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "hw/inc/compile_time_args.h"
-#include "hw/inc/dataflow_api.h"
-#include "hw/inc/tt-1xx/risc_common.h"
+#include "hw/inc/api/compile_time_args.h"
+#include "hw/inc/api/dataflow/dataflow_api.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/endpoints.h"
+#include "hw/inc/internal/tt-1xx/risc_common.h"
 
 template <bool use_legacy_api>
 void access_memory(uint32_t src_addr, uint32_t end_addr, uint32_t num_iterations, volatile uint64_t* results) {

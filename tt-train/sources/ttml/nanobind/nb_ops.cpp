@@ -1,9 +1,15 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
+
+#include <span>
+#include <ttnn/distributed/distributed_tensor.hpp>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
@@ -18,9 +24,15 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/multi_head_utils.hpp"
+#include "ops/polynorm_op.hpp"
+#include "ops/rand_op.hpp"
+#include "ops/randn_op.hpp"
+#include "ops/reshape_op.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
+#include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -45,14 +57,22 @@ void py_module_types(nb::module_& m) {
 
     m.def_submodule("matmul");
     m.def_submodule("multi_head_utils");
+    m.def_submodule("attention");
+    m.def_submodule("reshape");
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
+    m.def_submodule("swiglu");
     m.def_submodule("unary");
 }
 
 void py_module(nb::module_& m) {
     {
         auto py_binary = static_cast<nb::module_>(m.attr("binary"));
+        py_binary.def(
+            "add",
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const ttnn::Tensor&)>(&ops::operator+),
+            nb::arg("a"),
+            nb::arg("b"));
         py_binary.def(
             "add",
             static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::AutocastTensor&)>(
@@ -88,6 +108,8 @@ void py_module(nb::module_& m) {
                 &ttml::ops::operator/),
             nb::arg("a"),
             nb::arg("b"));
+        py_binary.def("min", &ttml::ops::min, nb::arg("a"), nb::arg("b"));
+        py_binary.def("max", &ttml::ops::max, nb::arg("a"), nb::arg("b"));
     }
 
     {
@@ -96,11 +118,32 @@ void py_module(nb::module_& m) {
             "all_reduce",
             &ttml::ops::distributed::all_reduce,
             nb::arg("tensor"),
-            nb::arg("noop_backward") = false);
+            nb::arg("noop_backward") = false,
+            nb::arg("cluster_axis") = nb::none());
         py_distributed.def(
-            "reduce_scatter", &ttml::ops::distributed::reduce_scatter, nb::arg("tensor"), nb::arg("dim"));
-        py_distributed.def("all_gather", &ttml::ops::distributed::all_gather, nb::arg("tensor"), nb::arg("dim"));
-        py_distributed.def("broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"));
+            "reduce_scatter",
+            &ttml::ops::distributed::reduce_scatter,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "scatter",
+            &ttml::ops::distributed::scatter,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none());
+        nb::enum_<ttml::ops::distributed::GradOutputType>(py_distributed, "GradOutputType")
+            .value("REPLICATED", ttml::ops::distributed::GradOutputType::REPLICATED)
+            .value("SHARDED", ttml::ops::distributed::GradOutputType::SHARDED);
+        py_distributed.def(
+            "all_gather",
+            &ttml::ops::distributed::all_gather,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
+        py_distributed.def(
+            "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
     }
 
     {
@@ -115,23 +158,34 @@ void py_module(nb::module_& m) {
 
     {
         auto py_embedding = static_cast<nb::module_>(m.attr("embedding"));
-        py_embedding.def("embedding_op", &ttml::ops::embedding_op, nb::arg("tensor"), nb::arg("weight"));
+        py_embedding.def("embedding", &ttml::ops::embedding_op, nb::arg("tensor"), nb::arg("weight"));
     }
 
     {
         auto py_layernorm = static_cast<nb::module_>(m.attr("layernorm"));
-        py_layernorm.def("layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta"));
+        py_layernorm.def(
+            "layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta") = nb::none());
         py_layernorm.def(
             "composite_layernorm",
             &ttml::ops::composite_layernorm,
             nb::arg("tensor"),
             nb::arg("gamma"),
-            nb::arg("beta"));
+            nb::arg("beta") = nb::none());
     }
 
     {
         auto py_linear = static_cast<nb::module_>(m.attr("linear"));
-        py_linear.def("linear_op", &ttml::ops::linear_op, nb::arg("tensor"), nb::arg("weight"), nb::arg("bias"));
+        // Overload with optional bias (None support)
+        py_linear.def(
+            "linear",
+            [](const autograd::TensorPtr& tensor,
+               const autograd::TensorPtr& weight,
+               std::optional<const autograd::TensorPtr> bias) -> autograd::TensorPtr {
+                return ttml::ops::linear_op(tensor, weight, bias.value_or(nullptr));
+            },
+            nb::arg("tensor"),
+            nb::arg("weight"),
+            nb::arg("bias") = nb::none());
         py_linear.def(
             "ttnn_linear_backward",
             &ttml::ops::ttnn_linear_backward,
@@ -195,15 +249,64 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_attention = static_cast<nb::module_>(m.attr("attention"));
+        // Overload 1: mask as ttml.autograd.Tensor (or None)
+        py_attention.def(
+            "scaled_dot_product_attention",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
+                return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt);
+        // Overload 2: mask as ttnn.Tensor (or None) - wrap it in autograd::Tensor
+        // ttnn.Tensor wraps tt::tt_metal::Tensor, so we accept that type
+        py_attention.def(
+            "scaled_dot_product_attention",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               const std::optional<tt::tt_metal::Tensor>& mask) -> autograd::TensorPtr {
+                std::optional<autograd::TensorPtr> mask_ptr = std::nullopt;
+                if (mask.has_value()) {
+                    mask_ptr = autograd::create_tensor(mask.value(), false);
+                }
+                return ttml::ops::scaled_dot_product_attention(query, key, value, mask_ptr);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt);
+
+        py_attention.def(
+            "scaled_dot_product_attention_composite",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
+                return ttml::ops::scaled_dot_product_attention_composite(query, key, value, mask);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt);
+    }
+
+    {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
-        py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"));
+        py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
         py_rope.def(
             "gen_freqs",
             &ttml::ops::gen_freqs,
             nb::arg("head_dim"),
             nb::arg("sequence_length"),
             nb::arg("theta"),
-            nb::arg("rope_scaling_params"));
+            nb::arg("rope_scaling_params"),
+            nb::arg("mesh_mapper") = nullptr);
         py_rope.def(
             "build_rope_params",
             &ttml::ops::build_rope_params,
@@ -244,6 +347,20 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_reshape = static_cast<nb::module_>(m.attr("reshape"));
+        // Wrapper to convert Python list to std::span
+        py_reshape.def(
+            "reshape",
+            [](const autograd::TensorPtr& tensor, const std::vector<int32_t>& shape) -> autograd::TensorPtr {
+                // Convert int32_t vector to uint32_t span
+                std::vector<uint32_t> shape_uint32(shape.begin(), shape.end());
+                return ttml::ops::reshape(tensor, std::span<uint32_t>(shape_uint32));
+            },
+            nb::arg("tensor"),
+            nb::arg("shape"));
+    }
+
+    {
         auto py_rmsnorm = static_cast<nb::module_>(m.attr("rmsnorm"));
         py_rmsnorm.def("rmsnorm", &ttml::ops::rmsnorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("epsilon"));
         py_rmsnorm.def(
@@ -253,6 +370,54 @@ void py_module(nb::module_& m) {
             nb::arg("gamma"),
             nb::arg("epsilon"));
     }
+
+    m.def(
+        "rand",
+        [](const ttnn::Shape& shape,
+           float a,
+           float b,
+           std::optional<uint32_t> seed,
+           tt::tt_metal::DataType dtype,
+           tt::tt_metal::Layout layout,
+           ttnn::distributed::TensorToMesh* mesh_mapper) {
+            std::optional<tt::tt_metal::distributed::MeshMapperConfig> cfg;
+            if (mesh_mapper != nullptr) {
+                cfg = mesh_mapper->config();
+            }
+            return ttml::ops::rand(shape, a, b, seed, dtype, layout, cfg);
+        },
+        nb::arg("shape"),
+        nb::arg("a") = 0.0f,
+        nb::arg("b") = 1.0f,
+        nb::kw_only(),
+        nb::arg("seed") = std::nullopt,
+        nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
+        nb::arg("layout") = tt::tt_metal::Layout::TILE,
+        nb::arg("mesh_mapper") = nullptr);
+
+    m.def(
+        "randn",
+        [](const ttnn::Shape& shape,
+           float mean,
+           float std,
+           std::optional<uint32_t> seed,
+           tt::tt_metal::DataType dtype,
+           tt::tt_metal::Layout layout,
+           ttnn::distributed::TensorToMesh* mesh_mapper) {
+            std::optional<tt::tt_metal::distributed::MeshMapperConfig> cfg;
+            if (mesh_mapper != nullptr) {
+                cfg = mesh_mapper->config();
+            }
+            return ttml::ops::randn(shape, mean, std, seed, dtype, layout, cfg);
+        },
+        nb::arg("shape"),
+        nb::arg("mean") = 0.0f,
+        nb::arg("std") = 1.0f,
+        nb::kw_only(),
+        nb::arg("seed") = std::nullopt,
+        nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
+        nb::arg("layout") = tt::tt_metal::Layout::TILE,
+        nb::arg("mesh_mapper") = nullptr);
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));
@@ -266,10 +431,32 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_swiglu = static_cast<nb::module_>(m.attr("swiglu"));
+        py_swiglu.def(
+            "swiglu",
+            &ttml::ops::swiglu,
+            nb::arg("tensor"),
+            nb::arg("w1"),
+            nb::arg("w2"),
+            nb::arg("w3"),
+            nb::arg("dropout_prob") = 0.0F,
+            nb::arg("use_per_device_seed") = true);
+    }
+
+    {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
+        py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
+        py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
+        py_unary.def(
+            "polynorm3",
+            &ttml::ops::polynorm3,
+            nb::arg("tensor"),
+            nb::arg("weight"),
+            nb::arg("bias"),
+            nb::arg("epsilon") = 1e-5F);
         py_unary.def("mean", &ttml::ops::mean, nb::arg("tensor"));
         // py_unary.def("sum", &ttml::ops::sum,
         //              nb::arg("tensor"));

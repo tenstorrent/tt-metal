@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
 #include <fmt/base.h>
-#include <stddef.h>
+#include <cstddef>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -22,15 +22,15 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -57,13 +57,16 @@ struct DRAMConfig {
 
 tt::tt_metal::KernelHandle CreateKernelFromVariant(tt::tt_metal::Program& program, DRAMConfig cfg) {
     tt::tt_metal::KernelHandle kernel;
-    std::visit([&](auto&& cfg_variant) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(cfg_variant)>, tt::tt_metal::EthernetConfig>) {
-            kernel = tt_metal::CreateKernel(program, cfg.kernel_file, cfg.core_range, cfg_variant);
-        } else if constexpr (std::is_same_v<std::decay_t<decltype(cfg_variant)>, tt::tt_metal::DataMovementConfig>) {
-            kernel = tt_metal::CreateKernel(program, cfg.kernel_file, cfg.core_range, cfg_variant);
-        }
-    }, cfg.kernel_cfg);
+    std::visit(
+        [&](auto&& cfg_variant) {
+            using T = std::decay_t<decltype(cfg_variant)>;
+            if constexpr (
+                std::is_same_v<T, tt::tt_metal::EthernetConfig> ||
+                std::is_same_v<T, tt::tt_metal::DataMovementConfig>) {
+                kernel = tt_metal::CreateKernel(program, cfg.kernel_file, cfg.core_range, cfg_variant);
+            }
+        },
+        cfg.kernel_cfg);
     return kernel;
 }
 
@@ -299,7 +302,7 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     };
 
     for (const auto& mesh_device : devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         for (auto active_eth_core : device->get_active_ethernet_cores(true)) {
             log_info(tt::LogTest, "Active Eth Loopback. Logical core {}", active_eth_core.str());
             dram_test_config.core_range = {active_eth_core, active_eth_core};
@@ -336,7 +339,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
     };
 
     for (const auto& mesh_device : devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,15 +6,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {};
+struct IntImgParams {};
 
-struct tensor_args_t {
-    const Tensor& input_tensor;
-};
-
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental::prim

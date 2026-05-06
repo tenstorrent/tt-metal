@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 #include <host_api.hpp>
 #include <stdint.h>
@@ -9,12 +11,10 @@
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class SystemMemoryManager;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 // Utility functions for dispatch MeshWorkloads
 // Used by MeshCommandQueue

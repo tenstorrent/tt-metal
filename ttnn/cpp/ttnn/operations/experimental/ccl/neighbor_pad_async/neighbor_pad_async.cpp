@@ -1,64 +1,94 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "neighbor_pad_async.hpp"
-#include <utility>
-#include "ttnn/operations/experimental/ccl/neighbor_pad_async/device/neighbor_pad_async_op.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/neighbor_pad_async/device/neighbor_pad_async_device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteNeighborPadAsync::invoke(
+ttnn::Tensor neighbor_pad_async(
     const ttnn::Tensor& input_tensor,
-    int32_t dim,
-    uint32_t padding_left,
-    uint32_t padding_right,
+    std::vector<int32_t> dim,
+    std::vector<uint32_t> padding_left,
+    std::vector<uint32_t> padding_right,
     const std::string& padding_mode,
-    uint32_t cluster_axis,
-    const GlobalSemaphore& final_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    std::optional<size_t> num_preferred_links,
+    std::vector<uint32_t> cluster_axis,
+    std::vector<GlobalSemaphore> neighbor_semaphore,
+    std::vector<GlobalSemaphore> barrier_semaphore,
+    const std::optional<std::vector<size_t>>& num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
-    std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    uint32_t logical_h,
+    uint32_t t_front_pad) {
+    TT_FATAL(!dim.empty() && dim.size() <= 2, "dim must have 1 or 2 elements, got {}", dim.size());
+    const size_t num_dims = dim.size();
+    for (size_t i = 0; i < num_dims; i++) {
+        TT_FATAL(dim[i] >= 0, "dim[{}] must be non-negative, got {}", i, dim[i]);
+    }
+    TT_FATAL(
+        padding_left.size() == num_dims,
+        "padding_left size ({}) must match dim size ({})",
+        padding_left.size(),
+        num_dims);
+    TT_FATAL(
+        padding_right.size() == num_dims,
+        "padding_right size ({}) must match dim size ({})",
+        padding_right.size(),
+        num_dims);
+    TT_FATAL(
+        cluster_axis.size() == num_dims,
+        "cluster_axis size ({}) must match dim size ({})",
+        cluster_axis.size(),
+        num_dims);
+    TT_FATAL(!neighbor_semaphore.empty(), "neighbor_semaphore must not be empty");
+    TT_FATAL(!barrier_semaphore.empty(), "barrier_semaphore must not be empty");
 
-    auto mesh_device = input_tensor.device();
-    uint32_t num_devices;
-    const auto& mesh_view = mesh_device->get_view();
-    // Use the mesh dimensions to determine the ring size
-    num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    std::vector<size_t> links = num_preferred_links.value_or(std::vector<size_t>(num_dims, 1));
 
-    TT_FATAL(num_devices > 1, "neighbor_pad_async op will only work for num_devices > 1, but has {}", num_devices);
+    // neighbor_semaphore[0] is always the H (primary) neighbor semaphore.
+    // neighbor_semaphore[1] is the W (secondary) neighbor semaphore for 2D padding.
+    // For 1D padding, reuse [0] as the W semaphore (it won't be used).
+    const auto& h_neighbor_sem = neighbor_semaphore[0];
+    const auto& w_neighbor_sem = neighbor_semaphore.size() >= 2 ? neighbor_semaphore[1] : neighbor_semaphore[0];
 
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    // Unpack secondary dimension if present
+    std::optional<uint32_t> pad_dim2;
+    uint32_t pad2_left = 0;
+    uint32_t pad2_right = 0;
+    std::optional<uint32_t> pad2_cluster_axis;
+    std::optional<size_t> pad2_num_links;
 
-    return tt::tt_metal::operation::run(
-               ttnn::NeighborPadAsync(
-                   devices,
-                   dim,
-                   padding_left,
-                   padding_right,
-                   padding_mode,
-                   cluster_axis,
-                   final_semaphore,
-                   barrier_semaphore,
-                   num_preferred_links.value_or(1),
-                   memory_config.value_or(input_tensor.memory_config()),
-                   topology_,
-                   num_devices,
-                   secondary_cluster_axis,
-                   secondary_mesh_shape),
-               {input_tensor},
-               {},
-               {})
-        .at(0);
+    if (dim.size() == 2) {
+        pad_dim2 = static_cast<uint32_t>(dim[1]);
+        pad2_left = padding_left[1];
+        pad2_right = padding_right[1];
+        pad2_cluster_axis = cluster_axis[1];
+        pad2_num_links = links.size() >= 2 ? links[1] : 1;
+    }
+
+    return ttnn::prim::neighbor_pad_async(
+        input_tensor,
+        dim[0],
+        padding_left[0],
+        padding_right[0],
+        padding_mode,
+        cluster_axis[0],
+        h_neighbor_sem,
+        w_neighbor_sem,
+        barrier_semaphore[0],
+        links[0],
+        memory_config,
+        topology,
+        pad_dim2,
+        pad2_left,
+        pad2_right,
+        pad2_cluster_axis,
+        pad2_num_links,
+        persistent_output_buffer,
+        logical_h,
+        t_front_pad);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

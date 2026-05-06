@@ -1,14 +1,14 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 namespace ttnn::operations::binary_ng {
 
 enum class SubtileBroadcastType {
@@ -45,8 +45,11 @@ struct BinaryNgDeviceOperation {
         bool is_sfpu = false;
         bool is_quant_op = false;
         bool is_where_op = false;
+        Layout input_layout_a = Layout::TILE;
+        Layout input_layout_b = Layout::TILE;
+        Layout output_layout = Layout::TILE;
 
-        tt::stl::hash::hash_t to_hash() const;
+        ttsl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
     };
 
@@ -57,73 +60,51 @@ struct BinaryNgDeviceOperation {
     };
 
     struct ProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
-            tt::tt_metal::CBHandle cb_src_a;
-            tt::tt_metal::CBHandle cb_src_b;
-            tt::tt_metal::CBHandle cb_src_c;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& c);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
-
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
-
-    // tensor-tensor invocation
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        BinaryOpType binary_op_type,
-        const std::optional<const DataType>& output_dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& optional_output_tensor,
-        const std::optional<bool>& fast_and_approximate_mode,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-        std::optional<unary::ScalarVariant> scalar_value,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-    // tensor-scalar invocation
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_a_arg,
-        float scalar,
-        BinaryOpType binary_op_type,
-        const std::optional<const DataType>& output_dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<Tensor>& optional_output_tensor,
-        const std::optional<bool>& fast_and_approximate_mode,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-        std::optional<unary::ScalarVariant> scalar_value,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace ttnn::operations::binary_ng
 
 namespace ttnn::prim {
-constexpr auto binary_ng =
-    ttnn::register_operation<"ttnn::prim::binary_ng", ttnn::operations::binary_ng::BinaryNgDeviceOperation>();
+
+ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    ttnn::operations::binary_ng::BinaryOpType binary_op_type,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    std::optional<ttnn::operations::unary::ScalarVariant> scalar_value = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
+    const Tensor& input_tensor_a_arg,
+    float scalar,
+    ttnn::operations::binary_ng::BinaryOpType binary_op_type,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    std::optional<ttnn::operations::unary::ScalarVariant> scalar_value = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
 }  // namespace ttnn::prim

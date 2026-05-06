@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
 #include <tt_stl/reflection.hpp>
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 

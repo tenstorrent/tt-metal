@@ -1,0 +1,941 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+import torch.nn as nn
+from diffusers.models.autoencoders.autoencoder_kl_mochi import MochiDecoder3D, MochiResnetBlock3D, MochiUpBlock3D
+from loguru import logger
+
+import ttnn
+
+from ....models.vae.vae_mochi import CausalUpsampleBlock as TtCausalUpsampleBlock
+from ....models.vae.vae_mochi import Conv1x1 as TtConv1x1
+from ....models.vae.vae_mochi import MochiVAEDecoder as TtDecoder
+from ....models.vae.vae_mochi import ResBlock as TtResBlock
+from ....parallel.config import MochiVAEParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
+from ....utils import cache
+from ....utils.check import assert_quality
+
+
+def get_padded_size(numerator, denominator):
+    return ((numerator + denominator - 1) // denominator) * denominator
+
+
+def make_mochi_vae_parallel_config(mesh_device):
+    """Build VAE parallel config based on mesh topology.
+
+    2D mesh (Galaxy: both dims > 1): H on axis 0, W on axis 1, no time parallelism.
+    1D mesh (T3K/N300/N150): time parallelism on the multi-device axis, no spatial parallelism.
+    """
+    if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
+        return MochiVAEParallelConfig(
+            time_parallel=ParallelFactor(factor=1, mesh_axis=1),
+            h_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+            w_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        )
+    else:
+        t_axis = 1 if mesh_device.shape[1] > 1 else 0
+        return MochiVAEParallelConfig(
+            time_parallel=ParallelFactor(factor=mesh_device.shape[t_axis], mesh_axis=t_axis),
+            h_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            w_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        )
+
+
+def get_shard_dims(parallel_config):
+    """Get ShardTensor2dMesh/ConcatMesh2dToTensor dims based on parallel config.
+
+    For axes with no parallelism (factor=1), uses dummy dims.
+    These are safe because those axes have mesh_shape=1 (no actual sharding/concat).
+    Dims must be unique (required by the framework).
+    """
+    dims = [0, 1]
+    if parallel_config.h_parallel.factor > 1:
+        dims[parallel_config.h_parallel.mesh_axis] = 2
+    if parallel_config.w_parallel.factor > 1:
+        dims[parallel_config.w_parallel.mesh_axis] = 3
+    if parallel_config.time_parallel.factor > 1:
+        dims[parallel_config.time_parallel.mesh_axis] = 1
+    return dims
+
+
+class Conv3d1x1(nn.Conv3d):
+    def __init__(self, in_channels, out_channels, bias=True):
+        super().__init__(in_channels, out_channels, kernel_size=(1, 1, 1), bias=bias)
+
+
+def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=True):
+    """Initialize both reference Conv3d and TT models."""
+    # Create reference model
+    reference_model = Conv3d1x1(in_channels, out_channels, bias=bias)
+
+    # Create TT model
+    tt_model = TtConv1x1(
+        mesh_device=mesh_device,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        bias=bias,
+    )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
+
+    return reference_model, tt_model
+
+
+@pytest.mark.parametrize(
+    "N, C_in, C_out, T, H, W",
+    [
+        (1, 12, 768, 28, 60, 106),
+    ],
+    ids=["large_latent"],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 1), (1, 2), (1, 8), (2, 4), (8, 4)],
+    ids=["1x1", "1x2", "1x8", "2x4", "8x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
+def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
+    """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
+    reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out)
+
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
+
+    # Create input tensor
+    torch_input = torch.randn(N, C_in, T, H, W)
+    tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+
+    if vae_parallel_config.time_parallel.factor > 1 and T % vae_parallel_config.time_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, vae_parallel_config.time_parallel.factor) - T)
+        )
+    if vae_parallel_config.w_parallel.factor > 1 and W % vae_parallel_config.w_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, get_padded_size(W, vae_parallel_config.w_parallel.factor) - W)
+        )
+    if vae_parallel_config.h_parallel.factor > 1 and H % vae_parallel_config.h_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, get_padded_size(H, vae_parallel_config.h_parallel.factor) - H)
+        )
+
+    tt_input = ttnn.from_torch(
+        tt_input,
+        device=mesh_device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    logger.info("Run TtConv1x1 forward (Conv3d mode)")
+    tt_output = tt_model(tt_input)
+    logger.info("End TtConv1x1 forward (Conv3d mode)")
+
+    # Convert TT output to torch tensor
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+    tt_output_torch = tt_output_torch[0:N, 0:C_out, 0:T, 0:H, 0:W]
+
+    # Get reference output
+    with torch.no_grad():
+        ref_output = reference_model(torch_input)
+
+    assert_quality(ref_output, tt_output_torch, pcc=0.999_500)
+
+
+resblock_args = {
+    "affine": True,
+    "attn_block": None,
+    "causal": True,
+    "prune_bottleneck": False,
+    "padding_mode": "replicate",
+    "bias": True,
+}
+
+
+def create_random_resblock_models(
+    mesh_device, parallel_config, ccl_manager, in_channels, nonlinearity, dtype=ttnn.bfloat16
+):
+    """Initialize both reference and TT models."""
+    # Create reference model
+    reference_model = MochiResnetBlock3D(in_channels=in_channels, act_fn=nonlinearity)
+
+    # Create TT model
+    tt_model = TtResBlock(
+        reference_model.in_channels,
+        reference_model.out_channels,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+        dtype=dtype,
+    )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
+
+    return reference_model, tt_model
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    ("N", "C", "T", "H", "W"),
+    [
+        # small latent
+        pytest.param(1, 768, 28, 40, 50, id="s768"),
+        pytest.param(1, 512, 84, 80, 100, id="s512"),
+        pytest.param(1, 256, 168, 160, 200, id="s256"),
+        pytest.param(1, 128, 168, 320, 400, id="s128"),
+        # large latent
+        pytest.param(1, 768, 28, 60, 106, id="l768"),
+        pytest.param(1, 512, 84, 120, 212, id="l512"),
+        pytest.param(1, 256, 168, 240, 424, id="l256"),
+        pytest.param(1, 128, 168, 480, 848, id="l128"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    [
+        ((1, 1), 1),
+        ((1, 2), 1),
+        ((1, 8), 1),
+        ((2, 4), 1),
+        ((8, 4), 4),  # WH Galaxy
+        ((8, 4), 2),  # BH Galaxy
+    ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        "2x4",
+        "wh_8x4",
+        "bh_8x4",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
+    ids=["bf16", "f32"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
+def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links, dtype):
+    """Test complete forward pass of TtResBlock."""
+    block_args = resblock_args.copy()
+    block_args["channels"] = C
+    block_args["nonlinearity"] = "silu"
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
+
+    reference_model, tt_model = create_random_resblock_models(
+        mesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+        in_channels=block_args["channels"],
+        nonlinearity=block_args["nonlinearity"],
+        dtype=dtype,
+    )
+
+    # Create input tensor
+    torch_input = torch.randn(N, C, T, H, W)
+    tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+
+    if vae_parallel_config.time_parallel.factor > 1 and T % vae_parallel_config.time_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, vae_parallel_config.time_parallel.factor) - T)
+        )
+    if vae_parallel_config.w_parallel.factor > 1 and W % vae_parallel_config.w_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, get_padded_size(W, vae_parallel_config.w_parallel.factor) - W)
+        )
+    if vae_parallel_config.h_parallel.factor > 1 and H % vae_parallel_config.h_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, get_padded_size(H, vae_parallel_config.h_parallel.factor) - H)
+        )
+
+    tt_input = ttnn.from_torch(
+        tt_input,
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    # Pass original (unpadded) spatial dims so ResBlock can slice padding
+    # before GroupNorm and re-pad after, preventing zero contamination.
+    logical_h = H if vae_parallel_config.h_parallel.factor > 1 else 0
+    logical_w = W if vae_parallel_config.w_parallel.factor > 1 else 0
+
+    logger.info(f"TT input shape: {tt_input.shape}")
+
+    logger.info("Run TtResBlock forward")
+    tt_output = tt_model(tt_input, logical_h, logical_w)
+    logger.info("End TtResBlock forward")
+
+    # Convert TT output to torch tensor
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+    tt_output_torch = tt_output_torch[0:N, 0:C, 0:T, 0:H, 0:W]
+
+    # Get reference output
+    logger.info("Run RefResBlock forward")
+    with torch.no_grad():
+        ref_output = reference_model(torch_input)[0]
+    logger.info("End RefResBlock forward")
+
+    logger.info("assert quality")
+    for i in range(T):
+        ref_output_slice = ref_output[:, :, i, :, :]
+        tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
+        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.9998)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    ("C", "T", "H_unpadded", "W_unpadded", "W_padded"),
+    [
+        # Decoder stage dims: after depth_to_spacetime doubling of initial 40x52
+        # (52 = pad_to_4(50)). W_padded includes the propagated padding, W_unpadded is logical.
+        pytest.param(512, 4, 80, 100, 104, id="dec_s512"),
+        pytest.param(256, 4, 160, 200, 208, id="dec_s256"),
+        pytest.param(128, 4, 320, 400, 416, id="dec_s128"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    [
+        ((1, 1), 1),
+        ((1, 2), 1),
+        ((1, 8), 1),
+        ((2, 4), 1),
+        ((8, 4), 4),  # WH Galaxy
+        ((8, 4), 2),  # BH Galaxy
+    ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        "2x4",
+        "wh_8x4",
+        "bh_8x4",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
+def test_tt_resblock_decoder_dims(mesh_device, C, T, H_unpadded, W_unpadded, W_padded, reset_seeds, num_links):
+    """Test resblock with decoder-actual dimensions that exercise W unpadding on 2D mesh.
+
+    In the decoder, depth_to_spacetime doubles both padded and logical dimensions.
+    This means later stages (C=512, 256, 128) have W_padded > W_unpadded (the
+    logical width). The standalone resblock test doesn't cover this because those
+    channels use clean W values that divide evenly by w_factor.
+    """
+    N = 1
+    block_args = resblock_args.copy()
+    block_args["channels"] = C
+    block_args["nonlinearity"] = "silu"
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
+
+    h_factor = vae_parallel_config.h_parallel.factor
+    w_factor = vae_parallel_config.w_parallel.factor
+    is_spatial = h_factor > 1 or w_factor > 1
+
+    if not is_spatial:
+        pytest.skip("No spatial parallelism on this topology; decoder-dims test not applicable")
+
+    # Pad H if needed
+    H_padded = get_padded_size(H_unpadded, h_factor) if H_unpadded % h_factor else H_unpadded
+
+    reference_model, tt_model = create_random_resblock_models(
+        mesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+        in_channels=C,
+        nonlinearity="silu",
+    )
+
+    # Create input at unpadded size (reference sees this)
+    torch_input = torch.randn(N, C, T, H_unpadded, W_unpadded)
+
+    # Build TT input at the padded size (as the decoder would provide).
+    # Pad in NCTHW layout (before permute) where W is the last dim, then permute.
+    tt_input_ncthw = torch_input.clone()
+    if H_padded > H_unpadded:
+        tt_input_ncthw = torch.nn.functional.pad(tt_input_ncthw, pad=(0, 0, 0, H_padded - H_unpadded))
+    if W_padded > W_unpadded:
+        # Edge-replicate the last W column (like the decoder's propagated padding)
+        last_col = tt_input_ncthw[:, :, :, :, W_unpadded - 1 : W_unpadded].expand(-1, -1, -1, -1, W_padded - W_unpadded)
+        tt_input_ncthw = torch.cat([tt_input_ncthw, last_col], dim=4)
+    tt_input = tt_input_ncthw.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+
+    logger.info(
+        f"Decoder-dims test: C={C} T={T} H={H_unpadded}→{H_padded} W={W_unpadded}→{W_padded} "
+        f"per_device=({H_padded//h_factor}, {W_padded//w_factor}) "
+        f"logical_h={H_unpadded} logical_w={W_unpadded}"
+    )
+
+    tt_input = ttnn.from_torch(
+        tt_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    logical_h = H_unpadded if h_factor > 1 else 0
+    logical_w = W_unpadded if w_factor > 1 else 0
+
+    logger.info(f"TT input shape: {tt_input.shape}")
+    tt_output = tt_model(tt_input, logical_h, logical_w)
+    logger.info("End TtResBlock forward")
+
+    # Gather output
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+    tt_output_torch = tt_output_torch[0:N, 0:C, 0:T, 0:H_unpadded, 0:W_unpadded]
+
+    # Reference model on unpadded input
+    logger.info("Run RefResBlock forward")
+    with torch.no_grad():
+        ref_output = reference_model(torch_input)[0]
+    logger.info("End RefResBlock forward")
+
+    logger.info("assert quality")
+    for i in range(T):
+        ref_output_slice = ref_output[:, :, i, :, :]
+        tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
+        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.9998)
+
+
+def create_random_causalupsampleblock_models(
+    mesh_device,
+    in_channels,
+    out_channels,
+    num_layers,
+    temporal_expansion,
+    spatial_expansion,
+    temporal_offset,
+    parallel_config,
+    ccl_manager,
+):
+    """Initialize both reference and TT models with optional real weights."""
+    # Create reference model
+    reference_model = MochiUpBlock3D(
+        in_channels=in_channels,
+        out_channels=out_channels,
+        num_layers=num_layers,
+        temporal_expansion=temporal_expansion,
+        spatial_expansion=spatial_expansion,
+    )
+
+    # Create TT model with same weights
+    tt_model = TtCausalUpsampleBlock(
+        mesh_device=mesh_device,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+        num_res_blocks=num_layers,
+        temporal_expansion=temporal_expansion,
+        spatial_expansion=spatial_expansion,
+        temporal_offset=temporal_offset,
+    )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
+
+    return reference_model, tt_model
+
+
+# Test case configurations for different input sizes
+@pytest.mark.parametrize(
+    "config",
+    [
+        # large latent
+        # First upsample block (768->512)
+        {
+            "name": "block1_768-512",
+            "in_channels": 768,
+            "out_channels": 512,
+            "num_res_blocks": 6,
+            "temporal_expansion": 3,
+            "spatial_expansion": 2,
+            "input_shape": [1, 768, 28, 60, 106],
+            "expected_output_shape": (1, 512, 84, 120, 212),
+        },
+        # Second upsample block (512->256)
+        {
+            "name": "block2_512-256",
+            "in_channels": 512,
+            "out_channels": 256,
+            "num_res_blocks": 4,
+            "temporal_expansion": 2,
+            "spatial_expansion": 2,
+            "input_shape": [1, 512, 84, 120, 212],
+            "expected_output_shape": (1, 256, 168, 240, 424),
+        },
+        # Third upsample block (256->128)
+        {
+            "name": "block3_256-128",
+            "in_channels": 256,
+            "out_channels": 128,
+            "num_res_blocks": 3,
+            "temporal_expansion": 1,
+            "spatial_expansion": 2,
+            "input_shape": [1, 256, 168, 240, 424],
+            "expected_output_shape": (1, 128, 168, 480, 848),
+        },
+        # small latent
+        # First upsample block (768->512)
+        {
+            "name": "block1_768-512",
+            "in_channels": 768,
+            "out_channels": 512,
+            "num_res_blocks": 6,
+            "temporal_expansion": 3,
+            "spatial_expansion": 2,
+            "input_shape": [1, 768, 28, 40, 50],
+            "expected_output_shape": (1, 512, 84, 80, 100),
+        },
+        # Second upsample block (512->256)
+        {
+            "name": "block2_512-256",
+            "in_channels": 512,
+            "out_channels": 256,
+            "num_res_blocks": 4,
+            "temporal_expansion": 2,
+            "spatial_expansion": 2,
+            "input_shape": [1, 512, 84, 80, 100],
+            "expected_output_shape": (1, 256, 168, 160, 200),
+        },
+        # Third upsample block (256->128)
+        {
+            "name": "block3_256-128",
+            "in_channels": 256,
+            "out_channels": 128,
+            "num_res_blocks": 3,
+            "temporal_expansion": 1,
+            "spatial_expansion": 2,
+            "input_shape": [1, 256, 168, 160, 200],
+            "expected_output_shape": (1, 128, 168, 320, 400),
+        },
+    ],
+    ids=["l768", "l512", "l256", "s768", "s512", "s256"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    [
+        ((1, 1), 1),
+        ((1, 2), 1),
+        ((1, 8), 1),
+        ((2, 4), 1),
+        ((8, 4), 4),  # WH Galaxy
+        ((8, 4), 2),  # BH Galaxy
+    ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        "2x4",
+        "wh_8x4",
+        "bh_8x4",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
+def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
+    """Test TtCausalUpsampleBlock against reference implementation."""
+    in_channels = config["in_channels"]
+    out_channels = config["out_channels"]
+    num_res_blocks = config["num_res_blocks"]
+    temporal_expansion = config["temporal_expansion"]
+    spatial_expansion = config["spatial_expansion"]
+    input_shape = config["input_shape"]
+    expected_output_shape = config["expected_output_shape"]
+    temporal_offset = 0  # temporal_expansion-1
+    N, C, T, H, W = input_shape
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
+
+    reference_model, tt_model = create_random_causalupsampleblock_models(
+        mesh_device,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        num_layers=num_res_blocks,
+        temporal_expansion=temporal_expansion,
+        spatial_expansion=spatial_expansion,
+        temporal_offset=temporal_offset,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+    )
+
+    # Create input tensor
+    torch_input = torch.randn(N, C, T, H, W)
+    tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+
+    if vae_parallel_config.time_parallel.factor > 1 and T % vae_parallel_config.time_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, vae_parallel_config.time_parallel.factor) - T)
+        )
+    if vae_parallel_config.w_parallel.factor > 1 and W % vae_parallel_config.w_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, get_padded_size(W, vae_parallel_config.w_parallel.factor) - W)
+        )
+    if vae_parallel_config.h_parallel.factor > 1 and H % vae_parallel_config.h_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, get_padded_size(H, vae_parallel_config.h_parallel.factor) - H)
+        )
+
+    tt_input = ttnn.from_torch(
+        tt_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    # Pass original (unpadded) spatial dims so ResBlocks inside the upsample
+    # block can slice padding before GroupNorm.
+    logical_h = H if vae_parallel_config.h_parallel.factor > 1 else 0
+    logical_w = W if vae_parallel_config.w_parallel.factor > 1 else 0
+
+    logger.info(f"Input shape: {torch_input.shape}")
+    logger.info("Run TtCausalUpsampleBlock forward")
+    tt_output = tt_model(tt_input, logical_h, logical_w)
+    logger.info("End TtCausalUpsampleBlock forward")
+
+    # Convert TT output to torch tensor
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+    if mesh_device.get_num_devices() > 1:
+        expected_T = T * temporal_expansion - temporal_offset
+        tt_output_torch = tt_output_torch[
+            0:N,
+            :,
+            0:expected_T,
+            0 : H * spatial_expansion,
+            0 : W * spatial_expansion,
+        ]
+
+    # Get reference output
+    logger.info("Run RefCausalUpsampleBlock forward")
+    with torch.no_grad():
+        ref_output = reference_model(torch_input)[0]
+    logger.info("End RefCausalUpsampleBlock forward")
+
+    logger.info("assert quality")
+    for i in range(T * temporal_expansion - temporal_offset):
+        ref_output_slice = ref_output[:, :, i, :, :]
+        tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
+        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.9995)
+
+
+def create_decoder_models(
+    mesh_device,
+    parallel_config,
+    ccl_manager,
+    latent_dim,
+    out_channels,
+    base_channels,
+    channel_multipliers,
+    temporal_expansions,
+    spatial_expansions,
+    num_res_blocks,
+    nonlinearity,
+    output_nonlinearity,
+):
+    """Initialize both reference and TT decoder models with optional real weights."""
+    # Create reference model
+    reference_model = MochiDecoder3D(
+        in_channels=latent_dim,
+        out_channels=out_channels,
+        block_out_channels=[base_channels * multiplier for multiplier in channel_multipliers],
+        layers_per_block=num_res_blocks,
+        temporal_expansions=temporal_expansions,
+        spatial_expansions=spatial_expansions,
+        act_fn=nonlinearity,
+    )
+
+    # Create TT model with same weights
+    tt_model = TtDecoder(
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+        out_channels=out_channels,
+        base_channels=base_channels,
+        channel_multipliers=channel_multipliers,
+        temporal_expansions=temporal_expansions,
+        spatial_expansions=spatial_expansions,
+        num_res_blocks=num_res_blocks,
+        latent_dim=latent_dim,
+        nonlinearity=nonlinearity,
+        output_nonlinearity=output_nonlinearity,
+    )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
+
+    return reference_model, tt_model
+
+
+# Test case configurations for different input sizes
+decoder_test_configs = [
+    {
+        "name": "small_latent",
+        "input_shape": [1, 12, 28, 40, 50],
+        "out_channels": 3,
+        "base_channels": 128,
+        "channel_multipliers": [1, 2, 4, 6],
+        "temporal_expansions": [1, 2, 3],
+        "spatial_expansions": [2, 2, 2],
+        "num_res_blocks": [3, 3, 4, 6, 3],
+        "latent_dim": 12,
+        "has_attention": [False, False, False, False, False],
+        "output_norm": False,
+        "nonlinearity": "silu",
+        "output_nonlinearity": "silu",
+        "causal": True,
+        # Expected output will be approximately: (1, 3, 168, 320, 400)
+    },
+    {
+        "name": "large_latent",
+        "input_shape": [1, 12, 28, 60, 106],
+        "out_channels": 3,
+        "base_channels": 128,
+        "channel_multipliers": [1, 2, 4, 6],
+        "temporal_expansions": [1, 2, 3],
+        "spatial_expansions": [2, 2, 2],
+        "num_res_blocks": [3, 3, 4, 6, 3],
+        "latent_dim": 12,
+        "has_attention": [False, False, False, False, False],
+        "output_norm": False,
+        "nonlinearity": "silu",
+        "output_nonlinearity": "silu",
+        "causal": True,
+        # Expected output will be approximately: (1, 3, 168, 480, 848)
+    },
+]
+
+
+def load_dit(
+    mesh_device: ttnn.MeshDevice,
+    ccl_manager: CCLManager,
+    use_cache: bool,
+    model_name: str = "genmo/mochi-1-preview",
+):
+    # Load pretrained Mochi Transformer
+    # First load the torch version to get the config and state dict
+    from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
+
+    from ....models.transformers.transformer_mochi import MochiTransformer3DModel
+    from ....parallel.config import DiTParallelConfig
+
+    torch_transformer = TorchMochiTransformer3DModel.from_pretrained(
+        model_name, subfolder="transformer", torch_dtype=torch.float32
+    )
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        sequence_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+    )
+
+    # Create TT version with the same config
+    transformer = MochiTransformer3DModel(
+        patch_size=torch_transformer.config.patch_size,
+        num_attention_heads=torch_transformer.config.num_attention_heads,
+        attention_head_dim=torch_transformer.config.attention_head_dim,
+        num_layers=torch_transformer.config.num_layers,
+        pooled_projection_dim=torch_transformer.config.pooled_projection_dim,
+        in_channels=torch_transformer.config.in_channels,
+        text_embed_dim=torch_transformer.config.text_embed_dim,
+        time_embed_dim=torch_transformer.config.time_embed_dim,
+        activation_fn=torch_transformer.config.activation_fn,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=True,
+    )
+
+    # Load state dict into TT transformer
+    if use_cache:
+        cache.load_model(
+            transformer,
+            model_name="mochi-1-preview",
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
+            dtype="bf16",
+        )
+    else:
+        transformer.load_torch_state_dict(torch_transformer.state_dict())
+
+    return transformer
+
+
+@pytest.mark.parametrize(
+    "config",
+    decoder_test_configs,
+    ids=[cfg["name"] for cfg in decoder_test_configs],
+)
+@pytest.mark.parametrize(
+    "load_dit_weights",
+    [
+        pytest.param(False, id="no_dit"),
+        pytest.param(True, id="load_dit"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, num_links",
+    [
+        ((1, 1), 1),
+        ((1, 2), 1),
+        ((1, 8), 1),
+        ((2, 4), 1),
+        ((8, 4), 4),  # WH Galaxy
+        ((8, 4), 2),  # BH Galaxy
+    ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        "2x4",
+        "wh_8x4",
+        "bh_8x4",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 20000000}], indirect=True
+)
+def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, num_links):
+    input_shape = config["input_shape"]
+    N, C, T, H, W = input_shape
+
+    logger.info(
+        f"Testing decoder with latent_dim={config['latent_dim']}, "
+        f"base_channels={config['base_channels']}, "
+        f"channel_multipliers={config['channel_multipliers']}, "
+    )
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+
+    if load_dit_weights:
+        # Load DiT weights to device to account for real world DRAM usage, checking for OOM.
+        logger.info("Loading DiT weights")
+        tt_model_dit = load_dit(mesh_device, ccl_manager, use_cache=False)
+
+    # Create models
+    logger.info("Creating VAE decoder models")
+
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
+
+    reference_model, tt_model = create_decoder_models(
+        mesh_device,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+        latent_dim=config["latent_dim"],
+        out_channels=config["out_channels"],
+        base_channels=config["base_channels"],
+        channel_multipliers=config["channel_multipliers"],
+        num_res_blocks=config["num_res_blocks"],
+        temporal_expansions=config["temporal_expansions"],
+        spatial_expansions=config["spatial_expansions"],
+        nonlinearity=config["nonlinearity"],
+        output_nonlinearity=config["output_nonlinearity"],
+    )
+
+    # Create input tensor (latent representation)
+    torch_input = torch.randn(N, C, T, H, W)
+    tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+
+    if vae_parallel_config.time_parallel.factor > 1 and T % vae_parallel_config.time_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, vae_parallel_config.time_parallel.factor) - T)
+        )
+    if vae_parallel_config.w_parallel.factor > 1 and W % vae_parallel_config.w_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, get_padded_size(W, vae_parallel_config.w_parallel.factor) - W)
+        )
+    if vae_parallel_config.h_parallel.factor > 1 and H % vae_parallel_config.h_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, get_padded_size(H, vae_parallel_config.h_parallel.factor) - H)
+        )
+
+    tt_input = ttnn.from_torch(
+        tt_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    # Pass original (unpadded) spatial dims so ResBlocks can slice padding
+    # before GroupNorm.
+    logical_h = H if vae_parallel_config.h_parallel.factor > 1 else 0
+    logical_w = W if vae_parallel_config.w_parallel.factor > 1 else 0
+
+    logger.info(f"Input shape: {torch_input.shape}")
+    logger.info("Run TtDecoder forward")
+    tt_output = tt_model(tt_input, logical_h, logical_w)
+    logger.info("End TtDecoder forward")
+
+    # Get reference output
+    logger.info("Run RefDecoder forward")
+    with torch.no_grad():
+        ref_output = reference_model(torch_input)[0]
+    logger.info("End RefDecoder forward")
+
+    # Convert TT output to torch tensor.  The decoder no longer does per-device
+    # padding slicing — the gathered tensor may have padding columns at the end.
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+
+    # Slice gathered output to the valid (unpadded) spatial dimensions.
+    H_out, W_out = ref_output.shape[3], ref_output.shape[4]
+    tt_output_torch = tt_output_torch[:, :, :, :H_out, :W_out]
+    logger.info(f"TT Output shape (after slicing) {tt_output_torch.shape}")
+
+    logger.info("assert quality")
+    for i in range(ref_output.shape[2]):
+        ref_output_slice = ref_output[:, :, i, :, :]
+        tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
+        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.995)

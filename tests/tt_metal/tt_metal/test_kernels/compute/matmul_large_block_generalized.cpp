@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
 #include "compute_kernel_api/tilize_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
 
 inline void tilize_activation(
     uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb) {
@@ -78,8 +78,7 @@ inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles
     cb_push_back(cb_id, out_subblock_num_tiles);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);             // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);       // outer row block size (in inner row blocks)
     uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);     // out_subblock_h*in0_block_w*in0_num_subblocks;
@@ -137,6 +136,7 @@ void MAIN {
         for (uint32_t block_in1_w = 0; block_in1_w < num_blocks_in1_w; block_in1_w++) {
             enable_reload = false;
             // DPRINT << 'B' << ENDL();
+            // DEVICE_PRINT("B\n");
             for (uint32_t block_in0_w = 0; block_in0_w < num_blocks_in0_w; block_in0_w++) {
                 bool last_out = block_in0_w == (num_blocks_in0_w - 1);
                 if (tilize_in) {
@@ -182,16 +182,9 @@ void MAIN {
                                             tt::CBIndex::c_1,
                                             in0_index,
                                             in1_index,
-                                            dst_index,
-                                            false /* transpose */);
+                                            dst_index);
                                     } else {
-                                        matmul_tiles(
-                                            in0_cb,
-                                            tt::CBIndex::c_1,
-                                            in0_index,
-                                            in1_index,
-                                            dst_index,
-                                            false /* transpose */);
+                                        matmul_tiles(in0_cb, tt::CBIndex::c_1, in0_index, in1_index, dst_index);
                                     }
                                     in1_index_inner_dim_offset += in1_per_core_w;
                                 }
@@ -245,4 +238,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

@@ -1,38 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dataflow_api_addrgen.h>
 #include <hostdevcommon/kernel_structs.h>
 
 #include <cstdint>
 #include <cstring>
 
-#include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
-
-template <typename AddrGen>
-void read_block_tiles(
-    const uint32_t cb_input_idx,
-    const AddrGen& input_address_generator,
-    const uint32_t Wt,
-    const uint32_t block_size,
-    const uint32_t tile_bytes,
-    const uint32_t idx) {
-    for (uint32_t j = 0; j < Wt; j += block_size) {
-        cb_reserve_back(cb_input_idx, block_size);
-        uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-            l1_write_addr += tile_bytes;
-        }
-
-        noc_async_read_barrier();
-        cb_push_back(cb_input_idx, block_size);
-    }
-}
+#include "api/dataflow/dataflow_api.h"
+#include "internal/dataflow/dataflow_api_addrgen.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
@@ -52,7 +29,6 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t mask_w = get_compile_time_arg_val(2);
-    constexpr uint32_t target_indexes_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t tiled_H = get_compile_time_arg_val(4);
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
 
@@ -80,8 +56,8 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     constexpr auto input_args = TensorAccessorArgs<6>();
     constexpr auto target_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
-    const auto target_indexes_address_generator = TensorAccessor(target_args, target_address, target_indexes_page_size);
+    const auto input_address_generator = TensorAccessor(input_args, input_address);
+    const auto target_indexes_address_generator = TensorAccessor(target_args, target_address);
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         // calculate the address of the first tile in the row
@@ -104,14 +80,14 @@ void kernel_main() {
         cb_push_back(cb_target_idx, onetile);  // push the tile to the back of the target buffer
 
         // read input buffer by blocks
-        read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
+        read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
 #ifndef EVERYTHING_FITS_IN_L1
         // read input buffer by blocks to calculate sum(exp(x - max(x))) in row
-        read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
+        read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
         // read input buffer by blocks to calculate softmax in row
-        read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
+        read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 #endif
     }
 }

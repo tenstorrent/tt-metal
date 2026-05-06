@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -171,6 +171,7 @@ def generate_report(
         device_only=False,
         analyze_noc_traces=collect_noc_traces,
         device_analysis_types=device_analysis_types,
+        force_legacy_device_logs=False,
     )
 
 

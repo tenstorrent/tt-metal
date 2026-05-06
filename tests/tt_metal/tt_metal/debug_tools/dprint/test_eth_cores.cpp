@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,16 +12,16 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "tests/tt_metal/tt_metal/eth/eth_test_common.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for printing from ethernet cores.
@@ -35,8 +35,9 @@ const std::string golden_output =
     R"(Test Debug Print: ERISC
 Basic Types:
 101-1.618@0.122559
-e5551234569123456789
+1015551234569123456789
 -17-343-44444-5123456789
+10
 Pointer:
 123
 456
@@ -56,7 +57,7 @@ void RunTest(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool active,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     // Try printing on all ethernet cores on this device
     std::unordered_set<CoreCoord> test_cores;
     tt_metal::EthernetConfig config = {.noc = static_cast<tt_metal::NOC>(processor), .processor = processor};
@@ -67,6 +68,7 @@ void RunTest(
         test_cores = device->get_inactive_ethernet_cores();
         config.eth_mode = Eth::IDLE;
     }
+    eth_test_common::set_arch_specific_eth_config(config);
     for (const auto& core : test_cores) {
         // Set up program and command queue
         distributed::MeshWorkload workload;
@@ -91,7 +93,7 @@ void RunTest(
         fixture->RunProgram(mesh_device, workload);
 
         // Check the print log against golden output.
-        EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+        EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 
         // Clear the log file for the next core's test
         MetalContext::instance().dprint_server()->clear_log_file();
@@ -102,7 +104,7 @@ void RunTest(
 
 TEST_F(DPrintMeshFixture, ActiveEthTestPrint) {
     for (auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
@@ -128,7 +130,7 @@ TEST_F(DPrintMeshFixture, IdleEthTestPrint) {
         GTEST_SKIP();
     }
     for (auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
         if (device->get_inactive_ethernet_cores().empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());

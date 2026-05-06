@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
-#include "risc_attribs.h"
+#include "api/dataflow/dataflow_api.h"
+#include "internal/risc_attribs.h"
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -61,7 +61,7 @@ void kernel_main() {
 
     uint32_t device_batch_offset = 0;
     if constexpr (PHASES_TO_READ == 2) {
-        const auto addrg = TensorAccessor(index_args, batch_offset_tensor_addr, index_stick_size);
+        const auto addrg = TensorAccessor(index_args, batch_offset_tensor_addr);
         cb_reserve_back(cb_batch_offset_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
         // Read the batch offset 1 page to read

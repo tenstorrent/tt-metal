@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -54,8 +54,9 @@ from tests.nightly.tg.ccl.test_all_reduce_async import (
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_ring_all_reduce_post_commit(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     num_links,
     per_chip_output_shape,
@@ -67,7 +68,7 @@ def test_ring_all_reduce_post_commit(
     num_iters=2,
 ):
     run_all_reduce_test(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         per_chip_output_shape,
         num_links,
@@ -114,8 +115,9 @@ def test_ring_all_reduce_post_commit(
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_ring_all_reduce_post_commit_2chip(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     per_chip_output_shape,
     num_links,
@@ -127,7 +129,7 @@ def test_ring_all_reduce_post_commit_2chip(
     num_iters=2,
 ):
     run_all_reduce_with_mesh_tensor_along_row(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         per_chip_output_shape,
         num_links,
@@ -182,11 +184,11 @@ NUM_ITERS = 2
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape", [[128, 128], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
+    "input_shape", [[128, 128], [544, 2880], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topology):
     tt_input, torch_reference = _get_tensors(

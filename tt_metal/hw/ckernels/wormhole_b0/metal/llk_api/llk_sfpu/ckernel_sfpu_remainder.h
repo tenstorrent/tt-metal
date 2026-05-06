@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,8 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 
 using namespace sfpi;
 namespace ckernel {

@@ -10,11 +10,11 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 ## Test Flow
 Runs the reader kernel on a Tensix core. After initializing a sharded DRAM buffer with data, the kernel issues NOC instructions to read this data into L1 memory using the stateful one_packet APIs. A read barrier is placed after these transactions to ensure data validity.
 
-Test attributes such as number of DRAM banks to shard into and number of tiles per bank, as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
+Test attributes such as number of DRAM banks to shard into and number of tiles per bank, as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through an equality check.
 
 An additional flag can be set to use a stateful read with transaction IDs, for testing the functionality of those APIs.
 
-Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+Test expectations are that the equality checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Running the Tests
 The tests use the Mesh Device API with fast dispatch mode:

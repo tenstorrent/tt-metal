@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,12 @@
 #include "core_coord.hpp"
 #include "fd_kernel.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "impl/context/metal_context.hpp"
+#include "impl/context/context_descriptor.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct prefetch_static_config_t {
     std::optional<uint32_t> my_downstream_cb_sem_id;
@@ -57,6 +56,11 @@ struct prefetch_static_config_t {
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
+
+    // Offsets of runtime args
+    std::optional<uint32_t> offsetof_my_dev_id;
+    std::optional<uint32_t> offsetof_to_dev_id;
+    std::optional<uint32_t> offsetof_router_direction;
 };
 
 struct prefetch_dependent_config_t {
@@ -93,13 +97,21 @@ public:
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool h_variant,
-        bool d_variant);
+        bool d_variant,
+        const ContextDescriptor& descriptor,
+        dispatch_core_manager& dispatch_core_manager,
+        const GetControlPlaneFn& get_control_plane = {},
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
+        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
+        const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     void CreateKernel() override;
 
     void GenerateStaticConfigs() override;
 
     void GenerateDependentConfigs() override;
+
+    void InitializeRuntimeArgsValues() override;
 
     void ConfigureCore() override;
 
@@ -113,5 +125,4 @@ private:
     bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

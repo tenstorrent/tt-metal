@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,12 +9,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::gelu_backward::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 
 GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const GeluBackwardParams& args, const GeluBackwardInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;              // src0
     const auto& grad_output = tensor_args.grad_output;  // src1
 
@@ -60,10 +60,10 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto src0_buffer = grad_output.buffer();
-    auto src1_buffer = input.buffer();
+    auto* src0_buffer = grad_output.buffer();
+    auto* src1_buffer = input.buffer();
 
-    auto dst_buffer = output.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {0};
     tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
@@ -88,16 +88,25 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
                             (dst_cb_data_format == tt::DataFormat::Int32) ||
                             (dst_cb_data_format == tt::DataFormat::UInt32);
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    unpack_to_dest_mode[src0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[src1_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+
+    // Select compute kernel based on approximation mode
+    std::string compute_kernel_path;
+    if (args.approximate == "tanh") {
+        compute_kernel_path =
+            "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
+            "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp";
+    } else {
+        compute_kernel_path =
+            "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
+            "kernels/compute/eltwise_bw_gelu_poly.cpp";
+    }
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        args.approximate == "tanh" ? "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
-                                     "kernels/compute/eltwise_bw_gelu_approx_tanh.cpp"
-                                   : "ttnn/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/"
-                                     "kernels/compute/eltwise_bw_gelu_approx_none.cpp",
+        compute_kernel_path,
         all_cores,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = unpack_to_dest_mode});
 
@@ -132,9 +141,9 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
 
 void GeluBackwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const GeluBackwardParams& /*operation_attributes*/,
+    const GeluBackwardInputs& tensor_args,
+    Tensor& output) {
     using namespace tt::tt_metal;
 
     auto& shared_vars = cached_program.shared_variables;
@@ -148,9 +157,9 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
 
     const auto& input = tensor_args.input;
     const auto& grad_output = tensor_args.grad_output;
-    auto src0_buffer = grad_output.buffer();
-    auto src1_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src0_buffer = grad_output.buffer();
+    auto* src1_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     // Only update buffer addresses
     auto& reader_runtime_args = GetRuntimeArgs(program, gelu_bw_reader_kernel_id);
@@ -193,4 +202,4 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::gelu_backward::program
+}  // namespace ttnn::experimental::prim

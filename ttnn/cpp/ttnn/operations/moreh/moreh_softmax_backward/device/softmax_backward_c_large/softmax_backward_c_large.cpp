@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
     const auto op = operation_attributes.op;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto device = output_grad.device();
+    auto* device = output_grad.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
@@ -61,7 +61,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
             {tt::CBIndex::c_26, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
         });
 
-    // create read/wrtie kernel
+    // create read/write kernel
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -158,7 +158,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
 
 void MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& input_grad) {
     auto& program = cached_program.program;

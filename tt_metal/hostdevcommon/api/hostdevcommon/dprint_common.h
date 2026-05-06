@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,6 +72,8 @@ static_assert(DPrintTypeID_Count < 64, "Exceeded number of dprint types");
 // These magic values must not be equal to any real wpos/rpos values.
 constexpr uint32_t DEBUG_PRINT_SERVER_STARTING_MAGIC = 0x98989898;
 constexpr uint32_t DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0xf8f8f8f8;
+constexpr uint32_t DEVICE_PRINT_RESET_BUFFER_MAGIC = 0xF0E1D2C3;
+constexpr uint32_t DEVICE_PRINT_WRITE_STALL_FLAG = 1u << 31;
 
 #define ATTR_PACK __attribute__((packed))
 
@@ -142,70 +144,3 @@ enum TypedU32_ARRAY_Format {
 static_assert(sizeof(DebugPrintMemLayout) == DPRINT_BUFFER_SIZE);
 // We use DebugPrintMemLayout to hold noc xfer data, 32 buckets (one for each bit in noc xfer length field).
 static_assert(sizeof(DebugPrintMemLayout().data) >= sizeof(uint32_t) * 8 * sizeof(uint32_t));
-
-// Size of datum in bytes, dprint-specific to support device-side and bfp* DataFormats
-static constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {
-    switch (format) {
-        case CommonDataFormat::Float32:
-        case CommonDataFormat::UInt32:
-        case CommonDataFormat::Int32: return 4;
-        case CommonDataFormat::Float16:
-        case CommonDataFormat::Float16_b:
-        case CommonDataFormat::UInt16: return 2;
-        case CommonDataFormat::Bfp2:
-        case CommonDataFormat::Bfp2_b:
-        case CommonDataFormat::Bfp4:
-        case CommonDataFormat::Bfp4_b:
-        case CommonDataFormat::Bfp8:
-        case CommonDataFormat::Bfp8_b:
-        case CommonDataFormat::Int8:
-        case CommonDataFormat::Lf8:
-        case CommonDataFormat::UInt8: return 1;  // Round up to 1 byte
-        case CommonDataFormat::Invalid:
-        default: return 0;  // Invalid/Unknown
-    }
-}
-
-static constexpr bool is_bfp(const CommonDataFormat& format) {
-    switch (format) {
-        case CommonDataFormat::Bfp2:
-        case CommonDataFormat::Bfp2_b:
-        case CommonDataFormat::Bfp4:
-        case CommonDataFormat::Bfp4_b:
-        case CommonDataFormat::Bfp8:
-        case CommonDataFormat::Bfp8_b: return true;
-        case CommonDataFormat::Float16:
-        case CommonDataFormat::Float16_b:
-        case CommonDataFormat::Float32:
-        case CommonDataFormat::Int8:
-        case CommonDataFormat::Lf8:
-        case CommonDataFormat::UInt8:
-        case CommonDataFormat::UInt16:
-        case CommonDataFormat::UInt32:
-        case CommonDataFormat::Int32:
-        case CommonDataFormat::Invalid:
-        default: return false;
-    }
-}
-
-static constexpr bool is_supported_format(const CommonDataFormat& format) {
-    switch (format) {
-        case CommonDataFormat::Bfp4_b:
-        case CommonDataFormat::Bfp8_b:
-        case CommonDataFormat::Float16_b:
-        case CommonDataFormat::Float32:
-        case CommonDataFormat::Int8:
-        case CommonDataFormat::UInt8:
-        case CommonDataFormat::UInt16:
-        case CommonDataFormat::UInt32:
-        case CommonDataFormat::Int32: return true;
-        case CommonDataFormat::Bfp2:
-        case CommonDataFormat::Bfp2_b:
-        case CommonDataFormat::Bfp4:
-        case CommonDataFormat::Bfp8:
-        case CommonDataFormat::Float16:
-        case CommonDataFormat::Lf8:
-        case CommonDataFormat::Invalid:
-        default: return false;
-    }
-}

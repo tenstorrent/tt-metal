@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
+from safetensors.torch import safe_open as safetensors_safe_open
 from tqdm import tqdm
 
 
@@ -42,6 +43,78 @@ def load_hf_state_dict(ckpt_dir):
     return loaded_weights
 
 
+def load_hf_state_dict_filtered(ckpt_dir, key_prefixes, local_files_only=None):
+    """
+    Load only the subset of HF checkpoint weights that match the given key prefixes.
+    Uses safetensors safe_open to avoid loading unrelated tensors into memory.
+    Supports local checkpoint directories or HF repo IDs.
+    """
+    prefixes = tuple(key_prefixes)
+    if not prefixes:
+        return {}
+
+    if local_files_only is None:
+        local_files_only = os.getenv("CI") == "true"
+
+    ckpt_dir = str(ckpt_dir)
+    is_local_dir = os.path.isdir(ckpt_dir)
+
+    hf_hub_download = None
+    EntryNotFoundError = None
+    LocalEntryNotFoundError = None
+    if not is_local_dir:
+        try:
+            from huggingface_hub import hf_hub_download
+            from huggingface_hub.utils import EntryNotFoundError, LocalEntryNotFoundError
+        except ImportError as exc:
+            raise ImportError("huggingface_hub is required to resolve HF repo IDs for safetensors loading.") from exc
+
+    def resolve_file(filename, allow_missing=False):
+        if is_local_dir:
+            path = os.path.join(ckpt_dir, filename)
+            if os.path.exists(path):
+                return path
+            if allow_missing:
+                return None
+            raise FileNotFoundError(f"Missing safetensors file {path}")
+
+        try:
+            return hf_hub_download(ckpt_dir, filename=filename, local_files_only=local_files_only)
+        except (EntryNotFoundError, LocalEntryNotFoundError) as exc:
+            if allow_missing:
+                return None
+            raise FileNotFoundError(
+                f"Missing safetensors file {filename} for repo {ckpt_dir} (local_files_only={local_files_only})"
+            ) from exc
+
+    loaded_weights = {}
+
+    index_path = resolve_file("model.safetensors.index.json", allow_missing=True)
+    if index_path is not None:
+        with open(index_path, "r") as f:
+            index_data = json.load(f)
+
+        weight_map = index_data["weight_map"]
+        file_to_keys = {}
+        for key, file in weight_map.items():
+            if key.startswith(prefixes):
+                file_to_keys.setdefault(file, []).append(key)
+
+        for file, keys in file_to_keys.items():
+            safetensor_path = resolve_file(file)
+            with safetensors_safe_open(safetensor_path, framework="pt", device="cpu") as f:
+                for key in keys:
+                    loaded_weights[key] = f.get_tensor(key)
+    else:
+        safetensor_path = resolve_file("model.safetensors")
+        with safetensors_safe_open(safetensor_path, framework="pt", device="cpu") as f:
+            for key in f.keys():
+                if key.startswith(prefixes):
+                    loaded_weights[key] = f.get_tensor(key)
+
+    return loaded_weights
+
+
 def standardize_hf_keys(state_dict):
     key_meta = "lm_head.weight"
     key_hf = "model.embed_tokens.weight"
@@ -61,6 +134,10 @@ def standardize_hf_keys_multimodal(state_dict):
             new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
         elif "model.vision_tower.vision_model." in k:
             new_state_dict[k.replace("model.vision_tower.vision_model.", "visual.")] = state_dict[k]
+        elif "model.vision_tower." in k:
+            new_state_dict[k.replace("model.", "")] = state_dict[k]
+        elif "model.multi_modal_projector." in k:
+            new_state_dict[k.replace("model.", "")] = state_dict[k]
         elif "model.vision_model." in k:
             new_state_dict[k.replace("model.vision_model.", "vision_model.")] = state_dict[k]
         elif "model.language_model." in k:
@@ -83,6 +160,18 @@ def standardize_hf_keys_multimodal(state_dict):
 def convert_hf_to_meta(state_dict, head_dim, n_heads=None, n_kv_heads=None):
     state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+    state_dict = map_hf_to_meta_keys(state_dict)
+    return state_dict
+
+
+def convert_hf_to_meta_no_qkv_permute(state_dict, head_dim, n_heads=None, n_kv_heads=None):
+    """Convert HF to Meta format but skip QKV weight permutation.
+
+    This keeps weights in HF format for use with HF-style RoPE.
+    Only key mapping is performed (q_proj -> wq, etc.).
+    """
+    state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
+    # SKIP convert_hf_qkv_to_meta_format - keep weights in HF format
     state_dict = map_hf_to_meta_keys(state_dict)
     return state_dict
 
@@ -110,6 +199,19 @@ def convert_hf_to_meta_mllama(state_dict, head_dim, config):
     return state_dict
 
 
+def convert_hf_to_meta_mllama_no_qkv_permute(state_dict, head_dim, config):
+    """Convert HF to Meta format for multimodal Llama but skip QKV weight permutation.
+
+    This keeps weights in HF format for use with HF-style RoPE.
+    Only key mapping is performed (q_proj -> wq, etc.).
+    """
+    state_dict = split_hf_keys(state_dict)
+    state_dict = map_hf_to_meta_keys_mllama(state_dict, config)
+    state_dict = convert_pos_embeddings(state_dict)
+    state_dict = flatten_conv_linear(state_dict)
+    return state_dict
+
+
 def map_hf_to_meta_keys_vision_only(state_dict):
     """
     Map Hugging Face checkpoint keys to Meta checkpoint keys.
@@ -127,12 +229,16 @@ def map_hf_to_meta_keys_vision_only(state_dict):
         ("k_norm", "k_norm"),
         ("fc1", "c_fc"),
         ("fc2", "c_proj"),
+        ("gate_proj", "w1"),
+        ("down_proj", "w2"),
+        ("up_proj", "w3"),
         ("layer_norm1", "ln_1"),
         ("layer_norm2", "ln_2"),
         ("post_layernorm", "ln_post"),
         ("embeddings.patch_embedding._linear", "embeddings.patch_embedding"),
         ("embeddings.patch_embedding", "embeddings.patch_embedding._linear"),
         ("embeddings.position_embedding.weight", "embeddings.position_embedding.positional_embedding"),
+        ("patch_conv", "patch_conv._linear"),
     ]
 
     return replace_keys(state_dict, replacements)
@@ -144,7 +250,7 @@ def map_vision_hf_to_meta_keys_split_to_submodels(state_dict):
     other_state_dict = dict()
 
     for k, v in state_dict.items():
-        if k.startswith("visual") or k.startswith("vision_model"):
+        if k.startswith("visual") or k.startswith("vision_model") or k.startswith("vision_tower"):
             selected_dict = vision_state_dict
         elif k.startswith("model") or k.startswith("lm_head") or k.startswith("language_model"):
             selected_dict = text_state_dict
@@ -165,6 +271,32 @@ def map_vision_hf_to_meta_keys(state_dict, head_dim):
     vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
 
     return {**vision_state_dict, **text_state_dict, **other_state_dict}
+
+
+def map_vision_hf_to_meta_keys_no_qkv_permute(state_dict, head_dim):
+    """Map vision HF to Meta keys but skip QKV format conversion for text portion.
+
+    This keeps text weights in HF format for use with HF-style RoPE.
+    """
+    vision_state_dict, text_state_dict, other_state_dict = map_vision_hf_to_meta_keys_split_to_submodels(state_dict)
+
+    # SKIP convert_hf_qkv_to_meta_format - keep text weights in HF format
+    text_state_dict = map_hf_to_meta_keys(text_state_dict)
+
+    vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
+
+    return {**vision_state_dict, **text_state_dict, **other_state_dict}
+
+
+def convert_vision_hf_to_meta_no_qkv_permute(state_dict, head_dim):
+    """Convert vision HF to Meta format but skip QKV weight permutation.
+
+    This keeps weights in HF format for use with HF-style RoPE.
+    Only key mapping is performed (q_proj -> wq, etc.).
+    """
+    state_dict = split_hf_keys(state_dict)
+    state_dict = map_vision_hf_to_meta_keys_no_qkv_permute(state_dict, head_dim)
+    return state_dict
 
 
 def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
@@ -286,7 +418,10 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     """Convert HuggingFace QKV weights to Meta format for RoPE compatibility."""
     converted_weights = {}
     for key, tensor in loaded_weights.items():
-        if "q_proj.weight" in key or "k_proj.weight" in key:
+        if "vision_tower" in key:
+            # Skip conversion for vision tower weights (Mistral vision support)
+            converted_weights[key] = tensor
+        elif "q_proj.weight" in key or "k_proj.weight" in key:
             # For weights: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
@@ -442,6 +577,18 @@ def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, con
     return state_dict
 
 
+def convert_meta_to_hf_no_qkv_permute(state_dict, fuse_qkv=False, fuse_mlp=False, config=None):
+    state_dict = reindex_layers(state_dict, config)
+    if fuse_qkv:
+        state_dict = fuse_qkv_meta(state_dict)
+    if fuse_mlp:
+        state_dict = fuse_mlp_meta(state_dict)
+
+    state_dict = map_meta_to_hf_keys(state_dict)
+    state_dict = rename_layers_to_cross_attn(state_dict, config)
+    return state_dict
+
+
 def replace_keys(state_dict, replacements):
     """
     Replacements are in the form (pattern, replacement).
@@ -514,6 +661,7 @@ def map_hf_to_meta_keys_mllama(loaded_weights, config):
         (r"^vision_model.post_tile_positional_embedding.gate", r"vision_model.post_tile_pos_embed.gate"),
         (r"^vision_model.", r"vision_model.vision_encoder."),
         (r"^model.multi_modal_projector.", r"vision_model.vision_projection."),
+        (r"^multi_modal_projector.", r"vision_model.vision_projection."),
     ]
 
     self_attn_replacements = {
@@ -640,6 +788,7 @@ def map_hf_to_meta_keys(loaded_weights):
         ("o_proj", "wo"),
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
+        ("patch_conv.weight", "patch_conv._linear.weight"),  # Minimal addition for Mistral vision
     ]
     return replace_keys(loaded_weights, replacements)
 
@@ -772,3 +921,32 @@ def convert_rope_style_hf_to_meta(cos_hf: torch.Tensor, sin_hf: torch.Tensor) ->
     sin_meta = torch.repeat_interleave(sin_unique, repeats=2, dim=-1)
 
     return cos_meta, sin_meta
+
+
+# Minimal addition for Mistral vision support
+def map_vision_meta_to_hf_keys(loaded_weights):
+    """
+    Map vision model Meta checkpoint keys to HuggingFace checkpoint keys.
+    Added for Mistral-Small-3.1-24B-Instruct-2503 vision support.
+    """
+    base_mapping = [
+        ("w1", "gate_proj"),
+        ("w2", "down_proj"),
+        ("w3", "up_proj"),
+        ("wq", "q_proj"),
+        ("wk", "k_proj"),
+        ("wv", "v_proj"),
+        ("wo", "o_proj"),
+        ("_linear.weight", "weight"),
+    ]
+    return replace_keys(loaded_weights, base_mapping)
+
+
+# Minimal addition for Mistral vision support
+def convert_vision_meta_to_hf(state_dict, head_dim):
+    """
+    Convert vision model state dict from Meta to HuggingFace format.
+    Added for Mistral-Small-3.1-24B-Instruct-2503 vision support.
+    """
+    state_dict = map_vision_meta_to_hf_keys(state_dict)
+    return state_dict

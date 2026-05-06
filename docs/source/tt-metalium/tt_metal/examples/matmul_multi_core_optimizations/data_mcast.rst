@@ -5,7 +5,7 @@ Data Multicasting in `matmul_multicore_reuse_mcast`
 
 **Note**: This example only works on Grayskull.
 
-Let's level up our code and show how you can leverage and fully customize METALIUM's core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work. This example builds off of the data_reuse one, so we employ the same intemediate (partial) results handling scheme on-core.  However, rather than map tile-work statically to your coregrid, we map in0's rows and in1's columns to the coregrid's edges, and cascade work core-to-core dynamically.  A fun tidbit: "torrent" in Tenstorrent pays homage to this concept of tensor computation flowing like an ultra fast stream of water.
+Let's level up our code and show how you can leverage and fully customize METALIUM's core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work. This example builds off of the data_reuse one, so we employ the same intermediate (partial) results handling scheme on-core.  However, rather than map tile-work statically to your coregrid, we map in0's rows and in1's columns to the coregrid's edges, and cascade work core-to-core dynamically.  A fun tidbit: "torrent" in Tenstorrent pays homage to this concept of tensor computation flowing like an ultra fast stream of water.
 
 
 Additional Compile-Time Argument
@@ -56,7 +56,7 @@ Next, we define the mcast role of the entire coregrid, the uppermost edge, and t
                 {(std::size_t)start_core_x, (std::size_t)start_core_y},
                 {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_r - 1});
 
-- **``all_except_left_column``**: Designates which cores will peform their share of in0 and in1 tile work, and calculate their partial results.
+- **``all_except_left_column``**: Designates which cores will perform their share of in0 and in1 tile work, and calculate their partial results.
 
     .. code-block:: cpp
 
@@ -71,7 +71,7 @@ Then, we define the data flow framework.  The basic idea is that we initiate in0
     CoreRange in0_sender_in1_sender(
         {(std::size_t)start_core_x, (std::size_t)start_core_y}, {(std::size_t)start_core_x, (std::size_t)start_core_y});
 
-Then we mcast send in0 rows of work vertically down the coregrid's left_column (from DRAM into each of these core's L1).  These left_column cores are responsible for disseminating the **same** in0 row tile data to each core, thereby leveraging the data reuse scheme as we mentioned in the last section.  We also ensure they are desginated as receiver cores because they will also take on in1 column work.
+Then we mcast send in0 rows of work vertically down the coregrid's left_column (from DRAM into each of these core's L1).  These left_column cores are responsible for disseminating the **same** in0 row tile data to each core, thereby leveraging the data reuse scheme as we mentioned in the last section.  We also ensure they are designated as receiver cores because they will also take on in1 column work.
 
 .. code-block:: cpp
 
@@ -87,7 +87,7 @@ We also mcast send in1 columns of work horizontally across the coregrid (left to
         {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y});
 
-The remining tiles act as receivers for both in0 and in1 tile data.  Essentially we are computing output_tile work (partial results of our output matrix) on each core, wherein each core has been simultaneously mcasted a unique chunk of in0 and in1 tile data to compute on.
+The remaining tiles act as receivers for both in0 and in1 tile data.  Essentially we are computing output_tile work (partial results of our output matrix) on each core, wherein each core has been simultaneously mcasted a unique chunk of in0 and in1 tile data to compute on.
 
 .. code-block:: cpp
 
@@ -124,7 +124,7 @@ In fact, you can instantiate circular buffers on any one of these three options:
 Multicast Reader/Writer Kernel Setup
 ------------------------------------
 
-In datareuse, we spawned reader and writer kernels per core.  In mcast, we have desginated core ranges (or more generally speaking, "groups"), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.
+In datareuse, we spawned reader and writer kernels per core.  In mcast, we have designated core ranges (or more generally speaking, "groups"), and METALIUM gives us functionality to relegate a certain type of reader/writer kernel to a group.
 
 Below, let's set some core ID's associated with a specific sender-receiver kernel.  Take note that each ID is designated as one of two data movement processors, NCRISC (loading data from DRAM to L1) or BRISC (storing data from L1 to DRAM), as defined in the ``$TT_METAL_HOME/tt_metal/impl/kernels/data_types.hpp`` file.
 
@@ -180,7 +180,7 @@ If you are interested in further details on how these work, we implore you to ch
 New Compute Kernel: Fused Bias Addition and Activation Functions
 ----------------------------------------------------------------
 
-Like all the examples preceeding, we call our compute kernel as usual, except here we introduce a new one called "bmm_large_block_zm_fused_bias_activation".
+Like all the examples preceding, we call our compute kernel as usual, except here we introduce a new one called "bmm_large_block_zm_fused_bias_activation".
 
 .. code-block:: cpp
 
@@ -243,7 +243,7 @@ To cleanly coordinate the distribution and processing of in0 and in1 tiles in ou
 Kernel Runtime Arguments
 ------------------------
 
-Recall that we just desginated NCRISCs to handle our DRAM->CoreGrid L1 data movement.  METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordintates.
+Recall that we just designated NCRISCs to handle our DRAM->CoreGrid L1 data movement.  METALIUM lets us pass in a buffer of tensors and dereference them with a stride by multiples of core coordinates.
 
 .. code-block:: cpp
 
@@ -269,8 +269,6 @@ For runtime, we need to set a few more IDs on corner cores of our CoreGrid, that
 
 .. code-block:: cpp
 
-    std::vector<KernelHandle> reader_kernel_ids;
-    std::vector<KernelHandle> writer_kernel_ids;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
@@ -289,7 +287,7 @@ For runtime, we need to set a few more IDs on corner cores of our CoreGrid, that
             auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
             auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
 
-At this point we can specificy exactly which worker core plays which role for mcasting in0 and in1 data.  Here we can map the physical core on device with:
+At this point we can specify exactly which worker core plays which role for mcasting in0 and in1 data.  Here we can map the physical core on device with:
 
 .. code-block:: cpp
 
@@ -315,15 +313,13 @@ At this point we can specificy exactly which worker core plays which role for mc
     ...
 
 
-Finally, we push our IDs into our reader and writer kernel handler vectors, and targets our NCRISC (RISCV_0) and BRISC (RISCV_1) processors.  For our master send core (0,0), which initiates data movement for both matrices in0 and in1:
+Finally, we target our NCRISC (RISCV_0) and BRISC (RISCV_1) processors. For our master send core (0,0), which initiates data movement for both matrices in0 and in1:
 
 .. code-block:: cpp
 
     if(core_idx_x == 0 and core_idx_y == 0) {
         tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_sender_in1_sender_id, core, mm_reader_args); // RISCV_0_default
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args); // RISCV_1_default
-        reader_kernel_ids.push_back(mm_reader_kernel_in0_sender_in1_sender_id);
-        writer_kernel_ids.push_back(unary_writer_kernel_noc1_id);
     }
 
 For the left_column cores, we task them with receiving in1 columns from the top and sending in0 rows to the right:
@@ -333,8 +329,6 @@ For the left_column cores, we task them with receiving in1 columns from the top 
     else if (core_idx_x == 0 and core_idx_y != 0) {
         tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_sender_in1_receiver_id, core, mm_reader_args); // RISCV_0_default
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args); // RISCV_1_default
-        reader_kernel_ids.push_back(mm_reader_kernel_in0_sender_in1_receiver_id);
-        writer_kernel_ids.push_back(unary_writer_kernel_noc1_id);
     }
 
 For the upper_row cores (minus the upper-left master send core), we task them with receiving matrix in0 rows from the left, and sending in1 columns upwards.
@@ -345,8 +339,6 @@ For the upper_row cores (minus the upper-left master send core), we task them wi
     else if (core_idx_x != 0 and core_idx_y == 0) {
         tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_receiver_in1_sender_id, core, mm_reader_args); // RISCV_1_default
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args); // RISCV_0_default
-        reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_sender_id);
-        writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);
     }
 
 For all other cores (between the left_column and upper_row cores, minus the master send core), we task these with receiving in0 rows from the left and in1 columns from the top, thereby dividing work appropriately and commencing the partial results computation process.
@@ -356,6 +348,4 @@ For all other cores (between the left_column and upper_row cores, minus the mast
     else {
         tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_receiver_in1_receiver_id, core, mm_reader_args); // RISCV_1_default
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args); // RISCV_0_default
-        reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_receiver_id);
-        writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);
     }
