@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <bit>
-#include <cstring>
 #include <ctime>
 #include <limits>
 #include <random>
@@ -111,7 +110,10 @@ ProgramDescriptor RandDeviceOperation::create_descriptor(
     switch (output_dtype) {
         case DataType::BFLOAT16: writer_desc.defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
         case DataType::FLOAT32: writer_desc.defines.emplace_back("OUTPUT_DTYPE_FLOAT32", "1"); break;
-        default: break;
+        default:
+            // The writer kernel only implements float32 and bfloat16 output paths.
+            // Fail fast here so we never instantiate a program that can hang at runtime.
+            TT_THROW("RandDeviceOperation: unsupported output dtype for writer kernel");
     }
     writer_desc.runtime_args.reserve(num_cores_total);
 
