@@ -131,7 +131,7 @@ fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_me
     const fs::path firmware_file = fs::path(target.weakened_firmware_name).filename();
     const fs::path fw_dir = firmware_cache_dir(build_key, target.target_name);
     fs::path candidate = fw_dir / firmware_file;
-    if (fs::exists(candidate)) {
+    if (tt::filesystem::safe_exists(candidate).value_or(false)) {
         return candidate;
     }
 
@@ -155,12 +155,12 @@ void build_failure(const std::string& target, const std::string& op, const std::
 }
 
 bool need_compile(const fs::path& out_dir, const fs::path& obj) {
-    return !fs::exists(out_dir / obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj);
+    return !tt::filesystem::safe_exists(out_dir / obj).value_or(false) || !tt::jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
 bool need_link(const fs::path& out_dir, const std::string& target_name) {
     fs::path elf_path = out_dir / (target_name + ".elf");
-    return !fs::exists(elf_path) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_path);
+    return !tt::filesystem::safe_exists(elf_path).value_or(false) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
 std::string format_args(const std::vector<std::string>& args) {
@@ -214,7 +214,7 @@ void compile_one(
     fs::path dephash_path = obj_temp_path;
     dephash_path.concat(".dephash");
     tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_path);
-    fs::remove(temp_d_path);
+    tt::filesystem::safe_remove(temp_d_path);
 }
 
 void link_one(
@@ -249,7 +249,7 @@ void link_one(
     fs::path log_path = elf_path;
     log_path.concat(".log");
     tt::jit_build::utils::FileRenamer log_file(log_path);
-    fs::remove(log_file.path());
+    tt::filesystem::safe_remove(log_file.path());
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
         build_failure(target.target_name, "link", format_args(args), log_file.path());
     }
@@ -261,7 +261,7 @@ void link_one(
     tt::jit_build::write_dependency_hashes({{elf_path, std::move(link_deps)}}, out_dir, elf_path, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
-        fs::remove(dephash_file.path());
+        tt::filesystem::safe_remove(dephash_file.path());
     }
 }
 
@@ -274,7 +274,7 @@ void build_target(
         throw std::runtime_error("srcs and objs must have the same size for target " + target.target_name);
     }
 
-    fs::create_directories(out_dir);
+    tt::filesystem::safe_create_directories(out_dir);
 
     const size_t num_objs = target.objs.size();
     std::vector<fs::path> temp_objs;
@@ -333,8 +333,8 @@ void build_target(
         if (compiled[i]) {
             fs::rename(src_path, dst_path);
             fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"));
-        } else if (fs::exists(src_path)) {
-            fs::remove(src_path);
+        } else if (tt::filesystem::safe_exists(src_path).value_or(false)) {
+            tt::filesystem::safe_remove(src_path);
         }
     }
 
@@ -372,7 +372,7 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
 
         if (!request.generated_files.empty()) {
             const fs::path genfiles_dir = kernel_cache_dir(request.build_key, request.kernel_name);
-            fs::create_directories(genfiles_dir);
+            tt::filesystem::safe_create_directories(genfiles_dir);
             for (const auto& file : request.generated_files) {
                 fs::path target_path = genfiles_dir / file.name;
                 tt::jit_build::utils::FileRenamer tmp(target_path);
@@ -433,7 +433,7 @@ tt::tt_metal::jit_server::UploadFirmwareResponse upload_firmware_callback(
             }
 
             fs::path fw_dir = firmware_cache_dir(request.build_key, safe_target);
-            fs::create_directories(fw_dir);
+            tt::filesystem::safe_create_directories(fw_dir);
             fs::path target_path = fw_dir / safe_file;
 
             tt::jit_build::utils::FileRenamer tmp(target_path);
