@@ -703,6 +703,15 @@ ALWI void elem_push_at_end(const E& e, uint32_t n) {
 template <class E>
 ALWI void elem_init() { E::init(); }
 
+// SFINAE detector — does `E` have a callable `void exec(uint32_t) const` member?
+// Used to route runtime-param SFPU ops (UnaryNe / Clamp / MulUnary / FillScalar / RandTile / ...)
+// to member dispatch even though they inherit `DestOnlyTag` via the CRTP base.
+template <class T, class = void> struct has_member_exec : std::false_type {};
+template <class T>
+struct has_member_exec<T, std::void_t<decltype(std::declval<const T>().exec(uint32_t{}))>>
+    : std::true_type {};
+template <class T> inline constexpr bool has_member_exec_v = has_member_exec<T>::value;
+
 // Compute-phase exec (everything except Pack*).
 // Runs between `tile_regs_acquire()` and `tile_regs_commit()`.
 // For FPU-clash patterns each element's init() runs immediately before its exec —
@@ -714,14 +723,19 @@ ALWI void elem_compute_exec(const E& e, uint32_t i) {
     if constexpr (is_pack_tile_op_v<E>) {
         // Pack runs in the pack phase, not compute. Skip here.
         (void)e; (void)i;
-    } else if constexpr (is_dest_only_op_v<E> && !is_fill_tile_op_v<E> && !is_rand_tile_op_v<E>) {
-        // Pure SFPU op via CRTP base — init then static exec().
+    } else if constexpr (has_member_exec_v<E>) {
+        // CB-bound element, Fill/Rand, OR runtime-param SFPU op (UnaryNe etc.) —
+        // dispatch via member exec(i) so runtime payload (param0, value, idx, ...) is captured.
+        E::init();
+        e.exec(i);
+    } else if constexpr (is_dest_only_op_v<E>) {
+        // Pure SFPU op via CRTP base — static init() + static exec().
         E::init();
         E::exec();
     } else {
-        // CB-bound element OR Fill/Rand — init then member exec(i).
+        // Fallback (shouldn't reach for well-formed chain elements).
         E::init();
-        e.exec(i);
+        (void)e; (void)i;
     }
 }
 

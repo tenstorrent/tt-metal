@@ -368,3 +368,25 @@ PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/
 PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_input_grad_small_kernel.cpp :: migrated: seed cb_dyadd (wt==0 NoWaitNoPop chain), seed cb_ydyadd (wt==0 chain); skipped: dy*gamma + mask, x-mean (bcast), Wt-loop mul body, post-reduce final write-out (bcast) — reason: bcast / mask / fold / reduce.
 PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_input_grad_large_kernel.cpp :: migrated: seed cb_dyadd (wt==0 WaitNoPop chain), seed cb_ydyadd (wt==0 chain), n*dy mul chain (cb_n_recip_n[0] * cb_dycopy → cb_ndy via BinaryFpu Mul + PackTile); skipped: dy*gamma + mask, x-mean / y mul (bcast), n*dy-Sum[dy] (bcast), x-mean (bcast), final write-out (bcast) — reason: bcast / mask / fold.
 
+
+## Run 9 — moreh `*_tiles_to_cb` substitution into eltwise_chain
+
+Per HQ guidance: substitute moreh `*_tiles_to_cb` calls (mul/add/sub/copy + bcast variants) with
+`compute_kernel_lib::eltwise_chain` BinaryFpu / CopyTile + PackTile shapes. Each kernel adds
+file-local `moreh_bin_chain` / `moreh_copy_chain` template wrappers (and optional `moreh_bin_chain_rt`
+for runtime-index loops). `BinaryDataFormatReconfig::InputAndOutput` preserves `_with_dt`-style
+reconfig semantics. Calls with non-constexpr CB ids (e.g. moreh_norm_backward auto-deduced ids,
+moreh_sgd cb_grad_tmp / cb_momentum_tmp runtime aliasing) stay raw.
+
+PARTIAL ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/moreh_sgd.cpp :: substituted: 6 x mul/add/sub/copy chains (constexpr CB cases); skipped: 5 x calls with cb_grad_tmp / cb_momentum_tmp runtime CB aliases / runtime pop_momentum.
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/moreh_adam.cpp :: substituted: 17 x mul/add/sub/copy_tile_to_cb (all constexpr); skipped: power_tile, recip+sub multi-step DEST blocks (raw stay).
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/moreh_adamw.cpp :: substituted: 15 x mul/add/sub/copy_tile_to_cb (all constexpr).
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_c_large.cpp :: substituted: 12 x mul/add/sub/copy chains.
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_h_large.cpp :: substituted: 7 x sub_bcast_rows / 2 x mul_bcast_rows / 1 x copy / 1 x add chains.
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp :: substituted: 7 x sub_bcast_cols / 2 x mul_bcast_cols / 1 x copy / 1 x add chains.
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_h.cpp :: substituted: 4 x mul/add/sub + 2 x bcast_rows chains via moreh_bin_chain + moreh_bin_chain_rt for runtime h indices.
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w.cpp :: substituted: 4 x mul/add/sub + 2 x bcast_cols chains; runtime w indices via moreh_bin_chain_rt.
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_h_large.cpp :: substituted: 6 x mul/add/sub/copy + 2 x bcast_rows chains.
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w_large.cpp :: substituted: 6 x mul/add/sub/copy + 2 x bcast_cols chains.
+SKIPPED:non-constexpr-CBs ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/moreh_norm_backward_kernel.cpp :: cb_x/cb_sign/cb_dx/cb_tmp* are `const auto` (runtime, deduced from input_id++ / output_id++); chain BinaryFpu requires constexpr CB ids.
+MIGRATED ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_c_large.cpp :: substituted: 11 x mul/add/sub/copy chains; mul_tiles_and_negative_to_cb stays raw (multi-stage SFPU helper).

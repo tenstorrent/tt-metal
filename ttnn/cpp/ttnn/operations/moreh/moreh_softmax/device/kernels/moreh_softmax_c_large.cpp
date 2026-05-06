@@ -120,19 +120,43 @@ void kernel_main() {
         // compute exp(x - max(x))
         for (uint32_t i = 0; i < dim_size; ++i) {
 #ifdef SOFTMAX
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
             exp_tile_to_cb(cb_tmp, cb_exps);
 #else
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
             rexp_tile_to_cb(cb_tmp, cb_exps);
 #endif
 
             if (i == 0) {
-                copy_tile_to_cb(cb_exps, cb_add);
+                moreh_copy_chain<cb_exps, cb_add, /*idx=*/0, /*pop=*/true>();
             } else {
-                add_tiles_to_cb(cb_add, cb_exps, cb_add);
+                moreh_bin_chain<
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    cb_add,
+                    cb_exps,
+                    cb_add,
+                    /*idxA=*/0,
+                    /*idxB=*/0,
+                    /*popA=*/true,
+                    /*popB=*/true>();
             }
         }
 
@@ -150,30 +174,94 @@ void kernel_main() {
 #ifdef LOG
 #ifdef SOFTMAX
             // x - max - log(sum)
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
-            sub_tiles_to_cb(cb_tmp, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_tmp,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #else
             // -x + max - log(sum)
-            sub_tiles_to_cb(cb_max, cb_in0, cb_tmp, 0, 0, /*pop0=*/0, /*pop1=*/1);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_max,
+                cb_in0,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/false,
+                /*popB=*/true>();
 
-            sub_tiles_to_cb(cb_tmp, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_tmp,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #endif
 #else
 #ifdef SOFTMAX
             // exp(x - max) / sum
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
             exp_tile_to_cb(cb_tmp, cb_exps);
 
-            mul_tiles_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #else
             // rexp(x - max) / sum
-            sub_tiles_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 
             rexp_tile_to_cb(cb_tmp, cb_exps);
 
-            mul_tiles_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            moreh_bin_chain<
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                /*idxA=*/0,
+                /*idxB=*/0,
+                /*popA=*/true,
+                /*popB=*/false>();
 #endif
 #endif
         }
