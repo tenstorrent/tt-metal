@@ -79,9 +79,9 @@ jobs:
           RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
         run: |
           RUN_LABEL="${RUN_ON_LABELS%% *}"
-          if [[ "$RUN_LABEL" =~ n150 ]]; then
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
             echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
-          elif [[ "$RUN_LABEL" =~ p150 ]]; then
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
             echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
           else
             echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
