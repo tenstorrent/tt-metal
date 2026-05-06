@@ -304,7 +304,6 @@ Tensor create_tt_tensor_from_host_data(
         case DataType::BFLOAT4_B: return create_tensor_from_host_buffer.operator()<float>();
         case DataType::UINT32: return create_tensor_from_host_buffer.operator()<uint32_t>();
         case DataType::INT32: return create_tensor_from_host_buffer.operator()<int32_t>();
-        case DataType::FP8_E4M3: return create_tensor_from_host_buffer.operator()<float8_e4m3>();
         case DataType::UINT8: return create_tensor_from_host_buffer.operator()<uint8_t>();
         case DataType::UINT16: return create_tensor_from_host_buffer.operator()<uint16_t>();
         case DataType::FLOAT32: return create_tensor_from_host_buffer.operator()<float>();

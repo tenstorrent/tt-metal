@@ -115,7 +115,13 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
                 TT_ASSERT(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
                 break;
             case DataType::FP8_E4M3:
-                TT_ASSERT(layout == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for FP8_E4M3 dtype!");
+                TT_ASSERT(
+                    layout == Layout::ROW_MAJOR,
+                    "Only ROW_MAJOR layout is supported for FP8_E4M3 dtype!");  // Added only for ROW_MAJOR, because it
+                                                                                // is currently only used as dtype of
+                                                                                // output ROW_MAJOR of combine DeepSeek
+                                                                                // V3 Prefill operator inside of
+                                                                                // "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine"
                 break;
             default:
                 TT_ASSERT(

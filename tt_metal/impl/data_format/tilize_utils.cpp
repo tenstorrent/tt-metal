@@ -538,13 +538,11 @@ template std::vector<float> convert_layout_tile_swizzled_to_tile_nfaces<float>(t
 template std::vector<uint16_t> convert_layout_tile_swizzled_to_tile_nfaces<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint32_t> convert_layout_tile_swizzled_to_tile_nfaces<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout_tile_swizzled_to_tile_nfaces<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<float8_e4m3> convert_layout_tile_swizzled_to_tile_nfaces<float8_e4m3>(tt::stl::Span<const float8_e4m3>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template std::vector<float> convert_layout_tile_nfaces_to_tile_swizzled<float>(tt::stl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint16_t> convert_layout_tile_nfaces_to_tile_swizzled<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint32_t> convert_layout_tile_nfaces_to_tile_swizzled<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout_tile_nfaces_to_tile_swizzled<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<float8_e4m3> convert_layout_tile_nfaces_to_tile_swizzled<float8_e4m3>(tt::stl::Span<const float8_e4m3>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template std::vector<float> convert_layout<float>(tt::stl::Span<const float>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<int> convert_layout<int>(tt::stl::Span<const int>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
@@ -552,6 +550,9 @@ template std::vector<uint8_t> convert_layout<uint8_t>(tt::stl::Span<const uint8_
 template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint16_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+// FP8_E4M3 is ROW_MAJOR-only (currently), so this is never called at runtime. Still required
+// to link: encode_tensor_data<float8_e4m3> compiles a runtime Layout::TILE branch that references
+// to_tile_major_layout<float8_e4m3> -> convert_layout<float8_e4m3>.
 template std::vector<float8_e4m3> convert_layout<float8_e4m3>(tt::stl::Span<const float8_e4m3>, const PhysicalSize&, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template std::vector<float> convert_layout<float>(tt::stl::Span<const float>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
@@ -560,7 +561,6 @@ template std::vector<uint8_t> convert_layout<uint8_t>(tt::stl::Span<const uint8_
 template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint16_t>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<float8_e4m3> convert_layout<float8_e4m3>(tt::stl::Span<const float8_e4m3>, tt::stl::Span<const uint32_t>, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template std::vector<uint16_t> tilize_swizzled<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
 template std::vector<uint32_t> tilize_swizzled<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
