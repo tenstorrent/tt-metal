@@ -68,13 +68,6 @@ xt::xarray<float> moe_ffn_swiglu_reference(
     return out;
 }
 
-float relative_l2(const xt::xarray<float>& a, const xt::xarray<float>& b) {
-    const auto diff = a - b;
-    const float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
-    const float ref_l2 = std::sqrt(xt::sum(xt::square(b))());
-    return diff_l2 / (ref_l2 + 1e-12f);
-}
-
 struct FfnCase {
     uint32_t E;
     uint32_t H;
@@ -166,8 +159,10 @@ void RunCase(const FfnCase& c) {
     ASSERT_EQ(out_2d.shape(), ref.shape());
     EXPECT_TRUE(xt::all(xt::isfinite(out_2d))) << "non-finite values in output";
 
-    const float rl2 = relative_l2(out_2d, ref);
-    EXPECT_LT(rl2, 1e-2f) << "relative L2 too large: " << rl2;
+    constexpr float kRtol = 1e-2f;
+    constexpr float kAtol = 1e-2f;
+    EXPECT_TRUE(xt::allclose(out_2d, ref, kRtol, kAtol))
+        << "allclose failed (rtol=" << kRtol << " atol=" << kAtol << ")";
 
     // Per-expert pad rows must be zero in the output.
     for (uint32_t e = 0; e < c.E; ++e) {
