@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cstdint>
 #include <random>
+#include <tt-metalium/distributed.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -36,6 +37,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
+#include "utils/memory_utils.hpp"
 
 namespace {
 
@@ -45,9 +47,9 @@ constexpr uint32_t kTpSize = 8U;  // mesh_shape: [1, 8] (matches t3k_mesh_graph_
 // configs/model_configs/tinyllama_bpe.yaml.  Per-device local vocab = 4000 (tile-aligned).
 // kProdSeqLen pinned to TinyLlama's max_sequence_length (2048) to capture the
 // worst-case loss cost the production training step pays.
-constexpr uint32_t kProdBatchSize = 1U;
+constexpr uint32_t kProdBatchSize = 4U;
 constexpr uint32_t kProdSeqLen = 2048U;
-constexpr uint32_t kProdVocabSize = 32000U;
+constexpr uint32_t kProdVocabSize = 128256U;  // Llama-3 vocab; per-device = 16032 (tile-aligned, 501 tiles)
 
 // Smoke shapes — same code path, tiny tiles.  Used to verify the op chain
 // completes on 1×8 before paying the cold-compile cost at production size.
@@ -55,7 +57,7 @@ constexpr uint32_t kSmokeBatchSize = 1U;
 constexpr uint32_t kSmokeSeqLen = 32U;
 constexpr uint32_t kSmokeVocabSize = 256U;  // local 32 = one tile per device
 
-constexpr uint32_t kIterations = 5U;
+constexpr uint32_t kIterations = 12U;
 constexpr uint32_t kSmokeIterations = 2U;
 
 // Use UMD directly — calling tt_metal::GetNumAvailableDevices() implicitly initializes
@@ -136,6 +138,40 @@ void perf_signpost(std::string_view label) {
     tt::tt_metal::op_profiler::tracy_message(fmt::format("`TT_SIGNPOST: {}`", label));
 }
 
+// Run one extra fwd+bwd pass with the GraphProcessor active so we can read out
+// per-device DRAM allocation peaks for this test variant.  Done as a separate
+// pass (after the timed loop) so the capture overhead doesn't pollute the
+// per-iteration tracy numbers above.  Caller supplies a closure that performs
+// the forward and produces the loss tensor; we drive the backward + final
+// print here.  Memory is reported per device (the graph processor's view of
+// allocations on the mesh device is per-device since each shard backs one bank).
+template <typename LossFn>
+void run_memory_pass(
+    std::string_view tag,
+    ttnn::distributed::MeshDevice* device,
+    const ttnn::Tensor& grad_dev_tensor,
+    LossFn&& forward) {
+    using namespace ttml;
+    fmt::println("[perf-test] === {} memory pass ===", tag);
+    // Make sure no prior dispatch is in flight when we start the capture so the
+    // tracker only sees allocs from this fwd+bwd pass.
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+
+    auto guard = utils::MemoryUsageTracker::begin_capture();
+    auto loss = forward();
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    utils::MemoryUsageTracker::snapshot(fmt::format("{}_FWD_PEAK", tag));
+
+    loss->set_grad(grad_dev_tensor);
+    loss->backward();
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    utils::MemoryUsageTracker::end_capture(fmt::format("{}_BWD_PEAK", tag));
+
+    utils::MemoryUsageTracker::print_memory_usage();
+    utils::MemoryUsageTracker::clear();
+    autograd::ctx().reset_graph();
+}
+
 void run_vocab_parallel_loop(uint32_t batch_size, uint32_t seq_len, uint32_t vocab_size, uint32_t iterations) {
     using namespace ttml;
 
@@ -205,6 +241,12 @@ void run_vocab_parallel_loop(uint32_t batch_size, uint32_t seq_len, uint32_t voc
 
         auto logits_ptr = autograd::create_tensor(logits_dev, true);
 
+        // Mark the start of the "compute" window: everything before this is host setup
+        // (tensor wrap), everything between here and the post-sync timestamp below is the
+        // host-side dispatch + device-side execution we want to compare against the per-op
+        // device-kernel-sum that tracy reports for this same window.
+        const auto t_compute_start = std::chrono::steady_clock::now();
+
         const auto t_fwd_start = std::chrono::steady_clock::now();
         perf_signpost(fmt::format("vp_ce_fwd_begin iter={}", it));
         auto loss = ops::distributed::vocab_parallel_cross_entropy_loss(logits_ptr, targets_ptr, /*cluster_axis=*/1U);
@@ -222,9 +264,33 @@ void run_vocab_parallel_loop(uint32_t batch_size, uint32_t seq_len, uint32_t voc
             it,
             std::chrono::duration<double, std::milli>(t_bwd_done - t_fwd_done).count());
 
+        // Force a device sync so the wall-clock below reflects actual end-to-end execution
+        // (host dispatch + device execution + final readout), not just async dispatch latency.
+        // Compare the printed "compute end-to-end" against the tracy CSV's per-iter device
+        // kernel sum / 8 (per-device) -- gap is host overhead + dispatch + sync cost.
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        const auto t_compute_end = std::chrono::steady_clock::now();
+        fmt::println(
+            "[perf-test] iter {} compute end-to-end (post-sync) {:.1f} ms",
+            it,
+            std::chrono::duration<double, std::milli>(t_compute_end - t_compute_start).count());
+
         autograd::ctx().reset_graph();
         fmt::println("[perf-test] iter {} done in {:.1f} ms", it, elapsed_ms_since(t0));
     }
+
+    // Per-device DRAM peak measurement (separate from the timed loop above so the
+    // GraphProcessor capture overhead doesn't show up in tracy numbers).
+    // The forward closure reuploads the input tensor *inside* the captured window so
+    // the reported peak reflects the full per-device footprint of the loss op
+    // (input + fwd transients + bwd transients + grad), matching what training
+    // pays for per step rather than just the delta on top of an already-resident input.
+    run_memory_pass("vp_ce", device, grad_dev, [&]() {
+        auto logits_local = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            host.logits, device, ttnn::Layout::TILE, &tp_logits_mapper);
+        auto logits_ptr = autograd::create_tensor(logits_local, true);
+        return ops::distributed::vocab_parallel_cross_entropy_loss(logits_ptr, targets_ptr, /*cluster_axis=*/1U);
+    });
 }
 
 // Two flavors of the standard (non-vocab-parallel) CE loop:
@@ -305,6 +371,10 @@ void run_standard_ce_loop(
 
         auto logits_ptr = autograd::create_tensor(logits_dev, true);
 
+        // See the matching block in run_vocab_parallel_loop above for the rationale of these
+        // timestamps and the explicit Synchronize() call below.
+        const auto t_compute_start = std::chrono::steady_clock::now();
+
         const auto t_fwd_start = std::chrono::steady_clock::now();
         perf_signpost(fmt::format("std_ce_fwd_begin iter={}", it));
         // When include_all_gather=true, gather the sharded TP output along the vocab dim and
@@ -331,9 +401,35 @@ void run_standard_ce_loop(
             it,
             std::chrono::duration<double, std::milli>(t_bwd_done - t_fwd_done).count());
 
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        const auto t_compute_end = std::chrono::steady_clock::now();
+        fmt::println(
+            "[perf-test] iter {} compute end-to-end (post-sync) {:.1f} ms",
+            it,
+            std::chrono::duration<double, std::milli>(t_compute_end - t_compute_start).count());
+
         autograd::ctx().reset_graph();
         fmt::println("[perf-test] iter {} done in {:.1f} ms", it, elapsed_ms_since(t0));
     }
+
+    // Per-device DRAM peak measurement (mirrors run_vocab_parallel_loop).
+    // Tag includes the AG flavor so the two standard variants are
+    // distinguishable in the printed summary.  Reupload the input inside the
+    // capture so the reported peak reflects the full per-device footprint
+    // (see the matching note in run_vocab_parallel_loop).
+    const std::string mem_tag = include_all_gather ? "std_ce_ag" : "std_ce_no_ag";
+    run_memory_pass(mem_tag, device, grad_dev, [&]() {
+        auto logits_local = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            host.logits, device, ttnn::Layout::TILE, include_all_gather ? &tp_logits_mapper : replicate_mapper.get());
+        auto logits_ptr = autograd::create_tensor(logits_local, true);
+        auto loss_input = include_all_gather ? ops::distributed::all_gather(
+                                                   logits_ptr,
+                                                   /*dim=*/3,
+                                                   /*cluster_axis=*/1U,
+                                                   ops::distributed::GradOutputType::REPLICATED)
+                                             : logits_ptr;
+        return ops::cross_entropy_loss(loss_input, targets_ptr, ops::ReduceType::MEAN);
+    });
 }
 
 }  // namespace
