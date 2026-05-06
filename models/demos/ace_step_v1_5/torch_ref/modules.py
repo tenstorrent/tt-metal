@@ -44,7 +44,7 @@ class AdaLNZero(nn.Module):
 
 class MultiHeadSelfAttention(nn.Module):
     """
-    Explicit QKV multi-head self-attention (no black-box attention APIs).
+    Explicit QKV multi-head self-attention (no fused SDPA).
 
     Uses causal masking (typical transformer decode/prefill behavior).
     """
@@ -60,15 +60,21 @@ class MultiHeadSelfAttention(nn.Module):
         self.wv = nn.Linear(self.d_model, self.n_heads * self.d_head, bias=True)
         self.wo = nn.Linear(self.n_heads * self.d_head, self.d_model, bias=True)
 
+    def _qkv_heads(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """x [B,S,D] -> q,k,v each [B,H,S,Dh]."""
+        B, S, _D = x.shape
+        q = self.wq(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2)
+        k = self.wk(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2)
+        v = self.wv(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2)
+        return q, k, v
+
     def forward(self, x: torch.Tensor, *, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         """
         x: [B, S, D]
         attn_mask (optional): broadcastable to [B, 1, S, S], 1 = keep, 0 = mask
         """
         B, S, _D = x.shape
-        q = self.wq(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2)  # [B, H, S, Dh]
-        k = self.wk(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2)  # [B, H, S, Dh]
-        v = self.wv(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2)  # [B, H, S, Dh]
+        q, k, v = self._qkv_heads(x)
 
         scale = 1.0 / math.sqrt(self.d_head)
         scores = torch.matmul(q, k.transpose(-2, -1)) * scale  # [B, H, S, S]
@@ -84,6 +90,44 @@ class MultiHeadSelfAttention(nn.Module):
         probs = torch.softmax(scores, dim=-1)
         ctx = torch.matmul(probs, v)  # [B, H, S, Dh]
         ctx = ctx.transpose(1, 2).contiguous().view(B, S, self.n_heads * self.d_head)  # [B, S, H*Dh]
+        return self.wo(ctx)
+
+
+class MultiHeadSelfAttentionSDPA(nn.Module):
+    """
+    Same weights/shapes as :class:`MultiHeadSelfAttention`, but attention uses
+    ``torch.nn.functional.scaled_dot_product_attention`` (causal by default).
+    """
+
+    def __init__(self, cfg: AceConfig):
+        super().__init__()
+        self.d_model = int(cfg.d_model)
+        self.n_heads = int(cfg.n_heads)
+        self.d_head = int(cfg.d_head if cfg.d_head is not None else cfg.d_model // cfg.n_heads)
+
+        self.wq = nn.Linear(self.d_model, self.n_heads * self.d_head, bias=True)
+        self.wk = nn.Linear(self.d_model, self.n_heads * self.d_head, bias=True)
+        self.wv = nn.Linear(self.d_model, self.n_heads * self.d_head, bias=True)
+        self.wo = nn.Linear(self.n_heads * self.d_head, self.d_model, bias=True)
+
+    def forward(self, x: torch.Tensor, *, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
+        B, S, _D = x.shape
+        q, k, v = (
+            self.wq(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2),
+            self.wk(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2),
+            self.wv(x).view(B, S, self.n_heads, self.d_head).transpose(1, 2),
+        )
+
+        if attn_mask is None:
+            ctx = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True)
+        else:
+            causal = torch.tril(torch.ones((S, S), device=x.device, dtype=torch.bool))
+            keep = causal.unsqueeze(0).unsqueeze(0) & attn_mask.to(torch.bool)
+            additive = torch.zeros((B, 1, S, S), device=x.device, dtype=q.dtype)
+            additive = additive.masked_fill(~keep, float("-inf"))
+            ctx = F.scaled_dot_product_attention(q, k, v, attn_mask=additive, dropout_p=0.0, is_causal=False)
+
+        ctx = ctx.transpose(1, 2).contiguous().view(B, S, self.n_heads * self.d_head)
         return self.wo(ctx)
 
 
@@ -116,7 +160,10 @@ class TransformerBlock(nn.Module):
     def __init__(self, cfg: AceConfig):
         super().__init__()
         self.adaln_attn = AdaLNZero(cfg)
-        self.attn = MultiHeadSelfAttention(cfg)
+        if cfg.attention_impl == "sdpa":
+            self.attn = MultiHeadSelfAttentionSDPA(cfg)
+        else:
+            self.attn = MultiHeadSelfAttention(cfg)
         self.adaln_mlp = AdaLNZero(cfg)
         self.mlp = GEGLUMLP(cfg)
 

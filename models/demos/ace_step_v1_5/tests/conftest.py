@@ -36,21 +36,25 @@ def device():
     ttnn.close_device(dev)
 
 
-import os
-
-import pytest
-
-
 def require_ttnn():
     return pytest.importorskip("ttnn")
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def mesh_device():
+    """
+    Single mesh for the whole test session.
+
+    A function-scoped open/close loop exhausts Metal context slots and breaks
+    subsequent ``open_mesh_device`` calls (invalid context_id / MAX_CONTEXT_COUNT).
+    Remote-only meshes can also abort if many MeshDevice instances are torn down.
+    """
     ttnn = require_ttnn()
     if not os.environ.get("MESH_DEVICE"):
         pytest.skip("Requires TT device (set MESH_DEVICE)")
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    if hasattr(mesh, "enable_program_cache"):
+        mesh.enable_program_cache()
     try:
         yield mesh
     finally:

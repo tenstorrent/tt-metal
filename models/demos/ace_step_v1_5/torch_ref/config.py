@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+AttentionImpl = Literal["explicit", "sdpa"]
 
 
 @dataclass(frozen=True)
@@ -11,6 +14,8 @@ class AceConfig:
     d_ff: int = 2048
     cond_dim: int = 512
     eps: float = 1e-5
+    """explicit: manual QKᵀV + mask; sdpa: F.scaled_dot_product_attention (fused)."""
+    attention_impl: AttentionImpl = "explicit"
 
     def __post_init__(self) -> None:
         if self.d_model % self.n_heads != 0:

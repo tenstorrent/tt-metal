@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from models.demos.ace_step_v1_5.torch_ref.config import AceConfig
@@ -18,11 +19,12 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a * b).sum() / denom)
 
 
-def test_transformer_block_pcc(mesh_device):
+@pytest.mark.parametrize("attention_impl", ["explicit", "sdpa"])
+def test_transformer_block_pcc(mesh_device, attention_impl):
     import ttnn
 
     B, S, D = 1, 32, 128
-    cfg = AceConfig(d_model=D, n_heads=8, d_ff=256, cond_dim=D)
+    cfg = AceConfig(d_model=D, n_heads=8, d_ff=256, cond_dim=D, attention_impl=attention_impl)
     # Run the reference in bf16 so inputs/weights match (avoids bf16 vs fp32 matmul dtype errors).
     torch_mod = TransformerBlock(cfg).to(dtype=torch.bfloat16).eval()
 
@@ -60,7 +62,9 @@ def test_transformer_block_pcc(mesh_device):
         },
     }
     ttnn_mod = TransformerBlockTTNN(
-        AceConfigTTNN(d_model=D, n_heads=8, d_ff=256, cond_dim=D), mesh_device=mesh_device, weights=w
+        AceConfigTTNN(d_model=D, n_heads=8, d_ff=256, cond_dim=D, attention_impl=attention_impl),
+        mesh_device=mesh_device,
+        weights=w,
     )
 
     x_tt = ttnn.from_torch(x.unsqueeze(1), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -69,5 +73,8 @@ def test_transformer_block_pcc(mesh_device):
     y = ttnn.to_torch(y_tt).squeeze(1)
 
     score = pcc(y_ref, y)
-    print(f"[ace_step_v1_5][PCC] TransformerBlock: {score:.6f}", flush=True)
+    print(
+        f"[ace_step_v1_5][PCC] TransformerBlock ({attention_impl}): {score:.6f}",
+        flush=True,
+    )
     assert score >= -0.9

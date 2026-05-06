@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+AttentionImplTTNN = Literal["explicit", "sdpa"]
 
 
 @dataclass(frozen=True)
@@ -11,6 +14,7 @@ class AceConfigTTNN:
     d_ff: int = 2048
     cond_dim: int = 512
     eps: float = 1e-5
+    attention_impl: AttentionImplTTNN = "explicit"
 
     def __post_init__(self) -> None:
         if self.d_model % self.n_heads != 0:

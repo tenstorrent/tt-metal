@@ -5,6 +5,15 @@ import math
 from ._ttnn import get_ttnn
 from .config import AceConfigTTNN
 
+# TTNN SDPA requires TILE tensors whose logical head_dim equals the padded head_dim
+# (see sdpa_device_operation.cpp: logical_shape[3] == legacy_shape[3]). Sub-tile
+# head sizes (e.g. 16) otherwise stay logically 16 while tiles pad to 32.
+_SDPA_HEAD_DIM_ALIGN = 32
+
+
+def _sdpa_head_dim_tile_padding(d_head: int) -> int:
+    return (int(d_head) + _SDPA_HEAD_DIM_ALIGN - 1) // _SDPA_HEAD_DIM_ALIGN * _SDPA_HEAD_DIM_ALIGN
+
 
 def _require_ttnn():
     ttnn = get_ttnn()
@@ -252,6 +261,103 @@ class MultiHeadSelfAttentionTTNN:
         return out
 
 
+class MultiHeadSelfAttentionSDPATTNN:
+    """
+    Same linear QKV / output projection contract as :class:`MultiHeadSelfAttentionTTNN`,
+    but attention uses ``ttnn.transformer.scaled_dot_product_attention`` (device fused SDPA).
+
+    Input ``x``: ``[B, 1, S, D]``; QKV layouts match TTNN SDPA: ``[B, H, S, Dh]``.
+    """
+
+    def __init__(self, cfg: AceConfigTTNN, *, mesh_device, dtype=None, weights=None):
+        ttnn = _require_ttnn()
+        transformer = getattr(ttnn, "transformer", None)
+        sdpa = getattr(transformer, "scaled_dot_product_attention", None) if transformer is not None else None
+        if sdpa is None:
+            raise RuntimeError(
+                "This TTNN build does not expose ttnn.transformer.scaled_dot_product_attention; "
+                "use attention_impl='explicit' or rebuild TTNN with SDPA bindings."
+            )
+
+        self.ttnn = ttnn
+        self._sdpa = sdpa
+        self.mesh_device = mesh_device
+        self.d_model = int(cfg.d_model)
+        self.n_heads = int(cfg.n_heads)
+        self.d_head = int(cfg.d_head if cfg.d_head is not None else cfg.d_model // cfg.n_heads)
+        self.dtype = dtype or ttnn.bfloat16
+
+        if weights is None:
+            raise ValueError("MultiHeadSelfAttentionSDPATTNN requires weights from Torch module")
+
+        mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        mapper = ttnn.ReplicateTensorToMesh(mesh_device) if hasattr(ttnn, "ReplicateTensorToMesh") else None
+
+        def as_w(t):
+            return ttnn.as_tensor(
+                t, device=mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, memory_config=mem, mesh_mapper=mapper
+            )
+
+        def as_b(t):
+            return ttnn.as_tensor(
+                t.reshape(1, 1, 1, -1),
+                device=mesh_device,
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem,
+                mesh_mapper=mapper,
+            )
+
+        self.wq, self.bq = as_w(weights["wq"]), as_b(weights["bq"])
+        self.wk, self.bk = as_w(weights["wk"]), as_b(weights["bk"])
+        self.wv, self.bv = as_w(weights["wv"]), as_b(weights["bv"])
+        self.wo, self.bo = as_w(weights["wo"]), as_b(weights["bo"])
+
+    def __call__(self, x):
+        ttnn = self.ttnn
+        q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
+        k = ttnn.linear(x, self.wk, bias=self.bk, transpose_b=True)
+        v = ttnn.linear(x, self.wv, bias=self.bv, transpose_b=True)
+
+        B = int(q.shape[0])
+        S = int(q.shape[2])
+        H = self.n_heads
+        Dh = self.d_head
+
+        q = ttnn.reshape(q, (B, 1, S, H, Dh))
+        k = ttnn.reshape(k, (B, 1, S, H, Dh))
+        v = ttnn.reshape(v, (B, 1, S, H, Dh))
+        q = ttnn.permute(q, (0, 3, 2, 4, 1))
+        k = ttnn.permute(k, (0, 3, 2, 4, 1))
+        v = ttnn.permute(v, (0, 3, 2, 4, 1))
+        q = ttnn.reshape(q, (B, H, S, Dh))
+        k = ttnn.reshape(k, (B, H, S, Dh))
+        v = ttnn.reshape(v, (B, H, S, Dh))
+
+        sdpa_d = _sdpa_head_dim_tile_padding(Dh)
+        if sdpa_d > Dh:
+            pt = sdpa_d - Dh
+            pad4 = ((0, 0), (0, 0), (0, 0), (0, pt))
+            q = ttnn.pad(q, padding=pad4, value=0.0)
+            k = ttnn.pad(k, padding=pad4, value=0.0)
+            v = ttnn.pad(v, padding=pad4, value=0.0)
+
+        # Explicit scale: TTNN may derive scale from padded last dim; keep PyTorch 1/sqrt(d_head).
+        attn_scale = 1.0 / math.sqrt(float(Dh))
+        ctx = self._sdpa(q, k, v, attn_mask=None, is_causal=True, scale=attn_scale)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        if sdpa_d > Dh:
+            ctx = ttnn.slice(ctx, (0, 0, 0, 0), (B, H, S, Dh))
+        ctx = ttnn.permute(ctx, (0, 2, 1, 3))
+        ctx = ttnn.reshape(ctx, (B, 1, S, H * Dh))
+        out = ttnn.linear(ctx, self.wo, bias=self.bo, transpose_b=True)
+        ttnn.deallocate(ctx)
+        return out
+
+
 class TransformerBlockTTNN:
     """
     TTNN Transformer block:
@@ -262,7 +368,12 @@ class TransformerBlockTTNN:
         if weights is None:
             raise ValueError("TransformerBlockTTNN requires a nested weights dict")
         self.adaln_attn = AdaLNZeroTTNN(cfg, mesh_device=mesh_device, dtype=dtype, weights=weights["adaln_attn"])
-        self.attn = MultiHeadSelfAttentionTTNN(cfg, mesh_device=mesh_device, dtype=dtype, weights=weights["attn"])
+        if cfg.attention_impl == "sdpa":
+            self.attn = MultiHeadSelfAttentionSDPATTNN(
+                cfg, mesh_device=mesh_device, dtype=dtype, weights=weights["attn"]
+            )
+        else:
+            self.attn = MultiHeadSelfAttentionTTNN(cfg, mesh_device=mesh_device, dtype=dtype, weights=weights["attn"])
         self.adaln_mlp = AdaLNZeroTTNN(cfg, mesh_device=mesh_device, dtype=dtype, weights=weights["adaln_mlp"])
         self.mlp = GEGLUMLPTTNN(cfg, mesh_device=mesh_device, dtype=dtype, weights=weights["mlp"])
         self.ttnn = self.adaln_attn.ttnn
