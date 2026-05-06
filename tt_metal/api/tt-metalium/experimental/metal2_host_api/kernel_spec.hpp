@@ -244,6 +244,8 @@ struct KernelSpec {
         DFBSpecName dfb_spec_name;
         enum class Scope { INTRA, INTER };
         Scope scope = Scope::INTRA;
+        // If the INTER case were enabled, we would need an additional field to describe
+        // the inter-thread communication pattern here.
     };
     std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
 };
