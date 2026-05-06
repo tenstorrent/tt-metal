@@ -268,8 +268,6 @@ template std::vector<uint16_t> encode_tensor_data<uint16_t>(
     ttsl::Span<const uint16_t> logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
     ttsl::Span<const uint8_t> logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
-template std::vector<float8_e4m3> encode_tensor_data<float8_e4m3>(
-    ttsl::Span<const float8_e4m3> logical_data, const TensorSpec& tensor_spec, float8_e4m3 pad_value);
 
 // Referenced from tensor_apis.cpp; explicit instantiations ensure symbols survive Release --gc-sections linking.
 template std::vector<bfloat16> to_tile_major_layout<bfloat16>(
