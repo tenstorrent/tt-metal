@@ -331,7 +331,7 @@ class TTNNQwen3OmniMoeCode2WavDecoderResidualUnit(TTNNModule):
 
     @classmethod
     def from_torch(cls, m, *args, **kwargs):
-        from models.experimental.tt_symbiote.modules.activation import TTNNSnakeBeta
+        from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNSnakeBeta
 
         new = cls()
         new._fallback_torch_layer = m

@@ -60,7 +60,8 @@ from models.experimental.tt_symbiote.modules.qwen_omni_attention import (
     TTNNQwenAudioAttention,
 )
 from models.experimental.tt_symbiote.modules.embedding import TTNNQwen3OmniMoeCodecPredictorEmbedding
-from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu, TTNNSnakeBeta
+from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu
+from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNSnakeBeta
 from models.experimental.tt_symbiote.modules.qwen_omni_decoder import (
     TTNNQwen3OmniMoeCausalConvNet,
     TTNNQwen3OmniMoeCausalTransConvNet,
