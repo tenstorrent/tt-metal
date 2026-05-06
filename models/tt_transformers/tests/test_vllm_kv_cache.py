@@ -42,13 +42,16 @@ def _make_ttnn_mock():
     return ttnn_mock
 
 
-def test_per_layer_allocates_one_kv_pair_per_spec(dp_model):
+def test_per_layer_allocates_one_kv_pair_per_unique_tensor(dp_model):
+    """Each unique ``tensor_idx`` allocates one (k, v) pair; layers that
+    share a ``tensor_idx`` reuse the same handles."""
     from models.tt_transformers.tt import generator_vllm
 
+    # Layers 0, 1, 2 all use tensor_idx=0,1,2 respectively → three buffers.
     per_layer = [
-        ((4, 2, 32, 64), torch.bfloat16),  # layer 0
-        ((4, 1, 32, 64), torch.bfloat16),  # layer 1 (smaller — sliding)
-        ((4, 2, 32, 64), torch.bfloat16),  # layer 2
+        ((4, 2, 32, 64), torch.bfloat16, 0),
+        ((4, 2, 32, 64), torch.bfloat16, 1),
+        ((4, 2, 32, 64), torch.bfloat16, 2),
     ]
 
     with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
@@ -63,14 +66,40 @@ def test_per_layer_allocates_one_kv_pair_per_spec(dp_model):
     assert all(len(layer) == 2 for layer in kv_cache[0])  # k, v
 
 
-def test_per_layer_passes_each_shape_to_cache_filename(dp_model):
-    """The cache filename is keyed on the per-layer shape; verify a layer
-    with a smaller shape gets a different cache file from a larger one."""
+def test_shared_tensor_idx_reuses_one_buffer(dp_model):
+    """Layers sharing a ``tensor_idx`` (HMA tensor sharing) point at the
+    same underlying ttnn handles and only one allocation runs per
+    ``tensor_idx``."""
+    from models.tt_transformers.tt import generator_vllm
+
+    # Layers 0 and 2 share tensor 0; layer 1 has its own tensor 1.
+    per_layer = [
+        ((4, 2, 32, 64), torch.bfloat16, 0),
+        ((4, 2, 32, 64), torch.bfloat16, 1),
+        ((4, 2, 32, 64), torch.bfloat16, 0),
+    ]
+
+    with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
+        kv_cache = generator_vllm.allocate_vllm_kv_cache_per_layer(
+            per_layer, dp_model=dp_model, tt_cache_path=Path("/tmp/tt-test-cache")
+        )
+
+    # 2 unique tensor_idx values × 2 (k, v) = 4 allocations.
+    assert ttnn_mock.as_tensor.call_count == 4
+    # Layers 0 and 2 must reference the *same* handle list.
+    assert kv_cache[0][0] is kv_cache[0][2]
+    assert kv_cache[0][0] is not kv_cache[0][1]
+
+
+def test_per_layer_keys_cache_filename_on_tensor_idx(dp_model):
+    """Cache filenames must distinguish independent buffers even when
+    shapes are identical, so on-disk caches can't collide across layers
+    that don't share a ``tensor_idx``."""
     from models.tt_transformers.tt import generator_vllm
 
     per_layer = [
-        ((4, 2, 32, 64), torch.bfloat16),
-        ((4, 1, 32, 64), torch.bfloat16),  # half-sized
+        ((4, 2, 32, 64), torch.bfloat16, 0),
+        ((4, 2, 32, 64), torch.bfloat16, 1),
     ]
 
     with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
@@ -79,17 +108,15 @@ def test_per_layer_passes_each_shape_to_cache_filename(dp_model):
         )
 
     cache_filenames = [str(call.kwargs["cache_file_name"]) for call in ttnn_mock.as_tensor.call_args_list]
-    # Layer 0's shape (4, 2, 32, 64) must show up in two filenames (k+v),
-    # and so must layer 1's (4, 1, 32, 64). Different shapes → different
-    # filenames so caches don't collide.
-    assert sum("(4, 2, 32, 64)" in f for f in cache_filenames) == 2
-    assert sum("(4, 1, 32, 64)" in f for f in cache_filenames) == 2
+    assert sum("_t0" in f for f in cache_filenames) == 2
+    assert sum("_t1" in f for f in cache_filenames) == 2
 
 
 def test_legacy_uniform_shape_delegates_to_per_layer(dp_model):
     """The legacy ``allocate_vllm_kv_cache`` must produce identical output to
-    calling ``allocate_vllm_kv_cache_per_layer`` with a uniform-spec list,
-    so existing single-group callers keep working unchanged."""
+    calling ``allocate_vllm_kv_cache_per_layer`` with a per-layer triple
+    list (each layer its own ``tensor_idx``), so existing single-group
+    callers keep working unchanged."""
     from models.tt_transformers.tt import generator_vllm
 
     shape = (4, 2, 32, 64)
@@ -104,7 +131,7 @@ def test_legacy_uniform_shape_delegates_to_per_layer(dp_model):
 
     with patch.object(generator_vllm, "ttnn", new=_make_ttnn_mock()) as ttnn_mock:
         per_layer = generator_vllm.allocate_vllm_kv_cache_per_layer(
-            [(shape, dtype)] * num_layers,
+            [(shape, dtype, i) for i in range(num_layers)],
             dp_model=dp_model,
             tt_cache_path=Path("/tmp/c"),
         )

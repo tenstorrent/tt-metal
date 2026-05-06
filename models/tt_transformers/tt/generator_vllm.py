@@ -33,28 +33,40 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs,
 
 
 def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer], tt_cache_path):
-    """Allocate KV cache tensors with potentially different shape per layer.
+    """Allocate KV cache tensors with optional cross-layer DRAM sharing.
 
     Args:
-        per_layer_specs: list of ``(kv_cache_shape, dtype)`` tuples, one per
-            layer in model layer-index order. Hybrid attention models
-            (Gemma3/4, GPT-OSS) use this so sliding-window layers can be
-            backed by a smaller paged pool than full-attention layers; for
-            uniform-attention models all entries are identical.
+        per_layer_specs: list of ``(kv_cache_shape, dtype, tensor_idx)``
+            triples, one per layer in model layer-index order. Layers with
+            the same ``tensor_idx`` share one underlying TT tensor — this
+            is upstream's HMA tensor-sharing layout (e.g. for Gemma3 5:1,
+            one full-attention layer and several sliding-window layers
+            collapse to a single DRAM buffer; per-group block tables keep
+            their slot accesses disjoint at runtime). Layers with unique
+            ``tensor_idx`` get their own buffer.
         dp_model: list of replicated TT model handles, one per data-parallel
             submesh.
         tt_cache_path: path used for on-disk weight cache file naming.
 
     Returns:
-        ``list[submesh][layer_idx][k_or_v]`` of TT tensors.
+        ``list[submesh][layer_idx][k_or_v]`` of TT tensors. Multiple
+        ``layer_idx`` entries may refer to the same underlying tensor
+        objects when they share a ``tensor_idx``.
     """
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
+        # tensor_idx -> [k, v] ttnn handles; reused across all layers that
+        # share a buffer.
+        unique_buffers: dict[int, list] = {}
         kv_tt = []
-        for layer_num, (kv_cache_shape, dtype) in enumerate(
+        for layer_num, (kv_cache_shape, dtype, tensor_idx) in enumerate(
             tqdm(per_layer_specs, desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})")
         ):
+            existing = unique_buffers.get(tensor_idx)
+            if existing is not None:
+                kv_tt.append(existing)
+                continue
             cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
             # Get the dtype for the kv cache based on the configured optimizations in the model
             if dp_model[mesh_idx].args.optimizations is not None:
@@ -77,11 +89,14 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=kv_cache_dtype,
                     # Separate cache files for K and V to avoid collision.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
+                    # ``tensor_idx`` distinguishes shared buffers that have the
+                    # same shape but back different layer subsets.
+                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}",
                 )
                 for kv in ["k", "v"]
             ]
 
+            unique_buffers[tensor_idx] = kv_tt_i
             kv_tt.append(kv_tt_i)
         kv_cache.append(kv_tt)
     return kv_cache
@@ -91,11 +106,11 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
     """Uniform-shape KV cache allocator for non-hybrid models.
 
     Hybrid attention models should use :func:`allocate_vllm_kv_cache_per_layer`,
-    which takes a per-layer ``(shape, dtype)`` list so sliding-window layers
-    can be backed by a smaller paged pool than full-attention layers.
+    which takes a per-layer ``(shape, dtype, tensor_idx)`` list so layers
+    can share DRAM buffers per upstream's HMA tensor-sharing model.
     """
     return allocate_vllm_kv_cache_per_layer(
-        [(kv_cache_shape, dtype)] * num_layers,
+        [(kv_cache_shape, dtype, i) for i in range(num_layers)],
         dp_model=dp_model,
         tt_cache_path=tt_cache_path,
     )
@@ -748,7 +763,10 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         with self._route_per_layer_page_tables(page_tables_per_layer):
-            return super().decode_forward(*args, **kwargs)
+            # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
+            # NotImplementedError placeholder; route to ``Generator``'s
+            # actual decode implementation.
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
@@ -823,7 +841,10 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         with self._route_per_layer_page_tables(page_tables_per_layer):
-            return super().decode_forward(*args, **kwargs)
+            # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
+            # NotImplementedError placeholder; route to ``Generator``'s
+            # actual decode implementation.
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
 
     @classmethod
     def initialize_vllm_model(
