@@ -48,7 +48,10 @@ from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP, TTNNQwen
 from models.experimental.tt_symbiote.modules.qwen_omni_moe import (
     TTNNQwen3OmniThinkerMoE,
 )
-from models.experimental.tt_symbiote.models.qwen_omni import apply_qwen3_omni_talker_prepare_inputs_fix
+from models.experimental.tt_symbiote.models.qwen_omni import (
+    QwenOmniDeviceInit,
+    apply_qwen3_omni_talker_prepare_inputs_fix,
+)
 from models.experimental.tt_symbiote.modules.qwen_omni_attention import (
     TTNNQwen3Attention,
     TTNNQwen3OmniAttention,
@@ -427,7 +430,7 @@ def test_qwen_omni_thinker_lm_head_pcc(mesh_device, full_omni_model_for_pcc):
     m = full_omni_model_for_pcc
     torch_lm = m.thinker.lm_head
     tt_lm = TTNNQwenOmniThinkerLmHead.from_torch(torch_lm)
-    set_device(tt_lm, mesh_device)
+    set_device(tt_lm, mesh_device, device_init=QwenOmniDeviceInit)
     tt_lm.preprocess_weights()
     tt_lm.move_weights_to_device()
 
@@ -457,7 +460,7 @@ def test_qwen_omni_thinker_attention_pcc(mesh_device, full_omni_model_for_pcc):
     torch_attn.rotary_emb = m.thinker.model.rotary_emb
     text_config = m.config.thinker_config.text_config
     tt_attn = TTNNQwen3OmniAttention.from_torch(torch_attn)
-    set_device(tt_attn, mesh_device)
+    set_device(tt_attn, mesh_device, device_init=QwenOmniDeviceInit)
     tt_attn.preprocess_weights()
     tt_attn.move_weights_to_device()
 
@@ -505,7 +508,7 @@ def test_qwen_omni_talker_attention_pcc(mesh_device, full_omni_model_for_pcc):
     torch_attn.rotary_emb = m.talker.model.rotary_emb
     text_config = m.config.talker_config.text_config
     tt_attn = TTNNQwen3Attention.from_torch(torch_attn)
-    set_device(tt_attn, mesh_device)
+    set_device(tt_attn, mesh_device, device_init=QwenOmniDeviceInit)
     tt_attn.preprocess_weights()
     tt_attn.move_weights_to_device()
 
@@ -554,7 +557,7 @@ def test_qwen_omni_vision_attention_pcc(mesh_device, full_omni_model_for_pcc):
         config._attn_implementation = "eager"
 
     tt_attn = TTNNQwen3VLMoeVisionAttention.from_torch(torch_attn)
-    set_device(tt_attn, mesh_device)
+    set_device(tt_attn, mesh_device, device_init=QwenOmniDeviceInit)
     tt_attn.preprocess_weights()
     tt_attn.move_weights_to_device()
 
@@ -634,7 +637,7 @@ def test_qwen_omni_audio_attention_pcc(mesh_device, full_omni_model_for_pcc):
     config = m.config.thinker_config.audio_config
 
     tt_attn = TTNNQwenAudioAttention.from_torch(torch_attn)
-    set_device(tt_attn, mesh_device)
+    set_device(tt_attn, mesh_device, device_init=QwenOmniDeviceInit)
     tt_attn.preprocess_weights()
     tt_attn.move_weights_to_device()
 
@@ -671,7 +674,7 @@ def test_qwen_omni_code2wav_attention_pcc(mesh_device, full_omni_model_for_pcc):
 
     tt_attn = TTNNQwen3OmniMoeCode2WavAttention.from_torch(torch_attn)
     tt_attn.use_windowed_attention = False
-    set_device(tt_attn, mesh_device)
+    set_device(tt_attn, mesh_device, device_init=QwenOmniDeviceInit)
     tt_attn.preprocess_weights()
     tt_attn.move_weights_to_device()
 
@@ -711,7 +714,7 @@ def test_qwen_omni_thinker_moe_pcc(mesh_device, full_omni_model_for_pcc):
     text_config = m.config.thinker_config.text_config
 
     tt_mlp = TTNNQwen3OmniThinkerMoE.from_torch(torch_mlp)
-    set_device(tt_mlp, mesh_device)
+    set_device(tt_mlp, mesh_device, device_init=QwenOmniDeviceInit)
     tt_mlp.preprocess_weights()
     tt_mlp.move_weights_to_device()
 
@@ -740,7 +743,7 @@ def test_qwen_omni_talker_moe_pcc(mesh_device, full_omni_model_for_pcc):
     text_config = m.config.talker_config.text_config
 
     tt_mlp = TTNNQwen3TalkerMoE.from_torch(torch_mlp)
-    set_device(tt_mlp, mesh_device)
+    set_device(tt_mlp, mesh_device, device_init=QwenOmniDeviceInit)
     tt_mlp.preprocess_weights()
     tt_mlp.move_weights_to_device()
 
@@ -817,7 +820,7 @@ def test_qwen_omni(mesh_device):
 
     # Set device for all TTNN modules
     print(f"Setting device for TTNN modules (mesh: {mesh_device.get_num_devices()} device(s))...")
-    set_device(model, mesh_device)
+    set_device(model, mesh_device, device_init=QwenOmniDeviceInit)
 
     _patch_thinker_talker_device_dtype(model)
 

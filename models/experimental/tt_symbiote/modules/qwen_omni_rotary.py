@@ -10,8 +10,10 @@ import torch
 import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.models.qwen_omni.distributed_config import (
+    qwen_omni_replicated_concat_dim0_tensor_config,
+)
 from models.experimental.tt_symbiote.core.utils import tree_map
 
 
@@ -37,12 +39,7 @@ def _is_host_ttnn_tensor_obj(x) -> bool:
 
 
 def _replicated_mesh_config(mesh_device):
-    if mesh_device is None or mesh_device.get_num_devices() <= 1:
-        return None
-    return DistributedTensorConfig(
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-    )
+    return qwen_omni_replicated_concat_dim0_tensor_config(mesh_device)
 
 
 def _set_rotary_outputs_replicated(module: TTNNModule, output_tensors):

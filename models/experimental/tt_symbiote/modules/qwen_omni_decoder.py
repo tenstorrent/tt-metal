@@ -9,8 +9,10 @@ import torch.nn.functional as F
 
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 from models.experimental.tt_symbiote.core.utils import torch_dtype_to_ttnn_dtype, tree_map
+from models.experimental.tt_symbiote.models.qwen_omni.distributed_config import (
+    qwen_omni_replicated_concat_dim0_tensor_config,
+)
 
 
 def _mesh_host_stitch_device_shards(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor | None:
@@ -39,13 +41,7 @@ def _mesh_host_stitch_device_shards(tt_tensor: ttnn.Tensor, mesh_device) -> torc
 
 def _code2wav_bct_replicated_mesh_config(mesh_device):
     """code2wav ``[B, C, T]`` activations are replicated per mesh device (see ``TTNNQwenOmniConv2dNHWC``)."""
-    if mesh_device is None or mesh_device.get_num_devices() <= 1:
-        return None
-    return DistributedTensorConfig(
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-        replicate_compose_slice_dim0_to_leading=True,
-    )
+    return qwen_omni_replicated_concat_dim0_tensor_config(mesh_device)
 
 
 def _ttnn_mesh_to_torch_one_replica(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:

@@ -11,9 +11,9 @@ from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devic
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.run_config import (
     DistributedTensorConfig,
-    distributed_config_col_sharded_last_dim,
     trace_enabled,
 )
+from models.experimental.tt_symbiote.models.qwen_omni.distributed_config import distributed_config_col_sharded_last_dim
 from models.experimental.tt_symbiote.modules.decoder_layer import _next_power_of_2
 
 

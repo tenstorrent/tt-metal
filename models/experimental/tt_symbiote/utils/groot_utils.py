@@ -1462,6 +1462,11 @@ def patch_run_config_for_gr00t():
             return self.tensor_config
 
     run_config.DistributedConfig = DistributedConfig
+    from models.experimental.tt_symbiote.models.qwen_omni import (
+        distributed_config as symbiote_qwen_omni_distributed_config,
+    )
+
+    symbiote_qwen_omni_distributed_config.DistributedConfig = DistributedConfig
 
     _patch_module_for_gr00t(DistributedConfig)
     _patch_device_management_for_gr00t(DistributedConfig)

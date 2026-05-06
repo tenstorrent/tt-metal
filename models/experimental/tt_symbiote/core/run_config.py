@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import math
 import os
 import time
 from dataclasses import dataclass
@@ -20,99 +19,6 @@ from models.experimental.tt_symbiote.core.utils import (
     torch_dtype_to_ttnn_dtype,
     ttnn_dtype_to_torch_dtype,
 )
-from models.tt_transformers.tt.ccl import TT_CCL
-
-
-@dataclass
-class CCLManagerConfig:
-    """Configuration for CCLManager."""
-
-    mesh_device: Any
-    num_links: Optional[int] = None
-    topology: Optional[Any] = None
-
-    def __post_init__(self):
-        if self.num_links is None:
-            self.num_links = 1
-        if self.topology is None:
-            self.topology = ttnn.Topology.Linear
-
-
-@dataclass
-class DistributedTensorConfig:
-    """Configuration for distributed tensor operations."""
-
-    mesh_mapper: Any
-    mesh_composer: Any
-    logical_shape_fn: Optional[Any] = None
-    # Replicated mesh + ``ConcatMeshToTensor(dim=0)`` stacks one copy per device on dim 0; set True to
-    replicate_compose_slice_dim0_to_leading: bool = False
-
-    def get_logical_shape(self, sharded_shape):
-        if self.logical_shape_fn is not None:
-            return self.logical_shape_fn(sharded_shape)
-        return sharded_shape
-
-
-def distributed_config_col_sharded_last_dim(mesh_device) -> DistributedTensorConfig:
-    """Build metadata for last-dim column-sharded activations on ``mesh_device``."""
-
-    def logical_shape_for_col_sharded(sharded_shape):
-        shape_list = list(sharded_shape)
-        n = int(mesh_device.get_num_devices())
-        shape_list[-1] = int(shape_list[-1]) * n
-        return tuple(shape_list)
-
-    return DistributedTensorConfig(
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1),
-        logical_shape_fn=logical_shape_for_col_sharded,
-    )
-
-
-def logical_shape_for_batch_channel_sharding(mesh_shape):
-    def _logical_shape(shape):
-        shape = list(shape)
-        logical_shape = [shape[0] * mesh_shape[0]] + shape[1:-1] + [shape[-1] * mesh_shape[1]]
-        return tuple(logical_shape)
-
-    return _logical_shape
-
-
-@dataclass
-class DistributedConfig:
-    """Configuration for distributed operations."""
-
-    mesh_device: Any
-    tensor_config: Optional[DistributedTensorConfig] = None
-    ccl_manager: Optional[Any] = None
-
-    def __post_init__(self):
-        if self.tensor_config is None and self.mesh_device.get_num_devices() > 1:
-            self.tensor_config = DistributedTensorConfig(
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (0, -1)),
-                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, self.mesh_device.shape, (0, -1)),
-                logical_shape_fn=logical_shape_for_batch_channel_sharding(self.mesh_device.shape),
-            )
-        if self.ccl_manager is None and self.mesh_device.get_num_devices() > 1:
-            self.ccl_manager = TT_CCL(self.mesh_device)
-
-    def get_tensor_config_for_tensor(self, module_name, tensor):
-        if tensor is not None:
-            if (
-                len(tensor.shape) < 2
-                or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
-                or tensor.shape[0] % self.mesh_device.shape[0] != 0
-            ):
-                print(
-                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
-                )
-                # Replicated mesh: compose with dim=0 only. Do not use MeshComposerConfig([0, len(shape)]);
-                return DistributedTensorConfig(
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
-                )
-        return self.tensor_config
 
 
 @contextlib.contextmanager
@@ -197,6 +103,7 @@ class DispatchManager:
     timings: Dict[str, Any] = {}
     _modules_in_progress: List[str] = []
     current_module_name: Optional[str] = None
+    ENABLED = True
 
     @staticmethod
     def set_current_module_name(module_name: Optional[str]) -> None:
@@ -262,7 +169,13 @@ class DispatchManager:
         return rs
 
     @staticmethod
+    def DisableTiming():
+        DispatchManager.ENABLED = False
+
+    @staticmethod
     def record_timing(backend: str, module_name: str, func_name: str, attrs: dict, duration: float) -> None:
+        if not DispatchManager.ENABLED:
+            return
         if backend not in DispatchManager.timings:
             DispatchManager.timings[backend] = {}
         if "TimingEntries" not in DispatchManager.timings:
@@ -566,32 +479,26 @@ class NormalRun:
     @staticmethod
     def to_torch(self):
         """Convert to PyTorch tensor."""
-
-        def _to_torch_from_device(self):
-            is_mesh_device = self.ttnn_distributed_tensor_config is not None
-            if is_mesh_device:
-                cfg = self.ttnn_distributed_tensor_config
-                result = ttnn.to_torch(self.ttnn_tensor, mesh_composer=cfg.mesh_composer).to(self.device, self.dtype)
-                if getattr(cfg, "replicate_compose_slice_dim0_to_leading", False) and result.dim() >= 1:
-                    lead = int(self.ttnn_tensor.shape[0])
-                    if result.shape[0] > lead:
-                        result = result[:lead].contiguous()
-                return result
-            return ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
-
-        if self.ttnn_tensor is None:
-            assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
+        if self.elem is not None and self.elem.device.type != "meta" and self.ttnn_tensor is None:
             return self.elem
 
-        need_refresh = self.elem is None or self.elem.device.type == "meta"
-        if not need_refresh and self.ttnn_distributed_tensor_config is not None:
-            logical_shape = self.ttnn_distributed_tensor_config.get_logical_shape(
-                tuple(int(x) for x in self.ttnn_tensor.shape)
-            )
-            need_refresh = self.elem.numel() != math.prod(logical_shape)
+        def _to_torch(self):
+            is_mesh_device = self.ttnn_distributed_tensor_config is not None
+            if is_mesh_device:
+                result = ttnn.to_torch(
+                    self.ttnn_tensor, mesh_composer=self.ttnn_distributed_tensor_config.mesh_composer
+                ).to(self.device, self.dtype)
+            else:
+                result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
+            return result
 
-        if need_refresh:
-            self.elem = _to_torch_from_device(self)
+        result = self.elem
+        if self.ttnn_tensor is not None and self.elem is None:
+            result = _to_torch(self)
+        assert result is not None, "Both ttnn_tensor and elem are None. This should not happen."
+        if result.device.type == "meta" and self.ttnn_tensor is not None:
+            result = _to_torch(self)
+        self.elem = result if self.elem is None else self.elem
         return self.elem
 
     @staticmethod
@@ -620,7 +527,6 @@ class NormalRun:
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         assert self.device is not None, "Device must be set for TTNN module execution."
-        begin_full = time.time()
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
             transform = fast_unwrap_to_device(self.device)
@@ -655,10 +561,6 @@ class NormalRun:
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
-        end_full = time.time()
-        DispatchManager.record_timing(
-            "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
-        )
         return result
 
 

@@ -15,20 +15,16 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.models.qwen_omni.distributed_config import (
+    qwen_omni_replicated_concat_dim0_tensor_config,
+)
 from models.experimental.tt_symbiote.core.utils import tree_map
 
 
 def _lm_head_logits_dtensor_config(mesh_device):
     """Replicated logits: compose then slice dim 0 so HF sampling sees ``[batch, …]`` not ``[batch*n_dev, …]``."""
-    if mesh_device is None or mesh_device.get_num_devices() <= 1:
-        return None
-    return DistributedTensorConfig(
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-        replicate_compose_slice_dim0_to_leading=True,
-    )
+    return qwen_omni_replicated_concat_dim0_tensor_config(mesh_device)
 
 
 class TTNNQwenOmniThinkerLmHead(TTNNModule):

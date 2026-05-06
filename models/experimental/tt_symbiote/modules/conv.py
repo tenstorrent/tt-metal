@@ -10,7 +10,10 @@ from torch import nn
 import ttnn
 from models.tt_cnn.tt.builder import Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.models.qwen_omni.distributed_config import (
+    qwen_omni_replicated_concat_dim0_tensor_config,
+)
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.utils import torch_dtype_to_ttnn_dtype, tree_map
 from models.experimental.tt_symbiote.modules.activation import TTNNReLU
@@ -1593,13 +1596,7 @@ class TTNNConv2dNHWCInputMultipleOf16(TTNNConv2dNHWC):
 
 def _qwen_omni_conv2d_mesh_output_config(mesh_device):
     """Replicated conv readback: Replicate + ConcatMesh(dim=0) slice (avoid ConcatMesh2d inflation on audio). TTNNQwenOmniConv2dNHWC AGs width when sharded."""
-    if mesh_device is None or mesh_device.get_num_devices() <= 1:
-        return None
-    return DistributedTensorConfig(
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-        replicate_compose_slice_dim0_to_leading=True,
-    )
+    return qwen_omni_replicated_concat_dim0_tensor_config(mesh_device)
 
 
 def _pair_int2_conv(x) -> tuple:
