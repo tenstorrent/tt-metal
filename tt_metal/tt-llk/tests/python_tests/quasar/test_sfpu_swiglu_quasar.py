@@ -38,7 +38,11 @@ from helpers.llk_params import (
     UnpackerEngine,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    generate_sfpu_format_dest_acc_combinations,
+    input_output_formats,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -242,66 +246,25 @@ def _prepare_swiglu_inputs(
     return gate.to(torch_dtype), up.to(torch_dtype)
 
 
-def _is_invalid_quasar_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
-) -> bool:
-    """
-    Same filter as the other float-only SFPU Quasar tests (e.g. abs).
-    """
-    in_fmt = fmt.input_format
-    out_fmt = fmt.output_format
-
-    # Quasar packer: non-Float32 → Float32 output requires dest_acc=Yes.
-    if (
-        in_fmt != DataFormat.Float32
-        and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Quasar SFPU: Float32 input → Float16 output requires dest_acc=Yes.
-    if (
-        in_fmt == DataFormat.Float32
-        and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Integer and float formats cannot be mixed in input/output.
-    if in_fmt.is_integer() != out_fmt.is_integer():
-        return True
-
-    return False
-
-
 def _generate_sfpu_swiglu_combinations(formats_list: List[FormatConfig]):
     """
-    Build the parametrize product for the swiglu test.
+    Build the parametrize product for the swiglu test. Wraps the shared
+    ``generate_sfpu_format_dest_acc_combinations`` from ``helpers.param_config``
+    with an extra ``implied_math_format`` axis.
     """
     combinations = []
 
-    for fmt in formats_list:
-        in_fmt = fmt.input_format
-
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
-        )
-        for dest_acc in dest_acc_modes:
-            if _is_invalid_quasar_combination(fmt, dest_acc):
+    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
+        for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
+            # MX formats aren't part of this test but keep the pattern
+            # consistent with other float SFPU tests.
+            if (
+                fmt.input_format.is_mx_format()
+                and implied_math_format == ImpliedMathFormat.No
+            ):
                 continue
 
-            for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-                # MX formats aren't part of this test but keep the pattern
-                # consistent with other float SFPU tests.
-                if (
-                    in_fmt.is_mx_format()
-                    and implied_math_format == ImpliedMathFormat.No
-                ):
-                    continue
-
-                combinations.append((fmt, dest_acc, implied_math_format))
+            combinations.append((fmt, dest_acc, implied_math_format))
 
     return combinations
 

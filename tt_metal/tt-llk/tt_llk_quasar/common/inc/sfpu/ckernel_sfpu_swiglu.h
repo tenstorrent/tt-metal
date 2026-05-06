@@ -77,60 +77,60 @@ inline void _init_swiglu_()
 // Per-face inner loop: reads `iterations` (= TEST_FACE_R_DIM / SFP_ROWS)
 // 32-datum row-pairs of (gate, up), writes the swiglu output back to Dest.
 //
-// LREG layout:
-//   LREG0     : gate (in), gate_clamped (after gate min-clamp), result (final, before store)
-//   LREG1     : up (in), up_clipped (after nested-relu clip)
-//   LREG2     : scratch for clamp tmp; later up_plus1
-//   LREG3     : alpha_gate (after hoisted SFPMUL), then sigmoid output (in-place)
-//   LREG4     : +L           (loaded by _init_swiglu_)
-//   LREG5     : +2L          (loaded by _init_swiglu_)
-//   LREG6     : alpha        (loaded by _init_swiglu_)
-//   LREG7     : sigmoid work_reg, then glu = gate * sig
+// The body interleaves independent ops from the gate min-clamp, up clip, and
+// sigmoid identities so each dependent SFPMAD/SFPNONLINEAR has unrelated work
+// between it and its consumer. Same instruction count as the serial form;
+// no semantic change. Sigmoid is inlined (rather than calling
+// `_calculate_sigmoid_regs_`) so the up_plus1 SFPADD can hide in the multi-
+// cycle EXP latency.
 //
-// TODO(post-bringup): profile back-to-back SFPMAD pairs in the gate min-clamp
-// (lines 99/101) and up clip (lines 108/110/112). If Quasar inserts pipeline
-// nops between dependent SFPMADs, hand-interleaving independent ops from
-// different clamp identities could remove them — but that's a scheduler
-// concern (see PR #43152 review by amahmudTT) and we're keeping the source
-// readable until profiling shows it matters.
+// LREG layout (lifetimes split across stages — annotations below trace each):
+//   LREG0     : gate (in)     → gate_clamped → final result (before store)
+//   LREG1     : up (in)       → up_clipped
+//   LREG2     : up scratch    → up_plus1
+//   LREG3     : gate scratch  → alpha_gate → exp(-alpha_gate) → sigmoid (in-place)
+//   LREG4     : +L            (loaded by _init_swiglu_)
+//   LREG5     : +2L           (loaded by _init_swiglu_)
+//   LREG6     : alpha         (loaded by _init_swiglu_)
+//   LREG7     : -alpha_gate   → exp+1 → glu = gate_clamped * sigmoid
 inline void _calculate_swiglu_(const int iterations, const int gate_offset_idx, const int up_offset_idx, const int out_offset_idx)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        // Load gate and up from Dest at distinct tile bases.
         TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, gate_offset_idx + (d << 1));
         TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, up_offset_idx + (d << 1));
 
-        // ---- Gate min-clamp:  gate = +L - relu(+L - gate)  (3 ops) ----
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG2, 0x1 /*NEGATE_VB*/); // LREG2 = +L - gate
-        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);                    // LREG2 = relu(LREG2)
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG0, 0x1 /*NEGATE_VB*/); // LREG0 = +L - LREG2 = gate_clamped
+        // ---- Interleaved gate-clamp (LREG3 scratch) / up-clip inner relu (LREG2 scratch) ----
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG3, 0x1 /*NEGATE_VB*/); // [Gate] LREG3 = +L - gate
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, 0);                 // [Up]   LREG2 = up + L          (hides LREG3 latency)
+        TTI_SFPNONLINEAR(p_sfpu::LREG3, p_sfpu::LREG3, p_sfpnonlinear::RELU_MODE);                    // [Gate] LREG3 = relu(+L - gate) (hides LREG2 latency)
+        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);                    // [Up]   LREG2 = relu(up + L)    (hides LREG3 latency)
 
-        // ---- alpha_gate = alpha * gate_clamped  (1 op, hoisted here so the ----
-        //      ---- 5 up-clip ops below + sigmoid hide the SFPMUL latency) ----
-        TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0); // LREG3 = alpha * LREG0
+        // ---- Gate-clamp finish / up-clip outer sub (interleaved) ----
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG0, 0x1 /*NEGATE_VB*/); // [Gate] LREG0 = +L - relu = gate_clamped
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0x1 /*NEGATE_VB*/); // [Up]   LREG2 = +2L - relu
 
-        // ---- Up clip: clip(up, ±L) = +L - relu(+2L - relu(up + L))  (5 ops) ----
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, 0);                 // LREG2 = up + +L
-        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);                    // LREG2 = relu(LREG2)
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0x1 /*NEGATE_VB*/); // LREG2 = +2L - LREG2
-        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);                    // LREG2 = relu(LREG2)
-        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG1, 0x1 /*NEGATE_VB*/); // LREG1 = +L - LREG2 = up_clipped
+        // ---- alpha_gate / up-clip outer relu (interleaved) ----
+        TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0); // [Gate] LREG3 = alpha * gate_clamped
+        TTI_SFPNONLINEAR(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpnonlinear::RELU_MODE);    // [Up]   LREG2 = relu(+2L - relu)
 
-        // ---- up_plus1 = up_clipped + 1.0  (1 op via LCONST_1 mul-add trick) ----
-        TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 0); // LREG2 = up + 1
+        // ---- Sigmoid start / up-clip finish (interleaved) ----
+        TTI_SFPMOV(p_sfpu::LREG3, p_sfpu::LREG7, 1);                                                  // [Sig]  LREG7 = -alpha_gate
+        TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LREG1, 0x1 /*NEGATE_VB*/); // [Up]   LREG1 = +L - relu = up_clipped
 
-        // ---- sigmoid(alpha_gate) in-place on LREG3, with LREG7 as scratch (4 ops via helper) ----
-        _calculate_sigmoid_regs_(p_sfpu::LREG3, p_sfpu::LREG7, p_sfpu::LREG3);
+        // ---- Sigmoid exp / up_plus1 (interleaved, hides multi-cycle EXP latency) ----
+        TTI_SFPNONLINEAR(p_sfpu::LREG7, p_sfpu::LREG3, p_sfpnonlinear::EXP_MODE);        // [Sig]  LREG3 = exp(-alpha_gate)
+        TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 0); // [Up]   LREG2 = up_clipped + 1   (hides EXP latency)
 
-        // ---- glu = gate_clamped * sig  (1 op, into LREG7) ----
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0); // LREG7 = LREG0 * LREG3
+        // ---- Sigmoid tail — serial, no independent work left to interleave ----
+        TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LCONST_1, p_sfpu::LREG7, 0); // LREG7 = exp + 1
+        TTI_SFPNONLINEAR(p_sfpu::LREG7, p_sfpu::LREG3, p_sfpnonlinear::RECIP_MODE);      // LREG3 = 1/(exp+1) = sigmoid
 
-        // ---- result = up_plus1 * glu  (1 op, into LREG0 — gate_clamped is dead) ----
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // LREG0 = LREG2 * LREG7
+        // ---- Final multiply chain (serial) ----
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0); // LREG7 = gate_clamped * sigmoid
+        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // LREG0 = up_plus1 * glu
 
-        // ---- Store ----
         TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, out_offset_idx + (d << 1));
     }
 }

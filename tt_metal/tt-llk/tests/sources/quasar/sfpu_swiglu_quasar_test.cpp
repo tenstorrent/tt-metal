@@ -139,14 +139,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_init_();
 
     // SFPU section for swiglu. Base the Dest write address at the gate tile
-    // (DST_INDEX + 0). Tile offsets are in Dest rows: Tile32x32 uses 64 rows
-    // per tile, so:
+    // (DST_INDEX + 0). Tile offsets are in Dest rows: one tile spans
+    // num_faces * TEST_FACE_R_DIM rows (= 64 for Tile32x32 with 4 faces × 16
+    // rows), so:
     //   gate at Dest tile 0  → offset 0
-    //   up   at Dest tile 1  → offset 64
-    //   out  at Dest tile 2  → offset 128
+    //   up   at Dest tile 1  → offset 1 * DEST_ROWS_PER_TILE
+    //   out  at Dest tile 2  → offset 2 * DEST_ROWS_PER_TILE
     // _calculate_swiglu_ reads/writes 2 rows per iteration (SFP_ROWS=2), and
     // _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_() advances the base by
-    // 16 rows (one face) between face iterations, so the same (0,64,128)
+    // TEST_FACE_R_DIM rows (one face) between face iterations, so the same
     // relative offsets work for every face.
     _llk_math_eltwise_unary_sfpu_start_(params.DST_INDEX);
 
@@ -154,13 +155,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // the whole SFPU section. They persist across every per-face call below.
     ckernel::sfpu::_init_swiglu_();
 
+    const std::uint32_t DEST_ROWS_PER_TILE = params.num_faces * params.TEST_FACE_R_DIM;
     for (std::uint32_t face = 0; face < params.num_faces; ++face)
     {
         ckernel::sfpu::_calculate_swiglu_(
             num_sfpu_iterations,
             /*gate_offset_idx=*/0,
-            /*up_offset_idx=*/64,
-            /*out_offset_idx=*/128);
+            /*up_offset_idx=*/DEST_ROWS_PER_TILE,
+            /*out_offset_idx=*/2 * DEST_ROWS_PER_TILE);
         _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
     }
 
@@ -218,8 +220,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_init_(buf_desc_id, num_output_tiles);
 
-    // Output lives at Dest tile index 2 (gate=0, up=1, out=2 relative to
-    // DST_INDEX).
+    // Output lives at Dest tile index 2 — this is the layout *this driver*
+    // uses (see "Layout used by this test" at the top of the file): gate=0,
+    // up=1, out=2 relative to DST_INDEX. The kernel itself is layout-agnostic
+    // and accepts arbitrary (gate, up, out) Dest offsets via
+    // `_calculate_swiglu_`'s parameters; +2 is not a property of swiglu.
     _llk_pack_(params.DST_INDEX + 2, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
