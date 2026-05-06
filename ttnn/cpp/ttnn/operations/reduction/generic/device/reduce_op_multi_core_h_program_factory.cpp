@@ -4,7 +4,6 @@
 
 #include "reduce_op_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
-#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -12,6 +11,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <numeric>
 
 namespace ttnn::prim {
@@ -193,14 +193,17 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             compute_Wt_g2,
             NC,
             use_width_sharding);
-        const uint32_t negate_cb_tiles = Ht * per_nc_advance;
+        // Compute in uint64_t to mirror h_reduce_negate_fits_in_l1 and avoid
+        // uint32_t overflow before the L1 fit check / CB sizing.
+        const uint64_t negate_cb_tiles = static_cast<uint64_t>(Ht) * per_nc_advance;
 
         // L1 fit check: c_4 (acc) and c_5 (ineg) are each sized at
         // negate_cb_tiles.  If the combined allocation would not fit in the
         // available L1 budget, the caller is expected to fall back to external
         // negation — see ttnn::prim::h_reduce_negate_fits_in_l1 in common.cpp,
         // which mirrors this calculation.
-        const uint64_t negate_cb_bytes = 2ull * negate_cb_tiles * dst_single_tile_size;
+        const uint64_t per_cb_bytes = negate_cb_tiles * dst_single_tile_size;
+        const uint64_t negate_cb_bytes = 2ull * per_cb_bytes;
         const auto lowest_address = device->lowest_occupied_compute_l1_address();
         uint64_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
         const uint64_t base_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -217,10 +220,19 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             negate_cb_bytes,
             negate_cb_tiles,
             max_l1_space);
+        // CBDescriptor.total_size is uint32_t; the L1 fit check above already
+        // bounds per_cb_bytes by the per-core L1 budget (well under 4 GiB),
+        // but assert the narrowing explicitly so any future budget change
+        // surfaces here instead of producing a silently-truncated CB size.
+        TT_FATAL(
+            per_cb_bytes <= std::numeric_limits<uint32_t>::max(),
+            "Negate H reduce: per-CB size {} B exceeds uint32_t total_size range",
+            per_cb_bytes);
+        const uint32_t per_cb_total_size = static_cast<uint32_t>(per_cb_bytes);
 
         uint32_t acc_cb_index = CBIndex::c_4;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = negate_cb_tiles * dst_single_tile_size,
+            .total_size = per_cb_total_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(acc_cb_index),
@@ -231,7 +243,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
         uint32_t ineg_cb_index = CBIndex::c_5;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = negate_cb_tiles * dst_single_tile_size,
+            .total_size = per_cb_total_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(ineg_cb_index),
