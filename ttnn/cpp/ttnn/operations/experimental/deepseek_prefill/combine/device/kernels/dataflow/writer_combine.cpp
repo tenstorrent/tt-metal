@@ -211,6 +211,13 @@ void kernel_main() {
                        << ENDL();
 
 #ifdef DEST_CHIP_ID
+        if (distance > 1) {
+            while (true);
+        }
+
+        if (distance == 0) {
+            while (true);
+        }
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             output_addr_gen,
