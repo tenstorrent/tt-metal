@@ -86,6 +86,7 @@ public:
     ~SignalGuard() { signal(signum, prev); }
 };
 
+[[maybe_unused]]
 static bool bandwidth_check(
     tt::tt_metal::IDevice* const send_device,
     const CoreCoord& send_core,
@@ -106,6 +107,7 @@ static bool bandwidth_check(
     return pass;
 }
 
+[[maybe_unused]]
 static bool dram_data_check(
     tt::tt_metal::IDevice* const recv_device,
     uint32_t dram_start_addr,

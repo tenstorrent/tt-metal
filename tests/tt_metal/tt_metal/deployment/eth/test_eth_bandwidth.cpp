@@ -79,7 +79,7 @@ static bool run_test_bandwidth(
 
     bool pass = true;
     pass &= eth_data_check(recv_device, recv_core, recv_l1_address, inputs);
-    pass &= eth_bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD_BIDIR);
+    pass &= eth_bandwidth_check(send_device, send_core, send_delta_addr, total_transferred, BANDWIDTH_THRESHOLD);
     return pass;
 }
 
