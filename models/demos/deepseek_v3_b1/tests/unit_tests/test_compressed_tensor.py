@@ -102,6 +102,65 @@ def test_bfp2_cpp_matches_python_edge_cases():
     _check_bfp2_cpp_vs_python(x, "edge_cases")
 
 
+def test_assigner_single_format_short_circuit():
+    """Single-format assigner must skip quantize_fn + tile_metrics entirely.
+
+    With ``formats=[fmt]`` every tile is unconditionally assigned ``fmt`` (the
+    fallback ``best_precision`` and the only ``formats_by_cost`` entry are the
+    same), so the per-format quantize/score loop and the per-tile assignment
+    loop are pure waste. This test asserts the fast path is taken by failing
+    if ``quantize_fn`` is invoked.
+    """
+    torch.manual_seed(0)
+    x = torch.randn(96, 128)  # 3x4 tile grid -> 12 tiles
+    tiles_h, tiles_w = 3, 4
+    num_tiles = tiles_h * tiles_w
+
+    def _forbidden_quantize_fn(_t, _fmt):
+        raise AssertionError("quantize_fn must not be called in single-format short-circuit")
+
+    for fmt in ["bfp8", "bfp4", "bfp2", "bfp0"]:
+        assigner = CompressedTensorAssigner(metric="pcc", threshold=0.999, formats=[fmt])
+        result = assigner.assign(x, _forbidden_quantize_fn)
+
+        expected_idx = COMPRESSED_FORMATS.index(fmt)
+        assert result.assignment.shape == (tiles_h, tiles_w)
+        assert np.all(
+            result.assignment == expected_idx
+        ), f"format={fmt}: expected all entries {expected_idx}, got {np.unique(result.assignment)}"
+        assert result.tile_counts[fmt] == num_tiles
+        for other_fmt in COMPRESSED_FORMATS:
+            if other_fmt != fmt:
+                assert result.tile_counts.get(other_fmt, 0) == 0
+        assert result.quantized is None
+
+
+def test_assigner_multi_format_still_runs_assigner():
+    """Multi-format assigner must keep running quantize_fn + tile_metrics.
+
+    Sanity guard for the short-circuit: any ``len(formats) > 1`` config must
+    fall through to the full assignment path. Uses the pure-numpy
+    ``quantize_dequantize_bfp`` so the test is host-only (no TTNN device).
+    Asserts ``quantize_fn`` is invoked and ``quantized`` is materialized
+    (the fast path leaves it as ``None``).
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import BFP_MANT_BITS
+
+    torch.manual_seed(0)
+    x = np.random.RandomState(0).randn(96, 128).astype(np.float32)
+    calls: list[str] = []
+
+    def _numpy_quantize_fn(t, fmt):
+        calls.append(fmt)
+        return quantize_dequantize_bfp(t, BFP_MANT_BITS[fmt])
+
+    assigner = CompressedTensorAssigner(metric="pcc", threshold=0.999, formats=["bfp8", "bfp4"])
+    result = assigner.assign(x, _numpy_quantize_fn)
+    assert calls == ["bfp8", "bfp4"], f"expected one quantize call per format, got {calls}"
+    assert result.quantized is not None
+    assert result.assignment.shape == (3, 4)
+
+
 def _div_up(a, b):
     return (a + b - 1) // b
 
