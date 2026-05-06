@@ -50,14 +50,12 @@ struct CaseResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
-uint32_t round_up(uint32_t x, uint32_t mult) {
-    return ((x + mult - 1U) / mult) * mult;
-}
-
 std::vector<uint32_t> compute_offsets(const std::vector<uint32_t>& counts) {
+    constexpr uint32_t kTile = 32U;
     std::vector<uint32_t> offsets(counts.size() + 1U, 0U);
     for (std::size_t e = 0; e < counts.size(); ++e) {
-        offsets[e + 1U] = offsets[e] + round_up(counts[e], 32U);
+        const uint32_t padded = ((counts[e] + kTile - 1U) / kTile) * kTile;
+        offsets[e + 1U] = offsets[e] + padded;
     }
     return offsets;
 }
