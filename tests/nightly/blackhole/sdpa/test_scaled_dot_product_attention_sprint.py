@@ -4,6 +4,8 @@
 
 import os
 import math
+from unittest import mock
+
 import torch
 from itertools import product
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -412,3 +414,70 @@ def test_sdpa_create_perf_table(b, nh, s, d):
             f"{best['total_waste_pct']:.1f}% pad waste, {best['slot_waste_pct']:.1f}% slot waste)"
         )
     print(f"{'='*170}\n")
+
+
+# === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
+# Symmetric +/- band — catches both regressions and unexpected speedups.
+SDPA_PERF_MARGIN = 0.007
+
+SDPA_PERF_CHECK_CONFIGS = [
+    # (shape_id, q_chunk_size, k_chunk_size, expected_util)
+    ("wan2_2_1xGLX_analog", 288, 512, 70.0),
+    ("wan2_2_4xGLX_analog", 224, 512, 57.5),
+]
+
+
+@pytest.mark.skipif(
+    os.environ.get("SDPA_PERF_CHECKS") != "1",
+    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
+)
+@pytest.mark.parametrize(
+    "shape_id, q_chunk_size, k_chunk_size, expected_util",
+    SDPA_PERF_CHECK_CONFIGS,
+    ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}" for cfg in SDPA_PERF_CHECK_CONFIGS],
+)
+def test_sdpa_perf_check(shape_id, q_chunk_size, k_chunk_size, expected_util):
+    """Measure single-chip SDPA math utilization via tracy and assert within +/- SDPA_PERF_MARGIN."""
+    from tracy.process_model_log import run_device_profiler
+
+    idx = INPUT_IDS.index(shape_id)
+    _b, nh, s, d = INPUT_SHAPES[idx]
+
+    subdir = "ttnn_sdpa_perf_check"
+    test_id = f"k{k_chunk_size}-q{q_chunk_size}-bf16"
+    command = (
+        f"pytest tests/nightly/blackhole/sdpa/"
+        f"test_scaled_dot_product_attention_sprint.py::test_sdpa_sweep_perf_impl"
+        f"[{shape_id}-{test_id}]"
+    )
+
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+
+    with mock.patch.dict(os.environ, {"CI": "false"}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+    )
+
+    assert (
+        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
+    ), "profiler returned no SDPA ops — inner test was skipped or did not produce a kernel run"
+
+    core_count = int(r["CORE COUNT"][0])
+    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
+    utilization = compute_sdpa_utilization(s, d, nh, duration_ns, core_count)
+
+    lower = expected_util * (1 - SDPA_PERF_MARGIN)
+    upper = expected_util * (1 + SDPA_PERF_MARGIN)
+
+    logger.info(
+        f"SDPA perf check {shape_id}-q{q_chunk_size}-k{k_chunk_size}: "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+    )
+
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {SDPA_PERF_MARGIN*100:.1f}%)"
+    )

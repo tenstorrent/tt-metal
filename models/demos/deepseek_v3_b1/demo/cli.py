@@ -264,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         top_p=args.top_p,
         temperature=args.temperature,
     )
-    print(file=sys.stdout, flush=True)
+    print(end="", file=sys.stdout, flush=True)
     return 0
 
 

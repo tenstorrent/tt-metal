@@ -484,7 +484,6 @@ def test_decoder(
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache_attn_ref"],
-            d["ttnn_metadata_tensor"],
             d["scale"],
             d["ttnn_sdpa_output"],
             d["sdpa_kv_cache_buffer"],
@@ -537,7 +536,6 @@ def test_decoder(
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
-        d["ttnn_metadata_tensor"],
         d["scale"],
         d["sdpa_kv_cache_buffer"],
         d["sdpa_out_interm_buffer"],
@@ -592,7 +590,6 @@ def test_decoder(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
-        forward_metadata=d["forward_metadata"],
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
@@ -986,7 +983,6 @@ def test_decoder_mlp(
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
-        d["ttnn_metadata_tensor"],
         d["scale"],
         d["sdpa_kv_cache_buffer"],
         d["sdpa_out_interm_buffer"],
@@ -1041,7 +1037,6 @@ def test_decoder_mlp(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
-        forward_metadata=d["forward_metadata"],
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)

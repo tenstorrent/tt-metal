@@ -139,31 +139,23 @@ TEST_F(DramKernelFixture, DramKernelOnMultipleCores) {
     }
 }
 
-// Test Tensix reading from DRISC L1 using a DRISC<->Tensix semaphore
-// handshake:
-//  - DRISC enters stream mode, seeds DRISC L1, and signals readiness.
-//  - Tensix waits for readiness, reads DRISC L1, then signals done.
-//  - DRISC waits for done and restores NOC2AXI.
+// Test Tensix reading from DRISC L1 in NOC2AXI mode: host seeds DRISC L1 directly,
+// Tensix reads it using the 5-arg noc_read_with_state to preserve the 64-bit DRAM_L1_NOC_OFFSET address.
 TEST_F(DramKernelFixture, DramKernelTensixReadFromDRISCL1) {
     constexpr uint32_t kMagicValue = 0xCAFEBABE;
     CoreCoord logical_core_drisc{0, 0};
     CoreCoord logical_core_tensix{0, 0};
-    CoreCoord tensix_virtual = device_->virtual_core_from_logical_core(logical_core_tensix, CoreType::WORKER);
     CoreCoord drisc_virtual = device_->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
 
     Program program = CreateProgram();
-    // Two semaphores, one local to each core:
-    //   stream_ready (Tensix-local): DRISC remote-incs to 1 to indicate stream mode is on
-    //   tensix_done (DRISC-local):  Tensix remote-incs to 1 when the read is complete
-    uint32_t stream_ready_sem_id = CreateSemaphore(program, logical_core_tensix, 0, CoreType::WORKER);
-    uint32_t tensix_done_sem_id = CreateSemaphore(program, logical_core_drisc, 0, CoreType::DRAM);
 
-    auto drisc_kid = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_transfer.cpp",
-        logical_core_drisc,
-        DramConfig{.noc = NOC::NOC_0, .compile_args = {drisc_l1_base_, tensix_virtual.x, tensix_virtual.y}});
-    SetRuntimeArgs(program, drisc_kid, logical_core_drisc, {stream_ready_sem_id, tensix_done_sem_id, kMagicValue});
+    uint32_t magic = kMagicValue;
+    MetalContext::instance().get_cluster().write_core(
+        &magic, sizeof(uint32_t), tt_cxy_pair(mesh_device_->build_id(), drisc_virtual), drisc_l1_noc_addr_);
+
+    // Split 64-bit DRISC L1 NOC addr (with DRAM_L1_NOC_OFFSET bit 37) into two uint32_t compile args.
+    const uint32_t drisc_l1_noc_addr_low = static_cast<uint32_t>(drisc_l1_noc_addr_);
+    const uint32_t drisc_l1_noc_addr_high = static_cast<uint32_t>(drisc_l1_noc_addr_ >> 32);
 
     CreateKernel(
         program,
@@ -173,12 +165,7 @@ TEST_F(DramKernelFixture, DramKernelTensixReadFromDRISCL1) {
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_0,
             .compile_args = {
-                tensix_l1_base_,
-                drisc_l1_base_,
-                drisc_virtual.x,
-                drisc_virtual.y,
-                stream_ready_sem_id,
-                tensix_done_sem_id}});
+                tensix_l1_base_, drisc_l1_noc_addr_low, drisc_l1_noc_addr_high, drisc_virtual.x, drisc_virtual.y}});
 
     run_workload(std::move(program));
 
@@ -213,10 +200,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCReadFromTensixL1) {
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_transfer.cpp",
         logical_core_drisc,
-        DramConfig{
-            .noc = NOC::NOC_0,
-            .compile_args = {drisc_l1_base_, tensix_virtual.x, tensix_virtual.y},
-            .defines = {{"MODE_TENSIX_TO_DRISC", "1"}}});
+        DramConfig{.noc = NOC::NOC_0, .compile_args = {drisc_l1_base_, tensix_virtual.x, tensix_virtual.y}});
     SetRuntimeArgs(program, kid, logical_core_drisc, {tensix_l1_base_});
     run_workload(std::move(program));
 
@@ -238,6 +222,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
     const uint32_t bytes_per_iter = 64 * 1024;
     constexpr uint32_t iters = 1000;
     const uint32_t total_bytes_per_core = iters * bytes_per_iter;
+    const uint32_t elements_per_endpoint = bytes_per_iter / sizeof(uint32_t);
 
     // Endpoints within the same bank share GDDR address space - partition by endpoint row.
     TT_FATAL(
@@ -258,7 +243,10 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
 
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
     log_info(LogTest, "Random seed: {}", seed);
-    std::vector<uint32_t> data = create_random_vector_of_bfloat16(bytes_per_iter, 1000.0f, seed);
+    // Unique data per endpoint proves each endpoint has independent L1.
+    std::vector<uint32_t> data =
+        create_random_vector_of_bfloat16(num_banks * num_endpoints * bytes_per_iter, 1000.0f, seed);
+    auto endpoint_offset = [&](uint32_t row, uint32_t col) { return (row * num_banks + col) * elements_per_endpoint; };
     Program program = CreateProgram();
 
     for (uint32_t row = 0; row < num_endpoints; row++) {
@@ -266,7 +254,10 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
             CoreCoord logical_core{col, row};
             CoreCoord virtual_core = device_->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
             MetalContext::instance().get_cluster().write_core(
-                data.data(), bytes_per_iter, tt_cxy_pair(mesh_device_->build_id(), virtual_core), drisc_l1_noc_addr_);
+                data.data() + endpoint_offset(row, col),
+                bytes_per_iter,
+                tt_cxy_pair(mesh_device_->build_id(), virtual_core),
+                drisc_l1_noc_addr_);
             auto k_id = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
@@ -289,18 +280,20 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
     // the aggregate write bandwidth from DRISC L1 to DRAM across all endpoints
     for (uint32_t row = 0; row < num_endpoints; row++) {
         for (uint32_t col = 0; col < num_banks; col++) {
+            auto begin = data.begin() + endpoint_offset(row, col);
+            std::vector<uint32_t> endpoint_data(begin, begin + elements_per_endpoint);
             uint32_t dram_channel =
                 device_->dram_channel_from_logical_core(CoreCoord{col, 0});  // channel maps by bank (col)
-            // Verify the last chunk written; all chunks hold identical data so one read suffices.
             // ReadFromDeviceDRAMChannel is slow (host-device round-trip); avoid reading all iters.
-            std::vector<uint32_t> result(bytes_per_iter / sizeof(uint32_t));
+            std::vector<uint32_t> result(elements_per_endpoint);
             tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
                 device_,
                 dram_channel,
                 dram_addr + bytes_per_iter * (iters - 1) + total_bytes_per_core * row,
                 bytes_per_iter,
                 result);
-            EXPECT_EQ(result, data) << "Data mismatch on DRAM from core (bank=" << col << ", endpoint=" << row << ")";
+            EXPECT_EQ(result, endpoint_data)
+                << "Data mismatch on DRAM from core (bank=" << col << ", endpoint=" << row << ")";
             CoreCoord virtual_core = device_->virtual_core_from_logical_core({col, row}, CoreType::DRAM);
             max_cycles = std::max(max_cycles, read_timing_cycles(virtual_core, timing_noc_addr));
         }
@@ -328,6 +321,7 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
     const uint32_t bytes_per_iter = 64 * 1024;
     constexpr uint32_t iters = 1000;
     const uint32_t total_bytes_per_core = iters * bytes_per_iter;
+    const uint32_t elements_per_endpoint = bytes_per_iter / sizeof(uint32_t);
 
     // Each endpoint within the same bank reads from its own DRAM slot (partitioned by row).
     TT_FATAL(
@@ -347,14 +341,19 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
 
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
     log_info(LogTest, "Random seed: {}", seed);
-    std::vector<uint32_t> data = create_random_vector_of_bfloat16(bytes_per_iter, 1000.0f, seed);
+    // Unique data per endpoint proves each endpoint has independent L1.
+    std::vector<uint32_t> data =
+        create_random_vector_of_bfloat16(num_banks * num_endpoints * bytes_per_iter, 1000.0f, seed);
+    auto endpoint_offset = [&](uint32_t row, uint32_t col) { return (row * num_banks + col) * elements_per_endpoint; };
 
     // Write data from DRISCs to read to all DRAM Banks
     for (uint32_t col = 0; col < num_banks; col++) {
         uint32_t dram_channel = device_->dram_channel_from_logical_core(CoreCoord{col, 0});
         for (uint32_t row = 0; row < num_endpoints; row++) {
+            auto begin = data.begin() + endpoint_offset(row, col);
+            std::vector<uint32_t> endpoint_data(begin, begin + elements_per_endpoint);
             tt::tt_metal::detail::WriteToDeviceDRAMChannel(
-                device_, dram_channel, dram_addr + row * bytes_per_iter, data);
+                device_, dram_channel, dram_addr + row * bytes_per_iter, endpoint_data);
         }
     }
 
@@ -384,10 +383,12 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
     for (uint32_t row = 0; row < num_endpoints; row++) {
         for (uint32_t col = 0; col < num_banks; col++) {
             CoreCoord virtual_core = device_->virtual_core_from_logical_core({col, row}, CoreType::DRAM);
-            std::vector<uint32_t> result(data.size());
+            auto begin = data.begin() + endpoint_offset(row, col);
+            std::vector<uint32_t> endpoint_data(begin, begin + elements_per_endpoint);
+            std::vector<uint32_t> result(elements_per_endpoint);
             MetalContext::instance().get_cluster().read_core(
                 result.data(), bytes_per_iter, tt_cxy_pair(mesh_device_->build_id(), virtual_core), drisc_l1_noc_addr_);
-            EXPECT_EQ(result, data) << "Data mismatch on core (bank=" << col << ", endpoint=" << row << ")";
+            EXPECT_EQ(result, endpoint_data) << "Data mismatch on core (bank=" << col << ", endpoint=" << row << ")";
             max_cycles = std::max(max_cycles, read_timing_cycles(virtual_core, timing_noc_addr));
         }
     }
