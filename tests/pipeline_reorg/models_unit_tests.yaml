@@ -229,7 +229,7 @@
   model: gemma-4-e4b
   skus:
     wh_n150:
-      timeout: 5
+      timeout: 15
       tier: 2
     # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
     # wh_n300:
