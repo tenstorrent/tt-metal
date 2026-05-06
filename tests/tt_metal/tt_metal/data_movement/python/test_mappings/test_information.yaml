@@ -981,7 +981,7 @@ tests:
     bandwidth_mode: "combined"
 
   1230:
-    name: "2D Matmul Test 1230 - 4x4 K=1 NOC1 Saturation (in1 512KiB per core, page=8192)"
+    name: "2D Matmul Test 1230 - 4x4 K=8 NOC1 Saturation (in1 512KiB per core, page=2048)"
     bandwidth_mode: "combined"
 
   1231:
