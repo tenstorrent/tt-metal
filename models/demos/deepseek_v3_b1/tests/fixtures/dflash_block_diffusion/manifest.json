@@ -12,6 +12,10 @@
   "acceptance_metric": "committed_tokens_per_verify_pass_including_anchor",
   "trace_files": [
     {
+      "path": "run_inference_trace.json",
+      "description": "Host-side run_inference packet trace for DFlash block proposals and target verification."
+    },
+    {
       "path": "lossless_block_trace.json",
       "description": "Synthetic lossless DFlash block replay with partial acceptance and target correction."
     }

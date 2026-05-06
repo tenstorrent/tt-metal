@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "name": "dflash_block_diffusion_run_inference_lossless_trace",
+  "approach": "dflash_block_diffusion",
+  "target_model": "moonshotai/Kimi-K2.5",
+  "draft_model": "z-lab/Kimi-K2.5-DFlash",
+  "golden_reference": {
+    "implementation": "golden_dflash_block_diffusion_agent_23",
+    "manager": "golden_dflash.spec_decode.SpecDecodeManager",
+    "draft_runtime": "golden_dflash.spec_decode.TorchDFlashRuntime"
+  },
+  "implementation_status": {
+    "production_hook": "missing",
+    "expected_hook": "ModelPipeline.run_inference with DFlash block proposals",
+    "temporary_test_seam": "_DFlashTraceBackedPipeline"
+  },
+  "params": {
+    "prompt_token_ids": [101, 102],
+    "max_new_tokens": 7,
+    "eos_token_id": null,
+    "block_size": 4,
+    "temperature": 0.0,
+    "top_k": 1,
+    "top_p": 1.0
+  },
+  "device_to_host": {
+    "prefill_results": [
+      {
+        "token": {"token_id": 201, "pos": 2},
+        "target_hidden_layer_ids": [0, 1]
+      }
+    ],
+    "read_results": [
+      {
+        "anchor_pos": 2,
+        "target_posterior": [
+          {"token_id": 202, "pos": 3},
+          {"token_id": 203, "pos": 4},
+          {"token_id": 204, "pos": 5},
+          {"token_id": 205, "pos": 6}
+        ]
+      },
+      {
+        "anchor_pos": 5,
+        "target_posterior": [
+          {"token_id": 205, "pos": 6},
+          {"token_id": 206, "pos": 7},
+          {"token_id": 207, "pos": 8},
+          {"token_id": 208, "pos": 9}
+        ]
+      },
+      {
+        "anchor_pos": 7,
+        "target_posterior": [
+          {"token_id": 207, "pos": 8},
+          {"token_id": 208, "pos": 9},
+          {"token_id": 209, "pos": 10},
+          {"token_id": 210, "pos": 11}
+        ]
+      }
+    ]
+  },
+  "host_draft_blocks": [
+    {
+      "anchor_pos": 2,
+      "token_ids": [201, 202, 203, 999]
+    },
+    {
+      "anchor_pos": 5,
+      "token_ids": [204, 205, 998, 997]
+    },
+    {
+      "anchor_pos": 7,
+      "token_ids": [206, 207, 996, 995]
+    }
+  ],
+  "expected_host": {
+    "generated_tokens": [201, 202, 203, 204, 205, 206, 207],
+    "output_token_ids": [101, 102, 201, 202, 203, 204, 205, 206, 207],
+    "acceptance_lengths": [3, 2, 2],
+    "read_count": 3,
+    "writes": [
+      {"token_id": 201, "type": "BASE", "pos": 2, "user_id": 0, "prefill_id": -1},
+      {"token_id": 202, "type": "SPEC", "pos": 3, "user_id": 0, "prefill_id": -1},
+      {"token_id": 203, "type": "SPEC", "pos": 4, "user_id": 0, "prefill_id": -1},
+      {"token_id": 999, "type": "SPEC", "pos": 5, "user_id": 0, "prefill_id": -1},
+      {"token_id": 204, "type": "BASE", "pos": 5, "user_id": 0, "prefill_id": -1},
+      {"token_id": 205, "type": "SPEC", "pos": 6, "user_id": 0, "prefill_id": -1},
+      {"token_id": 998, "type": "SPEC", "pos": 7, "user_id": 0, "prefill_id": -1},
+      {"token_id": 997, "type": "SPEC", "pos": 8, "user_id": 0, "prefill_id": -1},
+      {"token_id": 206, "type": "BASE", "pos": 7, "user_id": 0, "prefill_id": -1},
+      {"token_id": 207, "type": "SPEC", "pos": 8, "user_id": 0, "prefill_id": -1},
+      {"token_id": 996, "type": "SPEC", "pos": 9, "user_id": 0, "prefill_id": -1},
+      {"token_id": 995, "type": "SPEC", "pos": 10, "user_id": 0, "prefill_id": -1}
+    ]
+  },
+  "metadata": {
+    "num_accepts": 4,
+    "num_rejects": 3,
+    "average_committed_tokens": 2.3333333333333335
+  }
+}
