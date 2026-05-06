@@ -556,23 +556,43 @@ class PipelineBlock:
                 self.host_io.run()
 
     def terminate(self):
+        print("start of PipelineBlock.terminate()")
         ttnn.distributed_context_barrier()
+        print("passed barrier in PipelineBlock.terminate()")
         if self.parallel_devices:
+            print("terminating parallel device socket interfaces...")
             for si in self.entry_socket_interface:
+                print(f"terminating entry SocketInterface {si}")
                 si.terminate(False)
+                print(f"terminated entry SocketInterface {si}")
             for i, si in enumerate(self.exit_socket_interface):
+                print(f"terminating exit SocketInterface {si}")
                 si.terminate(i == len(self.exit_socket_interface) - 1)
+                print(f"terminated exit SocketInterface {si}")
         elif self.is_pipeline_start:
+            print("terminating first stage: host_io, exit_socket_interface, entry_socket_interface (if loopback)")
             self.host_io.terminate(False)
+            print("terminated host_io")
             if self.initialize_loopback:
+                print("terminating loopback entry_socket_interface")
                 self.entry_socket_interface.terminate(False)
+                print("terminated loopback entry_socket_interface")
             self.exit_socket_interface.terminate(True)
+            print("terminated exit_socket_interface")
         else:
+            print(
+                "terminating non-first stage: entry_socket_interface, exit_socket_interface (if has_exit), host_io (if has_d2h)"
+            )
             self.entry_socket_interface.terminate(False)
+            print("terminated entry_socket_interface")
             if self.has_exit:
+                print("terminating exit_socket_interface")
                 self.exit_socket_interface.terminate(not self.has_d2h)
+                print("terminated exit_socket_interface")
             if self.host_io is not None:
+                print("terminating host_io")
                 self.host_io.terminate(True)
+                print("terminated host_io")
 
     def is_first_pipeline_stage(self):
         return self.is_pipeline_start

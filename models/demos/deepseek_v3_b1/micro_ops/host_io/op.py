@@ -547,10 +547,17 @@ class HostInterface:
 
     def terminate(self, sync_devices):
         if self.h2d_socket:
+            print("Terminating H2D socket...")
             self.h2d_socket.barrier()
+            print("H2D socket terminated")
         if self.d2h_socket:
+            print("Terminating D2H socket...")
             self.d2h_socket.barrier()
+            print("D2H socket terminated")
 
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
+        print("Termination semaphore set, waiting for device kernels to exit...")
         if sync_devices:
+            print("Synchronizing device to ensure clean termination...")
             ttnn.synchronize_device(self.mesh_device)
+            print("Device synchronized, termination complete.")

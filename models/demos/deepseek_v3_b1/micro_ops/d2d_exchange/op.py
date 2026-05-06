@@ -686,13 +686,20 @@ class SocketInterface:
 
     def terminate(self, sync_devices):
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
+        print(f"[SI] Sent termination signal (set semaphore to 1)")
         if sync_devices:
             if self.local_socket:
+                print(f"[SI] Synchronizing local device {self.mesh_device}")
                 ttnn.synchronize_device(self.mesh_device)
+                print(f"[SI] Local device synchronization complete")
                 if self.downstream_socket:
+                    print(f"[SI] Synchronizing downstream socket device {self.downstream_socket.get_mesh_device()}")
                     ttnn.synchronize_device(self.downstream_socket.get_mesh_device())
+                    print(f"[SI] Downstream socket device synchronization complete")
             else:
+                print(f"[SI] Synchronizing sender mesh device {self.mesh_device}")
                 ttnn.synchronize_device(self.mesh_device)
+                print(f"[SI] Sender mesh device synchronization complete")
 
     def get_downstream_socket(self):
         return self.downstream_socket_pair[1]
@@ -1039,16 +1046,24 @@ class ParallelSocketInterface:
         return ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
     def terminate(self, sync_devices):
+        print(f"[PSI] Terminating: setting termination semaphore to 1")
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
+        print(f"[PSI] Termination signal sent")
         if sync_devices:
             if self.local_socket:
+                print(f"[PSI] Synchronizing local device {self.mesh_device}")
                 ttnn.synchronize_device(self.mesh_device)
+                print(f"[PSI] Local device synchronization complete")
                 for ds in self._downstream_sockets:
                     if ds is not None:
+                        print(f"[PSI] Synchronizing downstream socket device {ds.get_mesh_device()}")
                         ttnn.synchronize_device(ds.get_mesh_device())
+                        print(f"[PSI] Downstream socket device synchronization complete")
                         break
             else:
+                print(f"[PSI] Synchronizing sender mesh device {self.mesh_device}")
                 ttnn.synchronize_device(self.mesh_device)
+                print(f"[PSI] Sender mesh device synchronization complete")
 
     def get_downstream_sockets(self):
         """Return receiver sockets from all downstream socket pairs (one per channel)."""

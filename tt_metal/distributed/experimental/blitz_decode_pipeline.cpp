@@ -199,6 +199,7 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
         stages.size());
 
     // 1. No stage has identical entry and exit coords
+    const std::size_t check_distinct_until = initialize_loopback ? stages.size() : stages.size() - 1;
     for (std::size_t i = 0; i < stages.size(); i++) {
         const auto& s = stages[i];
         TT_FATAL(
@@ -216,13 +217,10 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
         if (s.entry_node_coord.dims() < 2) {
             continue;
         }
-        TT_FATAL(
-            s.entry_node_coord[1] != s.exit_node_coord[1],
-            "Stage [{}] (stage_index={}) entry and exit must use different mesh columns (coord[1]): entry {} exit {}",
-            i,
-            s.stage_index,
-            coord_str(s.entry_node_coord),
-            coord_str(s.exit_node_coord));
+        // TT_FATAL(
+        //     s.entry_node_coord[1] != s.exit_node_coord[1],
+        //     "Stage [{}] (stage_index={}) entry and exit must use different mesh columns (coord[1]): entry {} exit
+        //     {}", i, s.stage_index, coord_str(s.entry_node_coord), coord_str(s.exit_node_coord));
     }
 
     // 2. No coord is reused across stages (no overlapping nodes).

@@ -175,13 +175,14 @@ def test_bcast_moe_reduce_pipeline(
 
     entry_column = 0
     reduce_exit_column = 0
+    pipeline_idx = my_mesh_id if my_mesh_id > 0 else 1
     if len(pipeline_config) > 1:
         try:
-            entry_column = int(pipeline_config[0].entry_node_coord[1])
+            entry_column = int(pipeline_config[pipeline_idx].entry_node_coord[1])
         except Exception:
             entry_column = 0
         try:
-            reduce_exit_column = int(pipeline_config[0].exit_node_coord[1])
+            reduce_exit_column = int(pipeline_config[pipeline_idx].exit_node_coord[1])
         except Exception:
             reduce_exit_column = 0
     exit_column = entry_column
@@ -732,11 +733,10 @@ def test_bcast_moe_reduce_pipeline(
         logger.info(f"Pipeline Stage 0 D2H Reduce PCC: {pcc_msg}")
         assert passing, f"Pipeline Stage 0 D2H PCC check failed: {pcc_msg}"
 
-    ttnn.distributed_context_barrier()
-
     # -- Pipeline teardown --
     logger.info(f"[rank={my_mesh_id}] waiting for pipeline termination")
     if is_stage0:
+        ttnn.distributed_context_barrier()
         for hio in host_ios:
             hio.terminate(False)
         entry_socket_interface.terminate(False)
@@ -932,13 +932,14 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
     #   exit_node_coord  → reduce exit column (sends reduced output downstream)
     entry_column = 0
     reduce_exit_column = 0
+    pipeline_idx = my_mesh_id if my_mesh_id > 0 else 1
     if len(pipeline_config) > 1:
         try:
-            entry_column = int(pipeline_config[0].entry_node_coord[1])
+            entry_column = int(pipeline_config[pipeline_idx].entry_node_coord[1])
         except Exception:
             entry_column = 0
         try:
-            reduce_exit_column = int(pipeline_config[0].exit_node_coord[1])
+            reduce_exit_column = int(pipeline_config[pipeline_idx].exit_node_coord[1])
         except Exception:
             reduce_exit_column = 0
     exit_column = entry_column

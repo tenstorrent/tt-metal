@@ -167,6 +167,7 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+    DPRINT << "TERMINATION SEMAPHORE address in d2d multi upstream: " << (uint32_t)termination_semaphore_addr << "\n";
 
     bool fabric_sender_opened = false;
     bool fabric_receiver_opened = false;
@@ -196,6 +197,7 @@ void kernel_main() {
         socket_reserve_pages(sender_socket, 1);
 
         invalidate_l1_cache();
+        DPRINT << "termination semaphore value in d2d multi upstream: " << (uint32_t)termination_semaphore[0] << "\n";
         if (termination_semaphore[0] == 1) {
             break;
         }

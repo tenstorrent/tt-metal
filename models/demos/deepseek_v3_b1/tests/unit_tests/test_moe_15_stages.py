@@ -159,13 +159,14 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
 
     entry_column = 0
     reduce_exit_column = 0
+    pipeline_idx = my_mesh_id if my_mesh_id > 0 else 1
     if len(pipeline_config) > 1:
         try:
-            entry_column = int(pipeline_config[0].entry_node_coord[1])
+            entry_column = int(pipeline_config[pipeline_idx].entry_node_coord[1])
         except Exception:
             entry_column = 0
         try:
-            reduce_exit_column = int(pipeline_config[0].exit_node_coord[1])
+            reduce_exit_column = int(pipeline_config[pipeline_idx].exit_node_coord[1])
         except Exception:
             reduce_exit_column = 0
     exit_column = entry_column
@@ -270,6 +271,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         stage0_program_entries = all_entries
         logger.info(f"[rank=0] parallel stage 0 programs built ({len(device_coords)} channels), dispatch deferred")
     else:
+        my_entry_coords = entry_column_coords if my_mesh_id == 1 else exit_column_coords
         pipeline_block = PipelineBlock(
             mesh_device,
             pipeline_core,
@@ -282,20 +284,31 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             entry_downstream_core=moe_sender_core,
             exit_upstream_cores=shard_cores_list,
             exit_upstream_page_size=reduce_payload_per_shard,
-            entry_device_coords=entry_column_coords,
+            entry_device_coords=my_entry_coords,
             exit_device_coords=exit_column_coords,
         )
         logger.info(f"[rank={my_mesh_id}] parallel pipeline block created")
 
     # ── Get per-device sockets for forward (input) and reduce (output) ──
+    # Expand to num_devices-sized lists indexed by chip_id (row * cols + col).
     forward_sockets = None
     downstream_sockets = None
     if my_mesh_id >= 1:
-        forward_sockets = pipeline_block.get_downstream_sockets()
-        downstream_sockets = pipeline_block.get_upstream_sockets()
+        raw_fwd = pipeline_block.get_downstream_sockets()
+        raw_ds = pipeline_block.get_upstream_sockets()
+        num_devices = int(mesh_rows) * int(mesh_cols)
+        forward_sockets = [None] * num_devices
+        downstream_sockets = [None] * num_devices
+        fwd_col = entry_column if my_mesh_id == 1 else reduce_exit_column
+        for idx, row_idx in enumerate(range(int(mesh_rows))):
+            fwd_chip_id = row_idx * int(mesh_cols) + fwd_col
+            ds_chip_id = row_idx * int(mesh_cols) + reduce_exit_column
+            forward_sockets[fwd_chip_id] = raw_fwd[idx]
+            downstream_sockets[ds_chip_id] = raw_ds[idx]
         logger.info(
-            f"[rank={my_mesh_id}] {len(forward_sockets)} forward sockets, "
-            f"{len(downstream_sockets)} downstream socket groups"
+            f"[rank={my_mesh_id}] {len(raw_fwd)} forward sockets mapped to "
+            f"{sum(1 for s in forward_sockets if s is not None)}/{num_devices} devices, "
+            f"{len(raw_ds)} downstream socket groups"
         )
 
     # ── MoE tensor setup ──
@@ -493,7 +506,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             worker_core_grid=moe_worker_core_grid,
             is_torus=is_torus,
             downstream_sockets=downstream_sockets,
-            exit_column=exit_column,
+            exit_column=exit_column if my_mesh_id == 1 else reduce_exit_column,
             reduce_exit_column=reduce_exit_column,
         )
         logger.info(f"[rank={my_mesh_id}] MoE + reduce-to-all completed")
@@ -522,6 +535,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
         assert d2h_result_torch is not None, "All D2H sockets returned zeros -- reduce or pipeline failed"
 
     ttnn.distributed_context_barrier()
+    print(f"rank {my_mesh_id} passed barrier\n")
 
     # ── Pipeline teardown ───────────────────────────────────────────────────
     logger.info(f"[rank={my_mesh_id}] waiting for pipeline termination")

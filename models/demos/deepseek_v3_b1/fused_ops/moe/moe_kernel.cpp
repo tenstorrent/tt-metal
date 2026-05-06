@@ -1472,7 +1472,7 @@ void kernel_main() {
 
         if constexpr (persistent_mode == 0) {
             if (iteration >= num_iterations) {
-                DPRINT << "MOE: completed " << iteration << " iterations, exiting\n";
+                DPRINT << "END OF MOE kernel iteration " << iteration << ", exiting\n";
                 break;
             }
         }
