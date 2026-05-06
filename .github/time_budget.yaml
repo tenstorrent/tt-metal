@@ -129,6 +129,15 @@ llk:
   unit:
     wh_n150_civ2: 100
     bh_p150b_civ2: 70
+  e2e:
+    wh_n150_civ2: 1800
+    bh_p150b_civ2: 1800
+  perf:
+    wh_n150_civ2: 1200
+    bh_p150b_civ2: 1200
+  smoke:
+    wh_n150_civ2: 160
+    bh_p150b_civ2: 160
 
 models:
   sanity:
@@ -182,14 +191,3 @@ models:
     wh_n150: 10
     wh_llmbox_perf: 30
     wh_galaxy: 30
-
-llk:
-  e2e:
-    wh_n150_civ2: 1800
-    bh_p150b_civ2: 1800
-  perf:
-    wh_n150_civ2: 1200
-    bh_p150b_civ2: 1200
-  smoke:
-    wh_n150_civ2: 160
-    bh_p150b_civ2: 160
