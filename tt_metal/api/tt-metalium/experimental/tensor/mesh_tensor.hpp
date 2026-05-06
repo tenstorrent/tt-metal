@@ -178,12 +178,22 @@ public:
     const MeshTensorImpl& impl() const;
 
 private:
-    // This will be deleted after DeviceStorage no longer needs to keep a shared_ptr of the MeshBuffer.
+    // TODO(#43693): Remove once DeviceStorage no longer keeps a shared_ptr<MeshBuffer>
+    // in its DeallocatedTombStone state.
+    // DeviceStorage is the sole caller — it uses mesh_buffer_invariant_breaking() to
+    // populate the tombstone when a tensor is deallocated, so the device pointer
+    // remains accessible on aliased tensors (e.g. after a zero-copy reshape).
+    // This breaks MeshTensor's core invariant: that it is the sole owner of the
+    // underlying MeshBuffer. Shared ownership leaks out, allowing the MeshBuffer to
+    // outlive the MeshTensor.
     friend struct DeviceStorage;
 
     /**
-     * Wider API compatible mesh_buffer() that returns a shared ownership to the underlying storage.
-     * Access is only used by DeviceStorage.
+     * Returns shared ownership of the underlying MeshBuffer.
+     *
+     * WARNING: Breaks MeshTensor's sole-ownership invariant. The caller becomes a
+     * shared owner of the MeshBuffer, which can outlive the MeshTensor.
+     * Only accessible to DeviceStorage. See #43693 for removal plan.
      */
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
 
