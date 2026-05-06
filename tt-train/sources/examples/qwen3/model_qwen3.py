@@ -10,7 +10,6 @@ symbols consumed by ``model_qwen3_distributed.py`` and ``model_factory.py``.
 """
 
 import sys
-from dataclasses import dataclass
 
 import torch
 from tqdm import tqdm
@@ -20,13 +19,12 @@ from ttml.modules import AbstractModuleBase, LinearLayer, ModuleList, Parameter
 
 # Re-export shared components so existing callers (model_qwen3_distributed,
 # model_factory, etc.) continue to work with ``from model_qwen3 import ...``
-from ttml.models.qwen3 import Qwen3, Qwen3Config  # noqa: F401
+from ttml.models.qwen3 import Qwen3, Qwen3Config, RMSNormFunction, ConcatLastDim  # noqa: F401
 
 from utils.tensor_utils import (
     torch_to_ttml,
     make_weight,
     make_ones,
-    make_zeros,
     weight_initializer,
     zeros_initializer,
 )
@@ -35,6 +33,9 @@ from utils.param_utils import (  # noqa: F401 — re-exported for callers
     unpermute_norm_weights,
     build_weight_mapping_single,
 )
+
+from utils.memory import memory_snapshot
+from utils.checkpoint import checkpoint
 
 # Backwards-compat alias: callers that created Qwen3ForCausalLM now get Qwen3
 Qwen3ForCausalLM = Qwen3
