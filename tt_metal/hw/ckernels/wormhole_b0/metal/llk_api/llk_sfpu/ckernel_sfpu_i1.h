@@ -7,73 +7,111 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 
 // ======================================================================
-// i1(x) = x * p(x²) / q(x²)  — odd function, evaluated in t = x²
+// i1(x) — modified Bessel function of the first kind, order 1.
 //
-// BF16: n7/d6  → degree-3 in t, 0.02 BF16 ULP analytical
-// FP32: n14/d14 → degree-6/7 in t, <0.001 FP32 ULP analytical
-//        (arithmetic-limited to ~8 ULP on SFPU due to FP32 rounding)
-// APPROXIMATION_MODE: approx adds ~128 FP32 ULP via sfpu_reciprocal
-//   (negligible for BF16 ≤1 ULP, degrades FP32 from ~11 to ~140 ULP)
+// Two-region implementation, exploiting that i1 is odd: i1(-x) = -i1(x).
+//   |x| ≤ 10:  rational p(t)/q(t) on t = x², result = x · p(t)/q(t)
+//              BF16: n7/d6   → 0.02 BF16 ULP analytical
+//              FP32: n14/d14 → <0.001 FP32 ULP analytical
+//   |x| > 10:  asymptotic expansion
+//                i1(x) = sign(x) · exp(|x|) / sqrt(|x|) · P(1/|x|)
+//              degree-4 minimax fit, max rel err ~1e-8 over [10, 88.5].
+//
+// Inputs are clamped to [-88.5, 88.5] to avoid exp() overflow.
+// Both paths execute under SFPU predication; v_if/v_else separates the
+// paths to manage register pressure. In-domain accuracy is unchanged.
+// OOD accuracy: ~10⁶ FP32 ULP (clamping) → <50 FP32 ULP (asymptotic).
+//
+// APPROXIMATION_MODE: only affects the reciprocal NR iteration count.
 // ======================================================================
+
+// Asymptotic path is outlined to keep register pressure within SFPI's
+// LRA budget. Returns sign(x_signed) · exp(|x|) · 1/sqrt(|x|) · P(1/|x|).
+// Note: this function must stay minimalist — SFPU LRA is limited.
+// Every operation here competes with the main loop.
+template <bool APPROXIMATION_MODE>
+inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed) {
+    const sfpi::vFloat inv_abs_x = sfpu_reciprocal<APPROXIMATION_MODE>(abs_x);
+
+    // P(y), degree-4 minimax fit on y ∈ [1/88.5, 0.1]; max rel err ~1e-8.
+    // This outlined function does not stress the main loop's LRA, so full precision is safe.
+    const sfpi::vFloat correction = PolynomialEvaluator::eval(
+        inv_abs_x, 3.9894228967e-01f, -1.4960495444e-01f, -4.6652925320e-02f, -4.3674591560e-02f, -1.9748322314e-02f);
+
+    // exp(|x|) — 21-bit accurate variant. |x|≤88.5, no overflow possible.
+    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_<true>(abs_x);
+
+    // 1/sqrt(|x|) via Quake-style magic constant + Newton refinement.
+    const sfpi::vInt rsqrt_i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(abs_x) >> 1);
+    sfpi::vFloat rsqrt_y = sfpi::reinterpret<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
+    sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
+    rsqrt_y = rsqrt_y * (sfpi::vFloat(2.2825186f) + c0 * (sfpi::vFloat(2.2533049f) + c0));
+    c0 = sfpi::vConst1 + (-rsqrt_y) * (abs_x * rsqrt_y);
+    rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
+
+    // i1 is odd: copy sign of original x onto positive magnitude.
+    return sfpi::setsgn(exp_abs * rsqrt_y * correction, x_signed);
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
+    constexpr float I1_MAX_INPUT = 88.5f;
+    constexpr float I1_THRESHOLD = 10.0f;
+
+#pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Clamp to [-10, 10]: polynomial extrapolates catastrophically for |x| > 12.
-        sfpi::vFloat lo = -1.0000000000e+01f;
+        // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32.
+        sfpi::vFloat lo = -I1_MAX_INPUT;
         sfpi::vec_min_max(lo, x);
-        sfpi::vFloat hi = 1.0000000000e+01f;
+        sfpi::vFloat hi = I1_MAX_INPUT;
         sfpi::vec_min_max(x, hi);
 
-        const sfpi::vFloat t = x * x;  // t = x²
+        const sfpi::vFloat abs_x = sfpi::setsgn(x, 0);
+
+        // ─── Asymptotic path (|x| > 10) — outlined to limit reg pressure.
+        v_if(abs_x > I1_THRESHOLD) { sfpi::dst_reg[0] = calculate_i1_asymptotic_<APPROXIMATION_MODE>(abs_x, x); }
+        v_else {
+            // ─── Polynomial path (|x| ≤ 10) ──────────────────────────────────
+            const sfpi::vFloat t = x * x;
 
 #ifdef INP_FLOAT32
-        // FP32 n14/d14: p degree-6, q degree-7 in t.
-        // Coefficients in ascending order of t^k (non-zero parity terms only).
-        sfpi::vFloat numer = PolynomialEvaluator::eval(
-            t,
-            5.0000000000e-01f,   // a1  (t^0)
-            5.6819390506e-02f,   // a3  (t^1)
-            1.9247245509e-03f,   // a5  (t^2)
-            2.8397364076e-05f,   // a7  (t^3)
-            2.0916867527e-07f,   // a9  (t^4)
-            7.7937084564e-10f,   // a11 (t^5)
-            1.2293555930e-12f);  // a13 (t^6)
-        sfpi::vFloat denom = PolynomialEvaluator::eval(
-            t,
-            1.0000000000e+00f,   // b0  (t^0)
-            -1.1361218989e-02f,  // b2  (t^1)
-            6.1268139689e-05f,   // b4  (t^2)
-            -1.9771712800e-07f,  // b6  (t^3)
-            3.8127551116e-10f,   // b8  (t^4)
-            -3.1218170410e-13f,  // b10 (t^5)
-            -3.0635529988e-16f,  // b12 (t^6)
-            7.4301498523e-19f);  // b14 (t^7)
+            sfpi::vFloat numer = PolynomialEvaluator::eval(
+                t,
+                5.0000000000e-01f,
+                5.6819390506e-02f,
+                1.9247245509e-03f,
+                2.8397364076e-05f,
+                2.0916867527e-07f,
+                7.7937084564e-10f,
+                1.2293555930e-12f);
+            sfpi::vFloat denom = PolynomialEvaluator::eval(
+                t,
+                1.0000000000e+00f,
+                -1.1361218989e-02f,
+                6.1268139689e-05f,
+                -1.9771712800e-07f,
+                3.8127551116e-10f,
+                -3.1218170410e-13f,
+                -3.0635529988e-16f,
+                7.4301498523e-19f);
 #else
-        // BF16 n7/d6: p degree-3, q degree-3 in t.
-        // Minimax-fitted via Chebyshev-node differential evolution.
-        sfpi::vFloat numer = PolynomialEvaluator::eval(
-            t,
-            4.9992737740e-01f,   // a1 (t^0)
-            5.4503594600e-02f,   // a3 (t^1)
-            1.6126291630e-03f,   // a5 (t^2)
-            2.0223499130e-05f);  // a7 (t^3)
-        sfpi::vFloat denom = PolynomialEvaluator::eval(
-            t,
-            1.0000000000e+00f,    // b0 (t^0)
-            -1.6242591070e-02f,   // b2 (t^1)
-            1.0333660750e-04f,    // b4 (t^2)
-            -2.5076132990e-07f);  // b6 (t^3)
+            sfpi::vFloat numer = PolynomialEvaluator::eval(
+                t, 4.9992737740e-01f, 5.4503594600e-02f, 1.6126291630e-03f, 2.0223499130e-05f);
+            sfpi::vFloat denom = PolynomialEvaluator::eval(
+                t, 1.0000000000e+00f, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
 #endif
+            sfpi::dst_reg[0] = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
+        }
+        v_endif;
 
-        sfpi::dst_reg[0] = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
         sfpi::dst_reg++;
     }
 }
