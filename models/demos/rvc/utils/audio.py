@@ -36,31 +36,32 @@ def audio2(i, o, format, sr):
     inp.close()
 
 
-def _get_audio_path(file_index):
-    file_name = f"sample-speech-{file_index}.wav"
-    file = os.path.abspath(os.path.join(SPEECH_DIRECTORY, file_name))
-    if os.path.commonpath([SPEECH_DIRECTORY, file]) != SPEECH_DIRECTORY:
-        raise RuntimeError(f"Audio file must be located under {SPEECH_DIRECTORY}")
-    if not os.path.exists(file):
-        raise RuntimeError(f"Audio file does not exist: {file}")
-    return file
+def _decode_audio(f, sr):
+    with BytesIO() as out:
+        audio2(f, out, "f32le", sr)
+        audio = np.frombuffer(out.getvalue(), np.float32).flatten().copy()
+        return torch.from_numpy(audio)
 
 
-def _load_audio_index(file_index, sr):
-    file = _get_audio_path(file_index)
-    with open(file, "rb") as f:
-        with BytesIO() as out:
-            audio2(f, out, "f32le", sr)
-            audio = np.frombuffer(out.getvalue(), np.float32).flatten().copy()
-            return torch.from_numpy(audio)
+def _load_fixed_audio_batch(sr):
+    audio_list = []
+    for i in range(BATCH_AUDIO_SIZE):
+        path = os.path.abspath(os.path.join(SPEECH_DIRECTORY, f"sample-speech-{i}.wav"))
+        with open(path, "rb") as f:
+            audio = _decode_audio(f, sr)
+            audio_list.append(audio)
+    return audio_list
 
 
 def load_audio(sr):
-    return _load_audio_index(0, sr)
+    path = os.path.abspath(os.path.join(SPEECH_DIRECTORY, "sample-speech-0.wav"))
+    with open(path, "rb") as f:
+        audio = _decode_audio(f, sr)
+    return audio
 
 
 def load_audio_batch(sr):
-    audio_list = [_load_audio_index(file_index, sr) for file_index in range(BATCH_AUDIO_SIZE)]
+    audio_list = _load_fixed_audio_batch(sr)
     max_length = max(audio.shape[0] for audio in audio_list)
     batch = torch.zeros((len(audio_list), max_length), dtype=torch.float32)
     for idx, audio in enumerate(audio_list):
