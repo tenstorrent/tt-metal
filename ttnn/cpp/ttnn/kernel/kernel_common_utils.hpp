@@ -31,6 +31,5 @@ template <typename KernelStruct>
 inline constexpr bool SerializableKernelArgs =
     alignof(KernelStruct) == alignof(uint32_t) && std::is_aggregate_v<KernelStruct> &&
     std::is_trivially_copyable_v<KernelStruct>;
-
 #endif
 }  // namespace ttnn::kernel_utils
