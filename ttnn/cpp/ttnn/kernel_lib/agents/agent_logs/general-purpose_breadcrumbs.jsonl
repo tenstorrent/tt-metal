@@ -1,0 +1,2 @@
+{"event":"start","details":"Starting eltwise migration run, target: 87 more kernels","ts":"2026-05-06T14:51:02+00:00"}
+{"event":"progress","details":"3 ternary kernels migrated: ternary_sfpu_no_bcast_ttt, ternary_addc_ops_sfpu, ternary_sfpu_no_bcast_tts_tst","ts":"2026-05-06T15:42:34+00:00"}
