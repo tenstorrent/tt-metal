@@ -182,6 +182,8 @@ class TestConfig:
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
+    SIMULATOR_TIMEOUT: ClassVar[int] = 600
+    SIMULATOR_POLL_INTERVAL: ClassVar[float] = 0.01
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
@@ -1216,7 +1218,9 @@ class TestConfig:
         ):
             raise ValueError("Quasar only supports TRISC boot mode")
 
-        brisc_cmd_timeout = 600 if TestConfig.TEST_TARGET.run_simulator else 1
+        brisc_cmd_timeout = (
+            TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else 1
+        )
 
         if boot_mode == BootMode.BRISC:
             if not TestConfig.BRISC_ELF_LOADED:
@@ -1327,8 +1331,6 @@ class TestConfig:
             timeout: Maximum time to wait (in seconds) before timing out.
         """
 
-        SIMULATOR_POLL_INTERVAL = 0.01
-
         mailboxes = {core for core in device_module.Mailboxes}
         if self.CHIP_ARCH != ChipArchitecture.QUASAR:
             mailboxes -= {
@@ -1338,7 +1340,11 @@ class TestConfig:
                 device_module.Mailboxes.BriscBread0,
                 device_module.Mailboxes.BriscBread1,
             }
-        timeout = 600 if TestConfig.TEST_TARGET.run_simulator else timeout
+        timeout = (
+            TestConfig.SIMULATOR_TIMEOUT
+            if TestConfig.TEST_TARGET.run_simulator
+            else timeout
+        )
 
         completed = set()
         end_time = time.time() + timeout
@@ -1355,7 +1361,7 @@ class TestConfig:
 
             if TestConfig.TEST_TARGET.run_simulator:
                 time.sleep(
-                    SIMULATOR_POLL_INTERVAL
+                    TestConfig.SIMULATOR_POLL_INTERVAL
                 )  # Poll every 10ms in simulator, because it takes a lot longer to execute the kernel
 
         handle_if_assert_hit(
