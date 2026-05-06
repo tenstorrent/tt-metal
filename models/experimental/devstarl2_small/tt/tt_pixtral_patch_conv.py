@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""HF-equivalent patch embedding: ``nn.Conv2d`` (square stride=kernel) as Unfold + ``ttnn.linear``."""
+
+from __future__ import annotations
+
+import torch
+import ttnn
+
+from models.common.lightweightmodule import LightweightModule
+
+
+class TtPixtralPatchConv(LightweightModule):
+    """
+    Patch Conv for Pixtral / Devstral vision towers.
+
+    Maps checkpoint keys ``{prefix}_linear.weight`` / ``{prefix}_linear.bias`` (meta layout after
+    ``convert_vision_hf_to_meta``). Accepts torch ``[N, C, H, W]``, returns ``[N, num_patches, out_channels]``.
+    """
+
+    def __init__(
+        self,
+        mesh_device,
+        state_dict,
+        state_dict_prefix,
+        dtype,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int,
+        bias: bool,
+    ):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+
+        self.bias = (
+            ttnn.as_tensor(
+                torch.reshape(state_dict[f"{state_dict_prefix}_linear.bias"], (1, -1)),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            if bias
+            else None
+        )
+
+        self._unfold = torch.nn.Unfold(kernel_size=self.kernel_size, stride=self.stride)
+
+        weight = state_dict[f"{state_dict_prefix}_linear.weight"]
+        if weight.ndim == 4:
+            weight = weight.reshape(out_channels, -1).T
+
+        self._linear_weight = ttnn.as_tensor(
+            weight,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    def forward(self, x: torch.Tensor) -> ttnn.Tensor:
+        x = self._unfold(x)
+        x = x.permute(0, 2, 1)
+
+        x = ttnn.as_tensor(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        return ttnn.linear(
+            x,
+            self._linear_weight,
+            bias=self.bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+        )
+
+
+__all__ = ["TtPixtralPatchConv"]
