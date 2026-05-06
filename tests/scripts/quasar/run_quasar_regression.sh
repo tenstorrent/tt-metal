@@ -26,7 +26,7 @@ Run Quasar emulator regression tests defined in a YAML file.
 Required environment variables:
   TT_METAL_SIMULATOR_BASE   Base path containing simulator build directories
                            (e.g. the parent of emu-quasar-1x3/, emu-quasar-2x3/,
-                           emu-quasar-2x3_DISPATCH)
+                           emu-quasar-2x3_DISPATCH/)
                            The script sets TT_METAL_SIMULATOR per test automatically.
                            If TT_METAL_SIMULATOR is already set, the base is
                            derived automatically (one directory up).
