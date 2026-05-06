@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import ttnn
@@ -235,9 +238,32 @@ class LlamaGRPOCompleter(GRPOCompleter):
         self._ctx = ctx
         self._model = tt_model
         self.transformer_config = tf_config
+        self._model_source: str = model_source
 
         self._kv_cache: Any = None
         self._kv_cache_B: int = 0
+
+        # tt-transformers mirror state (populated by ``init_model``). Held
+        # alongside the ttml model so the completer can hold both copies on the
+        # same mesh device (single-device, two-copies bringup; see step 1 of
+        # the ttml -> tt-transformers bridge).
+        #
+        # ``_tt_generator`` owns the prefill/decode trace lifecycle and on-device
+        # sampling. ``_tt_kv_cache`` is the per-layer (k_cache, v_cache) list
+        # used by paged attention (built via the public
+        # ``[l.attention.layer_past for l in model.layers]`` pattern from
+        # ``models/tt_transformers/tt/common.py``). ``_tt_page_table`` is kept
+        # as a host torch tensor — that's what the Generator API expects, and
+        # passing the same identity each call avoids tripping the Generator's
+        # ``prev_page_table`` content check (which would otherwise refresh the
+        # trace inputs from host and clobber the on-device sampling-feedback
+        # chain).
+        self._tt_model: Any = None
+        self._tt_model_args: Any = None
+        self._tt_generator: Any = None
+        self._tt_kv_cache: Any = None
+        self._tt_page_table: Any = None
+        self._tt_model_cache_dir: Optional[Path] = None
 
     @property
     def tokenizer(self) -> Any:
@@ -245,14 +271,181 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
     @property
     def model(self) -> Any:
-        """The underlying tt model."""
+        """The underlying ttml Llama model used for training."""
         return self._model
+
+    @property
+    def tt_model(self) -> Any:
+        """The tt-transformers ``Transformer`` mirror (or ``None`` if not initialized).
+
+        Populated by :meth:`init_model`; once set, :meth:`generate` (and
+        therefore :meth:`generate_str`) dispatches to the tt-transformers
+        path instead of the ttml one. Distinct from :attr:`model`, which is
+        the ttml model used for training.
+        """
+        return self._tt_model
+
+    # ------------------------------------------------------------------
+    # tt-transformers bridge (step 1: model init only)
+    # ------------------------------------------------------------------
+
+    def init_model(
+        self,
+        state_dict: Dict[str, Any],
+        *,
+        max_seq_len: int = 2048,
+        dtype: Any = None,
+        instruct: bool = True,
+    ) -> None:
+        """Initialize a tt-transformers ``Transformer`` mirror from a Meta-style state dict.
+
+        The state dict must use Meta naming (post HF -> Meta conversion), i.e.
+        the format produced by
+        ``models.tt_transformers.tt.model_config.ModelArgs.load_state_dict()``.
+        Eventually the dict will come from a ttml weight dump so the mirror
+        tracks the ttml model. For step 1 of the bridge this method only
+        builds the model; weight transfer ttml -> tt-transformers lands in a
+        later step (see :meth:`update_weights`).
+
+        After this returns, calls to :meth:`generate` (and therefore
+        :meth:`generate_str`) automatically dispatch to the tt-transformers
+        path instead of the ttml one.
+
+        Idempotent: if a previous mirror exists it is torn down (including
+        its temporary weight-cache directory) before a new one is built.
+
+        Args:
+            state_dict: Meta-style host state dict (torch tensors).
+            max_seq_len: Max sequence length the ``Transformer`` will support.
+            dtype: ttnn weight dtype. Defaults to ``ttnn.bfloat8_b`` to match
+                ``pcc_hf_ttml_ttt.py``.
+            instruct: Whether to use the instruct chat template in
+                ``ModelArgs``.
+        """
+        import torch
+
+        from models.tt_transformers.tt.common import PagedAttentionConfig
+        from models.tt_transformers.tt.generator import Generator
+        from models.tt_transformers.tt.model import Transformer
+        from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+
+        if dtype is None:
+            dtype = ttnn.bfloat8_b
+
+        if self._tt_model is not None:
+            self._teardown_tt_model()
+
+        # ``ModelArgs`` reads the model id from the env var.
+        os.environ["HF_MODEL"] = self._model_source
+
+        batch_size = 1  # step 1 supports batch_size=1 only
+
+        args = ModelArgs(
+            self._mesh_device,
+            instruct=instruct,
+            max_batch_size=batch_size,
+            optimizations=lambda ma: DecodersPrecision.accuracy(ma.n_layers, ma.model_name),
+            max_seq_len=max_seq_len,
+            cache_hf=True,
+        )
+
+        # Paged attention KV cache: kept simple (single contiguous identity
+        # mapping) because we only run one user at a time. The page_table is a
+        # host torch tensor — that's what ``Generator.prefill_forward_text``
+        # and ``decode_forward`` expect, and the ``Generator`` content-checks
+        # it at every decode step to decide whether to refresh trace inputs.
+        # Re-using the same tensor identity across calls keeps the on-device
+        # sampling-feedback chain intact.
+        paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
+        page_table = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).reshape(
+            batch_size, paged_attention_config.max_num_blocks // batch_size
+        )
+
+        # Per-instance throwaway weight cache. ``weight_cache_path=None`` is
+        # the eventual goal but currently crashes inside ``mlp.py`` and
+        # ``embedding.py`` (their ``cache_name`` lambdas do ``None / "..."``
+        # when ``args.dummy_weights == False``). Until that's fixed upstream,
+        # we use a unique directory and clean it up in :meth:`_teardown_tt_model`
+        # so stale tilized weights from a prior init never get reused.
+        cache_dir = Path(tempfile.mkdtemp(prefix="ttt_grpo_completer_"))
+
+        tt_model = Transformer(
+            args=args,
+            mesh_device=self._mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=cache_dir,
+            paged_attention_config=paged_attention_config,
+        )
+
+        # On-device sampling is required for the fast decode path that keeps
+        # tokens on device between steps. If the mesh shape / vocab size /
+        # prefetcher combination doesn't satisfy
+        # ``Transformer._supports_on_device_sampling`` (see ``model.py``),
+        # ``decode_forward(sampling_params=...)`` would silently fall back to
+        # logits-on-host and our async pattern would not save anything.
+        # Fail loudly here instead.
+        if not getattr(tt_model, "_supports_on_device_sampling", False):
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            raise RuntimeError(
+                "tt-transformers Transformer was built without on-device sampling support; "
+                "the fast decode path requires it. Check mesh shape, vocab size, and prefetcher "
+                "settings (see Transformer._supports_on_device_sampling in model.py)."
+            )
+
+        # Build paged-attention KV-cache handles the same way ``create_tt_model``
+        # does in ``models/tt_transformers/tt/common.py``: one (k, v) tuple per
+        # decoder layer, looked up via the public ``layer.attention.layer_past``
+        # attribute. ``Generator`` expects a list per data-parallel rank, so we
+        # wrap in another list for the single-rank case.
+        tt_kv_cache = [l.attention.layer_past for l in tt_model.layers]
+
+        generator = Generator(
+            model=[tt_model],
+            model_args=[args],
+            mesh_device=self._mesh_device,
+            tokenizer=self.tokenizer,
+        )
+
+        self._tt_model = tt_model
+        self._tt_model_args = args
+        self._tt_generator = generator
+        self._tt_kv_cache = tt_kv_cache
+        self._tt_page_table = page_table
+        self._tt_model_cache_dir = cache_dir
+
+    def update_weights(self, state_dict: Dict[str, Any]) -> None:
+        """Update the tt-transformers mirror from a Meta-style state dict.
+
+        Step 1 of the bridge: not yet implemented. Until weight transfer
+        lands, callers must rebuild via :meth:`init_model` (full reconstruction;
+        slow because the program cache is rebuilt and weights re-tilized).
+        """
+        raise NotImplementedError("update_weights is not yet implemented; rebuild via init_model(state_dict)")
+
+    def _teardown_tt_model(self) -> None:
+        """Drop the tt-transformers mirror and remove its weight-cache dir."""
+        self._tt_model = None
+        self._tt_model_args = None
+        self._tt_generator = None
+        self._tt_kv_cache = None
+        self._tt_page_table = None
+        if self._tt_model_cache_dir is not None:
+            shutil.rmtree(self._tt_model_cache_dir, ignore_errors=True)
+            self._tt_model_cache_dir = None
 
     def generate(self, prompts: List[List[int]]) -> List[List[int]]:
         """Generate completions for a batch of tokenised prompts.
 
         For N prompts, returns N * completions_per_prompt completions.
+
+        Dispatches to the tt-transformers mirror when :meth:`init_model` has
+        populated it; otherwise runs the original ttml batched path. Both
+        paths return tokens-only completions in the same shape.
         """
+        if self._tt_model is not None:
+            return self._completion_tt_impl(prompts)
+
         ctx = self._ctx
         max_len = max(len(row) for row in prompts)
         pad_lengths = [max_len - len(row) for row in prompts for _ in range(ctx.completions_per_prompt)]
@@ -270,10 +463,201 @@ class LlamaGRPOCompleter(GRPOCompleter):
             return self._completion_batched_impl(prompt_tokens_np, pad_lengths, B, N)
 
     def generate_str(self, prompt_strs: List[str]) -> List[str]:
-        """Generate completions from string prompts, returning decoded strings."""
+        """Generate completions from string prompts, returning decoded strings.
+
+        Backend-agnostic — :meth:`generate` does the dispatch.
+        """
         prompts = [self._ctx._tokenizer.encode(s) for s in prompt_strs]
         completions = self.generate(prompts)
         return [self._ctx._tokenizer.decode(c, skip_special_tokens=False) for c in completions]
+
+    def _reset_tt_kv_cache(self) -> None:
+        """Zero the tt-transformers paged-attention KV cache before a new prompt.
+
+        Mirrors the public-attribute pattern used in
+        ``models/tt_transformers/demo/simple_text_demo.py``: each layer's
+        ``attention.layer_past`` is a ``(k_cache, v_cache)`` tuple of device
+        tensors; we overwrite their contents in place so subsequent attention
+        kernels read zeros at unfilled positions.
+        """
+        for layer in self._tt_model.layers:
+            k_cache, v_cache = layer.attention.layer_past
+            ttnn.mul(k_cache, 0, output_tensor=k_cache)
+            ttnn.mul(v_cache, 0, output_tensor=v_cache)
+
+    def _completion_tt_impl(self, prompts: List[List[int]]) -> List[List[int]]:
+        """tt-transformers generation loop using the public Generator API.
+
+        Mirrors the structure of :meth:`_completion_batched_impl` (the ttml
+        loop) so the on-device flow is the same in spirit:
+
+          * Prefill the prompt in one shot via ``Generator.prefill_forward_text``.
+            With ``sampling_params`` set, on-device sampling returns the first
+            generated token directly (already on host).
+          * Decode loop calls ``Generator.decode_forward(read_from_device=False)``
+            so each step's sampled token stays on device and is fed back into
+            the next step's trace input slot via the on-device feedback chain
+            (``ttnn_decode_forward`` writes the sampled token into the
+            trace-input ``x`` and increments ``current_pos`` on device — see
+            ``models/tt_transformers/tt/model.py:638-642`` and
+            ``model.py:603-605``).
+          * Stop-token detection runs on chunked async d2h reads (every
+            ``CHUNK`` steps) instead of per-step host syncs, matching ttml's
+            ``_async_read_to_host`` pattern. Detection thus lags compute by up
+            to ``CHUNK`` tokens, which we trim out at the end.
+
+        Single-prompt only for now (``init_model`` builds with
+        ``max_batch_size=1`` and ``completions_per_prompt`` must be 1).
+        Multiple prompts are processed sequentially with the KV cache reset
+        between each.
+        """
+        import torch
+
+        from models.common.sampling import SamplingParams
+
+        ctx = self._ctx
+        args = self._tt_model_args
+        generator = self._tt_generator
+        page_table = self._tt_page_table
+        kv_cache = [self._tt_kv_cache]
+        mesh_device = self._mesh_device
+
+        if args.max_batch_size != 1:
+            raise NotImplementedError(
+                "tt-transformers path currently supports max_batch_size=1; " f"got max_batch_size={args.max_batch_size}"
+            )
+        if ctx.completions_per_prompt != 1:
+            raise NotImplementedError("tt-transformers path currently supports completions_per_prompt=1")
+
+        # Sampling: temperature=0 means greedy (top_k=1 with neutral
+        # temperature). Otherwise multinomial at the requested temperature.
+        if ctx.temperature == 0.0:
+            sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=1.0)
+        else:
+            sampling_params = SamplingParams(temperature=ctx.temperature, top_k=0, top_p=1.0)
+
+        stop_ids = self._get_stop_ids()
+        stop_arr = np.fromiter(stop_ids, dtype=np.int32) if stop_ids else np.empty(0, dtype=np.int32)
+
+        completions: List[List[int]] = []
+        for prompt_ids in prompts:
+            prompt_len = len(prompt_ids)
+            if prompt_len == 0:
+                completions.append([])
+                continue
+
+            # Reset paged KV cache between prompts so context never leaks.
+            self._reset_tt_kv_cache()
+
+            # ---- Prefill ----
+            prompt_t = torch.tensor([list(prompt_ids)], dtype=torch.long)
+            prefilled, _ = generator.prefill_forward_text(
+                prompt_t,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=[prompt_len],
+                sampling_params=sampling_params,
+                enable_trace=True,
+                warmup_prefill=True,
+            )
+            first_tok = int(prefilled[0, 0].item())
+
+            completion: List[int] = [first_tok]
+            if first_tok in stop_ids:
+                completions.append(completion)
+                continue
+
+            max_new = min(
+                ctx.max_tokens_to_complete - 1,
+                args.max_seq_len - prompt_len - 1,
+            )
+            if max_new <= 0:
+                completions.append(completion)
+                continue
+
+            # ---- Decode loop with chunked async readback ----
+            #
+            # ``out_tok`` and ``current_pos`` are only used by the FIRST
+            # decode_forward call (when ``reset_batch=True`` populates trace
+            # inputs from host). After that the trace updates current_pos and
+            # the token slot on device, and these args are ignored — see
+            # ``Generator._decode_forward_trace_text`` reset_inputs gating.
+            out_tok = prefilled
+            current_pos = torch.tensor([prompt_len])
+
+            chunk_columns: List[Any] = []
+            pending_hosts: List[Any] = []
+            pending_event: Any = None
+            early_stop = False
+
+            for step in range(max_new):
+                tt_dec = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    enable_trace=True,
+                    sampling_params=sampling_params,
+                    reset_batch=(step == 0),
+                    read_from_device=False,
+                )
+                # ``tt_dec`` is one (token_dev, log_probs_dev) per data-parallel
+                # rank; data_parallel == 1 for our completer.
+                device_tok = tt_dec[0][0]
+                chunk_columns.append(device_tok)
+                # Host shadow for current_pos. The trace updates the device-side
+                # current_pos itself, but we keep this in sync so any future
+                # decode_forward call that hits ``reset_inputs=True`` (e.g. on a
+                # later prompt boundary) writes the right value.
+                current_pos = current_pos + 1
+
+                if (step + 1) % CHUNK == 0:
+                    # Sync the previous chunk and promote its tokens to the
+                    # completion. Detection lags by CHUNK steps; we break as
+                    # soon as a stop token is found and trim correctly.
+                    if pending_event is not None:
+                        ttnn.event_synchronize(mesh_event=pending_event)
+                        for h in pending_hosts:
+                            tok_torch, _ = generator.process_decode_output_host([(h, None)], is_tokens=True)
+                            tok = int(tok_torch[0].item())
+                            completion.append(tok)
+                            if tok in stop_ids:
+                                early_stop = True
+                                break
+                        if early_stop:
+                            break
+                    # Fire async d2h for this chunk; the event marks all
+                    # in-flight reads on cq=0.
+                    pending_hosts = [t.cpu(blocking=False) for t in chunk_columns]
+                    pending_event = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
+                    chunk_columns = []
+
+            # Drain any in-flight chunk we fired but never synced inside the loop.
+            if not early_stop and pending_event is not None:
+                ttnn.event_synchronize(mesh_event=pending_event)
+                for h in pending_hosts:
+                    tok_torch, _ = generator.process_decode_output_host([(h, None)], is_tokens=True)
+                    tok = int(tok_torch[0].item())
+                    completion.append(tok)
+                    if tok in stop_ids:
+                        early_stop = True
+                        break
+
+            # Drain any remaining device tokens that never hit a chunk boundary.
+            if not early_stop and chunk_columns:
+                tail_hosts = [t.cpu(blocking=False) for t in chunk_columns]
+                tail_event = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
+                ttnn.event_synchronize(mesh_event=tail_event)
+                for h in tail_hosts:
+                    tok_torch, _ = generator.process_decode_output_host([(h, None)], is_tokens=True)
+                    tok = int(tok_torch[0].item())
+                    completion.append(tok)
+                    if tok in stop_ids:
+                        break
+
+            completions.append(completion)
+
+        return completions
 
     def compute_nlog_probs(
         self, prompts: List[List[int]], completions: List[List[int]]
