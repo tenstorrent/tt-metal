@@ -510,26 +510,21 @@ class ttMLA:
 
         # All reduce (skip for single-device TP)
         if self.tp_factor > 1:
-            tt_q = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_q = ttnn.reduce_scatter(
                 tt_q,
-                persistent_output_buffers=None,
                 dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                cluster_axis=self.tp_axis,
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.ccl_topology,
-                cluster_axis=self.tp_axis,
             )
-            tt_q = ttnn.experimental.all_gather_async(
+            tt_q = ttnn.all_gather(
                 tt_q,
                 dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                cluster_axis=self.tp_axis,
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.ccl_topology,
-                cluster_axis=self.tp_axis,
             )
 
         # rmsnorm
@@ -594,15 +589,13 @@ class ttMLA:
 
         # All reduce (skip for single-device TP)
         if self.tp_factor > 1:
-            tt_kv = ttnn.experimental.all_gather_async(
+            tt_kv = ttnn.all_gather(
                 tt_kv,
                 dim=1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                cluster_axis=self.tp_axis,
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.ccl_topology,
-                cluster_axis=self.tp_axis,
             )
             tt_kv = ttnn.experimental.fast_reduce_nc(
                 tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
@@ -681,15 +674,13 @@ class ttMLA:
             **self._get_mm_kwargs("o_proj", seq_len_local),
         )
         if self.tp_factor > 1:
-            out = ttnn.experimental.reduce_scatter_minimal_async(
+            out = ttnn.reduce_scatter(
                 v_out,
                 dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                cluster_axis=self.tp_axis,
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.ccl_topology,
-                cluster_axis=self.tp_axis,
             )
         else:
             out = v_out
