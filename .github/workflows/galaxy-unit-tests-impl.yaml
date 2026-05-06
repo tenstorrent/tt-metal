@@ -115,7 +115,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ matrix.test-group.sku == 'wh_galaxy_perf' && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+        - ${{ (matrix.test-group.sku == 'wh_galaxy_perf' || matrix.test-group.sku == 'bh_galaxy_perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
