@@ -51,7 +51,7 @@ operations:
     pack_relu: "ZERO_RELU"
     block_size: [32, 32]
 
-  # Stage 3: MIN_THRESHOLD_RELU — Elwsub(A, B).
+  # Stage 3: MIN_THRESHOLD_RELU — Datacopy A.
   # A ∈ [0.0, 1.1]. Values ≤ 0.5 zeroed, values > 0.5 kept.
   - output: "out_min_thresh"
     math:
