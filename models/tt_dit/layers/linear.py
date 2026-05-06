@@ -208,14 +208,15 @@ class ColParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+        parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
+        if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
-                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
             )
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
@@ -248,6 +249,12 @@ class ColParallelLinear(Module):
             M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
             core_grid = get_matmul_core_grid(self.mesh_device)
             matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+
+            # Gather if needed here. Helps cleanup upstream code
+            if K != weight.padded_shape[-2] and parallel_config_tp > 1:
+                x = self.ccl_manager.all_gather_persistent_buffer(
+                    x, dim=-1, mesh_axis=parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                )
 
             if self.chunks is not None:
                 outputs = ttnn.experimental.minimal_matmul_split(
