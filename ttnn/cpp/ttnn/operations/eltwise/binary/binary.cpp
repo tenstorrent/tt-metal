@@ -391,6 +391,29 @@ inline auto invoke_binary_ng_impl(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+<<<<<<< HEAD
+=======
+    if (use_legacy
+            ? *use_legacy
+            : operations::binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
+                  (not operations::binary::detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
+        const std::vector activations(post_activations.begin(), post_activations.end());
+        const std::optional lhs_activation =
+            lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
+
+        if constexpr (requires { operations::binary::detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
+            auto [a, b] = operations::binary::detail::preprocess_inputs(binary_op_type, lhs, rhs);
+            // std::cout << "legacy binary" << std::endl;
+            return ttnn::prim::binary(a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
+        } else {
+            // std::cout << "Legacy binary" << std::endl;
+            return ttnn::prim::binary(
+                lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
+        }
+    }
+
+    // std::cout << "NG binary" << std::endl;
+>>>>>>> b7ca6b3de53 (rebased and fixed conflicts - calls divide instead if BinaryOperationWithFastApprox)
     const auto a_dtype = lhs.dtype();
     const DataType b_dtype = [&] {
         if constexpr (requires { rhs.dtype(); }) {
@@ -569,6 +592,16 @@ Tensor relational_binary(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+<<<<<<< HEAD
+=======
+    if (use_legacy
+            ? *use_legacy
+            : operations::binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
+                  (not operations::binary::detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
+        return detail::binary_impl(binary_op_type, lhs, rhs, dtype, memory_config, output);
+    }
+
+>>>>>>> b7ca6b3de53 (rebased and fixed conflicts - calls divide instead if BinaryOperationWithFastApprox)
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,
