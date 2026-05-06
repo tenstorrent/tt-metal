@@ -116,6 +116,7 @@ struct Core {
     static constexpr bool enable_mtp = get_named_compile_time_arg_val("enable_mtp") == 1;
     static constexpr bool is_base_stage = get_named_compile_time_arg_val("is_mtp_base_stage") == 1;
     static constexpr bool is_spec_stage = get_named_compile_time_arg_val("is_mtp_verify_stage") == 1;
+    static constexpr uint32_t num_speculative_tokens = get_named_compile_time_arg_val("num_speculative_tokens");
     static constexpr bool is_eh_matmul_core = enable_mtp && get_named_compile_time_arg_val("is_eh_matmul_core") == 1;
     static constexpr bool is_eh_reduce_worker_core =
         enable_mtp && get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
@@ -127,6 +128,11 @@ struct Core {
     // ── Verify stage metadata transfer ───────────────────────────────
     static constexpr bool is_exit_device = get_named_compile_time_arg_val("is_exit_device") == 1;
 };
+
+static_assert(Core::num_speculative_tokens >= 1, "num_speculative_tokens must be at least 1");
+static_assert(
+    Core::num_speculative_tokens <= deepseek_b1_ops::MAX_SPECULATIVE_TOKENS,
+    "num_speculative_tokens exceeds the fixed metadata token slots");
 
 void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
@@ -744,49 +750,41 @@ void kernel_main() {
     deepseek_b1_ops::PersistentLoop<Core::persistent_mode> loop(termination_semaphore_addr);
 
 #if defined(COMPILE_FOR_BRISC)
-    // Write the full DeepseekMetadata output page into the given CB.
-    //
-    // Header (words 0-12):
-    //   [token_type, tok0_id, tok0_pos, tok1_id, tok1_pos, slot_id,
-    //    token_id, position_id, prefill_token_id, reserved,
-    //    temperature, k, probability_mass_threshold]
-    //
-    // p_indices / p_scores (words 16-63):
-    //   When metadata_src_addr != 0 the trailing arrays are copied from that
-    //   L1 address (used by the spec stage to forward the base stage's
-    //   probabilities).  When 0 the caller guarantees they are already
-    //   in-place (base stage writes them via copy_probabilities directly
-    //   into the CB page).
+    // Write one fixed DeepseekMetadata page into the given CB.
     auto write_token_metadata_to_socket_cb = [](uint32_t cb,
                                                 uint32_t token_type,
-                                                uint32_t tok0_id,
-                                                uint32_t tok0_pos,
-                                                uint32_t tok1_id = 0,
-                                                uint32_t tok1_pos = 0,
-                                                uint32_t input_pos_id = 0,
                                                 uint32_t slot_id = 0,
-                                                uint32_t k = 0,
-                                                uint32_t temperature = 0,
-                                                uint32_t probability_mass_threshold = 0,
+                                                uint32_t input_token_id = 0,
+                                                uint32_t input_pos_id = 0,
+                                                uint32_t prefill_token_id = 0,
+                                                uint32_t lane_idx = 0,
+                                                uint32_t window_start_pos = 0,
+                                                uint32_t num_window_tokens = 0,
+                                                const uint32_t* candidate_token_ids = nullptr,
+                                                const uint32_t* candidate_positions = nullptr,
                                                 uint32_t metadata_src_addr = 0) {
         volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb));
-        page[0] = token_type;
-        page[1] = tok0_id;
-        page[2] = tok0_pos;
-        page[3] = tok1_id;
-        page[4] = tok1_pos;
-        page[5] = slot_id;
-        page[6] = 0;             // token id
-        page[7] = input_pos_id;  // position id
-        page[8] = 0;             // prefill token id
-        page[9] = 0;             // reserved
-        page[10] = temperature;
-        page[11] = k;
-        page[12] = probability_mass_threshold;
+        for (uint32_t i = 0; i < deepseek_b1_ops::METADATA_PAGE_WORDS; ++i) {
+            page[i] = 0;
+        }
         if (metadata_src_addr != 0) {
             volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_src_addr);
-            for (uint32_t i = 16; i < 64; ++i) {
+            for (uint32_t i = 18; i <= 41; ++i) {
                 page[i] = src[i];
+            }
+        }
+        page[0] = token_type;
+        page[1] = slot_id;
+        page[2] = input_token_id;
+        page[3] = input_pos_id;
+        page[4] = prefill_token_id;
+        page[5] = lane_idx;
+        page[6] = window_start_pos;
+        page[7] = num_window_tokens;
+        if (candidate_token_ids != nullptr && candidate_positions != nullptr) {
+            for (uint32_t slot_idx = 0; slot_idx < deepseek_b1_ops::MAX_WINDOW_TOKENS; ++slot_idx) {
+                page[8 + slot_idx] = candidate_token_ids[slot_idx];
+                page[8 + deepseek_b1_ops::MAX_WINDOW_TOKENS + slot_idx] = candidate_positions[slot_idx];
             }
         }
     };
@@ -923,7 +921,7 @@ void kernel_main() {
         // increments `metadata_ready_semaphore_id` above. Sampling.hpp reads
         // temperature / k / probability_mass_threshold off this struct on the
         // base stage (enable_metadata=True), and the downstream `mtp` /
-        // `update_speculative_state` lambdas read tok0_*/slot_id from it
+        // `update_speculative_state` lambdas read candidate/slot fields from it
         // unconditionally. Waiting + clearing here means neither downstream
         // path needs its own wait, and avoids the prior race where sampling
         // started before metadata had landed.
@@ -1217,14 +1215,13 @@ void kernel_main() {
 
             invalidate_l1_cache();
             uint32_t token_type = metadata_ptr->token_type;
-            uint32_t base_token_pos = metadata_ptr->position_id;
-            uint32_t input_pos_id = metadata_ptr->tok0_pos + 1;
+            uint32_t base_token_pos = metadata_ptr->position_id + 1;
+            uint32_t input_pos_id = metadata_ptr->position_id;
             uint32_t slot_id = metadata_ptr->slot_id;
-            uint32_t k = metadata_ptr->k;
-            volatile tt_l1_ptr uint32_t* metadata_raw =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
-            uint32_t temperature = metadata_raw[10];
-            uint32_t probability_mass_threshold = metadata_raw[12];
+            uint32_t lane_idx = metadata_ptr->lane_idx;
+            uint32_t window_start_pos = metadata_ptr->window_start_pos + 1;
+            uint32_t num_window_tokens = metadata_ptr->num_window_tokens != 0 ? metadata_ptr->num_window_tokens
+                                                                              : Core::num_speculative_tokens + 1;
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t sampling_socket_cb = get_named_compile_time_arg_val("sampling_socket_cb");
@@ -1235,19 +1232,23 @@ void kernel_main() {
 
             cb_wait_front(sampling_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(sampling_socket_cb));
+            uint32_t candidate_token_ids[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            uint32_t candidate_positions[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            candidate_token_ids[0] = base_token_id;
+            candidate_positions[0] = base_token_pos;
             cb_reserve_back(eh_gather_dst_cb, 1);
             write_token_metadata_to_socket_cb(
                 eh_gather_dst_cb,
                 token_type,
-                base_token_id,
-                base_token_pos,
-                0,
+                slot_id,
                 0,
                 input_pos_id,
-                slot_id,
-                k,
-                temperature,
-                probability_mass_threshold,
+                0,
+                lane_idx,
+                window_start_pos,
+                num_window_tokens,
+                candidate_token_ids,
+                candidate_positions,
                 metadata_output_l1_addr);
             cb_push_back(eh_gather_dst_cb, 1);
             cb_pop_front(sampling_socket_cb, 1);
@@ -1264,8 +1265,7 @@ void kernel_main() {
     // token from metadata L1 (transferred by NCRISC during the broadcast phase), and
     // writes a TOKEN_META page with both tokens back to CB 6.
     //
-    // Metadata layout from base stage (at metadata_output_l1_addr):
-    //   [0] = token_type, [1] = tok0_id, [2] = tok0_pos, [3] = tok1_id, [4] = tok1_pos, ...
+    // Metadata layout from base stage (at metadata_output_l1_addr) is DeepseekMetadata.
     // ========================================================================
     auto update_speculative_state = [&]() {
 #if defined(COMPILE_FOR_BRISC)
@@ -1286,32 +1286,37 @@ void kernel_main() {
             volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
             invalidate_l1_cache();
-            uint32_t base_token_id = metadata_ptr->tok0_id;
+            uint32_t base_token_id = metadata_ptr->candidate_token_ids[0];
             uint32_t token_type = metadata_ptr->token_type;
-            uint32_t base_token_pos = metadata_ptr->tok0_pos + 1;
+            uint32_t base_token_pos = metadata_ptr->candidate_positions[0];
             uint32_t slot_id = metadata_ptr->slot_id;
-            uint32_t spec_token_pos = metadata_ptr->tok0_pos + 2;
+            uint32_t spec_token_pos = base_token_pos + 1;
             uint32_t input_pos_id = metadata_ptr->position_id;
-            uint32_t k = metadata_ptr->k;
-            volatile tt_l1_ptr uint32_t* metadata_raw2 =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
-            uint32_t temperature = metadata_raw2[10];
-            uint32_t probability_mass_threshold = metadata_raw2[12];
+            uint32_t lane_idx = metadata_ptr->lane_idx;
+            uint32_t window_start_pos = metadata_ptr->window_start_pos;
+            uint32_t num_window_tokens = metadata_ptr->num_window_tokens >= 2 ? metadata_ptr->num_window_tokens
+                                                                              : Core::num_speculative_tokens + 1;
             cb_pop_front(sampling_socket_cb, 1);
 
+            uint32_t candidate_token_ids[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            uint32_t candidate_positions[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            candidate_token_ids[0] = base_token_id;
+            candidate_positions[0] = base_token_pos;
+            candidate_token_ids[1] = spec_token_id;
+            candidate_positions[1] = spec_token_pos;
             cb_reserve_back(sampling_socket_cb, 1);
             write_token_metadata_to_socket_cb(
                 sampling_socket_cb,
                 token_type,
-                base_token_id,
-                base_token_pos,
-                spec_token_id,
-                spec_token_pos,
-                input_pos_id,
                 slot_id,
-                k,
-                temperature,
-                probability_mass_threshold,
+                0,
+                input_pos_id,
+                0,
+                lane_idx,
+                window_start_pos,
+                num_window_tokens,
+                candidate_token_ids,
+                candidate_positions,
                 metadata_output_l1_addr);
             cb_push_back(sampling_socket_cb, 1);
         }

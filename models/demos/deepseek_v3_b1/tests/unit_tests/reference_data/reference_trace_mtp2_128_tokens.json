@@ -1,0 +1,7971 @@
+{
+  "schema_version": 2,
+  "name": "spec_decode_host_fsm_case",
+  "metadata": {
+    "num_accepts": 80,
+    "num_rejects": 12
+  },
+  "params": {
+    "prompt_token_ids": [
+      0,
+      128803,
+      21750,
+      260,
+      3107,
+      15255,
+      2019,
+      396,
+      10340,
+      270,
+      48941,
+      26509,
+      1167,
+      16,
+      128804
+    ],
+    "max_new_tokens": 128,
+    "eos_token_id": 1,
+    "num_speculative_tokens": 2
+  },
+  "device_to_host": {
+    "prefill_results": [
+      {
+        "user_id": 0,
+        "type": "PREFILL",
+        "lane_idx": 0,
+        "window_start_pos": 15,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 128798,
+            "pos": 15
+          },
+          {
+            "token_id": 201,
+            "pos": 16
+          },
+          {
+            "token_id": 5,
+            "pos": 17
+          }
+        ],
+        "target_topn_tokens": [
+          128798,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "read_results": [
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 16,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 201,
+            "pos": 16
+          },
+          {
+            "token_id": 2581,
+            "pos": 17
+          },
+          {
+            "token_id": 477,
+            "pos": 18
+          }
+        ],
+        "target_topn_tokens": [
+          201,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 16,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 2581,
+            "pos": 17
+          },
+          {
+            "token_id": 477,
+            "pos": 18
+          },
+          {
+            "token_id": 2887,
+            "pos": 19
+          }
+        ],
+        "target_topn_tokens": [
+          2581,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 16,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 455,
+            "pos": 18
+          },
+          {
+            "token_id": 26509,
+            "pos": 19
+          },
+          {
+            "token_id": 8205,
+            "pos": 20
+          }
+        ],
+        "target_topn_tokens": [
+          455,
+          1350,
+          29752,
+          71480,
+          26509,
+          7,
+          3,
+          8,
+          1,
+          4
+        ],
+        "target_topn_probs": [
+          0.44515255093574524,
+          0.2382729947566986,
+          0.19346272945404053,
+          0.10355313867330551,
+          0.019558638334274292,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 18,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 477,
+            "pos": 18
+          },
+          {
+            "token_id": 2887,
+            "pos": 19
+          },
+          {
+            "token_id": 304,
+            "pos": 20
+          }
+        ],
+        "target_topn_tokens": [
+          477,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 18,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 2887,
+            "pos": 19
+          },
+          {
+            "token_id": 304,
+            "pos": 20
+          },
+          {
+            "token_id": 5085,
+            "pos": 21
+          }
+        ],
+        "target_topn_tokens": [
+          2887,
+          4985,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.8411305546760559,
+          0.15886946022510529,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 18,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 304,
+            "pos": 20
+          },
+          {
+            "token_id": 5085,
+            "pos": 21
+          },
+          {
+            "token_id": 260,
+            "pos": 22
+          }
+        ],
+        "target_topn_tokens": [
+          304,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 21,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 5085,
+            "pos": 21
+          },
+          {
+            "token_id": 260,
+            "pos": 22
+          },
+          {
+            "token_id": 2019,
+            "pos": 23
+          }
+        ],
+        "target_topn_tokens": [
+          5085,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 21,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 260,
+            "pos": 22
+          },
+          {
+            "token_id": 2019,
+            "pos": 23
+          },
+          {
+            "token_id": 396,
+            "pos": 24
+          }
+        ],
+        "target_topn_tokens": [
+          260,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 21,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 2019,
+            "pos": 23
+          },
+          {
+            "token_id": 396,
+            "pos": 24
+          },
+          {
+            "token_id": 10340,
+            "pos": 25
+          }
+        ],
+        "target_topn_tokens": [
+          2019,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 24,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 396,
+            "pos": 24
+          },
+          {
+            "token_id": 10340,
+            "pos": 25
+          },
+          {
+            "token_id": 270,
+            "pos": 26
+          }
+        ],
+        "target_topn_tokens": [
+          396,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 24,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 10340,
+            "pos": 25
+          },
+          {
+            "token_id": 270,
+            "pos": 26
+          },
+          {
+            "token_id": 48941,
+            "pos": 27
+          }
+        ],
+        "target_topn_tokens": [
+          10340,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 24,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 270,
+            "pos": 26
+          },
+          {
+            "token_id": 48941,
+            "pos": 27
+          },
+          {
+            "token_id": 26509,
+            "pos": 28
+          }
+        ],
+        "target_topn_tokens": [
+          270,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 27,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 48941,
+            "pos": 27
+          },
+          {
+            "token_id": 26509,
+            "pos": 28
+          },
+          {
+            "token_id": 1167,
+            "pos": 29
+          }
+        ],
+        "target_topn_tokens": [
+          48941,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 27,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 26509,
+            "pos": 28
+          },
+          {
+            "token_id": 1167,
+            "pos": 29
+          },
+          {
+            "token_id": 603,
+            "pos": 30
+          }
+        ],
+        "target_topn_tokens": [
+          26509,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 27,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 1167,
+            "pos": 29
+          },
+          {
+            "token_id": 603,
+            "pos": 30
+          },
+          {
+            "token_id": 1350,
+            "pos": 31
+          }
+        ],
+        "target_topn_tokens": [
+          1167,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 30,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 603,
+            "pos": 30
+          },
+          {
+            "token_id": 455,
+            "pos": 31
+          },
+          {
+            "token_id": 26509,
+            "pos": 32
+          }
+        ],
+        "target_topn_tokens": [
+          603,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 30,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 455,
+            "pos": 31
+          },
+          {
+            "token_id": 26509,
+            "pos": 32
+          },
+          {
+            "token_id": 8205,
+            "pos": 33
+          }
+        ],
+        "target_topn_tokens": [
+          455,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 30,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 7155,
+            "pos": 32
+          },
+          {
+            "token_id": 396,
+            "pos": 33
+          },
+          {
+            "token_id": 270,
+            "pos": 34
+          }
+        ],
+        "target_topn_tokens": [
+          7155,
+          12803,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.9241418242454529,
+          0.07585817575454712,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 32,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 26509,
+            "pos": 32
+          },
+          {
+            "token_id": 8205,
+            "pos": 33
+          },
+          {
+            "token_id": 344,
+            "pos": 34
+          }
+        ],
+        "target_topn_tokens": [
+          26509,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 32,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 8205,
+            "pos": 33
+          },
+          {
+            "token_id": 344,
+            "pos": 34
+          },
+          {
+            "token_id": 28,
+            "pos": 35
+          }
+        ],
+        "target_topn_tokens": [
+          8205,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 32,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 344,
+            "pos": 34
+          },
+          {
+            "token_id": 6428,
+            "pos": 35
+          },
+          {
+            "token_id": 412,
+            "pos": 36
+          }
+        ],
+        "target_topn_tokens": [
+          344,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 35,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 6428,
+            "pos": 35
+          },
+          {
+            "token_id": 412,
+            "pos": 36
+          },
+          {
+            "token_id": 7226,
+            "pos": 37
+          }
+        ],
+        "target_topn_tokens": [
+          6428,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 35,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 412,
+            "pos": 36
+          },
+          {
+            "token_id": 1137,
+            "pos": 37
+          },
+          {
+            "token_id": 262,
+            "pos": 38
+          }
+        ],
+        "target_topn_tokens": [
+          412,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 35,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 1137,
+            "pos": 37
+          },
+          {
+            "token_id": 262,
+            "pos": 38
+          },
+          {
+            "token_id": 447,
+            "pos": 39
+          }
+        ],
+        "target_topn_tokens": [
+          1137,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 38,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 262,
+            "pos": 38
+          },
+          {
+            "token_id": 447,
+            "pos": 39
+          },
+          {
+            "token_id": 10,
+            "pos": 40
+          }
+        ],
+        "target_topn_tokens": [
+          262,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 38,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 39
+          },
+          {
+            "token_id": 10,
+            "pos": 40
+          },
+          {
+            "token_id": 18,
+            "pos": 41
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 38,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 10,
+            "pos": 40
+          },
+          {
+            "token_id": 18,
+            "pos": 41
+          },
+          {
+            "token_id": 11,
+            "pos": 42
+          }
+        ],
+        "target_topn_tokens": [
+          10,
+          18,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.602684736251831,
+          0.39731526374816895,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 41,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 18,
+            "pos": 41
+          },
+          {
+            "token_id": 11,
+            "pos": 42
+          },
+          {
+            "token_id": 438,
+            "pos": 43
+          }
+        ],
+        "target_topn_tokens": [
+          18,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 41,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 42
+          },
+          {
+            "token_id": 438,
+            "pos": 43
+          },
+          {
+            "token_id": 223,
+            "pos": 44
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 41,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 438,
+            "pos": 43
+          },
+          {
+            "token_id": 223,
+            "pos": 44
+          },
+          {
+            "token_id": 18,
+            "pos": 45
+          }
+        ],
+        "target_topn_tokens": [
+          438,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 44,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 44
+          },
+          {
+            "token_id": 18,
+            "pos": 45
+          },
+          {
+            "token_id": 14,
+            "pos": 46
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 44,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 18,
+            "pos": 45
+          },
+          {
+            "token_id": 201,
+            "pos": 46
+          },
+          {
+            "token_id": 262,
+            "pos": 47
+          }
+        ],
+        "target_topn_tokens": [
+          18,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 44,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 201,
+            "pos": 46
+          },
+          {
+            "token_id": 262,
+            "pos": 47
+          },
+          {
+            "token_id": 369,
+            "pos": 48
+          }
+        ],
+        "target_topn_tokens": [
+          201,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 47,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 262,
+            "pos": 47
+          },
+          {
+            "token_id": 447,
+            "pos": 48
+          },
+          {
+            "token_id": 10,
+            "pos": 49
+          }
+        ],
+        "target_topn_tokens": [
+          262,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 47,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 48
+          },
+          {
+            "token_id": 10,
+            "pos": 49
+          },
+          {
+            "token_id": 19,
+            "pos": 50
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 47,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 49
+          },
+          {
+            "token_id": 10,
+            "pos": 50
+          },
+          {
+            "token_id": 19,
+            "pos": 51
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          10,
+          40,
+          8,
+          7,
+          3,
+          1,
+          4,
+          9,
+          5
+        ],
+        "target_topn_probs": [
+          0.6099902391433716,
+          0.2152445912361145,
+          0.17476513981819153,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 49,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 10,
+            "pos": 49
+          },
+          {
+            "token_id": 19,
+            "pos": 50
+          },
+          {
+            "token_id": 19,
+            "pos": 51
+          }
+        ],
+        "target_topn_tokens": [
+          10,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 49,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 50
+          },
+          {
+            "token_id": 11,
+            "pos": 51
+          },
+          {
+            "token_id": 438,
+            "pos": 52
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 49,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 51
+          },
+          {
+            "token_id": 438,
+            "pos": 52
+          },
+          {
+            "token_id": 19,
+            "pos": 53
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 52,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 438,
+            "pos": 52
+          },
+          {
+            "token_id": 223,
+            "pos": 53
+          },
+          {
+            "token_id": 19,
+            "pos": 54
+          }
+        ],
+        "target_topn_tokens": [
+          438,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 52,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 53
+          },
+          {
+            "token_id": 19,
+            "pos": 54
+          },
+          {
+            "token_id": 14,
+            "pos": 55
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 52,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 201,
+            "pos": 54
+          },
+          {
+            "token_id": 262,
+            "pos": 55
+          },
+          {
+            "token_id": 447,
+            "pos": 56
+          }
+        ],
+        "target_topn_tokens": [
+          201,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 54,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 54
+          },
+          {
+            "token_id": 201,
+            "pos": 55
+          },
+          {
+            "token_id": 539,
+            "pos": 56
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 54,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 201,
+            "pos": 55
+          },
+          {
+            "token_id": 262,
+            "pos": 56
+          },
+          {
+            "token_id": 447,
+            "pos": 57
+          }
+        ],
+        "target_topn_tokens": [
+          201,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 54,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 305,
+            "pos": 56
+          },
+          {
+            "token_id": 201,
+            "pos": 57
+          },
+          {
+            "token_id": 262,
+            "pos": 58
+          }
+        ],
+        "target_topn_tokens": [
+          305,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 56,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 262,
+            "pos": 56
+          },
+          {
+            "token_id": 447,
+            "pos": 57
+          },
+          {
+            "token_id": 3913,
+            "pos": 58
+          }
+        ],
+        "target_topn_tokens": [
+          262,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 56,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 57
+          },
+          {
+            "token_id": 3913,
+            "pos": 58
+          },
+          {
+            "token_id": 11,
+            "pos": 59
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 56,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 3913,
+            "pos": 58
+          },
+          {
+            "token_id": 11,
+            "pos": 59
+          },
+          {
+            "token_id": 438,
+            "pos": 60
+          }
+        ],
+        "target_topn_tokens": [
+          3913,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 59,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 59
+          },
+          {
+            "token_id": 438,
+            "pos": 60
+          },
+          {
+            "token_id": 447,
+            "pos": 61
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 59,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 438,
+            "pos": 60
+          },
+          {
+            "token_id": 447,
+            "pos": 61
+          },
+          {
+            "token_id": 3913,
+            "pos": 62
+          }
+        ],
+        "target_topn_tokens": [
+          438,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 59,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 61
+          },
+          {
+            "token_id": 3913,
+            "pos": 62
+          },
+          {
+            "token_id": 15,
+            "pos": 63
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 62,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 3913,
+            "pos": 62
+          },
+          {
+            "token_id": 15,
+            "pos": 63
+          },
+          {
+            "token_id": 19,
+            "pos": 64
+          }
+        ],
+        "target_topn_tokens": [
+          3913,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 62,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 15,
+            "pos": 63
+          },
+          {
+            "token_id": 19,
+            "pos": 64
+          },
+          {
+            "token_id": 29,
+            "pos": 65
+          }
+        ],
+        "target_topn_tokens": [
+          15,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 62,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 64
+          },
+          {
+            "token_id": 11,
+            "pos": 65
+          },
+          {
+            "token_id": 940,
+            "pos": 66
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 65,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 65
+          },
+          {
+            "token_id": 940,
+            "pos": 66
+          },
+          {
+            "token_id": 447,
+            "pos": 67
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 65,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 940,
+            "pos": 66
+          },
+          {
+            "token_id": 447,
+            "pos": 67
+          },
+          {
+            "token_id": 10,
+            "pos": 68
+          }
+        ],
+        "target_topn_tokens": [
+          940,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 65,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 447,
+            "pos": 67
+          },
+          {
+            "token_id": 3913,
+            "pos": 68
+          },
+          {
+            "token_id": 15,
+            "pos": 69
+          }
+        ],
+        "target_topn_tokens": [
+          447,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 68,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 3913,
+            "pos": 68
+          },
+          {
+            "token_id": 15,
+            "pos": 69
+          },
+          {
+            "token_id": 20,
+            "pos": 70
+          }
+        ],
+        "target_topn_tokens": [
+          3913,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 68,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 15,
+            "pos": 69
+          },
+          {
+            "token_id": 20,
+            "pos": 70
+          },
+          {
+            "token_id": 11,
+            "pos": 71
+          }
+        ],
+        "target_topn_tokens": [
+          15,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 68,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 20,
+            "pos": 70
+          },
+          {
+            "token_id": 11,
+            "pos": 71
+          },
+          {
+            "token_id": 362,
+            "pos": 72
+          }
+        ],
+        "target_topn_tokens": [
+          20,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 71,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 71
+          },
+          {
+            "token_id": 362,
+            "pos": 72
+          },
+          {
+            "token_id": 313,
+            "pos": 73
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 71,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 362,
+            "pos": 72
+          },
+          {
+            "token_id": 313,
+            "pos": 73
+          },
+          {
+            "token_id": 11620,
+            "pos": 74
+          }
+        ],
+        "target_topn_tokens": [
+          362,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 71,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 313,
+            "pos": 73
+          },
+          {
+            "token_id": 1955,
+            "pos": 74
+          },
+          {
+            "token_id": 223,
+            "pos": 75
+          }
+        ],
+        "target_topn_tokens": [
+          313,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 74,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 11620,
+            "pos": 74
+          },
+          {
+            "token_id": 223,
+            "pos": 75
+          },
+          {
+            "token_id": 20,
+            "pos": 76
+          }
+        ],
+        "target_topn_tokens": [
+          11620,
+          1955,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.8411305546760559,
+          0.1588694453239441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 74,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 75
+          },
+          {
+            "token_id": 19,
+            "pos": 76
+          },
+          {
+            "token_id": 201,
+            "pos": 77
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 74,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 76
+          },
+          {
+            "token_id": 339,
+            "pos": 77
+          },
+          {
+            "token_id": 1350,
+            "pos": 78
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 75,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 75
+          },
+          {
+            "token_id": 20,
+            "pos": 76
+          },
+          {
+            "token_id": 271,
+            "pos": 77
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 75,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 20,
+            "pos": 76
+          },
+          {
+            "token_id": 339,
+            "pos": 77
+          },
+          {
+            "token_id": 1350,
+            "pos": 78
+          }
+        ],
+        "target_topn_tokens": [
+          20,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 75,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 271,
+            "pos": 77
+          },
+          {
+            "token_id": 1350,
+            "pos": 78
+          },
+          {
+            "token_id": 588,
+            "pos": 79
+          }
+        ],
+        "target_topn_tokens": [
+          271,
+          339,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.7772998809814453,
+          0.22270014882087708,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 78,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 1350,
+            "pos": 78
+          },
+          {
+            "token_id": 588,
+            "pos": 79
+          },
+          {
+            "token_id": 1347,
+            "pos": 80
+          }
+        ],
+        "target_topn_tokens": [
+          1350,
+          3211,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.9486640691757202,
+          0.05133591592311859,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 78,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 588,
+            "pos": 79
+          },
+          {
+            "token_id": 1347,
+            "pos": 80
+          },
+          {
+            "token_id": 78157,
+            "pos": 81
+          }
+        ],
+        "target_topn_tokens": [
+          588,
+          611,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.8411305546760559,
+          0.1588694453239441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 78,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 1347,
+            "pos": 80
+          },
+          {
+            "token_id": 260,
+            "pos": 81
+          },
+          {
+            "token_id": 50494,
+            "pos": 82
+          }
+        ],
+        "target_topn_tokens": [
+          1347,
+          696,
+          4090,
+          8,
+          7,
+          3,
+          1,
+          4,
+          9,
+          5
+        ],
+        "target_topn_probs": [
+          0.7459244728088379,
+          0.2137109488248825,
+          0.0403645820915699,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 81,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 411,
+            "pos": 81
+          },
+          {
+            "token_id": 58112,
+            "pos": 82
+          },
+          {
+            "token_id": 4090,
+            "pos": 83
+          }
+        ],
+        "target_topn_tokens": [
+          411,
+          58112,
+          78157,
+          260,
+          3,
+          7,
+          8,
+          1,
+          4,
+          9
+        ],
+        "target_topn_probs": [
+          0.4165678024291992,
+          0.27461910247802734,
+          0.27461910247802734,
+          0.034193966537714005,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 81,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 4654,
+            "pos": 82
+          },
+          {
+            "token_id": 58112,
+            "pos": 83
+          },
+          {
+            "token_id": 4090,
+            "pos": 84
+          }
+        ],
+        "target_topn_tokens": [
+          4654,
+          50494,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.6970582604408264,
+          0.30294179916381836,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 81,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 4090,
+            "pos": 83
+          },
+          {
+            "token_id": 14,
+            "pos": 84
+          },
+          {
+            "token_id": 790,
+            "pos": 85
+          }
+        ],
+        "target_topn_tokens": [
+          4090,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 84,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 14,
+            "pos": 84
+          },
+          {
+            "token_id": 790,
+            "pos": 85
+          },
+          {
+            "token_id": 7155,
+            "pos": 86
+          }
+        ],
+        "target_topn_tokens": [
+          14,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 84,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 790,
+            "pos": 85
+          },
+          {
+            "token_id": 7155,
+            "pos": 86
+          },
+          {
+            "token_id": 396,
+            "pos": 87
+          }
+        ],
+        "target_topn_tokens": [
+          790,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 84,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 436,
+            "pos": 86
+          },
+          {
+            "token_id": 344,
+            "pos": 87
+          },
+          {
+            "token_id": 64975,
+            "pos": 88
+          }
+        ],
+        "target_topn_tokens": [
+          7155,
+          436,
+          396,
+          8,
+          7,
+          3,
+          1,
+          4,
+          9,
+          5
+        ],
+        "target_topn_probs": [
+          0.37604695558547974,
+          0.37604695558547974,
+          0.24790604412555695,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 87,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 344,
+            "pos": 87
+          },
+          {
+            "token_id": 64975,
+            "pos": 88
+          },
+          {
+            "token_id": 362,
+            "pos": 89
+          }
+        ],
+        "target_topn_tokens": [
+          344,
+          734,
+          7706,
+          8,
+          7,
+          3,
+          1,
+          4,
+          9,
+          5
+        ],
+        "target_topn_probs": [
+          0.6159620881080627,
+          0.26769739389419556,
+          0.1163405179977417,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 87,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 64975,
+            "pos": 88
+          },
+          {
+            "token_id": 362,
+            "pos": 89
+          },
+          {
+            "token_id": 3226,
+            "pos": 90
+          }
+        ],
+        "target_topn_tokens": [
+          64975,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 87,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 362,
+            "pos": 89
+          },
+          {
+            "token_id": 3226,
+            "pos": 90
+          },
+          {
+            "token_id": 313,
+            "pos": 91
+          }
+        ],
+        "target_topn_tokens": [
+          362,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 90,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 3226,
+            "pos": 90
+          },
+          {
+            "token_id": 313,
+            "pos": 91
+          },
+          {
+            "token_id": 603,
+            "pos": 92
+          }
+        ],
+        "target_topn_tokens": [
+          3226,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 90,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 313,
+            "pos": 91
+          },
+          {
+            "token_id": 1754,
+            "pos": 92
+          },
+          {
+            "token_id": 270,
+            "pos": 93
+          }
+        ],
+        "target_topn_tokens": [
+          313,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 90,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 3504,
+            "pos": 92
+          },
+          {
+            "token_id": 304,
+            "pos": 93
+          },
+          {
+            "token_id": 270,
+            "pos": 94
+          }
+        ],
+        "target_topn_tokens": [
+          3504,
+          1754,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.977022647857666,
+          0.022977370768785477,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 93,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 304,
+            "pos": 93
+          },
+          {
+            "token_id": 12529,
+            "pos": 94
+          },
+          {
+            "token_id": 16966,
+            "pos": 95
+          }
+        ],
+        "target_topn_tokens": [
+          304,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 93,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 12529,
+            "pos": 94
+          },
+          {
+            "token_id": 16966,
+            "pos": 95
+          },
+          {
+            "token_id": 603,
+            "pos": 96
+          }
+        ],
+        "target_topn_tokens": [
+          12529,
+          33732,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.889272928237915,
+          0.11072706431150436,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 93,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 33732,
+            "pos": 95
+          },
+          {
+            "token_id": 1014,
+            "pos": 96
+          },
+          {
+            "token_id": 15599,
+            "pos": 97
+          }
+        ],
+        "target_topn_tokens": [
+          33732,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 95,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 16966,
+            "pos": 95
+          },
+          {
+            "token_id": 603,
+            "pos": 96
+          },
+          {
+            "token_id": 1350,
+            "pos": 97
+          }
+        ],
+        "target_topn_tokens": [
+          16966,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 95,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 603,
+            "pos": 96
+          },
+          {
+            "token_id": 13548,
+            "pos": 97
+          },
+          {
+            "token_id": 14,
+            "pos": 98
+          }
+        ],
+        "target_topn_tokens": [
+          603,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 95,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 13548,
+            "pos": 97
+          },
+          {
+            "token_id": 14,
+            "pos": 98
+          },
+          {
+            "token_id": 579,
+            "pos": 99
+          }
+        ],
+        "target_topn_tokens": [
+          13548,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 98,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 14,
+            "pos": 98
+          },
+          {
+            "token_id": 579,
+            "pos": 99
+          },
+          {
+            "token_id": 588,
+            "pos": 100
+          }
+        ],
+        "target_topn_tokens": [
+          14,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 98,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 579,
+            "pos": 99
+          },
+          {
+            "token_id": 588,
+            "pos": 100
+          },
+          {
+            "token_id": 1347,
+            "pos": 101
+          }
+        ],
+        "target_topn_tokens": [
+          579,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 98,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 588,
+            "pos": 100
+          },
+          {
+            "token_id": 1347,
+            "pos": 101
+          },
+          {
+            "token_id": 411,
+            "pos": 102
+          }
+        ],
+        "target_topn_tokens": [
+          588,
+          5922,
+          1347,
+          8,
+          7,
+          3,
+          1,
+          4,
+          9,
+          5
+        ],
+        "target_topn_probs": [
+          0.6159620881080627,
+          0.26769739389419556,
+          0.1163405179977417,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 101,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 1347,
+            "pos": 101
+          },
+          {
+            "token_id": 411,
+            "pos": 102
+          },
+          {
+            "token_id": 58112,
+            "pos": 103
+          }
+        ],
+        "target_topn_tokens": [
+          1347,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 101,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 411,
+            "pos": 102
+          },
+          {
+            "token_id": 58112,
+            "pos": 103
+          },
+          {
+            "token_id": 4090,
+            "pos": 104
+          }
+        ],
+        "target_topn_tokens": [
+          411,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 101,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 58112,
+            "pos": 103
+          },
+          {
+            "token_id": 4090,
+            "pos": 104
+          },
+          {
+            "token_id": 304,
+            "pos": 105
+          }
+        ],
+        "target_topn_tokens": [
+          58112,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 104,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 4090,
+            "pos": 104
+          },
+          {
+            "token_id": 304,
+            "pos": 105
+          },
+          {
+            "token_id": 23917,
+            "pos": 106
+          }
+        ],
+        "target_topn_tokens": [
+          4090,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 104,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 396,
+            "pos": 105
+          },
+          {
+            "token_id": 344,
+            "pos": 106
+          },
+          {
+            "token_id": 8281,
+            "pos": 107
+          }
+        ],
+        "target_topn_tokens": [
+          778,
+          396,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.7772998809814453,
+          0.22270014882087708,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 104,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 23917,
+            "pos": 106
+          },
+          {
+            "token_id": 270,
+            "pos": 107
+          },
+          {
+            "token_id": 26509,
+            "pos": 108
+          }
+        ],
+        "target_topn_tokens": [
+          23917,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 106,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 12122,
+            "pos": 106
+          },
+          {
+            "token_id": 295,
+            "pos": 107
+          },
+          {
+            "token_id": 541,
+            "pos": 108
+          }
+        ],
+        "target_topn_tokens": [
+          12122,
+          6623,
+          344,
+          8,
+          7,
+          3,
+          1,
+          4,
+          9,
+          5
+        ],
+        "target_topn_probs": [
+          0.8801278471946716,
+          0.072245292365551,
+          0.047626793384552,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 106,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 850,
+            "pos": 107
+          },
+          {
+            "token_id": 8281,
+            "pos": 108
+          },
+          {
+            "token_id": 339,
+            "pos": 109
+          }
+        ],
+        "target_topn_tokens": [
+          850,
+          8281,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.889272928237915,
+          0.11072707176208496,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 106,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 339,
+            "pos": 108
+          },
+          {
+            "token_id": 4480,
+            "pos": 109
+          },
+          {
+            "token_id": 734,
+            "pos": 110
+          }
+        ],
+        "target_topn_tokens": [
+          339,
+          305,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.889272153377533,
+          0.11072781682014465,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 107,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 295,
+            "pos": 107
+          },
+          {
+            "token_id": 541,
+            "pos": 108
+          },
+          {
+            "token_id": 3913,
+            "pos": 109
+          }
+        ],
+        "target_topn_tokens": [
+          295,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 107,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 541,
+            "pos": 108
+          },
+          {
+            "token_id": 3913,
+            "pos": 109
+          },
+          {
+            "token_id": 11,
+            "pos": 110
+          }
+        ],
+        "target_topn_tokens": [
+          541,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 107,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 3913,
+            "pos": 109
+          },
+          {
+            "token_id": 11,
+            "pos": 110
+          },
+          {
+            "token_id": 579,
+            "pos": 111
+          }
+        ],
+        "target_topn_tokens": [
+          3913,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 110,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 110
+          },
+          {
+            "token_id": 1014,
+            "pos": 111
+          },
+          {
+            "token_id": 305,
+            "pos": 112
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 110,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 1014,
+            "pos": 111
+          },
+          {
+            "token_id": 305,
+            "pos": 112
+          },
+          {
+            "token_id": 344,
+            "pos": 113
+          }
+        ],
+        "target_topn_tokens": [
+          1014,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 110,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 588,
+            "pos": 112
+          },
+          {
+            "token_id": 990,
+            "pos": 113
+          },
+          {
+            "token_id": 1347,
+            "pos": 114
+          }
+        ],
+        "target_topn_tokens": [
+          588,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 112,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 305,
+            "pos": 112
+          },
+          {
+            "token_id": 541,
+            "pos": 113
+          },
+          {
+            "token_id": 3913,
+            "pos": 114
+          }
+        ],
+        "target_topn_tokens": [
+          305,
+          339,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.9486640691757202,
+          0.05133591592311859,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 112,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 541,
+            "pos": 113
+          },
+          {
+            "token_id": 10,
+            "pos": 114
+          },
+          {
+            "token_id": 19,
+            "pos": 115
+          }
+        ],
+        "target_topn_tokens": [
+          6623,
+          541,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.6026865243911743,
+          0.3973134458065033,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 112,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 8281,
+            "pos": 114
+          },
+          {
+            "token_id": 339,
+            "pos": 115
+          },
+          {
+            "token_id": 1350,
+            "pos": 116
+          }
+        ],
+        "target_topn_tokens": [
+          8281,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 114,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 10,
+            "pos": 114
+          },
+          {
+            "token_id": 19,
+            "pos": 115
+          },
+          {
+            "token_id": 11,
+            "pos": 116
+          }
+        ],
+        "target_topn_tokens": [
+          10,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 114,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 115
+          },
+          {
+            "token_id": 11,
+            "pos": 116
+          },
+          {
+            "token_id": 2019,
+            "pos": 117
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 114,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 11,
+            "pos": 116
+          },
+          {
+            "token_id": 3987,
+            "pos": 117
+          },
+          {
+            "token_id": 339,
+            "pos": 118
+          }
+        ],
+        "target_topn_tokens": [
+          11,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 117,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 3987,
+            "pos": 117
+          },
+          {
+            "token_id": 339,
+            "pos": 118
+          },
+          {
+            "token_id": 1350,
+            "pos": 119
+          }
+        ],
+        "target_topn_tokens": [
+          3987,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 117,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 339,
+            "pos": 118
+          },
+          {
+            "token_id": 30330,
+            "pos": 119
+          },
+          {
+            "token_id": 1137,
+            "pos": 120
+          }
+        ],
+        "target_topn_tokens": [
+          339,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 117,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 30330,
+            "pos": 119
+          },
+          {
+            "token_id": 1137,
+            "pos": 120
+          },
+          {
+            "token_id": 262,
+            "pos": 121
+          }
+        ],
+        "target_topn_tokens": [
+          30330,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 120,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 362,
+            "pos": 120
+          },
+          {
+            "token_id": 58112,
+            "pos": 121
+          },
+          {
+            "token_id": 4090,
+            "pos": 122
+          }
+        ],
+        "target_topn_tokens": [
+          1137,
+          362,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.5,
+          0.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 120,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 262,
+            "pos": 121
+          },
+          {
+            "token_id": 2052,
+            "pos": 122
+          },
+          {
+            "token_id": 313,
+            "pos": 123
+          }
+        ],
+        "target_topn_tokens": [
+          262,
+          223,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.9486640691757202,
+          0.05133591592311859,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 120,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 2052,
+            "pos": 122
+          },
+          {
+            "token_id": 313,
+            "pos": 123
+          },
+          {
+            "token_id": 344,
+            "pos": 124
+          }
+        ],
+        "target_topn_tokens": [
+          2052,
+          855,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.7772998809814453,
+          0.22270014882087708,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 123,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 313,
+            "pos": 123
+          },
+          {
+            "token_id": 344,
+            "pos": 124
+          },
+          {
+            "token_id": 223,
+            "pos": 125
+          }
+        ],
+        "target_topn_tokens": [
+          313,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 123,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 344,
+            "pos": 124
+          },
+          {
+            "token_id": 223,
+            "pos": 125
+          },
+          {
+            "token_id": 18,
+            "pos": 126
+          }
+        ],
+        "target_topn_tokens": [
+          344,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 123,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 125
+          },
+          {
+            "token_id": 18,
+            "pos": 126
+          },
+          {
+            "token_id": 14,
+            "pos": 127
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 126,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 18,
+            "pos": 126
+          },
+          {
+            "token_id": 14,
+            "pos": 127
+          },
+          {
+            "token_id": 1354,
+            "pos": 128
+          }
+        ],
+        "target_topn_tokens": [
+          18,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 126,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 14,
+            "pos": 127
+          },
+          {
+            "token_id": 1354,
+            "pos": 128
+          },
+          {
+            "token_id": 223,
+            "pos": 129
+          }
+        ],
+        "target_topn_tokens": [
+          14,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 126,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 1354,
+            "pos": 128
+          },
+          {
+            "token_id": 223,
+            "pos": 129
+          },
+          {
+            "token_id": 18,
+            "pos": 130
+          }
+        ],
+        "target_topn_tokens": [
+          1354,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 129,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 129
+          },
+          {
+            "token_id": 18,
+            "pos": 130
+          },
+          {
+            "token_id": 14,
+            "pos": 131
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 129,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 18,
+            "pos": 130
+          },
+          {
+            "token_id": 603,
+            "pos": 131
+          },
+          {
+            "token_id": 262,
+            "pos": 132
+          }
+        ],
+        "target_topn_tokens": [
+          18,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 129,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 603,
+            "pos": 131
+          },
+          {
+            "token_id": 262,
+            "pos": 132
+          },
+          {
+            "token_id": 2052,
+            "pos": 133
+          }
+        ],
+        "target_topn_tokens": [
+          603,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 132,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 262,
+            "pos": 132
+          },
+          {
+            "token_id": 2052,
+            "pos": 133
+          },
+          {
+            "token_id": 313,
+            "pos": 134
+          }
+        ],
+        "target_topn_tokens": [
+          262,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 132,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 2052,
+            "pos": 133
+          },
+          {
+            "token_id": 313,
+            "pos": 134
+          },
+          {
+            "token_id": 344,
+            "pos": 135
+          }
+        ],
+        "target_topn_tokens": [
+          2052,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 132,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 313,
+            "pos": 134
+          },
+          {
+            "token_id": 344,
+            "pos": 135
+          },
+          {
+            "token_id": 223,
+            "pos": 136
+          }
+        ],
+        "target_topn_tokens": [
+          313,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 135,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 344,
+            "pos": 135
+          },
+          {
+            "token_id": 223,
+            "pos": 136
+          },
+          {
+            "token_id": 19,
+            "pos": 137
+          }
+        ],
+        "target_topn_tokens": [
+          344,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 135,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 136
+          },
+          {
+            "token_id": 19,
+            "pos": 137
+          },
+          {
+            "token_id": 14,
+            "pos": 138
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 135,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 137
+          },
+          {
+            "token_id": 14,
+            "pos": 138
+          },
+          {
+            "token_id": 1354,
+            "pos": 139
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 138,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 14,
+            "pos": 138
+          },
+          {
+            "token_id": 1354,
+            "pos": 139
+          },
+          {
+            "token_id": 223,
+            "pos": 140
+          }
+        ],
+        "target_topn_tokens": [
+          14,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 138,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 1354,
+            "pos": 139
+          },
+          {
+            "token_id": 223,
+            "pos": 140
+          },
+          {
+            "token_id": 19,
+            "pos": 141
+          }
+        ],
+        "target_topn_tokens": [
+          1354,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 138,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 223,
+            "pos": 140
+          },
+          {
+            "token_id": 19,
+            "pos": 141
+          },
+          {
+            "token_id": 28,
+            "pos": 142
+          }
+        ],
+        "target_topn_tokens": [
+          223,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 141,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 141
+          },
+          {
+            "token_id": 603,
+            "pos": 142
+          },
+          {
+            "token_id": 128799,
+            "pos": 143
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 141,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 603,
+            "pos": 142
+          },
+          {
+            "token_id": 262,
+            "pos": 143
+          },
+          {
+            "token_id": 1884,
+            "pos": 144
+          }
+        ],
+        "target_topn_tokens": [
+          603,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 141,
+        "num_window_tokens": 3,
+        "tokens": [
+          {
+            "token_id": 603,
+            "pos": 143
+          },
+          {
+            "token_id": 262,
+            "pos": 144
+          },
+          {
+            "token_id": 1884,
+            "pos": 145
+          }
+        ],
+        "target_topn_tokens": [
+          603,
+          539,
+          1350,
+          579,
+          223,
+          447,
+          7,
+          3,
+          8,
+          1
+        ],
+        "target_topn_probs": [
+          0.6118081212043762,
+          0.3274773061275482,
+          0.021825667470693588,
+          0.01772107370197773,
+          0.011682437732815742,
+          0.00948540773242712,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "expected_host": {
+    "generated_tokens": [
+      128798,
+      201,
+      2581,
+      477,
+      2887,
+      304,
+      5085,
+      260,
+      2019,
+      396,
+      10340,
+      270,
+      48941,
+      26509,
+      1167,
+      603,
+      455,
+      26509,
+      8205,
+      344,
+      6428,
+      412,
+      1137,
+      262,
+      447,
+      10,
+      18,
+      11,
+      438,
+      223,
+      18,
+      201,
+      262,
+      447,
+      10,
+      19,
+      11,
+      438,
+      223,
+      19,
+      201,
+      262,
+      447,
+      3913,
+      11,
+      438,
+      447,
+      3913,
+      15,
+      19,
+      11,
+      940,
+      447,
+      3913,
+      15,
+      20,
+      11,
+      362,
+      313,
+      11620,
+      223,
+      20,
+      271,
+      1350,
+      588,
+      1347,
+      260,
+      50494,
+      4090,
+      14,
+      790,
+      436,
+      344,
+      64975,
+      362,
+      3226,
+      313,
+      3504,
+      304,
+      12529,
+      16966,
+      603,
+      13548,
+      14,
+      579,
+      588,
+      1347,
+      411,
+      58112,
+      4090,
+      396,
+      12122,
+      295,
+      541,
+      3913,
+      11,
+      1014,
+      305,
+      541,
+      10,
+      19,
+      11,
+      3987,
+      339,
+      30330,
+      1137,
+      262,
+      2052,
+      313,
+      344,
+      223,
+      18,
+      14,
+      1354,
+      223,
+      18,
+      603,
+      262,
+      2052,
+      313,
+      344,
+      223,
+      19,
+      14,
+      1354,
+      223,
+      19,
+      603
+    ],
+    "writes": [
+      {
+        "token_id": 128798,
+        "type": "BASE",
+        "pos": 15,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 15,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 201,
+        "type": "SPEC",
+        "pos": 16,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 15,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 5,
+        "type": "SPEC",
+        "pos": 17,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 15,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 2581,
+        "type": "BASE",
+        "pos": 17,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 17,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 477,
+        "type": "SPEC",
+        "pos": 18,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 17,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 2887,
+        "type": "SPEC",
+        "pos": 19,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 17,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 304,
+        "type": "BASE",
+        "pos": 20,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 20,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 5085,
+        "type": "SPEC",
+        "pos": 21,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 20,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 260,
+        "type": "SPEC",
+        "pos": 22,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 20,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 2019,
+        "type": "BASE",
+        "pos": 23,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 23,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 396,
+        "type": "SPEC",
+        "pos": 24,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 23,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 10340,
+        "type": "SPEC",
+        "pos": 25,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 23,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 270,
+        "type": "BASE",
+        "pos": 26,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 26,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 48941,
+        "type": "SPEC",
+        "pos": 27,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 26,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 26509,
+        "type": "SPEC",
+        "pos": 28,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 26,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1167,
+        "type": "BASE",
+        "pos": 29,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 29,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 603,
+        "type": "SPEC",
+        "pos": 30,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 29,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1350,
+        "type": "SPEC",
+        "pos": 31,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 29,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 455,
+        "type": "BASE",
+        "pos": 31,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 31,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 26509,
+        "type": "SPEC",
+        "pos": 32,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 31,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 8205,
+        "type": "SPEC",
+        "pos": 33,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 31,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 344,
+        "type": "BASE",
+        "pos": 34,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 34,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 6428,
+        "type": "SPEC",
+        "pos": 35,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 34,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 412,
+        "type": "SPEC",
+        "pos": 36,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 34,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1137,
+        "type": "BASE",
+        "pos": 37,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 37,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 262,
+        "type": "SPEC",
+        "pos": 38,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 37,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 447,
+        "type": "SPEC",
+        "pos": 39,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 37,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 10,
+        "type": "BASE",
+        "pos": 40,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 40,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 18,
+        "type": "SPEC",
+        "pos": 41,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 40,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 11,
+        "type": "SPEC",
+        "pos": 42,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 40,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 438,
+        "type": "BASE",
+        "pos": 43,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 43,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 44,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 43,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 18,
+        "type": "SPEC",
+        "pos": 45,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 43,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 201,
+        "type": "BASE",
+        "pos": 46,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 46,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 262,
+        "type": "SPEC",
+        "pos": 47,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 46,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 369,
+        "type": "SPEC",
+        "pos": 48,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 46,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 447,
+        "type": "BASE",
+        "pos": 48,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 48,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 10,
+        "type": "SPEC",
+        "pos": 49,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 48,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 19,
+        "type": "SPEC",
+        "pos": 50,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 48,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 11,
+        "type": "BASE",
+        "pos": 51,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 51,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 438,
+        "type": "SPEC",
+        "pos": 52,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 51,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 19,
+        "type": "SPEC",
+        "pos": 53,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 51,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 223,
+        "type": "BASE",
+        "pos": 53,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 53,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 19,
+        "type": "SPEC",
+        "pos": 54,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 53,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 55,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 53,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 201,
+        "type": "BASE",
+        "pos": 55,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 55,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 262,
+        "type": "SPEC",
+        "pos": 56,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 55,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 447,
+        "type": "SPEC",
+        "pos": 57,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 55,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 3913,
+        "type": "BASE",
+        "pos": 58,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 58,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 11,
+        "type": "SPEC",
+        "pos": 59,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 58,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 438,
+        "type": "SPEC",
+        "pos": 60,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 58,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 447,
+        "type": "BASE",
+        "pos": 61,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 61,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 3913,
+        "type": "SPEC",
+        "pos": 62,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 61,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 15,
+        "type": "SPEC",
+        "pos": 63,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 61,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 19,
+        "type": "BASE",
+        "pos": 64,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 64,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 11,
+        "type": "SPEC",
+        "pos": 65,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 64,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 940,
+        "type": "SPEC",
+        "pos": 66,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 64,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 447,
+        "type": "BASE",
+        "pos": 67,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 67,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 3913,
+        "type": "SPEC",
+        "pos": 68,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 67,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 15,
+        "type": "SPEC",
+        "pos": 69,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 67,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 20,
+        "type": "BASE",
+        "pos": 70,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 70,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 11,
+        "type": "SPEC",
+        "pos": 71,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 70,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 362,
+        "type": "SPEC",
+        "pos": 72,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 70,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 313,
+        "type": "BASE",
+        "pos": 73,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 73,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1955,
+        "type": "SPEC",
+        "pos": 74,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 73,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 75,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 73,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 11620,
+        "type": "BASE",
+        "pos": 74,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 74,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 75,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 74,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 20,
+        "type": "SPEC",
+        "pos": 76,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 74,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 271,
+        "type": "BASE",
+        "pos": 77,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 77,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1350,
+        "type": "SPEC",
+        "pos": 78,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 77,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 588,
+        "type": "SPEC",
+        "pos": 79,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 77,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1347,
+        "type": "BASE",
+        "pos": 80,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 80,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 260,
+        "type": "SPEC",
+        "pos": 81,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 80,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 50494,
+        "type": "SPEC",
+        "pos": 82,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 80,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 4090,
+        "type": "BASE",
+        "pos": 83,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 83,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 84,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 83,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 790,
+        "type": "SPEC",
+        "pos": 85,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 83,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 436,
+        "type": "BASE",
+        "pos": 86,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 86,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 344,
+        "type": "SPEC",
+        "pos": 87,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 86,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 64975,
+        "type": "SPEC",
+        "pos": 88,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 86,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 362,
+        "type": "BASE",
+        "pos": 89,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 89,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 3226,
+        "type": "SPEC",
+        "pos": 90,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 89,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 313,
+        "type": "SPEC",
+        "pos": 91,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 89,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 3504,
+        "type": "BASE",
+        "pos": 92,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 92,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 304,
+        "type": "SPEC",
+        "pos": 93,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 92,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 270,
+        "type": "SPEC",
+        "pos": 94,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 92,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 12529,
+        "type": "BASE",
+        "pos": 94,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 94,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 16966,
+        "type": "SPEC",
+        "pos": 95,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 94,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 603,
+        "type": "SPEC",
+        "pos": 96,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 94,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 13548,
+        "type": "BASE",
+        "pos": 97,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 97,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 98,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 97,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 579,
+        "type": "SPEC",
+        "pos": 99,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 97,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 588,
+        "type": "BASE",
+        "pos": 100,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 100,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1347,
+        "type": "SPEC",
+        "pos": 101,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 100,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 411,
+        "type": "SPEC",
+        "pos": 102,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 100,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 58112,
+        "type": "BASE",
+        "pos": 103,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 103,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 4090,
+        "type": "SPEC",
+        "pos": 104,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 103,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 304,
+        "type": "SPEC",
+        "pos": 105,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 103,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 396,
+        "type": "BASE",
+        "pos": 105,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 105,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 344,
+        "type": "SPEC",
+        "pos": 106,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 105,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 8281,
+        "type": "SPEC",
+        "pos": 107,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 105,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 12122,
+        "type": "BASE",
+        "pos": 106,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 106,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 295,
+        "type": "SPEC",
+        "pos": 107,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 106,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 541,
+        "type": "SPEC",
+        "pos": 108,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 106,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 3913,
+        "type": "BASE",
+        "pos": 109,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 109,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 11,
+        "type": "SPEC",
+        "pos": 110,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 109,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 579,
+        "type": "SPEC",
+        "pos": 111,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 109,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1014,
+        "type": "BASE",
+        "pos": 111,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 111,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 305,
+        "type": "SPEC",
+        "pos": 112,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 111,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 344,
+        "type": "SPEC",
+        "pos": 113,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 111,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 541,
+        "type": "BASE",
+        "pos": 113,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 113,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 10,
+        "type": "SPEC",
+        "pos": 114,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 113,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 19,
+        "type": "SPEC",
+        "pos": 115,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 113,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 11,
+        "type": "BASE",
+        "pos": 116,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 116,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 3987,
+        "type": "SPEC",
+        "pos": 117,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 116,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 339,
+        "type": "SPEC",
+        "pos": 118,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 116,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 30330,
+        "type": "BASE",
+        "pos": 119,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 119,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1137,
+        "type": "SPEC",
+        "pos": 120,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 119,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 262,
+        "type": "SPEC",
+        "pos": 121,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 119,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 2052,
+        "type": "BASE",
+        "pos": 122,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 122,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 313,
+        "type": "SPEC",
+        "pos": 123,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 122,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 344,
+        "type": "SPEC",
+        "pos": 124,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 122,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 223,
+        "type": "BASE",
+        "pos": 125,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 125,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 18,
+        "type": "SPEC",
+        "pos": 126,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 125,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 127,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 125,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1354,
+        "type": "BASE",
+        "pos": 128,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 128,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 129,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 128,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 18,
+        "type": "SPEC",
+        "pos": 130,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 128,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 603,
+        "type": "BASE",
+        "pos": 131,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 131,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 262,
+        "type": "SPEC",
+        "pos": 132,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 131,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 2052,
+        "type": "SPEC",
+        "pos": 133,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 131,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 313,
+        "type": "BASE",
+        "pos": 134,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 134,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 344,
+        "type": "SPEC",
+        "pos": 135,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 134,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 136,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 134,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 19,
+        "type": "BASE",
+        "pos": 137,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 137,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 14,
+        "type": "SPEC",
+        "pos": 138,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 137,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 1354,
+        "type": "SPEC",
+        "pos": 139,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 137,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 223,
+        "type": "BASE",
+        "pos": 140,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 140,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 19,
+        "type": "SPEC",
+        "pos": 141,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 140,
+        "num_window_tokens": 3
+      },
+      {
+        "token_id": 28,
+        "type": "SPEC",
+        "pos": 142,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 140,
+        "num_window_tokens": 3
+      }
+    ],
+    "read_count": 141
+  }
+}

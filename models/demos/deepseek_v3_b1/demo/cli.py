@@ -15,7 +15,11 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
-from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
+from models.demos.deepseek_v3_b1.demo.model_pipeline import (
+    DEFAULT_RELAXED_ACCEPT_DELTA,
+    DEFAULT_RELAXED_ACCEPT_TOPN,
+    ModelPipeline,
+)
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
 
@@ -87,10 +91,23 @@ def create_parser() -> argparse.ArgumentParser:
         help="Number of users/slots (KV cache batch size) for the decoder stages",
     )
     parser.add_argument(
+        "--num-speculative-tokens",
+        type=int,
+        default=1,
+        help="Number of speculative MTP tokens per decode window",
+    )
+    parser.add_argument(
+        "--relaxed-accept-topn",
+        type=int,
+        default=DEFAULT_RELAXED_ACCEPT_TOPN,
+        help="Number of target-model top probabilities used for relaxed speculative acceptance",
+    )
+    parser.add_argument(
+        "--relaxed-accept-delta",
         "--relaxed-acceptance-delta",
         type=float,
-        default=0.6,
-        help="Relaxed acceptance delta for the MTP verification stage",
+        default=DEFAULT_RELAXED_ACCEPT_DELTA,
+        help="Accept speculative token when prob(token) >= prob(top1) - delta",
     )
     parser.add_argument(
         "--launch-only",
@@ -101,7 +118,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--top-k",
         type=int,
-        default=1,
+        default=32,
         help="Top-k sampling for the LM head weights (only for real weights)",
     )
     parser.add_argument(
@@ -148,8 +165,10 @@ def run_demo(
     launch_only: bool = False,
     io_socket_descriptor_prefix: str | None = None,
     num_slots: int = 64,
-    relaxed_acceptance_delta: float = 0.6,
-    top_k: int = 1,
+    num_speculative_tokens: int = 1,
+    relaxed_accept_topn: int = DEFAULT_RELAXED_ACCEPT_TOPN,
+    relaxed_accept_delta: float = DEFAULT_RELAXED_ACCEPT_DELTA,
+    top_k: int = 32,
     top_p: float = 1.0,
     temperature: float = 0.6,
 ) -> None:
@@ -170,7 +189,9 @@ def run_demo(
             moe_layer_id_override=moe_layer_id_override,
             io_socket_descriptor_prefix=io_socket_descriptor_prefix,
             num_slots=num_slots,
-            relaxed_acceptance_delta=relaxed_acceptance_delta,
+            num_speculative_tokens=num_speculative_tokens,
+            relaxed_accept_topn=relaxed_accept_topn,
+            relaxed_accept_delta=relaxed_accept_delta,
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
@@ -188,10 +209,6 @@ def run_demo(
             logger.debug("Prompt with chat template: {}", prompt)
 
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-            think_open_id = tokenizer.encode("<think>", add_special_tokens=False)
-            think_close_id = tokenizer.encode("</think>", add_special_tokens=False)
-            if len(think_open_id) != 1 or len(think_close_id) != 1:
-                raise RuntimeError("Thinking token IDs must be single tokens")
             if not prompt_ids:
                 raise RuntimeError("Chat template produced an empty prompt")
             logger.debug(f"Encoded prompt: {prompt_ids}")
@@ -201,7 +218,6 @@ def run_demo(
                 prompt_token_ids=prompt_ids,
                 max_new_tokens=iterations,
                 eos_token_id=tokenizer.eos_token_id,
-                think_token_ids=[think_open_id[0], think_close_id[0]],
                 return_generated_tokens=True,
             )
             assert generated_tokens is not None
@@ -259,7 +275,9 @@ def main(argv: list[str] | None = None) -> int:
         launch_only=args.launch_only,
         io_socket_descriptor_prefix=io_socket_descriptor_prefix,
         num_slots=args.num_slots,
-        relaxed_acceptance_delta=args.relaxed_acceptance_delta,
+        num_speculative_tokens=args.num_speculative_tokens,
+        relaxed_accept_topn=args.relaxed_accept_topn,
+        relaxed_accept_delta=args.relaxed_accept_delta,
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temperature,

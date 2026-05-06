@@ -32,7 +32,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MESH_LEAF, MESH_ROOT1, MESH_ROOT2, MESH_ROOT3
-from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES
+from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES, DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul.op import get_max_page_size_and_num_pages
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_device_role as get_reduce_device_role
@@ -65,7 +65,7 @@ def _is_singleton_prefix_shape(shape, expected_last_dim: int) -> bool:
 # hold token metadata (see demo/stage.py). RMSNorm + gamma still apply only to the first K activations.
 # If we use input_shape[-1] for RMS tile picking, (K+32)//32 can make (num_cols % 32) != 0 and incorrectly
 # select the 16x32 RMS path while rms_num_tiles stays 7 (seven 32x32 tiles = K elements) — wrong norm.
-_SPEC_VERIFY_METADATA_BF16_COLS = 32
+_SPEC_VERIFY_METADATA_BF16_COLS = DeepseekMetadata.aligned_size_bytes() // 2
 ACTIVATION_DIM = 7168
 
 
@@ -312,6 +312,7 @@ class LMHeadSampling:
         mtp_bcast_semaphores=None,
         base_token_buffer=None,
         k=32,
+        num_speculative_tokens=1,
     ):
         logger.debug(f"broadcast sender_coord={sender_coord}")
         """
@@ -355,6 +356,12 @@ class LMHeadSampling:
         logger.debug(
             f"[OP] entered mtp_base={is_mtp_base_stage} mtp_verify={is_mtp_verify_stage} persistent={persistent_mode}",
         )
+        if not 1 <= int(num_speculative_tokens) <= DeepseekMetadata.MAX_SPECULATIVE_TOKENS:
+            raise ValueError(
+                f"num_speculative_tokens must be between 1 and {DeepseekMetadata.MAX_SPECULATIVE_TOKENS}, "
+                f"got {num_speculative_tokens}"
+            )
+        num_speculative_tokens = int(num_speculative_tokens)
         # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
         enable_argmax = True
         fold_rmsnorm = gamma_tensor is None
@@ -1274,6 +1281,7 @@ class LMHeadSampling:
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
                     ("input_socket_mode", input_socket_mode),
+                    ("num_speculative_tokens", num_speculative_tokens),
                     # Mcast source (for setup_sharded_buffer on sender core)
                     ("mcast_src_cb", mcast_src_cb),
                     ("mcast_src_num_pages", rms_num_tiles),
@@ -1437,6 +1445,7 @@ class LMHeadSampling:
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
                     ("input_socket_mode", input_socket_mode),
+                    ("num_speculative_tokens", num_speculative_tokens),
                     ("mtp_token_l1_addr", mtp_token_l1_addr),
                     ("mtp_input_core_noc_x", mtp_input_core_noc_x),
                     ("mtp_input_core_noc_y", mtp_input_core_noc_y),
@@ -1588,6 +1597,7 @@ class LMHeadSampling:
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("num_speculative_tokens", num_speculative_tokens),
                     ("termination_semaphore_addr", termination_global_sem_addr),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),

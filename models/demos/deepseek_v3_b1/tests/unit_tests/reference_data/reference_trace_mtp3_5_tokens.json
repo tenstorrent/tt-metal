@@ -1,0 +1,569 @@
+{
+  "schema_version": 2,
+  "name": "spec_decode_host_fsm_case",
+  "metadata": {
+    "num_accepts": 3,
+    "num_rejects": 1
+  },
+  "params": {
+    "prompt_token_ids": [
+      0,
+      128803,
+      21750,
+      260,
+      3107,
+      15255,
+      2019,
+      396,
+      10340,
+      270,
+      48941,
+      26509,
+      1167,
+      16,
+      128804
+    ],
+    "max_new_tokens": 5,
+    "eos_token_id": 1,
+    "num_speculative_tokens": 3
+  },
+  "device_to_host": {
+    "prefill_results": [
+      {
+        "user_id": 0,
+        "type": "PREFILL",
+        "lane_idx": 0,
+        "window_start_pos": 15,
+        "num_window_tokens": 4,
+        "tokens": [
+          {
+            "token_id": 128798,
+            "pos": 15
+          },
+          {
+            "token_id": 201,
+            "pos": 16
+          },
+          {
+            "token_id": 5,
+            "pos": 17
+          },
+          {
+            "token_id": 223,
+            "pos": 18
+          }
+        ],
+        "target_topn_tokens": [
+          128798,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "read_results": [
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 16,
+        "num_window_tokens": 4,
+        "tokens": [
+          {
+            "token_id": 201,
+            "pos": 16
+          },
+          {
+            "token_id": 2581,
+            "pos": 17
+          },
+          {
+            "token_id": 477,
+            "pos": 18
+          },
+          {
+            "token_id": 2887,
+            "pos": 19
+          }
+        ],
+        "target_topn_tokens": [
+          201,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 16,
+        "num_window_tokens": 4,
+        "tokens": [
+          {
+            "token_id": 2581,
+            "pos": 17
+          },
+          {
+            "token_id": 477,
+            "pos": 18
+          },
+          {
+            "token_id": 2887,
+            "pos": 19
+          },
+          {
+            "token_id": 304,
+            "pos": 20
+          }
+        ],
+        "target_topn_tokens": [
+          2581,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 16,
+        "num_window_tokens": 4,
+        "tokens": [
+          {
+            "token_id": 455,
+            "pos": 18
+          },
+          {
+            "token_id": 26509,
+            "pos": 19
+          },
+          {
+            "token_id": 8205,
+            "pos": 20
+          },
+          {
+            "token_id": 344,
+            "pos": 21
+          }
+        ],
+        "target_topn_tokens": [
+          455,
+          1350,
+          29752,
+          71480,
+          26509,
+          7,
+          3,
+          8,
+          1,
+          4
+        ],
+        "target_topn_probs": [
+          0.44515255093574524,
+          0.2382729947566986,
+          0.19346272945404053,
+          0.10355313867330551,
+          0.019558638334274292,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 3,
+        "window_start_pos": 16,
+        "num_window_tokens": 4,
+        "tokens": [
+          {
+            "token_id": 19,
+            "pos": 19
+          },
+          {
+            "token_id": 16,
+            "pos": 20
+          },
+          {
+            "token_id": 455,
+            "pos": 21
+          },
+          {
+            "token_id": 2019,
+            "pos": 22
+          }
+        ],
+        "target_topn_tokens": [
+          19,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "BASE",
+        "lane_idx": 0,
+        "window_start_pos": 18,
+        "num_window_tokens": 4,
+        "tokens": [
+          {
+            "token_id": 477,
+            "pos": 18
+          },
+          {
+            "token_id": 2887,
+            "pos": 19
+          },
+          {
+            "token_id": 304,
+            "pos": 20
+          },
+          {
+            "token_id": 270,
+            "pos": 21
+          }
+        ],
+        "target_topn_tokens": [
+          477,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 1,
+        "window_start_pos": 18,
+        "num_window_tokens": 4,
+        "tokens": [
+          {
+            "token_id": 2887,
+            "pos": 19
+          },
+          {
+            "token_id": 304,
+            "pos": 20
+          },
+          {
+            "token_id": 5085,
+            "pos": 21
+          },
+          {
+            "token_id": 260,
+            "pos": 22
+          }
+        ],
+        "target_topn_tokens": [
+          2887,
+          4985,
+          8,
+          4,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0
+        ],
+        "target_topn_probs": [
+          0.8411305546760559,
+          0.15886946022510529,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 2,
+        "window_start_pos": 18,
+        "num_window_tokens": 4,
+        "tokens": [
+          {
+            "token_id": 304,
+            "pos": 20
+          },
+          {
+            "token_id": 5085,
+            "pos": 21
+          },
+          {
+            "token_id": 260,
+            "pos": 22
+          },
+          {
+            "token_id": 2019,
+            "pos": 23
+          }
+        ],
+        "target_topn_tokens": [
+          304,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "user_id": 0,
+        "type": "SPEC",
+        "lane_idx": 3,
+        "window_start_pos": 18,
+        "num_window_tokens": 4,
+        "tokens": [
+          {
+            "token_id": 5085,
+            "pos": 21
+          },
+          {
+            "token_id": 260,
+            "pos": 22
+          },
+          {
+            "token_id": 2019,
+            "pos": 23
+          },
+          {
+            "token_id": 396,
+            "pos": 24
+          }
+        ],
+        "target_topn_tokens": [
+          5085,
+          4,
+          8,
+          9,
+          7,
+          3,
+          1,
+          5,
+          0,
+          2
+        ],
+        "target_topn_probs": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "expected_host": {
+    "generated_tokens": [
+      128798,
+      201,
+      2581,
+      477,
+      2887
+    ],
+    "writes": [
+      {
+        "token_id": 128798,
+        "type": "BASE",
+        "pos": 15,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 15,
+        "num_window_tokens": 4
+      },
+      {
+        "token_id": 201,
+        "type": "SPEC",
+        "pos": 16,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 15,
+        "num_window_tokens": 4
+      },
+      {
+        "token_id": 5,
+        "type": "SPEC",
+        "pos": 17,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 15,
+        "num_window_tokens": 4
+      },
+      {
+        "token_id": 223,
+        "type": "SPEC",
+        "pos": 18,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 3,
+        "window_start_pos": 15,
+        "num_window_tokens": 4
+      },
+      {
+        "token_id": 2581,
+        "type": "BASE",
+        "pos": 17,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 0,
+        "window_start_pos": 17,
+        "num_window_tokens": 4
+      },
+      {
+        "token_id": 477,
+        "type": "SPEC",
+        "pos": 18,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 1,
+        "window_start_pos": 17,
+        "num_window_tokens": 4
+      },
+      {
+        "token_id": 2887,
+        "type": "SPEC",
+        "pos": 19,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 2,
+        "window_start_pos": 17,
+        "num_window_tokens": 4
+      },
+      {
+        "token_id": 304,
+        "type": "SPEC",
+        "pos": 20,
+        "user_id": 0,
+        "prefill_id": -1,
+        "lane_idx": 3,
+        "window_start_pos": 17,
+        "num_window_tokens": 4
+      }
+    ],
+    "read_count": 8
+  }
+}

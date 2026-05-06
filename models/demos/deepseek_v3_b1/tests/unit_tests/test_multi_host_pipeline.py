@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
+from models.demos.deepseek_v3_b1.model import InputField
 
 
 def create_fabric_router_config(max_payload_size):
@@ -410,7 +411,7 @@ def test_multi_host_loopback_pipeline_with_embedding(
 
         for token_id in range(vocab_size):
             torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-            torch_input[0, 6] = token_id
+            torch_input[0, InputField.TOKEN_ID] = token_id
             input_tensor = ttnn.from_torch(
                 torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
             )
@@ -562,7 +563,7 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
 
         for token_id in range(vocab_size):
             torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-            torch_input[0, 6] = token_id
+            torch_input[0, InputField.TOKEN_ID] = token_id
             input_tensor = ttnn.from_torch(
                 torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
             )
@@ -686,7 +687,7 @@ def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, toke
 
         for token_id in range(vocab_size):
             torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-            torch_input[0, 6] = token_id
+            torch_input[0, InputField.TOKEN_ID] = token_id
             input_tensor = ttnn.from_torch(
                 torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
             )
@@ -816,7 +817,7 @@ def test_pipeline_block_host_loopback(mesh_device, vocab_size, embedding_dim, to
 
         for token_id in range(vocab_size):
             torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-            torch_input[0, 6] = token_id
+            torch_input[0, InputField.TOKEN_ID] = token_id
             input_tensor = ttnn.from_torch(
                 torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
             )
@@ -1262,7 +1263,7 @@ def test_passthrough_pipeline_block(mesh_device):
 
             for token_id in range(vocab_size):
                 torch_input = torch.zeros(1, token_size_datums, dtype=token_dtype)
-                torch_input[0, 6] = token_id
+                torch_input[0, InputField.TOKEN_ID] = token_id
                 input_tensor = ttnn.from_torch(
                     torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
                 )
@@ -1332,7 +1333,7 @@ def test_single_galaxy_deepseek_pipeline(mesh_device, use_fp32, device_params):
 
         if pipeline.my_mesh_id == 0:
             torch_token = torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 6] = 0
+            torch_token[0, InputField.TOKEN_ID] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_META_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
