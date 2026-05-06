@@ -4,9 +4,7 @@ from ttml.common.utils import round_up_to_tile
 import numpy as np
 
 
-def create_causal_mask_kv_cache(
-    query_seq_len: int, prompt_len: int = 0
-) -> ttml.autograd.Tensor:
+def create_causal_mask_kv_cache(query_seq_len: int, prompt_len: int = 0) -> ttml.autograd.Tensor:
     """Create a causal attention mask for autoregressive generation with KV cache.
 
     This matches the C++ implementation exactly.
@@ -34,9 +32,7 @@ def create_causal_mask_kv_cache(
 
     # Reshape to [1, 1, padded_query_len, padded_whole_len]
     mask_data = mask_data.reshape(1, 1, padded_query_len, padded_whole_len)
-    mask_tensor = ttml.autograd.Tensor.from_numpy(
-        mask_data, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
+    mask_tensor = ttml.autograd.Tensor.from_numpy(mask_data, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
     return mask_tensor
 
@@ -86,9 +82,7 @@ def generate(
         use_sampling: Whether to use temperature sampling (if False, uses greedy decoding)
     """
 
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
-        ttml.autograd.GradMode.DISABLED
-    )
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
     model.eval()
 
     # Create KV cache
@@ -98,9 +92,7 @@ def generate(
     max_seq_len = transformer_config.max_sequence_length
     head_dim = transformer_config.embedding_dim // transformer_config.num_heads
 
-    kv_cache_config = ttml.models.KvCacheConfig(
-        num_layers, batch_size, num_groups, max_seq_len, head_dim
-    )
+    kv_cache_config = ttml.models.KvCacheConfig(num_layers, batch_size, num_groups, max_seq_len, head_dim)
     kv_cache = ttml.models.KvCache(kv_cache_config)
 
     # Reset KV cache for new sequence
@@ -144,9 +136,7 @@ def generate(
             logits, temperature, np.random.randint(low=1e7), logits_mask_tensor
         )
         next_token_idx = len(input_tokens) - 1
-        next_token = int(
-            next_token_tensor.to_numpy(composer=composer).flatten()[next_token_idx]
-        )
+        next_token = int(next_token_tensor.to_numpy(composer=composer).flatten()[next_token_idx])
 
         generated_tokens = np.append(generated_tokens, next_token)
 
