@@ -102,6 +102,42 @@ class MLP(LightweightModule):
         if not self.is_ffn2_model:
             self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
+        def as_bias_tensors(name):
+            bias_key = f"{state_dict_prefix}.{name}.bias"
+            if bias_key not in state_dict:
+                return None, None
+
+            torch_bias = state_dict[bias_key]
+            prefill_bias = ttnn.as_tensor(
+                torch_bias.view(1, 1, 1, -1),
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=cache_name(f"{name}_bias_prefill_sharded"),
+            )
+
+            decode_biases = []
+            for batch_size in range(ttnn.TILE_SIZE, args.tile_padded_batch_rows + ttnn.TILE_SIZE, ttnn.TILE_SIZE):
+                bias_decode = torch_bias.unsqueeze(0).expand(batch_size, -1)
+                decode_biases.append(
+                    ttnn.as_tensor(
+                        bias_decode,
+                        dtype=ttnn.bfloat16,
+                        device=self.mesh_device,
+                        mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        cache_file_name=cache_name(f"{name}_bias_decode_sharded_{batch_size}"),
+                    )
+                )
+
+            return prefill_bias, decode_biases
+
+        self.w1_bias_prefill, self.w1_bias_decode = as_bias_tensors("w1")
+        self.w2_bias_prefill, self.w2_bias_decode = as_bias_tensors("w2")
+
         # Default activation is SILU
         self.activation_type = (
             args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
@@ -112,10 +148,25 @@ class MLP(LightweightModule):
 
             def register_weights():
                 self.prefetcher.insert_tensor(self.w1)
-                self.prefetcher.insert_tensor(self.w3)
+                if not self.is_ffn2_model:
+                    self.prefetcher.insert_tensor(self.w3)
                 self.prefetcher.insert_tensor(self.w2)
 
             self.prefetcher.register_callback(register_weights)
+
+    def _add_bias(self, x: ttnn.Tensor, prefill_bias, decode_biases, mode: Mode) -> ttnn.Tensor:
+        if mode == Mode.DECODE:
+            if decode_biases is None:
+                return x
+            num_tiles = (x.shape[-2] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+            bias = decode_biases[num_tiles - 1]
+        else:
+            if prefill_bias is None:
+                return x
+            bias = prefill_bias
+
+        bias = ttnn.to_memory_config(bias, x.memory_config())
+        return ttnn.add(x, bias)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
@@ -238,6 +289,9 @@ class MLP(LightweightModule):
                         topology=self.args.ccl_topology(),
                         memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
                     )
+
+        w1_out = self._add_bias(w1_out, self.w1_bias_prefill, self.w1_bias_decode, mode)
+
         if not self.is_ffn2_model:
             w2_in = ttnn.mul(
                 w1_out,
@@ -342,5 +396,7 @@ class MLP(LightweightModule):
                 w2_out_reduced,
                 self.args.get_mlp_output_mem_config(mode, self.prefetcher),
             )
+
+        w2_out_reduced = self._add_bias(w2_out_reduced, self.w2_bias_prefill, self.w2_bias_decode, mode)
 
         return w2_out_reduced

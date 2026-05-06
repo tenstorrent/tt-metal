@@ -166,7 +166,14 @@ class LayerNorm(LightweightModule):
             return x
 
     def _distributed_rmsnorm(
-        self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
+        self,
+        inp,
+        epsilon=None,
+        weight=None,
+        bias=None,
+        program_config=None,
+        memory_config=None,
+        compute_kernel_config=None,
     ):
         assert program_config is None, "Distributed RMSNorm does not support sharded inputs"
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
@@ -194,6 +201,7 @@ class LayerNorm(LightweightModule):
             tt_stats,
             epsilon=epsilon,
             weight=weight,
+            bias=bias,
             compute_kernel_config=compute_kernel_config,
         )
         tt_stats.deallocate(True)
