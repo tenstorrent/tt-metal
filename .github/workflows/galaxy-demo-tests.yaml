@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - llama33_70b
           - sentence_bert
           - sd35
           - flux1

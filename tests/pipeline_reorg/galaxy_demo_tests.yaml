@@ -10,6 +10,28 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+- name: Galaxy Llama3 demo tests
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L"
+  model: llama33_70b
+  skus:
+    wh_galaxy_perf:
+      timeout: 15
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
+- name: Galaxy Llama3 evals tests
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
+  model: llama33_70b
+  skus:
+    wh_galaxy_perf:
+      timeout: 20
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Galaxy SentenceBert demo tests
   cmd: pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
   model: sentence_bert
