@@ -1312,8 +1312,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
     // Disabling RX forwarding is separate from "receiver saw traffic":
     // receiver_channel_data_forwarded also covers local-only delivery, so use the
-    // forwarded-to capture when it is trustworthy and fall back to the safe
-    // non-speedy default otherwise.
+    // forwarded-to capture together with locally-observed NOC writes when it is
+    // trustworthy and fall back to the safe non-speedy default otherwise.
     auto compute_disable_rx_forwarding = [&](size_t vc) -> uint32_t {
         if (vc == 0 && enable_speedy_vc0) {
             return 1;
@@ -1321,7 +1321,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         if (!channel_trimming_overrides_.has_value() || !can_use_forwarding_capture_by_vc[vc]) {
             return 0;
         }
-        return channel_trimming_overrides_->sender_channel_forwarded_to_bitfield_by_vc[vc] != 0 ? 0 : 1;
+        const bool has_downstream_forwarding =
+            channel_trimming_overrides_->sender_channel_forwarded_to_bitfield_by_vc[vc] != 0;
+        const bool has_local_chip_delivery = channel_trimming_overrides_->used_noc_send_type_by_vc_bitfield[vc] != 0;
+        const bool should_disable_rx_forwarding = !has_downstream_forwarding && !has_local_chip_delivery;
+        return static_cast<uint32_t>(should_disable_rx_forwarding);
     };
     named_args["DISABLE_RX_CH0_FORWARDING"] = compute_disable_rx_forwarding(0);
     named_args["DISABLE_RX_CH1_FORWARDING"] = compute_disable_rx_forwarding(1);
