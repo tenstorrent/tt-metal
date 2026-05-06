@@ -217,18 +217,6 @@ void call_unary_sfpu_operation(
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
     }
     // Single call (else branch): _calculate_exponential_ handles 8 or 32 iterations internally.
-    else if constexpr (OPERATION == SfpuType::exponential && APPROX_MODE)
-    {
-        SFPU_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            _calculate_exponential_,
-            (APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
-            dst_index,
-            vector_mode,
-            p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
-    }
-    // Single call (else branch): non-approx mode, handles all iterations in one call.
     else if constexpr (OPERATION == SfpuType::exponential)
     {
         SFPU_CALL(
@@ -433,16 +421,30 @@ void call_binary_sfpu_operation_init()
 {
     if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
-        BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::POW)
+        BINOP == BinaryOp::XLOGY)
     {
+        // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
         SFPU_BINARY_INIT_CB(add1, _sfpu_binary_init_, (APPROXIMATION_MODE, BINOP));
+    }
+    else if constexpr (BINOP == BinaryOp::POW)
+    {
+        SFPU_BINARY_INIT_CB(power, _sfpu_binary_init_, (APPROXIMATION_MODE, BINOP));
     }
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
         SFPU_BINARY_INIT_FN(add1, _init_add_top_row_);
     }
+    else if constexpr (BINOP == BinaryOp::RSHFT || BINOP == BinaryOp::LOGICAL_RSHFT)
+    {
+        SFPU_BINARY_INIT(right_shift);
+    }
+    else if constexpr (BINOP == BinaryOp::LSHFT)
+    {
+        SFPU_BINARY_INIT(left_shift);
+    }
     else
     {
+        // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
         SFPU_BINARY_INIT(add1);
     }
 }
