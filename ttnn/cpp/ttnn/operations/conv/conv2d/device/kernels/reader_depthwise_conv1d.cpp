@@ -92,7 +92,7 @@ void kernel_main() {
 
                 for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                     act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
-                    experimental::read_with_state(noc, l1_write_addr_act, act_l1_offset);
+                    experimental::read_with_state<coalesced_read_bytes>(noc, l1_write_addr_act, act_l1_offset);
                     l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
                 }
             }

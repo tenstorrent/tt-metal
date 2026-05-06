@@ -61,14 +61,14 @@ FORCE_INLINE void read_sticks(
         if constexpr (coalesced_read_bytes > conv_act_c_read_bytes) {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                 uint32_t src_addr = reader_offset + (ind * conv_act_c_read_bytes);
-                experimental::read_with_state(noc, l1_write_addr_act, src_addr);
+                experimental::read_with_state<coalesced_read_bytes>(noc, l1_write_addr_act, src_addr);
                 l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
             }
         } else {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                 uint32_t src_addr = reader_offset + (ind * conv_act_c_read_bytes);
                 for (uint32_t inner = 0; inner < weight_size_w; inner++) {
-                    experimental::read_with_state(noc, l1_write_addr_act, src_addr);
+                    experimental::read_with_state<coalesced_read_bytes>(noc, l1_write_addr_act, src_addr);
                     l1_write_addr_act += conv_act_c_read_bytes;
                     src_addr += stride_w_bytes;
                 }
@@ -81,7 +81,7 @@ FORCE_INLINE void read_sticks(
 
 template <uint32_t coalesced_read_bytes, uint32_t stride_h_bytes>
 FORCE_INLINE void read_kernel_w(experimental::Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
-    experimental::read_with_state(noc, l1_write_addr_act, act_l1_offset);
+    experimental::read_with_state<coalesced_read_bytes>(noc, l1_write_addr_act, act_l1_offset);
     l1_write_addr_act += coalesced_read_bytes;
     act_l1_offset += stride_h_bytes;
 }
