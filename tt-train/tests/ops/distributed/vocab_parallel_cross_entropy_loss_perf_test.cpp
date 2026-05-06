@@ -227,13 +227,27 @@ void run_vocab_parallel_loop(uint32_t batch_size, uint32_t seq_len, uint32_t voc
     }
 }
 
-void run_standard_ce_loop(uint32_t batch_size, uint32_t seq_len, uint32_t vocab_size, uint32_t iterations) {
+// Two flavors of the standard (non-vocab-parallel) CE loop:
+//
+//   include_all_gather = true  -> production-shaped: each device starts with `[B,1,S,V/tp]`
+//      sharded along vocab (matching the column-parallel-linear output) and runs
+//      `ops::distributed::all_gather` immediately before the loss.  Backward through
+//      the gather automatically inserts a `reduce_scatter` + `1/tp` rescale on the grad.
+//      This is the apples-to-apples baseline against vocab_parallel_cross_entropy_loss.
+//
+//   include_all_gather = false -> host-replicated: each device has the full `[B,1,S,V]`
+//      uploaded directly from the host.  No CCL inside the timed window, so the timing
+//      isolates the cost of the standard CE kernel itself (useful for separating
+//      "loss compute" from "ferrying the vocab around the ring").
+void run_standard_ce_loop(
+    uint32_t batch_size, uint32_t seq_len, uint32_t vocab_size, uint32_t iterations, bool include_all_gather) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
 
     fmt::println(
-        "[perf-test] standard CE (TP-sharded input + all_gather): B={} S={} V={} iters={} (V/tp_size={})",
+        "[perf-test] standard CE ({}): B={} S={} V={} iters={} (V/tp_size={})",
+        include_all_gather ? "TP-sharded input + all_gather" : "host-replicated input, no all_gather",
         batch_size,
         seq_len,
         vocab_size,
@@ -242,10 +256,10 @@ void run_standard_ce_loop(uint32_t batch_size, uint32_t seq_len, uint32_t vocab_
 
     const auto host = make_host_inputs(batch_size, seq_len, vocab_size);
 
-    // Mirror the production setup: a TP model with `gather_output=true` on the classifier head
-    // produces sharded logits `[B, 1, S, V/tp]` per device, then runs `ops::distributed::all_gather`
-    // (dim=last, GradOutputType::REPLICATED) immediately before the loss.  See
-    // tt-train/sources/ttml/modules/distributed/linear.cpp:114-118.
+    // Production setup (when include_all_gather=true): a TP model with `gather_output=true` on
+    // the classifier head produces sharded logits `[B,1,S,V/tp]` per device, then runs
+    // `ops::distributed::all_gather` (dim=last, GradOutputType::REPLICATED) immediately before
+    // the loss.  See tt-train/sources/ttml/modules/distributed/linear.cpp:114-118.
     using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
     using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
@@ -266,6 +280,8 @@ void run_standard_ce_loop(uint32_t batch_size, uint32_t seq_len, uint32_t vocab_
     // Same warm-up as the VP CE loop: pre-issue an all_reduce on a representative shape so that
     // the very first composite-CCL doesn't pay the GlobalSemaphore-init wedge cost.  Use the full
     // V replicated (representative of what the loss receives post-gather) to seed the right caches.
+    // Run this even when include_all_gather=false so both standard variants take the same warm-up
+    // path and have identical CCL state going into the timed window.
     {
         fmt::println("[perf-test] warm-up: dispatching one all_reduce to seed CCL caches");
         const auto t_warm = std::chrono::steady_clock::now();
@@ -277,11 +293,11 @@ void run_standard_ce_loop(uint32_t batch_size, uint32_t seq_len, uint32_t vocab_
         fmt::println("[perf-test] warm-up done in {:.1f} ms", elapsed_ms_since(t_warm));
     }
 
-    // Upload sharded logits once, reuse across iterations.  Each device holds [B, 1, S, V/tp]
-    // in BF16 at this point — the per-iter all_gather inside the signposts is what materializes
-    // the full V on every device, just like the production training loop.
-    auto logits_dev =
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(host.logits, device, ttnn::Layout::TILE, &tp_logits_mapper);
+    // Upload logits once, reuse across iterations.  Layout depends on whether we're modeling
+    // the production gather path (sharded `[B,1,S,V/tp]` per device) or the legacy
+    // host-replicated path (full `[B,1,S,V]` on every device).
+    auto logits_dev = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        host.logits, device, ttnn::Layout::TILE, include_all_gather ? &tp_logits_mapper : replicate_mapper.get());
 
     for (uint32_t it = 0U; it < iterations; ++it) {
         const auto t0 = std::chrono::steady_clock::now();
@@ -291,11 +307,16 @@ void run_standard_ce_loop(uint32_t batch_size, uint32_t seq_len, uint32_t vocab_
 
         const auto t_fwd_start = std::chrono::steady_clock::now();
         perf_signpost(fmt::format("std_ce_fwd_begin iter={}", it));
-        // Production-shaped path: gather the sharded TP output along the vocab dim, replicate the
-        // grad on backward (matching ColumnParallelLinear with gather_output=true).
-        auto gathered_logits = ops::distributed::all_gather(
-            logits_ptr, /*dim=*/3, /*cluster_axis=*/1U, ops::distributed::GradOutputType::REPLICATED);
-        auto loss = ops::cross_entropy_loss(gathered_logits, targets_ptr, ops::ReduceType::MEAN);
+        // When include_all_gather=true, gather the sharded TP output along the vocab dim and
+        // replicate the grad on backward (matching ColumnParallelLinear with gather_output=true).
+        // Otherwise feed the already-replicated logits straight into the loss.
+        auto loss_input = include_all_gather ? ops::distributed::all_gather(
+                                                   logits_ptr,
+                                                   /*dim=*/3,
+                                                   /*cluster_axis=*/1U,
+                                                   ops::distributed::GradOutputType::REPLICATED)
+                                             : logits_ptr;
+        auto loss = ops::cross_entropy_loss(loss_input, targets_ptr, ops::ReduceType::MEAN);
         perf_signpost(fmt::format("std_ce_fwd_end iter={}", it));
         const auto t_fwd_done = std::chrono::steady_clock::now();
         fmt::println("[perf-test] iter {} forward dispatched in {:.1f} ms", it, elapsed_ms_since(t_fwd_start));
@@ -332,9 +353,18 @@ TEST_F(ShardedCrossEntropyLossPerfT3KTest, DISABLED_VocabParallelCETrainStepLoop
     run_vocab_parallel_loop(kProdBatchSize, kProdSeqLen, kProdVocabSize, kIterations);
 }
 
-// Standard (non-vocab-parallel) CE on the same production shapes, logits
-// replicated across all 8 devices.  Apples-to-apples baseline: every device
-// materializes the full V=32000 vocab and runs the loss redundantly.
+// Standard (non-vocab-parallel) CE on the same production shapes, with the
+// production-shaped `all_gather` (forward) and `reduce_scatter` (backward)
+// included inside the timed window.  Apples-to-apples baseline against
+// vocab_parallel_cross_entropy_loss in a real TP training step.
 TEST_F(ShardedCrossEntropyLossPerfT3KTest, DISABLED_StandardCETrainStepLoop) {
-    run_standard_ce_loop(kProdBatchSize, kProdSeqLen, kProdVocabSize, kIterations);
+    run_standard_ce_loop(kProdBatchSize, kProdSeqLen, kProdVocabSize, kIterations, /*include_all_gather=*/true);
+}
+
+// Same standard CE, but with the logits replicated directly from the host so
+// no CCL runs inside the timed window.  Use this to isolate the cost of the
+// CE forward/backward kernels themselves vs the ferrying-the-vocab-around-the-
+// ring cost from the variant above.
+TEST_F(ShardedCrossEntropyLossPerfT3KTest, DISABLED_StandardCEReplicatedTrainStepLoop) {
+    run_standard_ce_loop(kProdBatchSize, kProdSeqLen, kProdVocabSize, kIterations, /*include_all_gather=*/false);
 }
