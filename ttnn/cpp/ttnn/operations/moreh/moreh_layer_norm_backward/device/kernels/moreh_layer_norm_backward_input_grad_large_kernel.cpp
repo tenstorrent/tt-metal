@@ -218,18 +218,18 @@ void kernel_main() {
             // Compute cb_dyadd
             cb_wait_front(cb_dycopy, onetile);
             if (wt == 0) {
-                tile_regs_acquire();
-                cb_reserve_back(cb_dyadd, onetile);
-
-                copy_tile_init_with_dt(cb_dycopy);
-                copy_tile(cb_dycopy, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_dyadd);
-
-                cb_push_back(cb_dyadd, onetile);
-                tile_regs_release();
+                // PARTIAL migration: seed cb_dyadd with first cb_dycopy tile (no pop on cb_dycopy).
+#if defined FP32_DEST_ACC_EN
+                reconfig_data_format_srca(cb_dycopy);
+                pack_reconfig_data_format(cb_dyadd);
+#endif
+                {
+                    using namespace compute_kernel_lib;
+                    eltwise_chain(
+                        onetile,
+                        CopyTile<cb_dycopy, Dst::D0, CopyTilePolicy::WaitNoPop>{},
+                        PackTile<cb_dyadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                }
             } else {
                 tile_regs_acquire();
                 cb_wait_front(cb_dyadd, onetile);
@@ -269,20 +269,18 @@ void kernel_main() {
 
             // Compute cb_ydyadd
             if (wt == 0) {
-                tile_regs_acquire();
-                cb_wait_front(cb_ydy, onetile);
-                cb_reserve_back(cb_ydyadd, onetile);
-
-                copy_tile_init_with_dt(cb_ydy);
-                copy_tile(cb_ydy, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_ydyadd);
-
-                cb_pop_front(cb_ydy, onetile);
-                cb_push_back(cb_ydyadd, onetile);
-                tile_regs_release();
+                // PARTIAL migration: seed cb_ydyadd with first cb_ydy tile.
+#if defined FP32_DEST_ACC_EN
+                reconfig_data_format_srca(cb_ydy);
+                pack_reconfig_data_format(cb_ydyadd);
+#endif
+                {
+                    using namespace compute_kernel_lib;
+                    eltwise_chain(
+                        onetile,
+                        CopyTile<cb_ydy, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                        PackTile<cb_ydyadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                }
             } else {
                 tile_regs_acquire();
                 cb_wait_front(cb_ydy, onetile);

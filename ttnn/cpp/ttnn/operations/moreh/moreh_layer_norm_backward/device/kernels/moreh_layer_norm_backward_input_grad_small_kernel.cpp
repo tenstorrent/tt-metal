@@ -241,18 +241,18 @@ void kernel_main() {
         cb_wait_front(cb_dycopy, Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             if (wt == 0) {
-                tile_regs_acquire();
-                cb_reserve_back(cb_dyadd, onetile);
-
-                copy_tile_init_with_dt(cb_dycopy);
-                copy_tile(cb_dycopy, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_dyadd);
-
-                cb_push_back(cb_dyadd, onetile);
-                tile_regs_release();
+                // PARTIAL migration: seed cb_dyadd with first cb_dycopy tile (no pop on cb_dycopy).
+#if defined FP32_DEST_ACC_EN
+                reconfig_data_format_srca(cb_dycopy);
+                pack_reconfig_data_format(cb_dyadd);
+#endif
+                {
+                    using namespace compute_kernel_lib;
+                    eltwise_chain(
+                        onetile,
+                        CopyTile<cb_dycopy, Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
+                        PackTile<cb_dyadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                }
             } else {
                 tile_regs_acquire();
                 cb_wait_front(cb_dyadd, onetile);
@@ -282,36 +282,39 @@ void kernel_main() {
         constexpr auto cb_ydyadd = cb_tmp3;
         cb_wait_front(cb_y, Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            // Compute cb_ydy
-            tile_regs_acquire();
-            cb_reserve_back(cb_ydy, onetile);
-
-            mul_tiles_init_with_dt(cb_y, cb_dycopy);
-            mul_tiles(cb_y, cb_dycopy, wt, wt, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_ydy);
-
-            cb_push_back(cb_ydy, onetile);
-            tile_regs_release();
+            // PARTIAL migration: cb_ydy = cb_y[wt] * cb_dycopy[wt] (per-tile pinned indices).
+            //   migrated: BinaryFpu(Mul) + PackTile chain (one iteration per chain call).
+            {
+                using namespace compute_kernel_lib;
+                using MulElt = BinaryFpu<
+                    cb_y, cb_dycopy, BinaryFpuOp::Mul, BroadcastDim::None,
+                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::NoWaitNoPop, CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::Pinned, CbIndexMode::Pinned, Dst::D0>;
+                MulElt elt{};
+                elt.a_tile_idx = wt;
+                elt.b_tile_idx = wt;
+                eltwise_chain(
+                    onetile,
+                    elt,
+                    PackTile<cb_ydy, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+                             PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+            }
 
             // Compute cb_ydyadd
             if (wt == 0) {
-                tile_regs_acquire();
-                cb_wait_front(cb_ydy, onetile);
-                cb_reserve_back(cb_ydyadd, onetile);
-
-                copy_tile_init_with_dt(cb_ydy);
-                copy_tile(cb_ydy, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_ydyadd);
-
-                cb_pop_front(cb_ydy, onetile);
-                cb_push_back(cb_ydyadd, onetile);
-                tile_regs_release();
+                // PARTIAL migration: seed cb_ydyadd with first cb_ydy tile.
+#if defined FP32_DEST_ACC_EN
+                reconfig_data_format_srca(cb_ydy);
+                pack_reconfig_data_format(cb_ydyadd);
+#endif
+                {
+                    using namespace compute_kernel_lib;
+                    eltwise_chain(
+                        onetile,
+                        CopyTile<cb_ydy, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+                        PackTile<cb_ydyadd, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                }
             } else {
                 tile_regs_acquire();
                 cb_wait_front(cb_ydy, onetile);
