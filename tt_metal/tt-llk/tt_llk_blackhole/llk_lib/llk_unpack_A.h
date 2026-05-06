@@ -24,7 +24,11 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_mop_config_(
-    const bool transpose_of_faces, const std::uint32_t num_faces, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
+    const bool transpose_of_faces,
+    const std::uint32_t num_faces,
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format = 0,
+    const bool partial_face               = true)
 {
     static_assert(
         !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
@@ -177,11 +181,24 @@ inline void _llk_unpack_A_mop_config_(
             }
             else
             {
-                const std::uint32_t outerloop     = num_faces;
-                constexpr std::uint32_t innerloop = 1;
-                ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
-                tmp.set_start_op(unpack_srca);
-                tmp.program();
+                if (partial_face)
+                {
+                    const std::uint32_t outerloop     = num_faces;
+                    constexpr std::uint32_t innerloop = 1;
+                    ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
+                    tmp.set_start_op(unpack_srca);
+                    tmp.program();
+                }
+                else
+                {
+                    static constexpr std::uint32_t unpack_srca_no_z_inc =
+                        TT_OP_UNPACR(SrcA, 0b0 /*Z inc*/, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    constexpr std::uint32_t outerloop = 1;
+                    constexpr std::uint32_t innerloop = 1;
+                    ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
+                    tmp.set_start_op(unpack_srca_no_z_inc);
+                    tmp.program();
+                }
             }
         }
     }
@@ -216,13 +233,18 @@ inline void _llk_unpack_A_init_(
     // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE || unpack_to_dest) ? p_setadc::UNP_A : p_setadc::UNP_B;
+    const bool partial_face         = (face_r_dim < FACE_R_DIM);
     if constexpr ((BType == BroadcastType::ROW || BType == BroadcastType::SCALAR) && unpack_to_dest) // ROW and SCALAR bcast will only unpack a single row
     {
         config_unpacker_x_end<UNP_SEL>(1);
     }
-    else // base case is to upk the entire face
+    else if (partial_face)
     {
         config_unpacker_x_end<UNP_SEL>(face_r_dim);
+    }
+    else
+    {
+        TT_SETADCXX(UNP_SEL, num_faces * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
     }
 
     // TODO NC: Move to TRISC1 tt-metal#36411
@@ -230,7 +252,8 @@ inline void _llk_unpack_A_init_(
     {
         _llk_unpack_dbg_feature_disable_();
     }
-    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
+    _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+        transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format, partial_face);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
