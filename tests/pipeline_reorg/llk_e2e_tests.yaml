@@ -27,7 +27,7 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-1.info
   skus:
     wh_n150_civ2:
-      timeout: 360
+      timeout: 38
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_wormhole group 2/5
@@ -56,7 +56,7 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-2.info
   skus:
     wh_n150_civ2:
-      timeout: 360
+      timeout: 38
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_wormhole group 3/5
@@ -85,7 +85,7 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-3.info
   skus:
     wh_n150_civ2:
-      timeout: 360
+      timeout: 38
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_wormhole group 4/5
@@ -114,7 +114,7 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-4.info
   skus:
     wh_n150_civ2:
-      timeout: 360
+      timeout: 38
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_wormhole group 5/5
@@ -143,7 +143,7 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-5.info
   skus:
     wh_n150_civ2:
-      timeout: 360
+      timeout: 38
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 1/5
@@ -172,7 +172,7 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-1.info
   skus:
     bh_p150b_civ2:
-      timeout: 360
+      timeout: 55
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 2/5
@@ -201,7 +201,7 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-2.info
   skus:
     bh_p150b_civ2:
-      timeout: 360
+      timeout: 55
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 3/5
@@ -230,7 +230,7 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-3.info
   skus:
     bh_p150b_civ2:
-      timeout: 360
+      timeout: 55
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 4/5
@@ -259,7 +259,7 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-4.info
   skus:
     bh_p150b_civ2:
-      timeout: 360
+      timeout: 55
   owner_id: U07J3K6KS1K
 
 - name: llk_e2e_blackhole group 5/5
@@ -288,5 +288,5 @@
     cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-5.info
   skus:
     bh_p150b_civ2:
-      timeout: 360
+      timeout: 55
   owner_id: U07J3K6KS1K
