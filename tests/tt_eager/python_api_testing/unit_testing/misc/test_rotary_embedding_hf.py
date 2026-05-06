@@ -340,6 +340,111 @@ def test_rotary_embedding_hf_decode_per_batch_position(device):
     ttnn.deallocate(sin_tt)
 
 
+@pytest.mark.xfail(
+    reason="Known decode bug: batch_per_core > 1 reuses cos/sin rows per core in sharded kernel",
+    strict=True,
+)
+def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device):
+    """Decode mode regression: force ``batch_per_core > 1`` and verify per-batch cos/sin rows are honored."""
+    torch.manual_seed(0)
+
+    core_grid = device.compute_with_storage_grid_size()
+    num_cores = core_grid.x * core_grid.y
+    batch = num_cores * 2  # Forces batch_per_core = 2 with exact height-shard packing.
+    num_heads = 8
+    head_dim = 128
+    cache_size = max(2048, batch * 4)
+    dtype = ttnn.bfloat16
+
+    positions = torch.arange(0, batch, dtype=torch.int64) * 3
+    positions = positions.remainder(cache_size)
+
+    cos_full = torch.randn(1, 1, cache_size, head_dim, dtype=torch.float32)
+    sin_full = torch.randn(1, 1, cache_size, head_dim, dtype=torch.float32)
+    cos_rows = cos_full[0, 0, positions, :]
+    sin_rows = sin_full[0, 0, positions, :]
+    cos_1b1d = cos_rows.unsqueeze(0).unsqueeze(2)  # [1, batch, 1, head_dim]
+    sin_1b1d = sin_rows.unsqueeze(0).unsqueeze(2)
+
+    torch_input = torch.randn(1, batch, num_heads, head_dim, dtype=torch.float32)
+    torch_golden = _torch_hf_rope_decode_broadcast_heads(torch_input, cos_1b1d, sin_1b1d)
+
+    padded_heads = nearest_32(num_heads)
+    inp_for_dev = torch_input
+    if padded_heads != num_heads:
+        pad_h = padded_heads - num_heads
+        z = torch.zeros(1, batch, pad_h, head_dim, dtype=torch_input.dtype)
+        inp_for_dev = torch.cat([torch_input, z], dim=2)
+
+    batch_parallel_factor = min(batch, num_cores)
+    batch_per_core = divup(batch, batch_parallel_factor)
+    decode_grid = ttnn.num_cores_to_corerangeset(batch_parallel_factor, core_grid, row_wise=True)
+    input_shard_spec = ttnn.ShardSpec(
+        decode_grid,
+        [padded_heads * batch_per_core, head_dim],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    qk_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        input_shard_spec,
+    )
+    input_tensor = ttnn.from_torch(
+        inp_for_dev.to(torch.bfloat16),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=qk_mem,
+    )
+    cos_interleaved = ttnn.from_torch(
+        cos_1b1d.to(torch.bfloat16),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sin_interleaved = ttnn.from_torch(
+        sin_1b1d.to(torch.bfloat16),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cos_sin_shard_spec = ttnn.ShardSpec(
+        decode_grid,
+        [ttnn.TILE_SIZE * batch_per_core, head_dim],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    cos_sin_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        cos_sin_shard_spec,
+    )
+    cos_tt = ttnn.interleaved_to_sharded(cos_interleaved, cos_sin_mem_config)
+    sin_tt = ttnn.interleaved_to_sharded(sin_interleaved, cos_sin_mem_config)
+
+    rope_cfg = _hf_rope_compute_kernel_config()
+    out_tt = ttnn.experimental.rotary_embedding_hf(
+        input_tensor,
+        cos_tt,
+        sin_tt,
+        is_decode_mode=True,
+        compute_kernel_config=rope_cfg,
+    )
+    out_torch = ttnn.to_torch(out_tt).to(torch.float32)
+    if padded_heads != num_heads:
+        out_torch = out_torch[:, :, :num_heads, :]
+
+    p, o = comp_pcc(torch_golden, out_torch)
+    logger.info(o)
+    assert p, "Decode mismatch with batch_per_core > 1"
+
+    ttnn.deallocate(out_tt)
+    ttnn.deallocate(input_tensor)
+    ttnn.deallocate(cos_tt)
+    ttnn.deallocate(sin_tt)
+
+
 @pytest.mark.parametrize(
     "W, Z, Y, X",
     ([1, 1, 32, 64], [1, 71, 32, 64], [1, 1, 64, 64], [1, 71, 64, 64], [1, 32, 32, 64], [1, 2, 32, 64]),
