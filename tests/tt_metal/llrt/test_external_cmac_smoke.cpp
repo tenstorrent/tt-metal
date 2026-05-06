@@ -9,17 +9,22 @@
 //      word was written.
 //   2. A 60-byte minimal TT-link Ethernet frame (EtherType 0x1AF4) is accepted
 //      by send() without error.
-//   3. If the FPGA BAR device file is accessible (TT_FPGA_BAR env var or the
-//      default /dev/xdma0_user), the stat_cls_passed register at AXI-Lite
-//      offset 0x430 increments by exactly 1.
+//   3. If TT_FPGA_BAR is set and the file is accessible, the stat_cls_passed
+//      register at AXI-Lite offset 0x430 increments by exactly 1.
 //
 // Skip conditions (exit 0 with a message):
 //   - TT_METAL_EXTERNAL_CMAC_PORTS is not set or empty (no CMAC port configured).
-//   - The FPGA BAR device cannot be opened (the TX-path assertion is still made).
+//   - TT_FPGA_BAR is not set or the file cannot be opened (TX-path still asserted).
+//
+// The shell uses QDMA IP (not XDMA), so BAR2 is exposed via the sysfs PCI
+// resource file — NOT /dev/xdma0_user.  Find the path with:
+//   FPGA_PCI=$(lspci -D | grep -i xilinx | awk '{print $1}')
+//   export TT_FPGA_BAR=/sys/bus/pci/devices/${FPGA_PCI}/resource2
 //
 // Usage:
 //   TT_METAL_EXTERNAL_CMAC_PORTS=0:14 ./test_external_cmac_smoke
-//   TT_METAL_EXTERNAL_CMAC_PORTS=0:14 TT_FPGA_BAR=/dev/xdma0_user ./test_external_cmac_smoke
+//   TT_METAL_EXTERNAL_CMAC_PORTS=0:14 TT_FPGA_BAR=/sys/bus/pci/devices/0000:XX:YY.Z/resource2 \
+//     ./test_external_cmac_smoke
 //   Optional peer MAC: TT_PEER_MAC=01:02:03:04:05:06 (default: FF×6 broadcast)
 
 #include <array>
@@ -87,17 +92,26 @@ static std::vector<uint8_t> build_tt_link_frame(
 // FPGA BAR read helper
 // -------------------------------------------------------------------------
 
-// Open the FPGA AXI-Lite BAR device file.  Returns -1 on failure.
+// Open the FPGA AXI-Lite BAR via the sysfs PCI resource2 file.
+// Returns -1 if TT_FPGA_BAR is not set or the file cannot be opened.
+// The shell uses QDMA IP: set TT_FPGA_BAR to the sysfs resource2 path,
+// e.g. /sys/bus/pci/devices/0000:XX:YY.Z/resource2
 static int open_fpga_bar() {
     const char* bar_path = std::getenv("TT_FPGA_BAR");
     if (!bar_path) {
-        bar_path = "/dev/xdma0_user";
+        log_warning(
+            tt::LogTest,
+            "TT_FPGA_BAR not set. Skipping FPGA stat_cls_passed check. "
+            "Set it to the sysfs resource2 path: "
+            "FPGA_PCI=$(lspci -D | grep -i xilinx | awk '{{print $1}}'); "
+            "export TT_FPGA_BAR=/sys/bus/pci/devices/${{FPGA_PCI}}/resource2");
+        return -1;
     }
     int fd = ::open(bar_path, O_RDONLY);
     if (fd < 0) {
         log_warning(
             tt::LogTest,
-            "Could not open FPGA BAR device '{}' (errno={}). "
+            "Could not open FPGA BAR '{}' (errno={}). "
             "Skipping FPGA stat_cls_passed check — TX path will still be asserted.",
             bar_path,
             errno);
