@@ -81,8 +81,8 @@ def test_flux2_performance(
     # Encoder/VAE TP covers the full submesh so the encoder mesh shape matches
     # the submesh directly (e.g. a 4x8 submesh stays 4x8, no reshape needed).
     submesh_size = sp_factor * tp_factor
-    encoder_tp = (submesh_size, sp_axis)
-    vae_tp = (submesh_size, sp_axis)
+    encoder_tp = (8, 1)  # (submesh_size, sp_axis)
+    vae_tp = (8, 1)  # (submesh_size, sp_axis)
 
     # Pipeline creation includes internal warmup (2 steps at target resolution).
     pipeline = Flux2Pipeline.create_pipeline(
@@ -114,7 +114,7 @@ def test_flux2_performance(
                     prompts=["A photo of a cat sitting on a windowsill at sunset"],
                     num_inference_steps=NUM_INFERENCE_STEPS,
                     seed=42,
-                    traced=False,
+                    traced=True,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
                 )
