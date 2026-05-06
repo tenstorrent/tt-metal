@@ -9,6 +9,7 @@
 #include <optional>
 #include <cmath>
 #include <string>
+#include <unordered_set>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -1212,10 +1213,18 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
     }
 
-    // K multicast pass: split the grid into two row-halves and run an independent
-    // 2D mcast chain on each. The two injectors must live in different physical
-    // columns so they don't both stack their forwards onto the same NoC column.
-    // Per-core loop padding lets each chain pad to its own injector's iteration count.
+    // K multicast pass: split the grid into N row-stripes (rows_per_chain rows tall)
+    // and run an independent 2D mcast chain on each. Every injector must live in a
+    // physical column distinct from all other injectors, so their forwards don't
+    // stack on the same NoC column. Per-core loop padding lets each chain pad to
+    // its own injector's iteration count.
+    //
+    // Target: 10 chains x 1 row (diagonal — one injector per row, each in a distinct
+    // physical column) on a 10x10 compute grid. Falls back to fewer chains when the
+    // grid is smaller; falls back to unicast otherwise.
+    constexpr uint32_t K_MCAST_ROWS_PER_CHAIN = 1;
+    constexpr uint32_t K_MCAST_TARGET_CHAINS = 10;
+
     bool k_mcast_enabled = false;
     std::string k_mcast_fallback_reason;
     std::vector<uint32_t> k_chain_max_q(num_cores, 0);  // per-core loop-padding count
@@ -1226,32 +1235,36 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         k_mcast_fallback_reason = "B > 1 (multi-batch not supported)";
     } else if (num_cores < 2) {
         k_mcast_fallback_reason = "num_cores < 2";
-    } else if (grid_size.y < 2) {
-        k_mcast_fallback_reason = "grid_size.y < 2 (cannot split into two row chains)";
+    } else if (grid_size.y < K_MCAST_ROWS_PER_CHAIN * 2) {
+        k_mcast_fallback_reason = fmt::format(
+            "grid_size.y < {} (need >=2 chains of {} rows)", K_MCAST_ROWS_PER_CHAIN * 2, K_MCAST_ROWS_PER_CHAIN);
     } else {
-        const uint32_t half_y_logical = grid_size.y / 2;
+        // Use as many chains as fit, capped at target. Each chain takes rows_per_chain
+        // rows; any leftover rows beyond num_chains*rows_per_chain are absorbed into the
+        // last chain so every core participates.
+        const uint32_t max_by_grid = grid_size.y / K_MCAST_ROWS_PER_CHAIN;
+        const uint32_t max_by_columns = grid_size.x;  // need one distinct injector column per chain
+        const uint32_t num_chains = std::min({K_MCAST_TARGET_CHAINS, max_by_grid, max_by_columns});
 
-        // Partition cores by logical y: top half rows vs bottom half rows
-        std::vector<uint32_t> top_cores;
-        std::vector<uint32_t> bottom_cores;
-        top_cores.reserve(num_cores);
-        bottom_cores.reserve(num_cores);
+        // Partition cores by stripe (logical_y / rows_per_chain), clamped so the last
+        // stripe absorbs any trailing rows when grid_size.y % rows_per_chain != 0.
+        std::vector<std::vector<uint32_t>> chain_cores(num_chains);
+        for (auto& v : chain_cores) {
+            v.reserve(num_cores / num_chains + grid_size.x);
+        }
         for (uint32_t ci = 0; ci < num_cores; ++ci) {
             const uint32_t logical_y = ci / grid_size.x;
-            if (logical_y < half_y_logical) {
-                top_cores.push_back(ci);
-            } else {
-                bottom_cores.push_back(ci);
-            }
+            const uint32_t stripe = std::min(logical_y / K_MCAST_ROWS_PER_CHAIN, num_chains - 1);
+            chain_cores[stripe].push_back(ci);
         }
 
-        // Pick max-work injector inside a candidate set, optionally excluding a physical column
+        // Pick max-work injector inside a candidate set, excluding any already-claimed columns.
         auto pick_injector = [&](const std::vector<uint32_t>& candidates,
-                                 std::optional<uint32_t> excl_phys_x) -> std::pair<uint32_t, uint32_t> {
+                                 const std::unordered_set<uint32_t>& excl_phys_x) -> std::pair<uint32_t, uint32_t> {
             uint32_t best_idx = 0;
             uint32_t best_q = 0;
             for (uint32_t ci : candidates) {
-                if (excl_phys_x.has_value() && core_work[ci].physical_core.x == *excl_phys_x) {
+                if (excl_phys_x.count(core_work[ci].physical_core.x)) {
                     continue;
                 }
                 if (core_work[ci].global_q_count > best_q) {
@@ -1262,74 +1275,81 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             return {best_idx, best_q};
         };
 
-        auto [top_injector_idx, top_max_q] = pick_injector(top_cores, std::nullopt);
-        if (top_max_q == 0) {
-            k_mcast_fallback_reason = "top half has no work";
-        } else {
-            const uint32_t top_injector_phys_x = core_work[top_injector_idx].physical_core.x;
-            auto [bot_injector_idx, bot_max_q] = pick_injector(bottom_cores, top_injector_phys_x);
-            if (bot_max_q == 0) {
-                k_mcast_fallback_reason = "bottom half has no work in a column != top injector's column";
-            } else {
-                k_mcast_enabled = true;
+        std::vector<uint32_t> chain_injector_idx(num_chains, 0);
+        std::vector<uint32_t> chain_max_q(num_chains, 0);
+        std::unordered_set<uint32_t> used_phys_x;
+        used_phys_x.reserve(num_chains);
 
-                auto configure_chain = [&](const std::vector<uint32_t>& chain_cores,
-                                           uint32_t injector_idx,
-                                           uint32_t chain_max_q,
-                                           CoreCoord phys_start,
-                                           CoreCoord phys_end) {
-                    const uint32_t num_receivers = static_cast<uint32_t>(chain_cores.size()) - 1;
-                    const CoreCoord injector_physical = core_work[injector_idx].physical_core;
-                    for (uint32_t ci : chain_cores) {
-                        auto& kc = batch_chain_configs[ci];
-                        kc.participates = true;
-                        kc.mcast_start = phys_start;
-                        kc.mcast_end = phys_end;
-                        kc.injector_physical = injector_physical;
-                        kc.batch = 0;  // reset: unicast K pass may have set this to a real batch id
-                        kc.is_injector = (ci == injector_idx);
-                        kc.is_sink = !kc.is_injector;
-                        if (kc.is_injector) {
-                            kc.mcast_num_dests = num_receivers;
-                            kc.mcast_sender_wait = num_receivers;
-                            kc.next_core_q_chunks = chain_max_q;
-                        }
-                        k_chain_max_q[ci] = chain_max_q;
+        bool all_chains_picked = true;
+        for (uint32_t s = 0; s < num_chains; ++s) {
+            auto [idx, q] = pick_injector(chain_cores[s], used_phys_x);
+            if (q == 0) {
+                k_mcast_fallback_reason =
+                    fmt::format("chain {} has no work in a column not yet claimed by a higher-priority chain", s);
+                all_chains_picked = false;
+                break;
+            }
+            chain_injector_idx[s] = idx;
+            chain_max_q[s] = q;
+            used_phys_x.insert(core_work[idx].physical_core.x);
+        }
+
+        if (all_chains_picked) {
+            k_mcast_enabled = true;
+
+            auto configure_chain = [&](const std::vector<uint32_t>& chain_cores_v,
+                                       uint32_t injector_idx,
+                                       uint32_t chain_max_q_v,
+                                       CoreCoord phys_start,
+                                       CoreCoord phys_end) {
+                const uint32_t num_receivers = static_cast<uint32_t>(chain_cores_v.size()) - 1;
+                const CoreCoord injector_physical = core_work[injector_idx].physical_core;
+                for (uint32_t ci : chain_cores_v) {
+                    auto& kc = batch_chain_configs[ci];
+                    kc.participates = true;
+                    kc.mcast_start = phys_start;
+                    kc.mcast_end = phys_end;
+                    kc.injector_physical = injector_physical;
+                    kc.batch = 0;  // reset: unicast K pass may have set this to a real batch id
+                    kc.is_injector = (ci == injector_idx);
+                    kc.is_sink = !kc.is_injector;
+                    if (kc.is_injector) {
+                        kc.mcast_num_dests = num_receivers;
+                        kc.mcast_sender_wait = num_receivers;
+                        kc.next_core_q_chunks = chain_max_q_v;
                     }
-                };
+                    k_chain_max_q[ci] = chain_max_q_v;
+                }
+            };
 
-                CoreCoord top_phys_start = device->worker_core_from_logical_core(CoreCoord{0, 0});
-                CoreCoord top_phys_end =
-                    device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, half_y_logical - 1});
-                CoreCoord bot_phys_start = device->worker_core_from_logical_core(CoreCoord{0, half_y_logical});
-                CoreCoord bot_phys_end =
-                    device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, grid_size.y - 1});
+            auto log_chain = [&](uint32_t s,
+                                 const std::vector<uint32_t>& chain_cores_v,
+                                 uint32_t injector_idx,
+                                 uint32_t chain_max_q_v,
+                                 CoreCoord phys_start,
+                                 CoreCoord phys_end) {
+                log_debug(
+                    tt::LogOp,
+                    "K mcast chain {}: {} cores, injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
+                    s,
+                    chain_cores_v.size(),
+                    injector_idx,
+                    core_work[injector_idx].physical_core.x,
+                    core_work[injector_idx].physical_core.y,
+                    chain_max_q_v,
+                    phys_start.x,
+                    phys_start.y,
+                    phys_end.x,
+                    phys_end.y);
+            };
 
-                configure_chain(top_cores, top_injector_idx, top_max_q, top_phys_start, top_phys_end);
-                configure_chain(bottom_cores, bot_injector_idx, bot_max_q, bot_phys_start, bot_phys_end);
-
-                auto log_chain = [&](const char* label,
-                                     const std::vector<uint32_t>& chain_cores,
-                                     uint32_t injector_idx,
-                                     uint32_t chain_max_q,
-                                     CoreCoord phys_start,
-                                     CoreCoord phys_end) {
-                    log_debug(
-                        tt::LogOp,
-                        "K mcast {} chain: {} cores, injector core {} phys=({},{}) max_q={}, rect ({},{})-({},{})",
-                        label,
-                        chain_cores.size(),
-                        injector_idx,
-                        core_work[injector_idx].physical_core.x,
-                        core_work[injector_idx].physical_core.y,
-                        chain_max_q,
-                        phys_start.x,
-                        phys_start.y,
-                        phys_end.x,
-                        phys_end.y);
-                };
-                log_chain("top", top_cores, top_injector_idx, top_max_q, top_phys_start, top_phys_end);
-                log_chain("bottom", bottom_cores, bot_injector_idx, bot_max_q, bot_phys_start, bot_phys_end);
+            for (uint32_t s = 0; s < num_chains; ++s) {
+                const uint32_t y_start = s * K_MCAST_ROWS_PER_CHAIN;
+                const uint32_t y_end = (s + 1 == num_chains) ? grid_size.y - 1 : (s + 1) * K_MCAST_ROWS_PER_CHAIN - 1;
+                const CoreCoord phys_start = device->worker_core_from_logical_core(CoreCoord{0, y_start});
+                const CoreCoord phys_end = device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, y_end});
+                configure_chain(chain_cores[s], chain_injector_idx[s], chain_max_q[s], phys_start, phys_end);
+                log_chain(s, chain_cores[s], chain_injector_idx[s], chain_max_q[s], phys_start, phys_end);
             }
         }
     }
