@@ -1,0 +1,11 @@
+{"ts":"2026-05-06T00:00:00+00:00","event":"start","details":"begin numerical stability analysis for linear op (Phase 0)"}
+{"ts":"2026-05-06T00:00:01+00:00","event":"read","details":"read numerical_stability_analysis_reference.md (methodology + output template)"}
+{"ts":"2026-05-06T00:00:02+00:00","event":"read","details":"linear_program_descriptor.py — confirms HiFi4, fp32_dest_acc_en=True, packer_l1_acc not set (defaults to false), bf16 input/weight/bias/output CBs, single-core (0,0)"}
+{"ts":"2026-05-06T00:00:03+00:00","event":"read","details":"kernels/linear_compute.cpp — 1x1 subblocks, num_k_blocks=1, packer_l1_acc=false template arg, LastBlockTarget::Interm or ::Out, SubblockMajor pack"}
+{"ts":"2026-05-06T00:00:04+00:00","event":"read","details":"matmul_block_helpers.hpp/inl — confirms num_k_blocks=1 path skips interm spill+reload entirely; pack-DF reconfig fires when fp32_dest_acc_en=true; no SFPU calls in matmul path"}
+{"ts":"2026-05-06T00:00:05+00:00","event":"read","details":"bias_add_helpers.hpp/inl — add_tiles_bcast_rows (FPU add, not multiply), partials_cb wait/pop subblock-major, no SFPU calls in default path"}
+{"ts":"2026-05-06T00:00:06+00:00","event":"read","details":"dest_helpers.hpp — DEST capacity at fp32 half-sync = 4 tiles; matmul subblock = 1 tile uses well under capacity"}
+{"ts":"2026-05-06T00:00:07+00:00","event":"read","details":"linear.py entry point — no compute_kernel_config parameter exposed to user; bf16 enforced for all inputs/weight/bias"}
+{"ts":"2026-05-06T00:00:08+00:00","event":"decision","details":"identified error sources: (1) K-accumulation depth = K elements/output (= Kt*32) inside fp32 DEST, (2) bf16 round-trip into cb_partials between matmul and bias add, (3) bias add in 2nd FPU phase. No SFPU, no division, no exp, no subtraction in algorithm."}
+{"ts":"2026-05-06T00:00:09+00:00","event":"decision","details":"Tile-boundary precision: with num_k_blocks=1 and 1x1 subblocks, K-accumulation completes entirely within DEST in fp32 — zero round-trips through L1 during matmul. The cb_partials -> bias_add round-trip IS bf16 because cb_partials is configured with output_tensor.dtype = bf16."}
+{"ts":"2026-05-06T00:00:10+00:00","event":"write","details":"writing numerical_stability.md to /localdev/wransom/tt-metal/ttnn/ttnn/operations/linear/numerical_stability.md"}
