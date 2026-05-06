@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import pytest
 
-import ttnn
 from conftest import bh_2d_mesh_device_context
 
 

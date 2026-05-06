@@ -34,7 +34,6 @@ from __future__ import annotations
 from typing import Callable
 
 import pytest
-import torch
 from loguru import logger
 
 import ttnn

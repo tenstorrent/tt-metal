@@ -307,7 +307,6 @@ def run_all_to_all_dispatch_test(
     test_skew=False,
     shard_dim=0,
 ):
-    use_sub_devices = False
     torch.manual_seed(2005)
     random.seed(2005)
     mesh_device.enable_program_cache()
@@ -422,12 +421,8 @@ def run_all_to_all_dispatch_test(
         metadata_tensors.append(tt_metadata_tensor)
 
     ccl_sub_device_crs = subdevice_shard_cores_grid
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    if use_sub_devices:
-        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     tt_out_tensor_list = []
@@ -477,13 +472,13 @@ def run_all_to_all_dispatch_test(
 
     if trace_mode:
         logger.info("Compiling model")
-        tt_out_tensor_list, tt_metadata_list = run_op(1, store_all_results=True)
+        run_op(1, store_all_results=True)
         ttnn.synchronize_device(mesh_device)
 
         if warmup_iters > 0:
             logger.info(f"Capturing Warmup {warmup_iters} iterations")
             trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            tt_out_tensor_list, tt_metadata_list = run_op(warmup_iters, store_all_results=True)
+            run_op(warmup_iters, store_all_results=True)
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             ttnn.synchronize_device(mesh_device)
 
@@ -842,15 +837,6 @@ def run_all_to_all_combine_test(
     if test_skew and local_reduce:
         pytest.skip("Skip skew test for local reduce")
     devices = mesh_shape[0] * mesh_shape[1]
-    compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
-    subdevice_shard_cores_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(compute_grid[0] - 1, compute_grid[1] - 1),
-            ),
-        }
-    )
 
     expert_mapping_tensors = []
     input_tensors = []
