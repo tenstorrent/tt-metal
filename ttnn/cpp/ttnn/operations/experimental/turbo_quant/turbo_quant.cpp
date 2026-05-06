@@ -26,7 +26,11 @@ std::vector<Tensor> turbo_quant_sdpa_decode(
     float scale,
     bool pre_rescaled,
     uint32_t num_cores_per_head,
-    bool return_lse) {
+    bool return_lse,
+    uint32_t recent_window,
+    const std::optional<Tensor>& k_ring,
+    const std::optional<Tensor>& v_ring,
+    const std::optional<Tensor>& ring_page_table) {
     return ::ttnn::prim::turbo_quant_sdpa_decode(
         q,
         k_indices,
@@ -39,7 +43,11 @@ std::vector<Tensor> turbo_quant_sdpa_decode(
         scale,
         pre_rescaled,
         num_cores_per_head,
-        return_lse);
+        return_lse,
+        recent_window,
+        k_ring,
+        v_ring,
+        ring_page_table);
 }
 
 }  // namespace ttnn

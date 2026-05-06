@@ -5,6 +5,7 @@
 #include "turbo_quant_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -73,6 +74,15 @@ Args:
     return_lse: If true, returns [out, lse] where lse holds LSE = max + log(sum)
         per (B, NQH) for the sliding-window hybrid host-side online-softmax
         combine. Default false returns [out].
+    recent_window: Sliding-window fused hybrid (Phase 1, plumbing only). When > 0,
+        the kernel will run a single fused SDPA over both the TQ cache (older
+        positions) and a BFP8 ring buffer (most recent `recent_window` positions),
+        replacing the dual-call + host-combine flow. Requires k_ring, v_ring,
+        ring_page_table to be provided. Default 0 = legacy behavior.
+    k_ring, v_ring: BFP8 paged ring caches over the most recent `recent_window`
+        positions. Required when recent_window > 0. Layout matches the TQ paged
+        cache ([B, NKH, ring_W_padded, head_dim]).
+    ring_page_table: Int32 page table for the ring (identity mapping for now).
 )doc",
         &ttnn::turbo_quant_sdpa_decode,
         nb::arg("q").noconvert(),
@@ -86,7 +96,11 @@ Args:
         nb::arg("scale"),
         nb::arg("pre_rescaled") = false,
         nb::arg("num_cores_per_head") = 1,
-        nb::arg("return_lse") = false);
+        nb::arg("return_lse") = false,
+        nb::arg("recent_window") = 0,
+        nb::arg("k_ring") = std::nullopt,
+        nb::arg("v_ring") = std::nullopt,
+        nb::arg("ring_page_table") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::turbo_quant

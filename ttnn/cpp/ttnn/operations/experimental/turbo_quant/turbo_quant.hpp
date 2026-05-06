@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "device/turbo_quant_device_operation.hpp"
 #include "sdpa/device/sdpa_tq_device_operation.hpp"
 
@@ -35,6 +37,10 @@ std::vector<Tensor> turbo_quant_sdpa_decode(
     float scale,
     bool pre_rescaled = false,
     uint32_t num_cores_per_head = 1,
-    bool return_lse = false);
+    bool return_lse = false,
+    uint32_t recent_window = 0,
+    const std::optional<Tensor>& k_ring = std::nullopt,
+    const std::optional<Tensor>& v_ring = std::nullopt,
+    const std::optional<Tensor>& ring_page_table = std::nullopt);
 
 }  // namespace ttnn

@@ -42,6 +42,38 @@ void SDPATQDeviceOperation::validate_on_program_cache_miss(
 
     // Centroids
     TT_FATAL(attrs.centroids.size() >= 2 && attrs.centroids.size() <= 16, "Need 2-16 centroids");
+
+    // Sliding-window fused hybrid (Phase 1): when recent_window > 0, the ring
+    // tensors must be provided and have compatible dtypes. Phase 1 only plumbs
+    // them through; the reader / compute kernel still ignore them. Phase 2/3
+    // wires the per-chunk source branch.
+    if (attrs.recent_window > 0) {
+        TT_FATAL(
+            args.k_ring.has_value() && args.v_ring.has_value() && args.ring_page_table.has_value(),
+            "recent_window > 0 requires k_ring, v_ring, ring_page_table to be set");
+        TT_FATAL(
+            args.k_ring->dtype() == tt::tt_metal::DataType::BFLOAT4_B ||
+                args.k_ring->dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+                args.k_ring->dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "k_ring must be BFP4_B, BFP8_B, or BF16");
+        TT_FATAL(
+            args.v_ring->dtype() == tt::tt_metal::DataType::BFLOAT4_B ||
+                args.v_ring->dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+                args.v_ring->dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "v_ring must be BFP4_B, BFP8_B, or BF16");
+        TT_FATAL(args.k_ring->layout() == Layout::TILE, "k_ring must be TILE layout");
+        TT_FATAL(args.v_ring->layout() == Layout::TILE, "v_ring must be TILE layout");
+        TT_FATAL(
+            args.ring_page_table->dtype() == tt::tt_metal::DataType::INT32 ||
+                args.ring_page_table->dtype() == tt::tt_metal::DataType::UINT32,
+            "ring_page_table must be Int32 or UInt32");
+        // Mutually exclusive with cross-core merge for Phase 1 to keep the
+        // initial implementation focused. Lifting this requires cb_lse_out
+        // de-aliasing similar to the return_lse case (cb_merge_new_max == c_3).
+        TT_FATAL(attrs.num_cores_per_head == 1, "recent_window > 0 currently incompatible with num_cores_per_head > 1");
+        TT_FATAL(
+            !attrs.pre_rescaled, "recent_window > 0 currently incompatible with pre_rescaled (kernel chooses both)");
+    }
 }
 
 SDPATQDeviceOperation::spec_return_value_t SDPATQDeviceOperation::compute_output_specs(
@@ -94,12 +126,17 @@ std::vector<Tensor> turbo_quant_sdpa_decode(
     float scale,
     bool pre_rescaled,
     uint32_t num_cores_per_head,
-    bool return_lse) {
+    bool return_lse,
+    uint32_t recent_window,
+    const std::optional<Tensor>& k_ring,
+    const std::optional<Tensor>& v_ring,
+    const std::optional<Tensor>& ring_page_table) {
     using Op = ttnn::operations::experimental::turbo_quant::SDPATQDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
-            scale, centroids, pre_rescaled, ttnn::MemoryConfig{}, num_cores_per_head, return_lse},
-        Op::tensor_args_t{q, k_indices, k_norms, v_indices, v_norms, page_table, cur_pos});
+            scale, centroids, pre_rescaled, ttnn::MemoryConfig{}, num_cores_per_head, return_lse, recent_window},
+        Op::tensor_args_t{
+            q, k_indices, k_norms, v_indices, v_norms, page_table, cur_pos, k_ring, v_ring, ring_page_table});
 }
 
 }  // namespace ttnn::prim

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -34,6 +35,17 @@ struct SDPATQDeviceOperation {
         // Mutually exclusive with num_cores_per_head > 1 (cb_lse_out aliases the
         // Tier 2A reducer's cb_merge_new_max).
         bool return_lse = false;
+
+        // Sliding-window fused hybrid (Phase 1, plumbing only): when > 0, the
+        // kernel runs a single fused SDPA over both the TQ cache (chunks fully
+        // in [0, cur_pos - recent_window)) and a BFP8 ring buffer (chunks
+        // covering the most recent `recent_window` positions). When 0 (default),
+        // legacy behavior — single source determined by k_indices alone.
+        // tensor_args_t.k_ring / v_ring / ring_page_table must be set when
+        // recent_window > 0. See SLIDING_WINDOW_DESIGN.md.
+        // Reader and compute kernel still ignore the ring inputs in Phase 1;
+        // Phase 2/3 wires the per-chunk source branch.
+        uint32_t recent_window = 0;
     };
 
     struct tensor_args_t {
@@ -44,6 +56,15 @@ struct SDPATQDeviceOperation {
         const Tensor& v_norms;     // [B, NKH, Sk, 1] BF16
         const Tensor& page_table;  // [B, max_pages] Int32
         const Tensor& cur_pos;     // [B] Int32
+
+        // Hybrid-mode ring inputs. Required iff
+        // operation_attributes_t::recent_window > 0; ignored otherwise.
+        // k_ring / v_ring are paged BFP8 caches over the most recent W tokens
+        // (W = recent_window). ring_page_table maps logical block i → physical
+        // block i (identity for now). See SLIDING_WINDOW_DESIGN.md.
+        std::optional<Tensor> k_ring = std::nullopt;
+        std::optional<Tensor> v_ring = std::nullopt;
+        std::optional<Tensor> ring_page_table = std::nullopt;
     };
 
     // Returns either {out} or {out, lse} depending on return_lse. A vector lets
@@ -98,6 +119,10 @@ std::vector<Tensor> turbo_quant_sdpa_decode(
     float scale,
     bool pre_rescaled = false,
     uint32_t num_cores_per_head = 1,
-    bool return_lse = false);
+    bool return_lse = false,
+    uint32_t recent_window = 0,
+    const std::optional<Tensor>& k_ring = std::nullopt,
+    const std::optional<Tensor>& v_ring = std::nullopt,
+    const std::optional<Tensor>& ring_page_table = std::nullopt);
 
 }  // namespace ttnn::prim
