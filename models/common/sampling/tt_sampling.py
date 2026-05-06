@@ -409,20 +409,30 @@ class TTSampling(LightweightModule):
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
                 cluster_axis = self.argmax_all_gather_axis
-                x = ttnn.experimental.all_gather_async(
-                    x,
-                    persistent_output_buffer=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                    num_links=self.num_argmax_gather_links,
-                    memory_config=x.memory_config(),
-                    cluster_axis=cluster_axis,
-                    topology=self.ag_topology,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    chunks_per_sync=10,
-                    num_workers_per_link=1,
-                    num_buffers_per_channel=2,
-                )
+                if callable(getattr(self.tt_ccl, "get_and_cycle_ag_semaphore_handles", None)):
+                    x = ttnn.experimental.all_gather_async(
+                        x,
+                        persistent_output_buffer=None,
+                        dim=3,
+                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                        num_links=self.num_argmax_gather_links,
+                        memory_config=x.memory_config(),
+                        cluster_axis=cluster_axis,
+                        topology=self.ag_topology,
+                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                        chunks_per_sync=10,
+                        num_workers_per_link=1,
+                        num_buffers_per_channel=2,
+                    )
+                else:
+                    x = self._perform_all_gather(
+                        x,
+                        dim=3,
+                        cluster_axis=cluster_axis,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        num_links=self.num_argmax_gather_links,
+                        buffer_key="SAMPLING",
+                    )
             x_untilized = ttnn.untilize(x, use_multicore=True)
             tt_out_tok = ttnn.argmax(
                 x_untilized,
