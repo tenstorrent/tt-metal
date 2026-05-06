@@ -56,14 +56,14 @@ jobs:
               dram_fw_init_step_prefixes=(
                 "clear_l1"
                 "clear_l1,write_bank_tables"
-                "clear_l1,write_bank_tables,load_binaries"
-                "clear_l1,write_bank_tables,load_binaries,write_core_info"
-                "clear_l1,write_bank_tables,load_binaries,write_core_info,write_launch_msg"
-                "clear_l1,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg"
-                "clear_l1,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs"
-                "clear_l1,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc"
-                "clear_l1,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc,assert_reset,deassert_reset"
-                "clear_l1,write_bank_tables,load_binaries,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc,assert_reset,deassert_reset,wait_init_done"
+                "clear_l1,write_bank_tables,write_core_info"
+                "clear_l1,write_bank_tables,write_core_info,write_launch_msg"
+                "clear_l1,write_bank_tables,write_core_info,write_launch_msg,write_go_msg"
+                "clear_l1,write_bank_tables,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs"
+                "clear_l1,write_bank_tables,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc"
+                "clear_l1,write_bank_tables,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc,load_binaries"
+                "clear_l1,write_bank_tables,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc,load_binaries,assert_reset,deassert_reset"
+                "clear_l1,write_bank_tables,write_core_info,write_launch_msg,write_go_msg,write_mailbox_ptrs,write_reset_pc,load_binaries,assert_reset,deassert_reset,wait_init_done"
               )
 
               status=0
