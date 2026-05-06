@@ -50,10 +50,10 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
+    pytest --timeout=1500 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
   skus:
     bh_p150_perf:
-      timeout: 10
+      timeout: 30
     # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
     bh_p150_perf_bhgh04:
       timeout: 30
@@ -174,27 +174,30 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.3-70B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
+    pytest --timeout 2400 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 1800 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
+    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 1800 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
   skus:
+    # STAGE 1 (revert before merging): bumped GHA timeouts on local-disk SKUs
+    # to fit pytest --timeout sum during cache regen. Production targets are
+    # 30 min once weights + tt_cache are populated.
     bh_llmbox:
-      timeout: 30
+      timeout: 120
     bh_loudbox:
       timeout: 30
     bh_quietbox_2:
-      timeout: 30
+      timeout: 120
     # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
     bh_llmbox_qbgh02:
-      timeout: 90
+      timeout: 150
     bh_llmbox_qbgh03:
-      timeout: 90
+      timeout: 150
     bh_llmbox_qbgh04:
-      timeout: 90
+      timeout: 150
     bh_quietbox_2_qbge01:
-      timeout: 90
+      timeout: 150
     bh_quietbox_2_qbge03:
-      timeout: 90
+      timeout: 150
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: llama3.3-70b
@@ -205,27 +208,29 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=Qwen/Qwen3-32B
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen3-32B
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 32768
+    pytest --timeout 1200 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 32768
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-32768-2-2-1-1-False"
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-32768-2-10-1-1-False"
   skus:
+    # STAGE 1 (revert before merging): bumped GHA timeouts on local-disk SKUs.
+    # Production targets are 30 min once cache is populated.
     bh_llmbox:
-      timeout: 30
+      timeout: 75
     bh_loudbox:
       timeout: 30
     bh_quietbox_2:
-      timeout: 30
+      timeout: 75
     # STAGE 1 (revert before merging): per-host SKU fan-out for cache regen.
     bh_llmbox_qbgh02:
-      timeout: 75
+      timeout: 90
     bh_llmbox_qbgh03:
-      timeout: 75
+      timeout: 90
     bh_llmbox_qbgh04:
-      timeout: 75
+      timeout: 90
     bh_quietbox_2_qbge01:
-      timeout: 75
+      timeout: 90
     bh_quietbox_2_qbge03:
-      timeout: 75
+      timeout: 90
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
   model-name: qwen3-32b
