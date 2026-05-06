@@ -272,7 +272,8 @@ class LoraModel(AbstractModuleBase):
         prefix: str,
         patterns: list[re.Pattern],
         config: LoraConfig,
-    ) -> None:
+    ) -> list[str]:
+        injected: list[str] = []
         """Recursively replace matching linear layers with their LoRA wrappers.
 
         ModuleList and ModuleDict require index/key-based assignment instead of
