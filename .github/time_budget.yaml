@@ -169,17 +169,10 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_deskbox: 250
     bh_llmbox: 1200
-    # STAGE 1 ONLY (revert before merging): per-machine LLMBox/QB2 SKUs used
-    # for cache regen.
-    bh_llmbox_qbgh02: 30
-    bh_llmbox_qbgh03: 30
-    bh_llmbox_qbgh04: 30
     bh_loudbox: 1200
 
     bh_p300: 800
     bh_quietbox_2: 250
-    bh_quietbox_2_qbge01: 120
-    bh_quietbox_2_qbge03: 120
   sweep:
     wh_n150: 10
     wh_llmbox_perf: 30

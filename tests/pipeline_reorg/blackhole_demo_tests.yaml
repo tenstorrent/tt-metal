@@ -335,25 +335,16 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=openai/gpt-oss-20b
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/openai--gpt-oss-20b/
-    pytest models/demos/gpt_oss/demo/text_demo.py -k prefill_128 --timeout=1500
+    pytest models/demos/gpt_oss/demo/text_demo.py -k prefill_128 --timeout=720
   skus:
     bh_p150:
-      timeout: 30
+      timeout: 15
     bh_deskbox:
-      timeout: 30
-    # STAGE 1: per-machine SKU fan-out so every local-disk runner gets its own
-    # weights+tensor-cache populated. Revert to bh_llmbox / bh_quietbox_2 with
-    # the production timeouts (15m) before sending the PR for review.
-    bh_llmbox_qbgh02:
-      timeout: 30
-    bh_llmbox_qbgh03:
-      timeout: 30
-    bh_llmbox_qbgh04:
-      timeout: 30
-    bh_quietbox_2_qbge01:
-      timeout: 30
-    bh_quietbox_2_qbge03:
-      timeout: 30
+      timeout: 15
+    bh_llmbox:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss-20b
@@ -364,7 +355,7 @@
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=openai/gpt-oss-120b
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/openai--gpt-oss-120b/
-    pytest models/demos/gpt_oss/demo/text_demo.py -k prefill_128 --timeout=4800
+    pytest models/demos/gpt_oss/demo/text_demo.py -k prefill_128 --timeout=1500
   skus:
     # gpt-oss-120b currently OOMs on bh_deskbox (2xP150, ~60GB DRAM total) at
     # the model's MXFP4 quantization. Re-enable when a more aggressively
@@ -372,13 +363,8 @@
     # 2-chip footprint.
     # bh_deskbox:
     #   timeout: 30
-    # STAGE 1: per-machine SKU fan-out across both QB2 runners. Revert to
-    # bh_quietbox_2 with the production timeout (25m) before sending the PR
-    # for review.
-    bh_quietbox_2_qbge01:
-      timeout: 90
-    bh_quietbox_2_qbge03:
-      timeout: 90
+    bh_quietbox_2:
+      timeout: 25
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss-120b
