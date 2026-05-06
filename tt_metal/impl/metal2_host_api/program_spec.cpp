@@ -1471,7 +1471,9 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 // Public Entry Point
 // ============================================================================
 
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
+Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+    // The mesh_device argument is required for forthcoming work but is not yet consumed.
+    (void)mesh_device;
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)

@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,25 @@ CACHE_DIR = Path(_ds_cache) if _ds_cache else None
 # Must match the path used in generate_teacher_forced_file.py
 # REFERENCE_FILE = Path(__file__).with_name("deepseek_v3_teacher_forcing.refpt")
 REFERENCE_FILE = Path(__file__).with_name("gpqa_diamond_racemic.refpt")
+
+ARTIFACT_DIR = Path("generated/artifacts")
+
+
+def _is_primary_artifact_writer() -> bool:
+    for rank_env in ("TT_MESH_HOST_RANK", "OMPI_COMM_WORLD_RANK", "PMI_RANK", "RANK"):
+        rank_value = os.getenv(rank_env)
+        if rank_value is None:
+            continue
+        try:
+            return int(rank_value) == 0
+        except ValueError:
+            return False
+    return True
+
+
+def _timestamped_artifact_stem(artifact_name: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{artifact_name}_{timestamp}"
 
 
 def _sanitize_decoded(text: str) -> str:
@@ -210,6 +231,7 @@ def test_demo_teacher_forcing_accuracy(
         force_recalculate=force_recalculate_weight_config,
         stop_at_eos=False,
         sample_on_device=False,
+        max_users_per_row=max_users_per_row,
     )
 
     # Check results
@@ -266,6 +288,42 @@ def test_demo_teacher_forcing_accuracy(
                     f"user0={expected_tokens[first_diff]}, user{idx}={tokens[first_diff]}"
                 )
             break
+
+    # Save per-user TT vs reference decode artifact from host rank 0 only (same pattern as test_demo.py).
+    if _is_primary_artifact_writer():
+        upr_suffix = f"{max_users_per_row}upr"
+        gt_decode = tokenizer.decode(
+            ref_gen_ids[:max_new_tokens].tolist(),
+            skip_special_tokens=False,
+        )
+        output_records: list[dict[str, object]] = []
+        for idx, gen in enumerate(results["generations"]):
+            tt_text = gen.get("text")
+            if not tt_text:
+                gen_ids = gen.get("tokens", [])
+                tt_text = tokenizer.decode([int(x) for x in gen_ids], skip_special_tokens=False) if gen_ids else ""
+
+            record: dict[str, object] = {
+                "index": idx + 1,
+                "prompt": prompt_text_for_users,
+                "tt_output": tt_text,
+                "gt_output": gt_decode,
+            }
+
+            pred_ids = gen.get("predicted_tokens")
+            if pred_ids:
+                record["tt_predicted_output"] = tokenizer.decode([int(x) for x in pred_ids], skip_special_tokens=False)
+
+            output_records.append(record)
+        artifact_dir = ARTIFACT_DIR
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        output_file = (
+            artifact_dir / f"{_timestamped_artifact_stem(f'teacher_forced_generated_outputs_{upr_suffix}')}.json"
+        )
+        with output_file.open("w", encoding="utf-8") as f:
+            json.dump(output_records, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        logger.info("Saved {} user outputs to {}", len(output_records), output_file)
 
     if "predicted_tokens" in first_gen:
         assert len(first_gen["predicted_tokens"]) == len(

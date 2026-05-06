@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 
 def random_torch_tensor(dtype, shape):

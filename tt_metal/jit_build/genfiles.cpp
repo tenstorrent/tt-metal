@@ -598,6 +598,11 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     emit_math_scalar_descriptors(out, desc);
     out << "#endif\n\n";
 
+    out << "#if defined(UCK_CHLKC_PACK)\n"
+           "#include \"llk_defs.h\"\n";
+    emit_math_scalar_descriptors(out, desc);
+    out << "#endif\n\n";
+
     out << "#if !defined(UCK_CHLKC_PACK)\n";
     emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_cbs);
     emit_unpack_tile_dims(out, desc, max_cbs);

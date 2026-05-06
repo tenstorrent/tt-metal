@@ -397,7 +397,12 @@ jobs:
 
       - name: 📀 Install vLLM
         run: |
-          uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 2>&1 | tee "${FILE_INSTALL_LOG}"
+          {
+            uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+            if [ -d vllm/plugins/vllm-tt-plugin ]; then
+              uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
+            fi
+          } 2>&1 | tee "${FILE_INSTALL_LOG}"
           exit "${PIPESTATUS[0]}"
 
       - name: 🚀 Run server
@@ -641,7 +646,7 @@ jobs:
         with:
           config: |
             {
-              "model": "anthropic/claude-sonnet-4-6",
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["output"],
               "output_dir": "ai_summaries"
@@ -681,7 +686,7 @@ jobs:
         with:
           config: |
             {
-              "model": "anthropic/claude-sonnet-4-6",
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE",
               "input_dir": "ai_job_summaries",
               "output_dir": "ai_run_summaries"
@@ -699,6 +704,7 @@ jobs:
         run: |
           if [ -f "$REPORT_FILE" ]; then
             cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::warning::Report file not found: $REPORT_FILE"
           fi
