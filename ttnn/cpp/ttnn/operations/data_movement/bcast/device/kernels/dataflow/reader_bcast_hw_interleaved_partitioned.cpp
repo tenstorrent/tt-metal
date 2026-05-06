@@ -33,6 +33,7 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CircularBuffer cb0(cb_id_in0);
     experimental::CircularBuffer cb1(cb_id_in1);
+    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
 #ifndef IN0_SHARDED
     const auto s0 = TensorAccessor(src0_args, src0_addr);

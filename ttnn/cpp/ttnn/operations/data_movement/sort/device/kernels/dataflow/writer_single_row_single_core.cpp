@@ -43,6 +43,7 @@ void kernel_main() {
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_value(value_tensor_cb_index);
+    const uint32_t value_tensor_tile_size_bytes = get_tile_size(value_tensor_cb_index);
 
     // Move data from L1 to DRAMs
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {

@@ -27,6 +27,7 @@ void kernel_main() {
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_out(cb_id_out0);
+    const uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
     uint32_t tile_id = 0;
     uint32_t i_nc = 0;

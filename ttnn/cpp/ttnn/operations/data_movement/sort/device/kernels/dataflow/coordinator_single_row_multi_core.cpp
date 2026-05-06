@@ -63,6 +63,8 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CircularBuffer cb_index(index_tensor_cb_index);
     experimental::CircularBuffer cb_input(input_tensor_cb_index);
+    const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_cb_index);
+    const uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
 
     // Copy input data to output and generate index tiles
     for (uint32_t h = 0; h < Ht; h++) {

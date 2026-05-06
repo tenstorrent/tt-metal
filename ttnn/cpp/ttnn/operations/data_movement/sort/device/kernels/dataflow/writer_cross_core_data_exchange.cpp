@@ -48,6 +48,7 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CircularBuffer cb_value(value_tensor_cb_index);
     experimental::CircularBuffer cb_lookup(physical_core_lookup_table_cb_index);
+    const uint32_t value_tensor_tile_size_bytes = get_tile_size(value_tensor_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Generate input index tiles
