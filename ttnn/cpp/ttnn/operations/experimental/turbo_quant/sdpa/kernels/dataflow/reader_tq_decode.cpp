@@ -27,14 +27,24 @@ void kernel_main() {
     constexpr bool pre_rescaled = get_compile_time_arg_val(11) == 1;
     constexpr bool is_paged_attention = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t block_size_t = get_compile_time_arg_val(13);  // block_size / TILE_HEIGHT
+    // Hybrid plumbing (Phase 2): when recent_window > 0, the reader has
+    // ring_K / ring_V / ring_page_table accessors available for the per-chunk
+    // source branch. Phase 2 just parses them — Phase 3 wires the branch.
+    [[maybe_unused]] constexpr uint32_t recent_window = get_compile_time_arg_val(14);
+    [[maybe_unused]] constexpr uint32_t ring_W_padded = get_compile_time_arg_val(15);
+    [[maybe_unused]] constexpr uint32_t ring_block_size_t = get_compile_time_arg_val(16);
 
-    constexpr auto q_args = TensorAccessorArgs<14>();
+    constexpr auto q_args = TensorAccessorArgs<17>();
     constexpr auto k_idx_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto k_norms_args = TensorAccessorArgs<k_idx_args.next_compile_time_args_offset()>();
     constexpr auto v_idx_args = TensorAccessorArgs<k_norms_args.next_compile_time_args_offset()>();
     constexpr auto v_norms_args = TensorAccessorArgs<v_idx_args.next_compile_time_args_offset()>();
     constexpr auto cur_pos_args = TensorAccessorArgs<v_norms_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<cur_pos_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto k_ring_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto v_ring_args = TensorAccessorArgs<k_ring_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto ring_page_table_args =
+        TensorAccessorArgs<v_ring_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -56,6 +66,11 @@ void kernel_main() {
     // so this reader reads the full [0, valid_k_chunks) range as before.
     const uint32_t core_idx_in_group_arg = get_arg_val<uint32_t>(argidx++);
     const uint32_t cores_per_head_arg = get_arg_val<uint32_t>(argidx++);
+    // Hybrid runtime addresses. In legacy mode these alias the TQ tensors and
+    // are unread; in hybrid mode they point at the ring buffers.
+    [[maybe_unused]] const uint32_t k_ring_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t v_ring_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const uint32_t ring_page_table_addr = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     // When pre_rescaled: push KV directly to sdpa's native CBs (c_1/c_2).

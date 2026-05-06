@@ -431,6 +431,19 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
             .set_page_size(CBIndex::c_8, cur_pos_stick_size));
 
     // ── Reader kernel ──
+    // Hybrid plumbing: when recent_window > 0, the reader needs accessors for
+    // the ring tensors. We always append ring tensor accessor CT args (using
+    // the TQ tensors as a placeholder when not in hybrid mode) so the kernel's
+    // CT-arg layout is constant. ring_W_padded is the block-aligned ring
+    // capacity; when recent_window=0 it's also 0.
+    const bool hybrid_mode = (attrs.recent_window > 0);
+    const auto* k_ring_buffer = hybrid_mode ? args.k_ring->buffer() : k_idx.buffer();
+    const auto* v_ring_buffer = hybrid_mode ? args.v_ring->buffer() : v_idx.buffer();
+    const auto* ring_pt_buffer = hybrid_mode ? args.ring_page_table->buffer() : page_table.buffer();
+    const uint32_t ring_block_size_t =
+        hybrid_mode ? (args.k_ring->padded_shape()[2] / tt::constants::TILE_HEIGHT) : block_size_t;
+    const uint32_t ring_W_padded = hybrid_mode ? args.k_ring->padded_shape()[0] * args.k_ring->padded_shape()[2] : 0;
+
     std::vector<uint32_t> reader_ct_args = {
         B,
         NQH,
@@ -446,6 +459,9 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         attrs.pre_rescaled ? 1u : 0u,
         is_paged_attention ? 1u : 0u,
         block_size_t,
+        attrs.recent_window,
+        ring_W_padded,
+        ring_block_size_t,
     };
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*k_idx.buffer()).append_to(reader_ct_args);
@@ -457,6 +473,12 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     // ignores them behind the `if constexpr (is_paged_attention)` gate, but the offset
     // calculation must be consistent).
     TensorAccessorArgs(*page_table.buffer()).append_to(reader_ct_args);
+    // Ring tensor accessor CT args. Always appended so the reader's CT-arg
+    // layout is identical in legacy and hybrid modes; placeholders point at
+    // TQ tensors when recent_window == 0.
+    TensorAccessorArgs(*k_ring_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(*v_ring_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(*ring_pt_buffer).append_to(reader_ct_args);
 
     KernelHandle reader_kernel = CreateKernel(
         program,
@@ -528,6 +550,15 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
         const uint32_t kernel_core_idx_in_group = core_idx_in_group;
         const uint32_t kernel_cores_per_head = cores_per_head;
 
+        // Ring runtime addresses. When recent_window == 0, fall back to TQ
+        // addresses so the placeholder accessors don't read garbage. The
+        // reader gates ring usage on the recent_window CT arg, so these
+        // addresses are dormant unless hybrid mode is active.
+        const uint32_t k_ring_addr = hybrid_mode ? args.k_ring->buffer()->address() : k_idx.buffer()->address();
+        const uint32_t v_ring_addr = hybrid_mode ? args.v_ring->buffer()->address() : v_idx.buffer()->address();
+        const uint32_t ring_pt_addr = hybrid_mode ? args.ring_page_table->buffer()->address()
+                                                  : (is_paged_attention ? page_table.buffer()->address() : 0u);
+
         SetRuntimeArgs(
             program,
             reader_kernel,
@@ -549,6 +580,9 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
                 head_end,
                 kernel_core_idx_in_group,  // Tier 2A: chunk-slice routing (mirrors compute kernel slot [7])
                 kernel_cores_per_head,     // Tier 2A: chunk-slice routing (mirrors compute kernel slot [8])
+                k_ring_addr,               // Hybrid: ring K base address (= k_idx.address() in legacy mode)
+                v_ring_addr,               // Hybrid: ring V base address (= v_idx.address() in legacy mode)
+                ring_pt_addr,              // Hybrid: ring page-table base address
             });
 
         SetRuntimeArgs(
@@ -609,12 +643,19 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
 
 void SDPATQDeviceOperation::MultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*attrs*/,
+    const operation_attributes_t& attrs,
     const tensor_args_t& args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto num_cores = cached_program.shared_variables.num_cores;
     auto grid_size_x = cached_program.shared_variables.grid_size_x;
+
+    const bool hybrid_mode = (attrs.recent_window > 0);
+    const bool is_paged = (args.k_indices.padded_shape()[0] != args.q.padded_shape()[0]);
+    const uint32_t k_ring_addr = hybrid_mode ? args.k_ring->buffer()->address() : args.k_indices.buffer()->address();
+    const uint32_t v_ring_addr = hybrid_mode ? args.v_ring->buffer()->address() : args.v_indices.buffer()->address();
+    const uint32_t ring_pt_addr =
+        hybrid_mode ? args.ring_page_table->buffer()->address() : (is_paged ? args.page_table.buffer()->address() : 0u);
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i % grid_size_x, i / grid_size_x};
@@ -627,12 +668,18 @@ void SDPATQDeviceOperation::MultiCore::override_runtime_arguments(
         reader_args[4] = args.v_norms.buffer()->address();
         // args[5] = page_table buffer address (0 if not paged).
         // args[6] = page_table_page_size (constant — set in create, not touched here).
-        const bool is_paged = (args.k_indices.padded_shape()[0] != args.q.padded_shape()[0]);
         reader_args[5] = is_paged ? args.page_table.buffer()->address() : 0u;
         // args[7] = cur_pos buffer address (refresh per call so the kernel reads
         // the latest position values).
         // args[8] = cur_pos_stick_size (constant — set in create).
         reader_args[7] = args.cur_pos.buffer()->address();
+        // args[9..15] = core-distribution / Tier 2A routing slots (constant — set in create).
+        // args[16..18] = ring K, V, page_table addresses (refresh per call so a
+        // moved ring buffer is picked up; in legacy mode they alias the TQ
+        // tensors and the reader doesn't read them).
+        reader_args[16] = k_ring_addr;
+        reader_args[17] = v_ring_addr;
+        reader_args[18] = ring_pt_addr;
 
         auto& writer_args = GetRuntimeArgs(program, cached_program.shared_variables.writer_kernel_id, core);
         writer_args[0] = output[0].buffer()->address();
