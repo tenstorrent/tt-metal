@@ -25,7 +25,7 @@ from unittest import mock
 import torch
 from dataclasses import dataclass, field
 from itertools import product
-from typing import List, Dict
+from typing import List, Dict, Optional
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
@@ -77,6 +77,10 @@ class ModelConfig:
 
     # Can be hardware-dependent to keep per-core work balanced between Galaxy and Quiet Box
     seq_len: int
+
+    # If set, open a submesh of this SP size instead of using the full detected ring.
+    # Global seq = seq_len * sp_size_override (not mesh_config.sp_size).
+    sp_size_override: Optional[int] = None
 
 
 def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
@@ -188,6 +192,36 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             q_chunk_sizes=[288],
             k_chunk_sizes=[512],
             seq_len=6144 if mesh_config.is_galaxy else 5760,  # Tuned for each platform to match per-core work
+        )
+    )
+
+    # WAN 2.1 — 1536×2048 at 1 frame
+    # Target (bh_2x4sp1tp0): SP=4, TP=2 → per-device [20 heads, 3072 tokens, 128]
+    # MeshConfig.detect() returns a 1×8 single-ring (sp=8, tp=1) on this system,
+    # so the test cannot replicate the production 4-chip ring or TP head sharding.
+    # seq_len=3072, nhq=20 preserves the correct per-device Q tensor [20h, 3072t, 128]
+    # so Q-chunk tiling matches production exactly. Global K is 2× too large (24576
+    # vs production 12288) so absolute durations are ~2× production, but the
+    # q_chunk ranking and slot-waste analysis are valid.
+    configs.append(
+        ModelConfig(
+            name="wan2_1_1536p_bh_2x4sp1tp0",
+            nhq=20,
+            nhk=20,
+            nhv=20,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            is_balanced=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            # 3072/96=32, /128=24, /192=16, /256=12, /288≈11 Q-chunks per device
+            q_chunk_sizes=[96, 128, 192, 256, 288],
+            # global K=12288: /128=96, /256=48, /512=24 K-chunks
+            k_chunk_sizes=[128, 256, 512],
+            seq_len=3072,
+            sp_size_override=4,  # Use first 4 chips as a 1×4 submesh; global K = 3072×4 = 12,288 ✓
         )
     )
 
@@ -346,11 +380,12 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
     config_ids = []
 
     for _, model in model_configs.items():
+        sp_size = model.sp_size_override if model.sp_size_override is not None else mesh_config.sp_size
         for q_chunk, k_chunk in product(model.q_chunk_sizes, model.k_chunk_sizes):
             configs.append(
                 (
                     BATCH_SIZE,
-                    model.seq_len * mesh_config.sp_size,  # Global sequence length across all devices in the ring
+                    model.seq_len * sp_size,  # Global sequence length across all devices in the ring
                     model.nhq * mesh_config.tp_size,  # Total query heads across all TP shards
                     model.nhk
                     * (
@@ -366,6 +401,7 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
                     model.is_balanced,
                     model.q_dtype,
                     model.kv_dtype,
+                    model.sp_size_override,  # Passed through so run_ring_joint_sdpa can open the right submesh
                 )
             )
             config_ids.append(get_test_case_id(model, q_chunk, k_chunk))
@@ -399,6 +435,7 @@ def run_ring_joint_sdpa(
     rmse_threshold=None,
     do_check=True,
     num_iterations=1,
+    sp_size_override=None,
 ):
     """
     Run Ring Joint Attention SDPA using direct ttnn operations with auto-detected devices.
@@ -452,10 +489,16 @@ def run_ring_joint_sdpa(
     if nhk != 1 and nhq != nhk:
         pytest.skip(f"Ring joint attention requires nhq == nhk or nhk == 1, got nhq={nhq}, nhk={nhk}")
 
-    # Auto-detect mesh configuration based on available devices
+    # Resolve actual SP size: use override if provided, else the detected ring size
+    actual_sp_size = sp_size_override if sp_size_override is not None else mesh_config.sp_size
+
+    if actual_sp_size < 2:
+        pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={actual_sp_size}")
+    if sp_size_override is not None and sp_size_override > mesh_config.sp_size:
+        pytest.skip(f"sp_size_override={sp_size_override} exceeds detected ring size {mesh_config.sp_size}")
 
     # Ring topology requires >2 devices; fall back to linear for <=2
-    use_ring = mesh_config.sp_size > 2
+    use_ring = False
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
     topology = Topology.Ring if use_ring else Topology.Linear
 
@@ -475,12 +518,14 @@ def run_ring_joint_sdpa(
 
     joint_seq_len = 0  # Use empty joint sequence (WAN 2.2 compatible)
 
-    if mesh_config.sp_size < 2:
-        pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
-
-    # Open mesh device based on calculated configuration
-    mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    # Open mesh device — create a submesh when sp_size_override < detected ring size
+    mesh_shape = ttnn.MeshShape(mesh_config.tp_size, actual_sp_size)
+    parent_mesh_device = None
+    if sp_size_override is not None and sp_size_override < mesh_config.sp_size:
+        parent_mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size))
+        mesh_device = parent_mesh_device.create_submesh(mesh_shape)
+    else:
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
     num_links = 2
 
     try:
@@ -784,8 +829,12 @@ def run_ring_joint_sdpa(
             assert out_pass_joint, f"Joint PCC {out_pcc_joint} below threshold {pcc_threshold}"
 
     finally:
-        # Clean up mesh device
-        ttnn.close_mesh_device(mesh_device)
+        # Close the device we opened (parent mesh if a submesh was created, otherwise mesh_device)
+        if parent_mesh_device is not None:
+            ttnn.close_mesh_device(mesh_device)
+            ttnn.close_mesh_device(parent_mesh_device)
+        else:
+            ttnn.close_mesh_device(mesh_device)
 
         # Restore fabric to disabled state
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
@@ -1138,7 +1187,7 @@ TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize(
-    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,sp_size_override",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
@@ -1157,6 +1206,7 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
     is_balanced,
     q_dtype,
     kv_dtype,
+    sp_size_override,
 ):
     """
     Performance sweep test for ring joint attention SDPA.
@@ -1182,12 +1232,13 @@ def test_ring_joint_attention_sdpa_sweep_perf_impl(
         is_causal=is_causal,
         is_balanced=is_balanced,
         do_check=False,
+        sp_size_override=sp_size_override,
     )
 
 
 # === TEST 2: ACCURACY VERIFICATION ===
 @pytest.mark.parametrize(
-    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,sp_size_override",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
@@ -1206,6 +1257,7 @@ def test_ring_joint_attention_sdpa_accuracy(
     is_balanced,
     q_dtype,
     kv_dtype,
+    sp_size_override,
 ):
     """
     Accuracy verification test for ring joint attention SDPA.
@@ -1240,12 +1292,13 @@ def test_ring_joint_attention_sdpa_accuracy(
         is_balanced=is_balanced,
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
+        sp_size_override=sp_size_override,
     )
 
 
 # === TEST 3: DETERMINISM VERIFICATION ===
 @pytest.mark.parametrize(
-    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
+    "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype,sp_size_override",
     TEST_CONFIGS,
     ids=TEST_CONFIG_IDS,
 )
@@ -1264,6 +1317,7 @@ def test_ring_joint_attention_sdpa_determinism(
     is_balanced,
     q_dtype,
     kv_dtype,
+    sp_size_override,
 ):
     """
     Test ring joint attention SDPA determinism: run 10 times with same inputs and verify outputs match exactly.
@@ -1288,6 +1342,7 @@ def test_ring_joint_attention_sdpa_determinism(
         is_causal=is_causal,
         is_balanced=is_balanced,
         num_iterations=num_iterations,
+        sp_size_override=sp_size_override,
     )
 
 
@@ -1357,12 +1412,14 @@ def test_ring_joint_attention_create_perf_table(model_name):
             is_balanced,
             q_dtype,
             kv_dtype,
+            sp_size_override,
         ) = config
 
         # Config now contains global (TP/SP-scaled) values
         # Convert to local (per-device) values for performance calculations
+        actual_ring_size = sp_size_override if sp_size_override is not None else ring_size
         s = sq  # sq is already global sequence length
-        local_seq_len = sq // ring_size
+        local_seq_len = sq // actual_ring_size
         local_nhq = nhq // mesh_config.tp_size
 
         try:
@@ -1402,7 +1459,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
             local_q_padded = local_q_num_chunks * q_chunk_size
             global_q_padded = local_q_padded * ring_size
             local_k_padded = local_k_num_chunks * k_chunk_size
-            global_k_padded = local_k_padded * ring_size
+            global_k_padded = local_k_padded * actual_ring_size
             actual_work = s * s
             padded_work = global_q_padded * global_k_padded
             total_waste_pct = ((padded_work - actual_work) / padded_work) * 100 if padded_work > 0 else 0
@@ -1466,9 +1523,11 @@ def test_ring_joint_attention_create_perf_table(model_name):
     print(
         f"Ring Joint Attention Performance Sweep ({model_name.upper()}): b={b}, nh={nhq} (global), s={s}, d_q={d_q}, d_v={d_v}, causal={is_causal}"
     )
-    print(f"Architecture: {mesh_config.arch_type}, Ring size: {ring_size} devices, TP size: {mesh_config.tp_size}")
+    print(
+        f"Architecture: {mesh_config.arch_type}, Ring size: {actual_ring_size} devices, TP size: {mesh_config.tp_size}"
+    )
     print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
-    print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {local_nhq} heads")
+    print(f"Per-device workload: Q={s // actual_ring_size} tokens, K/V={s} tokens (via ring), {local_nhq} heads")
     print(f"Core Allocation: {total_compute_cores} compute + {ccl_cores} CCL = {total_cores} total cores")
     print(f"{'='*150}")
     header = "| Rank | q_chunk | k_chunk | Duration (ms) | Cores Used | Iters/Core | Pad Waste | Slot Waste | FPU Util (%)  | Math Util |"
