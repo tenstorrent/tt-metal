@@ -225,7 +225,7 @@ def mul_relu_overlap_op(
     compute_cfg = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
     )
 
     compute_kernel = ttnn.KernelDescriptor(

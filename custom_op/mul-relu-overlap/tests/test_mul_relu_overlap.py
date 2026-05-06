@@ -20,6 +20,7 @@ SHAPES = [
     pytest.param([32, 32], id="1tile"),
     pytest.param([32, 128], id="1x4tiles"),
     pytest.param([2, 4, 32, 64], id="4d"),
+    pytest.param([16, 16, 1024, 1024], id="4d_large"),
 ]
 
 
