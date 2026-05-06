@@ -1795,12 +1795,7 @@ std::vector<Tensor> prod_bw(
             tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
             if (pad_needed) {
                 tensor_2 = ttnn::pad(
-                    tensor_2,
-                    padded_shape.to_array_4D(),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    0.0f,
-                    false,
-                    tensor_1.memory_config());
+                    tensor_2, padded_shape.to_array_4D(), Array4D({0, 0, 0, 0}), 0.0f, false, tensor_1.memory_config());
             }
         }
         // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
@@ -1844,12 +1839,7 @@ std::vector<Tensor> prod_bw(
         tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
         if (pad_needed) {
             tensor_2 = ttnn::pad(
-                tensor_2,
-                padded_shape.to_array_4D(),
-                tt::tt_metal::Array4D({0, 0, 0, 0}),
-                0.0f,
-                false,
-                tensor_1.memory_config());
+                tensor_2, padded_shape.to_array_4D(), Array4D({0, 0, 0, 0}), 0.0f, false, tensor_1.memory_config());
         }
     }
     // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)

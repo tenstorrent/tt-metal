@@ -72,7 +72,7 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
         static_cast<int>(input_tensor.layout()));
 
     TT_FATAL(
-        input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        input_tensor.storage_type() == StorageType::DEVICE,
         "Invalid storage type: input tensor must be on a device, but found {}.",
         static_cast<int>(input_tensor.storage_type()));
 

@@ -26,9 +26,7 @@ void RepeatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Validate the input tensor
     const Tensor& input_tensor_a = tensor_args.input;
-    TT_FATAL(
-        input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE,
-        "Operands to reshape need to be on device!");
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "This function is for RM->RM");
     TT_FATAL(

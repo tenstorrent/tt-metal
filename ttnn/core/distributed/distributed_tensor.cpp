@@ -598,7 +598,7 @@ Tensor distribute_tensor(
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     std::optional<ttnn::QueueId> cq_id) {
     TT_FATAL(
-        tensor.storage_type() == tt::tt_metal::StorageType::HOST,
+        tensor.storage_type() == StorageType::HOST,
         "TensorToMesh only supports host tensors; got storage type: {}",
         tensor.storage_type());
     Tensor output = mapper(tensor);

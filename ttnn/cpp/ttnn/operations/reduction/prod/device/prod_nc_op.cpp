@@ -22,7 +22,7 @@ ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, int64_t dim) {
 ttnn::Tensor create_output_tensor(
     const ttnn::Tensor& input_tensor, const ttnn::Shape& output_shape, const MemoryConfig& mem_config) {
     TT_FATAL(
-        input_tensor.storage_type() == tt_metal::StorageType::DEVICE,
+        input_tensor.storage_type() == ttnn::StorageType::DEVICE,
         "Input tensor must be stored on device. Storage type: {}",
         input_tensor.storage_type());
     return create_device_tensor(

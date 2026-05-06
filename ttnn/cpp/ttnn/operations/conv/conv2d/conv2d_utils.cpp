@@ -811,9 +811,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
             if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
                 input_tensor = ttnn::pad(
                     input_tensor,
-                    tt::tt_metal::Array4D(
-                        {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
+                    Array4D({input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
+                    Array4D({0, 0, 0, 0}),
                     0);
             }
         }

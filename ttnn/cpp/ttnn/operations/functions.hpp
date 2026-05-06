@@ -23,7 +23,6 @@ using tt::tt_metal::DataType;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::PageConfig;
-using tt::tt_metal::StorageType;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorMemoryLayout;
 using tt::tt_metal::distributed::MeshDevice;

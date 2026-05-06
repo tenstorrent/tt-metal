@@ -220,7 +220,7 @@ public:
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
-    tt::tt_metal::StorageType storage_type() const;
+    StorageType storage_type() const;
     tt::tt_metal::Shape strides() const;
 
     bool is_scalar() const;

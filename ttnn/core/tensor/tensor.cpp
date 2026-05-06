@@ -411,11 +411,11 @@ bool Tensor::is_allocated() const {
     return output;
 }
 
-tt::tt_metal::StorageType Tensor::storage_type() const {
+StorageType Tensor::storage_type() const {
     return std::visit(
         ttsl::overloaded{
-            [](const HostStorage&) { return tt::tt_metal::StorageType::HOST; },
-            [](const DeviceStorage&) { return tt::tt_metal::StorageType::DEVICE; },
+            [](const HostStorage&) { return StorageType::HOST; },
+            [](const DeviceStorage&) { return StorageType::DEVICE; },
         },
         tensor_attributes->get_storage());
 }

@@ -12,9 +12,9 @@
 
 namespace tt::tt_metal {
 
-bool is_cpu_tensor(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
+bool is_cpu_tensor(const ttnn::Tensor& tensor) { return tensor.storage_type() == ttnn::StorageType::HOST; }
 
-bool is_device_tensor(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
+bool is_device_tensor(const ttnn::Tensor& tensor) { return tensor.storage_type() == ttnn::StorageType::DEVICE; }
 
 CBDescriptor cb_descriptor_from_sharded_tensor(
     uint8_t cb_index,
@@ -59,7 +59,9 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const ttnn::T
     that have shards on them in order (based on shard orientation) so that the program and kernels will not be launched
     on cores with no data on them (this can cause failures).
     **/
-    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Tensor must be on device to compute optimal worker cores.");
+    TT_FATAL(
+        tensor.storage_type() == ttnn::StorageType::DEVICE,
+        "Tensor must be on device to compute optimal worker cores.");
     TT_FATAL(tensor.is_sharded(), "Tensor must be sharded to compute optimal worker cores.");
     if (!tensor.memory_config().is_dram()) {
         return tensor.buffer()->buffer_distribution_spec().value().cores_with_data();

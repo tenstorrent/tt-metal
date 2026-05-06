@@ -95,7 +95,7 @@ ttnn::Tensor to_device(
     ttsl::optional_reference<const MemoryConfig> mem_config,
     std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
-    if (input_tensor.storage_type() == StorageType::DEVICE) {
+    if (input_tensor.storage_type() == ttnn::StorageType::DEVICE) {
         TT_ASSERT(input_tensor.device() == mesh_device, "Currently do not support moving between devices");
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
@@ -166,7 +166,7 @@ void copy_to_host(
 }
 
 ttnn::Tensor cpu(const ttnn::Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id) {
-    if (input_tensor.storage_type() != StorageType::DEVICE) {
+    if (input_tensor.storage_type() != ttnn::StorageType::DEVICE) {
         return input_tensor;
     }
 

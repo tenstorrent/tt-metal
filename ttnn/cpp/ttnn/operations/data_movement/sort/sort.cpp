@@ -76,9 +76,8 @@ Tensor pre_sort_transform_tensor(
     const auto& padded_logical_shape = padded_tensor.logical_shape();
     const Tensor padded_output_tensor = ttnn::pad(
         padded_tensor,
-        tt::tt_metal::Array4D(
-            {padded_logical_shape[0], padded_logical_shape[1], padded_logical_shape[2], padded_last_dim}),
-        tt::tt_metal::Array4D({0, 0, 0, 0}),
+        Array4D({padded_logical_shape[0], padded_logical_shape[1], padded_logical_shape[2], padded_last_dim}),
+        Array4D({0, 0, 0, 0}),
         descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity(),
         /*use_multicore=*/true);
 

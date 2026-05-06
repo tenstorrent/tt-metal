@@ -15,10 +15,10 @@ void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "Tensor's '{}' storage type must be {}. Got storage type: {}",
             name,
-            enchantum::to_string(tt::tt_metal::StorageType::DEVICE),
+            enchantum::to_string(ttnn::StorageType::DEVICE),
             enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);

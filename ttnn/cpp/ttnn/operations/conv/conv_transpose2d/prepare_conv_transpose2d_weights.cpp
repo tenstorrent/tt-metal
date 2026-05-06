@@ -268,8 +268,8 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     }
 
     // Determine execution path based on configuration and input properties
-    ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(
-        tt::tt_metal::StorageType::DEVICE, input_memory_config, actual_slice_config);
+    ConvT2dExecutionPath path =
+        determine_conv_transpose2d_execution_path(StorageType::DEVICE, input_memory_config, actual_slice_config);
 
     Tensor mirrored_weight_tensor = transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel);
     if (path == ConvT2dExecutionPath::L1) {

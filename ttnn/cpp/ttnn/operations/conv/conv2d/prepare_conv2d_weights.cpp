@@ -1584,8 +1584,8 @@ static ttnn::Tensor prepare_conv_weights_internal(
         out_channel_padding = out_channels_padded - out_channels;
         ttnn::Shape weights_channels_padded_shape({out_channels_padded, in_channels_padded, window_h, window_w});
 
-        weight_tensor_ = ttnn::pad(
-            weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+        weight_tensor_ =
+            ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array_4D(), Array4D({0, 0, 0, 0}), 0);
 
         if (input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
@@ -1646,8 +1646,7 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
         validate_host_conv_bias(bias_tensor_);
         ttnn::Shape bias_channels_padded_shape(
             {1, 1, 32, round_up(out_channels_padded, params.weight_block_w_ntiles * 32)});
-        bias_tensor_ =
-            ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
+        bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), Array4D{0, 0, 0, 0}, 0);
         bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE);
         if (bias_tensor_.dtype() != weight_dtype) {
             bias_tensor_ = ttnn::to_dtype(bias_tensor_, weight_dtype);

@@ -23,7 +23,7 @@ using ::tt::tt_metal::DistributedHostBuffer;
 using ::tt::tt_metal::HostBuffer;
 
 Tensor all_gather(const Tensor& tensor) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::HOST, "Tensor must be on host");
+    TT_FATAL(tensor.storage_type() == StorageType::HOST, "Tensor must be on host");
     const auto& ctx = tensor.host_storage().buffer().context();
     if (*ctx->size() == 1) {
         // Single-host deployment. Validate this host has all the data.

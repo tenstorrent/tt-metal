@@ -13,8 +13,8 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     const auto& scores = tensor_args.scores;
     const auto& bias = tensor_args.bias;
 
-    TT_FATAL(scores.storage_type() == tt::tt_metal::StorageType::DEVICE, "Scores tensor must be on device");
-    TT_FATAL(bias.storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias tensor must be on device");
+    TT_FATAL(scores.storage_type() == StorageType::DEVICE, "Scores tensor must be on device");
+    TT_FATAL(bias.storage_type() == StorageType::DEVICE, "Bias tensor must be on device");
     TT_FATAL(scores.buffer() != nullptr, "Scores tensor must be allocated");
     TT_FATAL(bias.buffer() != nullptr, "Bias tensor must be allocated");
 

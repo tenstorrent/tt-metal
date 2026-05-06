@@ -23,10 +23,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 
 inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
     const auto input_rank = input.logical_shape().rank();
-    TT_FATAL(
-        (dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
-        "dim must be between 0 and {}.",
-        tt::tt_metal::MAX_NUM_DIMENSIONS);
+    TT_FATAL((dim >= 0 && dim <= MAX_NUM_DIMENSIONS), "dim must be between 0 and {}.", MAX_NUM_DIMENSIONS);
     TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
@@ -49,10 +46,10 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         adjusted_input_shape[dim] = (is_tile_dim) ? tt::constants::TILE_HEIGHT : 1;
         adjusted_input_shape_wo_padding[dim] = 1;
 
-        ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> input_dim(MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim(MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> input_dim_wo_padding(MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim_wo_padding(MAX_NUM_DIMENSIONS, 1);
 
         expand_to_max_dim(input_dim, adjusted_input_shape);
         expand_to_max_dim(output_dim, output_shape);

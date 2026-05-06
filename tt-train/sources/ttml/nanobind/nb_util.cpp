@@ -289,7 +289,7 @@ nb::object make_numpy_tensor(
     const auto impl = [&make_numpy_tensor_from_data,
                        &convert_to_row_major,
                        composer]<typename MetalType, typename NumpyType>(const ttnn::Tensor& tensor) {
-        if (tensor.storage_type() == ttnn::types::StorageType::HOST) {
+        if (tensor.storage_type() == ttnn::StorageType::HOST) {
             if (tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
                 const auto row_major_tensor = convert_to_row_major(tensor);
                 const auto row_major_tensor_data = tt::tt_metal::host_buffer::get_as<MetalType const>(row_major_tensor);

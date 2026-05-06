@@ -301,7 +301,7 @@ inline auto compute_program_hash(
 
 static inline TensorMeta make_tensor_meta(const ttnn::Tensor& tensor) {
     TensorMeta m;
-    if (tensor.storage_type() == StorageType::DEVICE) {
+    if (tensor.storage_type() == ttnn::StorageType::DEVICE) {
         m.is_device = true;
         m.device_id = tensor.device()->id();
         m.buffer_type = std::string(enchantum::to_string(tensor.memory_config().buffer_type()));

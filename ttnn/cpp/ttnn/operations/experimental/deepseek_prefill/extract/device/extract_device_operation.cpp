@@ -22,7 +22,7 @@ bool is_dram_interleaved(const ttnn::Tensor& tensor) {
 }
 
 void validate_index_tensor(const ttnn::Tensor& tensor, const std::string& name) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(tensor.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32, got {}", name, tensor.dtype());
     TT_FATAL(
@@ -64,7 +64,7 @@ void ExtractDeviceOperation::validate_on_program_cache_miss(
     const auto& global_expert_idx_table = tensor_args.global_expert_idx_table;
 
     // Global tensor validation: 2D, BFLOAT8_B, TILE layout, DRAM interleaved, on device.
-    TT_FATAL(global_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "global_tensor must be on device");
+    TT_FATAL(global_tensor.storage_type() == StorageType::DEVICE, "global_tensor must be on device");
     TT_FATAL(global_tensor.buffer() != nullptr, "global_tensor must have a buffer");
     TT_FATAL(
         global_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,

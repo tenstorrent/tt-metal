@@ -107,7 +107,7 @@ static std::ostream& operator<<(std::ostream& os, const ttnn::Shape& shape) {
 // ============================================================================
 
 const auto g_height_shard_3_1_1024_1024_tiled_to_16_cores = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+    ttnn::Shape(Array4D{3, 1, 32 * 32, 32 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -120,7 +120,7 @@ const auto g_height_shard_3_1_1024_1024_tiled_to_16_cores = ttnn::TensorSpec(
                 ShardOrientation::ROW_MAJOR}}));
 
 const auto g_height_shard_1_1_1024_32_tiled_to_32_cores = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 32, 64}),
+    ttnn::Shape(Array4D{1, 1, 32 * 32, 64}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -133,49 +133,49 @@ const auto g_height_shard_1_1_1024_32_tiled_to_32_cores = ttnn::TensorSpec(
                 ShardOrientation::ROW_MAJOR}}));
 
 const auto g_interleaved_1_1_1024_1024_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 128}),
+    ttnn::Shape(Array4D{1, 1, 64, 128}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleave_4_2_160_244_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
+    ttnn::Shape(Array4D{4, 2, 5 * 32, 7 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleave_1_2_160_244_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 5 * 32, 7 * 32}),
+    ttnn::Shape(Array4D{1, 1, 5 * 32, 7 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleave_1_1_160_244_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 5 * 32, 7 * 32}),
+    ttnn::Shape(Array4D{1, 1, 5 * 32, 7 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleaved_1_1_2048_64_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 2048, 64}),
+    ttnn::Shape(Array4D{1, 1, 2048, 64}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleaved_1_1_245_1024_tiled = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 256, 1024}),
+    ttnn::Shape(Array4D{1, 1, 256, 1024}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_width_shard_1_1_64_2048_tiled_to_32_cores = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 2048}),
+    ttnn::Shape(Array4D{1, 1, 64, 2048}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -188,7 +188,7 @@ const auto g_width_shard_1_1_64_2048_tiled_to_32_cores = ttnn::TensorSpec(
                 ShardOrientation::ROW_MAJOR}}));
 
 const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
-    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 1600, 256}),
+    ttnn::Shape(Array4D{1, 1, 1600, 256}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -747,7 +747,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
         tt::tt_metal::distributed::MeshDevice* device = device_;
 
         const auto output_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{
+            ttnn::Shape(Array4D{
                 input_spec_a.logical_shape()[0],
                 input_spec_a.logical_shape()[1],
                 input_spec_a.logical_shape()[-2],
@@ -1308,7 +1308,7 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
     const tt::tt_metal::MemoryConfig shard_mem_cfg{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec};
 
     const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array4D{1, 1, kTileHeight, kN}),
+        ttnn::Shape(ttnn::Array4D{1, 1, kTileHeight, kN}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), shard_mem_cfg));
 
@@ -1319,7 +1319,7 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
     // Weight: ROW_MAJOR, padded_shape[-1]==32 (tile width), volume==N.
     // Shape (1,1,N/32,32): padded[-1]=32, volume=N
     const auto weight_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array4D{1, 1, kN / kTileWidth, kTileWidth}),
+        ttnn::Shape(ttnn::Array4D{1, 1, kN / kTileWidth, kTileWidth}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
@@ -1334,7 +1334,7 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
         CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}}, {kTileHeight, kN}, ShardOrientation::ROW_MAJOR};
     const tt::tt_metal::MemoryConfig stats_mem_cfg{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, stats_shard_spec};
     const auto stats_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array4D{1, 1, kTileHeight, kN}),
+        ttnn::Shape(ttnn::Array4D{1, 1, kTileHeight, kN}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), stats_mem_cfg));
 

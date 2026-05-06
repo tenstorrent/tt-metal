@@ -16,7 +16,7 @@ void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input;
 
     TT_FATAL(
-        input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        input_tensor.storage_type() == ttnn::StorageType::DEVICE,
         "FrobeniusNormalize requires input on Device. Storage type: {}",
         enchantum::to_string(input_tensor.storage_type()));
 
@@ -39,7 +39,7 @@ void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.preallocated_output.has_value()) {
         const auto& output = tensor_args.preallocated_output.value();
-        TT_FATAL(output.storage_type() == tt::tt_metal::StorageType::DEVICE, "Preallocated output must be on Device");
+        TT_FATAL(output.storage_type() == ttnn::StorageType::DEVICE, "Preallocated output must be on Device");
         TT_FATAL(output.layout() == tt::tt_metal::Layout::TILE, "Preallocated output must be TILE layout");
         TT_FATAL(output.dtype() == tt::tt_metal::DataType::BFLOAT16, "Preallocated output must be BFLOAT16");
         TT_FATAL(output.logical_shape() == input_tensor.logical_shape(), "Preallocated output shape must match input.");

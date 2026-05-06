@@ -133,8 +133,7 @@ INSTANTIATE_TEST_SUITE_P(
     BufferTestFixture,
     ::testing::Combine(
         ::testing::Values(BufferTestParam{
-            .shape_a = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
-            .shape_b = ttnn::Shape(tt::tt_metal::Array4D{32, 1, 32, 32})}),
+            .shape_a = ttnn::Shape(Array4D{1, 1, 32, 32}), .shape_b = ttnn::Shape(Array4D{32, 1, 32, 32})}),
         ::testing::Values(
             tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH, tt::tt_metal::IGraphProcessor::RunMode::NORMAL)),
     [](const testing::TestParamInfo<std::tuple<BufferTestParam, tt::tt_metal::IGraphProcessor::RunMode>>& info) {
@@ -159,7 +158,7 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
 
     auto operation = [&device](tt::tt_metal::DataType datatype) {
         const auto input_a = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 4, 512, 512}),
+            ttnn::Shape(ttnn::Array4D{1, 4, 512, 512}),
             tt::tt_metal::TensorLayout(
                 datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
         const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
@@ -238,7 +237,7 @@ TEST_F(TestScopedGraphCapture, OrderOfArgsTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -313,7 +312,7 @@ TEST_F(TestScopedGraphCapture, SameTensorMultipleTimesTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -362,7 +361,7 @@ TEST_F(TestScopedGraphCapture, TernaryOpDifferentOrderTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -437,7 +436,7 @@ TEST_F(TestScopedGraphCapture, TernaryOpRepeatedTensorsTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -506,7 +505,7 @@ TEST_F(TestScopedGraphCapture, MatmulDifferentOrdersTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{64, 64}),
+        ttnn::Shape(ttnn::Array2D{64, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -587,7 +586,7 @@ TEST_F(TestScopedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) {
     auto operation = [&device]() {
         // Create tensors INSIDE the capture
         const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            ttnn::Shape(ttnn::Array2D{32, 64}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -673,7 +672,7 @@ TEST_P(DurationTrackingTest, DurationTracking) {
         auto capture = ttnn::graph::ScopedGraphCapture(run_mode);
 
         const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 4, 512, 512}),
+            ttnn::Shape(ttnn::Array4D{1, 4, 512, 512}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -742,7 +741,7 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
         auto capture = ttnn::graph::ScopedGraphCapture(run_mode);
 
         const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -817,7 +816,7 @@ TEST_F(TestScopedGraphCapture, ReportContainsClusterDescriptor) {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
 
         const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -849,7 +848,7 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
 
         const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -885,7 +884,7 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NORMAL);
 
         const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -927,7 +926,7 @@ TEST_F(TestScopedGraphCapture, DeallocateContainsBufferTypeTest) {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NORMAL);
 
         const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),

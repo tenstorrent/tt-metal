@@ -1097,7 +1097,7 @@ ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
 }
 
 ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
-    const tt::tt_metal::StorageType& storage_type,
+    const StorageType& storage_type,
     const MemoryConfig& memory_config,
     const std::optional<const op_slicing::Op2DSliceConfig>& slice_config) {
     // If slice config explicitly specifies L1_FULL, use L1 path
@@ -1113,7 +1113,7 @@ ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
     }
 
     // If no slice config and input is already on device in L1, use L1 path
-    if (!slice_config.has_value() && storage_type == tt::tt_metal::StorageType::DEVICE && memory_config.is_l1()) {
+    if (!slice_config.has_value() && storage_type == StorageType::DEVICE && memory_config.is_l1()) {
         return ConvT2dExecutionPath::L1;
     }
 

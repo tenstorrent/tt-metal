@@ -13,11 +13,11 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
     Tensors input_tensors, const OutputTensors& output_tensors, int ideal_compute_cycles) :
     ideal_compute_cycles(ideal_compute_cycles) {
     const auto& t = input_tensors.at(0);
-    const auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ARCH::WORMHOLE_B0;
+    const auto arch = t.storage_type() == ttnn::StorageType::DEVICE ? t.device()->arch() : ARCH::WORMHOLE_B0;
 
     // Get clock rate dynamically from device
     float clock_rate_ghz;
-    if (t.storage_type() == StorageType::DEVICE) {
+    if (t.storage_type() == ttnn::StorageType::DEVICE) {
         int freq_mhz = t.device()->get_clock_rate_mhz();
         clock_rate_ghz = freq_mhz / 1000.0f;
     } else {

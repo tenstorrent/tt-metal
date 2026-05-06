@@ -115,11 +115,10 @@ void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, ttnn::Tensor&
     }
 
     // Restore storage type if needed
-    tt::tt_metal::StorageType storage_type{};
+    ttnn::StorageType storage_type{};
     get_enum(file, std::string(name) + "/storage_type", storage_type);
 
-    if (storage_type == tt::tt_metal::StorageType::DEVICE &&
-        tensor.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+    if (storage_type == ttnn::StorageType::DEVICE && tensor.storage_type() != ttnn::StorageType::DEVICE) {
         tensor = tensor.to_device(&ttml::autograd::ctx().get_device());
     }
 }

@@ -14,7 +14,7 @@ void PolyNorm3ForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "PolyNorm3Forward operation requires {} to be on Device. Input storage type: {}",
             name,
             enchantum::to_string(tensor.storage_type()));

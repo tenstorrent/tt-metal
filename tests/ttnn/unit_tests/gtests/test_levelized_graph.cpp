@@ -43,7 +43,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        ttnn::Shape(ttnn::Array2D{64, 128}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -89,7 +89,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     }
     EXPECT_TRUE(vertex_1.out_edges.empty());
     EXPECT_FALSE(vertex_1.output_shape.empty());
-    EXPECT_EQ(vertex_1.output_shape[0], shape_to_string(tt::tt_metal::Array2D{64, 128}));
+    EXPECT_EQ(vertex_1.output_shape[0], shape_to_string(ttnn::Array2D{64, 128}));
 
     // Now get the same graph but up to level 2:
     auto levelized_graph_2 = ttnn::graph::LevelizedGraph(ref_json_trace, 2);
@@ -115,7 +115,7 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{256, 128}),
+        ttnn::Shape(ttnn::Array2D{256, 128}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -152,7 +152,7 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     // Basic structure checks - input tensor should have output edges
     EXPECT_TRUE(vertex_0.in_edges.empty());
     EXPECT_GE(vertex_0.out_edges.size(), 1);
-    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array2D{256, 128}));
+    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(ttnn::Array2D{256, 128}));
 
     // Test level 2
     auto levelized_graph_2 = ttnn::graph::LevelizedGraph(ref_json_trace, 2);
@@ -174,7 +174,7 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array3D{16, 32, 64}),
+        ttnn::Shape(ttnn::Array3D{16, 32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -212,7 +212,7 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     // Basic structure checks - input tensor should have output edges
     EXPECT_TRUE(vertex_0.in_edges.empty());
     EXPECT_GE(vertex_0.out_edges.size(), 1);
-    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array3D{16, 32, 64}));
+    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(ttnn::Array3D{16, 32, 64}));
 
     auto has_reduction = std::ranges::any_of(
         levelized_graph.vertices(), [](const auto& v) { return v.name.find("Reduce") != std::string::npos; });
@@ -240,7 +240,7 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 32}),
+        ttnn::Shape(ttnn::Array2D{32, 32}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -284,7 +284,7 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
     // Basic structure checks - input tensor should have output edges
     EXPECT_TRUE(vertex_0.in_edges.empty());
     EXPECT_GE(vertex_0.out_edges.size(), 1);  // feeds operations
-    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array2D{32, 32}));
+    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(ttnn::Array2D{32, 32}));
 
     EXPECT_TRUE(matmul_op_it != levelized_graph.vertices().end() || add_op_it != levelized_graph.vertices().end());
 
@@ -308,7 +308,7 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{12, 19}),
+        ttnn::Shape(ttnn::Array2D{12, 19}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -347,7 +347,7 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
     // Basic structure checks - input tensor should have output edges
     EXPECT_TRUE(vertex_0.in_edges.empty());
     EXPECT_GE(vertex_0.out_edges.size(), 1);
-    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array2D{12, 19}));
+    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(ttnn::Array2D{12, 19}));
 
     EXPECT_TRUE(digamma_op_it != levelized_graph.vertices().end());
 
@@ -371,7 +371,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        ttnn::Shape(ttnn::Array2D{64, 128}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -411,7 +411,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
 
     EXPECT_TRUE(vertex_0.in_edges.empty());
     EXPECT_GE(vertex_0.out_edges.size(), 1);
-    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(tt::tt_metal::Array2D{64, 128}));
+    EXPECT_EQ(vertex_0.output_shape[0], shape_to_string(ttnn::Array2D{64, 128}));
 
     // Tensor dedup removed: multiply(a,a) creates two separate tensor vertices.
     EXPECT_EQ(vertex_1.in_edges.size(), 2);
@@ -421,7 +421,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
     }
     EXPECT_TRUE(vertex_1.out_edges.empty());
     EXPECT_FALSE(vertex_1.output_shape.empty());
-    EXPECT_EQ(vertex_1.output_shape[0], shape_to_string(tt::tt_metal::Array2D{64, 128}));
+    EXPECT_EQ(vertex_1.output_shape[0], shape_to_string(ttnn::Array2D{64, 128}));
 
     // Test level 2
     auto levelized_graph_2 = ttnn::graph::LevelizedGraph(ref_json_trace, 2);
@@ -474,7 +474,7 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        ttnn::Shape(ttnn::Array2D{64, 128}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -568,13 +568,13 @@ TEST_F(TestLevelizedGraphCapture, JoinTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input_a = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        ttnn::Shape(ttnn::Array2D{64, 128}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
     const auto input_b = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        ttnn::Shape(ttnn::Array2D{64, 128}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -650,7 +650,7 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -747,7 +747,7 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -845,7 +845,7 @@ TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -913,7 +913,7 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -1014,7 +1014,7 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -1115,7 +1115,7 @@ TEST_F(TestLevelizedGraphCapture, MatmulDifferentOrders) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{64, 64}),
+        ttnn::Shape(ttnn::Array2D{64, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -1244,7 +1244,7 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -1341,21 +1341,21 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
     tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto input_a = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
     const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
     const auto input_b = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
     const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
     const auto input_c = ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        ttnn::Shape(ttnn::Array2D{32, 64}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -1436,7 +1436,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
     auto operation = [&device]() {
         // Create tensors INSIDE the capture
         const auto input_a = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            ttnn::Shape(ttnn::Array2D{32, 64}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -1444,7 +1444,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
         const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
 
         const auto input_b = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            ttnn::Shape(ttnn::Array2D{32, 64}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -1452,7 +1452,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
         const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
 
         const auto input_c = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            ttnn::Shape(ttnn::Array2D{32, 64}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -1551,7 +1551,7 @@ TEST_F(TestLevelizedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) 
     auto operation = [&device]() {
         // Create tensors INSIDE the capture
         const auto tensor_spec = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            ttnn::Shape(ttnn::Array2D{32, 64}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),

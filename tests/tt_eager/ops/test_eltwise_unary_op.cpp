@@ -166,10 +166,10 @@ void test_shape_padding() {
     ttnn::SetDefaultDevice(device);
 
     ttnn::Shape input_shape({1, 1, 13, 18});
-    tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1), input_shape);
 
-    auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+    auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, ttnn::Array4D({0, 0, 0, 0}), 0);
 
     padded_input_tensor = padded_input_tensor.to_layout(Layout::TILE);
     padded_input_tensor = padded_input_tensor.to_device(device);

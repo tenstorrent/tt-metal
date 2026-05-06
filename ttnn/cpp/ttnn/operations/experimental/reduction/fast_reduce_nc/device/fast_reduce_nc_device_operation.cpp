@@ -29,9 +29,7 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     // validate input dim
     const auto input_rank = input.logical_shape().rank();
     TT_FATAL(
-        (args.dim >= 0 && args.dim <= tt::tt_metal::MAX_NUM_DIMENSIONS - 2),
-        "dim must be between 0 and {}.",
-        tt::tt_metal::MAX_NUM_DIMENSIONS - 2);
+        (args.dim >= 0 && args.dim <= MAX_NUM_DIMENSIONS - 2), "dim must be between 0 and {}.", MAX_NUM_DIMENSIONS - 2);
     TT_FATAL((args.dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 

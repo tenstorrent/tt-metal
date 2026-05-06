@@ -190,7 +190,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
     auto dim_aligned = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
             auto storage_type = tensor.storage_type();
-            if (storage_type == tt::tt_metal::StorageType::DEVICE) {
+            if (storage_type == StorageType::DEVICE) {
                 return tensor.padded_shape()[dim] * tensor.element_size() % tensor.buffer()->alignment() == 0;
             }
             TT_THROW(

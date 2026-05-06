@@ -34,7 +34,7 @@ namespace tt::tt_metal::op_profiler {
 
 static inline json get_tensor_json(const ttnn::Tensor& tensor) {
     json ret;
-    if (tensor.storage_type() == StorageType::DEVICE) {
+    if (tensor.storage_type() == ttnn::StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
         ret["storage_type"]["memory_config"]["buffer_type"] =
             enchantum::to_string(tensor.memory_config().buffer_type());
