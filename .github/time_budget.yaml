@@ -174,10 +174,21 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_deskbox: 250
     bh_llmbox: 1200
+    # STAGE 1 ONLY (revert before merging): per-host LLMBox SKUs used for
+    # cache regen on local-disk runners.
+    bh_llmbox_qbgh02: 300
+    bh_llmbox_qbgh03: 300
+    bh_llmbox_qbgh04: 300
     bh_loudbox: 1200
 
     bh_p300: 800
     bh_quietbox_2: 280
+    # STAGE 1 ONLY (revert before merging): per-host SKUs for cache regen.
+    bh_quietbox_2_qbge01: 480
+    bh_quietbox_2_qbge03: 480
+    bh_p150_perf_bhgh04: 30
+    bh_p150_perf_bhgh05: 30
+    bh_p150_perf_bhgh06: 30
   sweep:
     wh_n150: 10
     wh_llmbox_perf: 30

@@ -156,12 +156,64 @@ skus:
       - P150
       - pipeline-perf
 
+  # STAGE 1 ONLY (revert before merging): per-host SKU labels used to populate
+  # weights and tt_cache on each individual local-disk P150_perf runner.
+  bh_p150_perf_bhgh04:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P150
+      - pipeline-perf
+      - tt-metal-ci-bm-yyzo-bh-gh04
+
+  bh_p150_perf_bhgh05:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P150
+      - pipeline-perf
+      - tt-metal-ci-bm-yyzo-bh-gh05
+
+  bh_p150_perf_bhgh06:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P150
+      - pipeline-perf
+      - tt-metal-ci-bm-yyzo-bh-gh06
+
   bh_llmbox:
     runs_on:
       - in-service
       - arch-blackhole
       - BH-LLMBox
       - pipeline-perf
+
+  # STAGE 1 ONLY (revert before merging): per-host SKU labels used to populate
+  # weights and tt_cache on each individual local-disk LLMBox.
+  bh_llmbox_qbgh02:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LLMBox
+      - pipeline-perf
+      - qb-gh02
+
+  bh_llmbox_qbgh03:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LLMBox
+      - pipeline-perf
+      - qb-gh03
+
+  bh_llmbox_qbgh04:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-LLMBox
+      - pipeline-perf
+      - qb-gh04
 
   bh_loudbox:
     runs_on:
@@ -209,6 +261,24 @@ skus:
       - BH-QB-GE
       - pipeline-perf
       - in-service
+
+  # STAGE 1 ONLY (revert before merging): per-host SKU labels used to populate
+  # weights and tt_cache on each individual local-disk QB2.
+  bh_quietbox_2_qbge01:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-QB-GE
+      - pipeline-perf
+      - qbge-metal-01
+
+  bh_quietbox_2_qbge03:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - BH-QB-GE
+      - pipeline-perf
+      - qbge-metal-03
 
   bh_sp1:
     runs_on:

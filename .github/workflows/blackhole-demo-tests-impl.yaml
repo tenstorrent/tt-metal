@@ -146,14 +146,14 @@ jobs:
         timeout-minutes: 120
         run: |
           set -e
-          mkdir -p /localdev/blackhole_demos/huggingface_data/genmo
+          mkdir -p /localdev/blackhole_demos/huggingface_data/hub
           python3 - <<'PY'
           import os
           from huggingface_hub import snapshot_download
 
           snapshot_download(
               repo_id="genmo/mochi-1-preview",
-              cache_dir="/localdev/blackhole_demos/huggingface_data/genmo",
+              cache_dir="/localdev/blackhole_demos/huggingface_data/hub",
               token=os.environ.get("HF_TOKEN"),
               resume_download=True,
           )
