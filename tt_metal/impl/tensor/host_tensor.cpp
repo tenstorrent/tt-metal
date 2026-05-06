@@ -9,8 +9,6 @@
 namespace tt::tt_metal {
 
 
-HostTensor::HostTensor() = default;
-
 HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
     impl_(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
 

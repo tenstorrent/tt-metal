@@ -9,8 +9,6 @@
 
 namespace tt::tt_metal {
 
-MeshTensor::MeshTensor() = default;
-
 MeshTensor::MeshTensor(MeshTensor&& other) noexcept = default;
 
 MeshTensor& MeshTensor::operator=(MeshTensor&& other) noexcept = default;

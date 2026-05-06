@@ -43,7 +43,7 @@ HostTensor create_simple_host_tensor(const Shape& shape, DataType dtype = DataTy
 
 // Type trait tests verifying HostTensor's semantic constraints
 
-TEST(HostTensorTypeTraitsTest, IsDefaultConstructible) { EXPECT_TRUE(std::is_default_constructible_v<HostTensor>); }
+TEST(HostTensorTypeTraitsTest, IsDefaultConstructible) { EXPECT_FALSE(std::is_default_constructible_v<HostTensor>); }
 
 TEST(HostTensorTypeTraitsTest, IsDestructible) { EXPECT_TRUE(std::is_destructible_v<HostTensor>); }
 
@@ -167,20 +167,6 @@ TEST(HostTensorTest, CopyAssignment) {
     EXPECT_EQ(other.dtype(), DataType::BFLOAT16);
     // Original should still be valid
     EXPECT_EQ(tensor.logical_shape(), shape);
-}
-
-TEST(HostTensorTest, CopyConstructionFromDefaultConstructed) {
-    HostTensor default_tensor;
-    const HostTensor& copied(default_tensor);
-    (void)copied;
-    // Both should be in default-constructed state (no assertions, just shouldn't crash)
-}
-
-TEST(HostTensorTest, CopyAssignmentFromDefaultConstructed) {
-    HostTensor default_tensor;
-    [[maybe_unused]] auto tensor = create_simple_host_tensor(Shape{2, 64});
-    tensor = default_tensor;
-    // tensor should now be in default-constructed state (no assertions, just shouldn't crash)
 }
 
 TEST(HostTensorTest, TensorSpecAccess) {

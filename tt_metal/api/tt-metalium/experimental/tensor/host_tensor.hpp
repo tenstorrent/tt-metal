@@ -39,8 +39,6 @@ class HostTensorImpl;
  * MeshTensor for host <-> device communication.
  *
  * Invariants of HostTensor:
- * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
- *   move construction will be UB. This exists to allow for default constructed HostTensor. This mirrors MeshTensor.
  * - Initialized: The HostTensor holds some tensor configurations and associated HostBuffer.
  */
 class HostTensor {
@@ -49,10 +47,7 @@ public:
 
     // Special Member functions
 
-    /**
-     * Constructs a host tensor in the default constructed state, acting like a nullptr.
-     */
-    HostTensor();
+    HostTensor() = delete;
 
     /**
      * Constructs a host tensor from a distributed host buffer.
@@ -89,7 +84,7 @@ public:
      * Move constructor.
      *
      * Takes over properties of the other HostTensor.
-     * The other HostTensor becomes a default-constructed HostTensor.
+     * The other HostTensor is left in a valid but unspecified state.
      */
     HostTensor(HostTensor&& other) noexcept;
 
@@ -97,7 +92,7 @@ public:
      * Move assignment operator.
      *
      * Takes over properties of the other HostTensor.
-     * The other HostTensor becomes a default-constructed HostTensor.
+     * The other HostTensor is left in a valid but unspecified state.
      */
     HostTensor& operator=(HostTensor&& other) noexcept;
 
@@ -208,6 +203,9 @@ public:
     const HostTensorImpl& impl() const;
 
 private:
+    // impl_ could be a nullptr if HostTensor is in a moved-from state.
+    // Avoid using impl_ pointer directly, use the accessors instead.
+    // Otherwise, please add manual TT_FATAL checks for nullptr.
     std::unique_ptr<HostTensorImpl> impl_;
 };
 

@@ -43,8 +43,6 @@ class MeshDevice;
  *   semantics)
  *
  * Invariants of MeshTensor:
- * - Default constructed: This is a valueless state, where any access to any member function outside of assignment and
- *   move construction will be UB. This exists to allow for default constructed MeshTensor. This mirrors HostTensor.
  * - Allocated: The device memory is allocated and **solely owned** by MeshTensor, user is able to get non-null
  *   pointers to the underlying storage and associated MeshDevice. Please note that this invariant isn't guaranteed
  *   currently, see: #38375
@@ -55,10 +53,7 @@ public:
 
     // Special Member functions
 
-    /**
-     * Construct a tensor that does not own any device memory.
-     */
-    MeshTensor();
+    MeshTensor() = delete;
 
     /**
      * Allocate a MeshTensor on the given device with the given spec and topology.
@@ -89,14 +84,14 @@ public:
     /**
      * Transfer ownership of the underlying device memory to the other MeshTensor.
      *
-     * post-condition: The other MeshTensor will be in a default constructed state.
+     * post-condition: The moved-from MeshTensor is left in a valid but unspecified state.
      */
     MeshTensor(MeshTensor&& other) noexcept;
 
     /**
      * Transfer ownership of the underlying device memory to the other MeshTensor.
      *
-     * post-condition: The other MeshTensor will be in a default constructed state.
+     * post-condition: The moved-from MeshTensor is left in a valid but unspecified state.
      */
     MeshTensor& operator=(MeshTensor&& other) noexcept;
 
@@ -107,21 +102,21 @@ public:
     /**
      * Return the underlying device storage MeshBuffer.
      *
-     * pre-condition: The device tensor must not be in a default constructed state.
+     * pre-condition: The MeshTensor must be allocated (not moved-from).
      */
     const distributed::MeshBuffer& mesh_buffer() const;
 
     /**
      * Get the device the allocated device memory is on.
      *
-     * pre-condition: The device tensor must not be in a default constructed state.
+     * pre-condition: The MeshTensor must be allocated (not moved-from).
      */
     distributed::MeshDevice& device() const;
 
     // Getters:
 
     /**
-     * Returns true if MeshTensor owns device memory (not default-constructed or moved-from).
+     * Returns true if MeshTensor owns device memory (not moved-from).
      */
     bool is_initialized() const;
 
@@ -130,7 +125,7 @@ public:
     /**
      * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
      *
-     * pre-condition: The device tensor must not be in a default constructed state.
+     * pre-condition: The MeshTensor must be allocated (not moved-from).
      */
     const TensorTopology& tensor_topology() const;
 
@@ -158,7 +153,7 @@ public:
     /**
      * Get the size in bytes of a single element held in the tensor.
      *
-     * pre-condition: The device tensor must not be in a default constructed state.
+     * pre-condition: The MeshTensor must be allocated (not moved-from).
      */
     std::size_t element_size() const;
 
@@ -197,9 +192,9 @@ private:
      */
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
 
-    // impl_ could be a nullptr if MeshTensor is in a default constructed state.
+    // impl_ could be a nullptr if MeshTensor is in a moved-from state.
     // Avoid using impl_ pointer directly, use the accessors instead.
-    // Otherwise, please add manual TT_ASSERT checks for nullptr.
+    // Otherwise, please add manual TT_FATAL checks for nullptr.
     std::unique_ptr<MeshTensorImpl> impl_;
 };
 

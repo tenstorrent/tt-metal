@@ -30,7 +30,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Type trait tests verifying MeshTensor's semantic constraints
 
-TEST(MeshTensorTypeTraitsTest, IsDefaultConstructible) { EXPECT_TRUE(std::is_default_constructible_v<MeshTensor>); }
+TEST(MeshTensorTypeTraitsTest, IsDefaultConstructible) { EXPECT_FALSE(std::is_default_constructible_v<MeshTensor>); }
 
 TEST(MeshTensorTypeTraitsTest, IsDestructible) { EXPECT_TRUE(std::is_destructible_v<MeshTensor>); }
 
@@ -47,41 +47,6 @@ TEST(MeshTensorTypeTraitsTest, IsNothrowMoveConstructible) {
 }
 
 TEST(MeshTensorTypeTraitsTest, IsNothrowMoveAssignable) { EXPECT_TRUE(std::is_nothrow_move_assignable_v<MeshTensor>); }
-
-// Runtime tests for default construction and move semantics
-
-TEST(MeshTensorTest, DefaultConstruction) {
-    MeshTensor tensor;
-    // Default constructed tensor is in valueless state
-    // Accessing members would trigger TT_ASSERT in debug builds
-    (void)tensor;
-}
-
-TEST(MeshTensorTest, MoveConstruction) {
-    MeshTensor tensor;
-    MeshTensor moved(std::move(tensor));
-    (void)moved;
-}
-
-TEST(MeshTensorTest, MoveAssignment) {
-    MeshTensor tensor;
-    MeshTensor other;
-    other = std::move(tensor);
-    (void)other;
-}
-
-TEST(MeshTensorTest, DefaultConstructedIsNotInitialized) {
-    MeshTensor tensor;
-    EXPECT_FALSE(tensor.is_initialized());
-}
-
-TEST(MeshTensorTest, MovedFromIsNotInitialized) {
-    MeshTensor source;
-    MeshTensor dest;
-    dest = std::move(source);
-    EXPECT_FALSE(source.is_initialized());  // NOLINT(bugprone-use-after-move)
-    EXPECT_FALSE(dest.is_initialized());
-}
 
 TEST(MeshTensorTest, ConstructionWithNullMeshBufferFails) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
