@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Per-job pass/fail status for the last N scheduled runs on `main` of the
 (Tier 1/2/3) Models e2e + unit pipelines. For failed jobs, fetches the
