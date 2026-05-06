@@ -44,8 +44,13 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     const sfpi::vFloat correction = PolynomialEvaluator::eval(
         inv_abs_x, 3.9894228967e-01f, -1.4960495444e-01f, -4.6652925320e-02f, -4.3674591560e-02f, -1.9748322314e-02f);
 
-    // exp(|x|) — 21-bit accurate variant. |x|≤88.5, no overflow possible.
+    // exp(|x|) — accurate variant for FP32 (<1 FP32 ULP), 21-bit for BF16.
+    // |x|≤88.5, no overflow possible.
+#ifdef INP_FLOAT32
+    const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_(abs_x);
+#else
     const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_<true>(abs_x);
+#endif
 
     // 1/sqrt(|x|) via Quake-style magic constant + Newton refinement.
     const sfpi::vInt rsqrt_i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(abs_x) >> 1);
