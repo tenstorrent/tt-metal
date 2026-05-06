@@ -31,7 +31,7 @@ using namespace ckernel::unpacker;
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape)
+inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape, const bool partial_face = true)
 {
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
@@ -138,8 +138,20 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         }
         else
         {
-            ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srca, unpack_srcb);
-            tmp.program();
+            if (partial_face)
+            {
+                ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srca, unpack_srcb);
+                tmp.program();
+            }
+            else
+            {
+                static constexpr std::uint32_t unpack_srca_no_z_inc =
+                    TT_OP_UNPACR(SrcA, 0b0 /*Z inc*/, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                static constexpr std::uint32_t unpack_srcb_no_z_inc =
+                    TT_OP_UNPACR(SrcB, 0b0 /*Z inc*/, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                ckernel_template tmp(1, 1, unpack_srca_no_z_inc, unpack_srcb_no_z_inc);
+                tmp.program();
+            }
         }
     }
 }
@@ -163,9 +175,17 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
     const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
 
-    config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
+    const bool partial_face = (tensor_shape.face_r_dim < FACE_R_DIM);
+    if (partial_face)
+    {
+        config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
+    }
+    else
+    {
+        TT_SETADCXX(p_setadc::UNP_AB, tensor_shape.total_num_faces() * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    }
 
-    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape); // transpose of faces 0,2,1,3
+    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape, partial_face); // transpose of faces 0,2,1,3
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
