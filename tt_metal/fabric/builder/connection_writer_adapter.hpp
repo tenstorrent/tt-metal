@@ -133,6 +133,17 @@ public:
 
     uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const override;
 
+    // Get the NOC coordinates of the first downstream EDM for a specific VC.
+    // Used by external fabric-builder plugins (e.g. CRAQ-Fabric) to derive
+    // DOWNSTREAM_NOC_X / DOWNSTREAM_NOC_Y CT args without direction-based
+    // heuristics. Callers should check get_downstream_edm_count_for_vc(vc_idx)
+    // before calling this.
+    tt::tt_metal::CoreCoord get_downstream_noc_for_vc(uint32_t vc_idx) const {
+        const auto& edms = downstream_edms_connected_by_vc.at(vc_idx);
+        TT_ASSERT(!edms.empty(), "No downstream EDMs for VC {}", vc_idx);
+        return edms.front().second;
+    }
+
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
         return downstream_edm_buffer_index_semaphore_addresses.at(vc_idx).at(compact_idx);
