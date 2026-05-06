@@ -19,29 +19,29 @@
 #include <ttnn/distributed/tensor_topology.hpp>
 #include "ttnn/tensor/types.hpp"
 
-
-namespace tt::tt_metal {
+namespace ttnn {
 
 class HostStorage {
 public:
     // Creates HostStorage from a HostTensor.
-    explicit HostStorage(HostTensor tensor);
+    explicit HostStorage(tt::tt_metal::HostTensor tensor);
 
     // Returns the distributed host buffer.
-    const DistributedHostBuffer& buffer() const;
+    const tt::tt_metal::DistributedHostBuffer& buffer() const;
 
     // Returns the host tensor.
-    const HostTensor& host_tensor() const;
-    HostTensor& host_tensor();
+    const tt::tt_metal::HostTensor& host_tensor() const;
+    tt::tt_metal::HostTensor& host_tensor();
 
     // Applies a transformation function to each device buffer in parallel, returning a new HostStorage.
-    HostStorage transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
+    HostStorage transform(
+        const std::function<tt::tt_metal::HostBuffer(const tt::tt_metal::HostBuffer&)>& callable) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
 
 private:
-    HostTensor tensor;
+    tt::tt_metal::HostTensor tensor;
 };
 
 // DeviceStorage is a wrapper around the MeshTensor to fit the semantics of ttnn::Tensor.
@@ -68,11 +68,11 @@ struct DeviceStorage {
     // Constructs a DeviceStorage from a device memory
 
     // Constructs DeviceStorage with coords covering the full mesh device shape.
-    explicit DeviceStorage(MeshTensor mesh_tensor);
+    explicit DeviceStorage(tt::tt_metal::MeshTensor mesh_tensor);
 
     // Constructs DeviceStorage that is a view of the mesh_buffer_ at the given coords_.
     // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.
-    DeviceStorage(MeshTensor mesh_tensor, std::vector<distributed::MeshCoordinate> coords);
+    DeviceStorage(tt::tt_metal::MeshTensor mesh_tensor, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Copys an existing DeviceStorage and share it's underlying device memory.
@@ -86,25 +86,25 @@ struct DeviceStorage {
     // Creates a copy of the DeviceStorage that shares the underlying device memory,
     // but with a different set of coords.
     // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.
-    DeviceStorage(const DeviceStorage& other, std::vector<distributed::MeshCoordinate> coords);
+    DeviceStorage(const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Device Memory getters
 
     // Get legacy single device buffer
     // Throws if the DeviceStorage is not allocated.
-    Buffer* get_buffer() const;
+    tt::tt_metal::Buffer* get_buffer() const;
 
     // Get mesh buffer that represents the device memory
     // Throws if the DeviceStorage is deallocated.
-    const distributed::MeshBuffer& get_mesh_buffer() const;
+    const tt::tt_metal::distributed::MeshBuffer& get_mesh_buffer() const;
 
     // Get the underlying MeshTensor, throws if the DeviceStorage is deallocated.
-    const MeshTensor& get_mesh_tensor() const;
+    const tt::tt_metal::MeshTensor& get_mesh_tensor() const;
 
     // Get the underlying MeshTensor, throws if the DeviceStorage is deallocated.
     // Please do not move the MeshTensor out of the DeviceStorage using this function.
-    MeshTensor& get_mesh_tensor();
+    tt::tt_metal::MeshTensor& get_mesh_tensor();
 
     // Returns the MeshDevice associated with the underlying device memory.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
@@ -116,8 +116,7 @@ struct DeviceStorage {
     //
     // TODO: Remove this workaround once models properly manage tensor lifetimes and
     // don't operate on deallocated tensors.
-    distributed::MeshDevice* get_device_bypass_deallocate_check() const;
-
+    tt::tt_metal::distributed::MeshDevice* get_device_bypass_deallocate_check() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // DeviceStorage as a view of the undelrying device memory at specific coordinates:
@@ -126,7 +125,7 @@ struct DeviceStorage {
     bool is_uniform_storage() const;
 
     // Returns the coordinates the tensor spans across.
-    std::span<const distributed::MeshCoordinate> get_coords() const;
+    std::span<const tt::tt_metal::distributed::MeshCoordinate> get_coords() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Deallocation management
@@ -150,7 +149,7 @@ struct DeviceStorage {
     // The function also leaks the ownership of the underlying device memory out.
     // This is meant to be transitional and is to be removed.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
-    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
 
     // There are situations where we want to "reinterpret" an existing Tensor without modifying its underlying memory.
     // For example, select slice ops can be done in-place, as can select reshapes. This DeviceStorage constructor
@@ -166,7 +165,7 @@ struct DeviceStorage {
     // This is currently the recommended method to reinterpret an existing Tensor.
     // This is  internal functionality: it is not part of the public API.
     // TODO(#38093): implement a more robust mechanism for Tensor reinterpretation
-    DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor);
+    DeviceStorage(const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
     // End internal functions.
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -185,10 +184,10 @@ struct DeviceStorage {
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Returns the tensor spec associated with the MeshTensor.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
-    const TensorSpec& get_tensor_spec() const;
+    const tt::tt_metal::TensorSpec& get_tensor_spec() const;
     // Returns the tensor topology associated with the MeshTensor.
     // Throws if the DeviceStorage is not constructed from a MeshTensor.
-    const TensorTopology& get_tensor_topology() const;
+    const tt::tt_metal::TensorTopology& get_tensor_topology() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Serialization
@@ -202,11 +201,11 @@ private:
     // Main internal constructor, performs all validation
     DeviceStorage(
         std::shared_ptr<MeshTensorHolder> mesh_tensor_holder,
-        std::vector<distributed::MeshCoordinate> coords,
+        std::vector<tt::tt_metal::distributed::MeshCoordinate> coords,
         std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder);
 
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
-    std::vector<distributed::MeshCoordinate> coords_;
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords_;
 
     // Experimental features for viewing an existing DeviceStorage
     const std::shared_ptr<MeshTensorHolder>& get_root_mesh_tensor() const;
@@ -216,4 +215,4 @@ private:
 
 using Storage = std::variant<HostStorage, DeviceStorage>;
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

@@ -14,7 +14,7 @@ struct UpsampleMultiCoreShardedProgramFactory {
         tt::tt_metal::CBHandle cb_src0{};
         tt::tt_metal::CBHandle out_cb{};
         tt::tt_metal::CBHandle config_cb{};
-        tt::tt_metal::DeviceStorage config_storage;
+        DeviceStorage config_storage;
         tt::tt_metal::Buffer* config_buffer = nullptr;
     };
 

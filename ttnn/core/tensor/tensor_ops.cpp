@@ -107,7 +107,7 @@ ttnn::Tensor to_device(
     } else {
         auto [mesh_tensor, coords] =
             non_uniform_data_movement::enqueue_write_tensor(cq, input_tensor.host_tensor(), *mesh_device, mem_config);
-        device_tensor = ttnn::Tensor(DeviceStorage(std::move(mesh_tensor), std::move(coords)));
+        device_tensor = ttnn::Tensor(ttnn::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     }
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
@@ -122,7 +122,7 @@ void copy_to_device(
     } else {
         auto coords = non_uniform_data_movement::enqueue_write_tensor(
             cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
-        device_tensor.device_storage() = DeviceStorage(device_tensor.device_storage(), std::move(coords));
+        device_tensor.device_storage() = ttnn::DeviceStorage(device_tensor.device_storage(), std::move(coords));
     }
     device_tensor = ttnn::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
@@ -351,7 +351,7 @@ ttnn::Tensor view_device(
             input_buffer.address());
 
         MeshTensor view_mesh_tensor(std::move(view_mesh_buffer), new_spec, input_tensor.tensor_topology());
-        DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
+        ttnn::DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return ttnn::Tensor(std::move(view_storage));
     }
     if (!input_tensor.memory_config().is_sharded()) {
@@ -364,7 +364,7 @@ ttnn::Tensor view_device(
             input_buffer.global_config(), new_device_config, input_buffer.device(), input_buffer.address());
 
         MeshTensor view_mesh_tensor(std::move(view_mesh_buffer), new_spec, input_tensor.tensor_topology());
-        DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
+        ttnn::DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return ttnn::Tensor(std::move(view_storage));
     }
 
@@ -398,7 +398,7 @@ ttnn::Tensor view_device(
         input_tensor.device(),
         input_tensor.mesh_buffer().address());
 
-    tt::tt_metal::DeviceStorage view_storage(
+    ttnn::DeviceStorage view_storage(
         input_tensor.device_storage(), MeshTensor(view_mesh_buffer, new_spec, input_tensor.tensor_topology()));
     return ttnn::Tensor(std::move(view_storage));
 }
@@ -444,7 +444,7 @@ ttnn::Tensor unchecked_reinterpret_layout(const ttnn::Tensor& input_tensor, Layo
         input_buffer.address());
 
     MeshTensor reinterpreted(std::move(new_mesh_buffer), new_spec, topology);
-    DeviceStorage reinterpreted_storage(input_tensor.device_storage(), std::move(reinterpreted));
+    ttnn::DeviceStorage reinterpreted_storage(input_tensor.device_storage(), std::move(reinterpreted));
     return ttnn::Tensor(std::move(reinterpreted_storage));
 }
 

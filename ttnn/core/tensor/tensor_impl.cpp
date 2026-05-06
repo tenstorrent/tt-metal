@@ -265,7 +265,7 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
         return ttnn::to_layout(tensor, Layout::ROW_MAJOR);
     };
 
-    auto get_host_buffers = [&](const HostStorage& storage) {
+    auto get_host_buffers = [&](const ttnn::HostStorage& storage) {
         std::vector<HostBuffer> buffers;
         storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
         return buffers;

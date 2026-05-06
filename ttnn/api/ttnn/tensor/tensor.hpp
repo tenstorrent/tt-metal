@@ -41,8 +41,6 @@ using TensorSpec = tt::tt_metal::TensorSpec;
 
 // These will be moved to ttnn namespace
 using TensorAttributes = tt::tt_metal::TensorAttributes;
-using HostStorage = tt::tt_metal::HostStorage;
-using DeviceStorage = tt::tt_metal::DeviceStorage;
 
 class Tensor {
 public:

@@ -18,13 +18,11 @@ namespace {
 using ::testing::SizeIs;
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::DeviceStorage;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::MeshDevice1x2Fixture;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
-using ttnn::Tensor;
 
 using DeviceStorageOwnershipTest = MeshDevice1x2Fixture;
 

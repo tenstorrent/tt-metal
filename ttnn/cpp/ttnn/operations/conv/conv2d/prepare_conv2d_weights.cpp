@@ -960,7 +960,7 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
     ttnn::Shape output_shape = ttnn::Shape(
         {out_channels, in_channels * stride[0] * stride[1], padded_kernel_h / stride[0], padded_kernel_w / stride[1]});
 
-    auto fold_weights = [&]<typename T>(const tt::tt_metal::HostStorage& storage) {
+    auto fold_weights = [&]<typename T>(const HostStorage& storage) {
         auto folded_buffer = storage.buffer().transform(
             [&](const tt::tt_metal::HostBuffer& input_host_buffer) {
                 auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);

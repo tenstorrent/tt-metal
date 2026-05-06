@@ -17,11 +17,14 @@
 // long time, it is expected for the implementation to graduate out of experimental really quickly.
 //
 // Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
+namespace ttnn {
+struct DeviceStorage;
+}  // namespace ttnn
+
 namespace tt::tt_metal {
 
 // Implementation details for MeshTensor
 class MeshTensorImpl;
-struct DeviceStorage;
 
 namespace distributed {
 class MeshDevice;
@@ -186,7 +189,7 @@ private:
     // This breaks MeshTensor's core invariant: that it is the sole owner of the
     // underlying MeshBuffer. Shared ownership leaks out, allowing the MeshBuffer to
     // outlive the MeshTensor.
-    friend struct DeviceStorage;
+    friend struct ttnn::DeviceStorage;
 
     /**
      * Returns shared ownership of the underlying MeshBuffer.

@@ -376,7 +376,7 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensorsWithDifferentShardDims) {
 }
 
 TEST_F(MeshTensorTest, DefaultConstructedDeviceStorageGetters) {
-    tt::tt_metal::DeviceStorage storage;
+    DeviceStorage storage;
 
     EXPECT_THAT(([&]() { storage.get_buffer(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));
     EXPECT_THAT(([&]() { storage.get_mesh_buffer(); }), ThrowsMessage<std::runtime_error>(HasSubstr("not allocated")));

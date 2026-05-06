@@ -291,7 +291,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     bool config_tensor_in_dram) {
     distributed::MeshDevice* device = input.device();
 
-    const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
+    const DeviceStorage& reader_indices_storage = reader_indices.device_storage();
     const bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
@@ -627,7 +627,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      * Reader Kernel: input rows -> input cb
      */
     tt::tt_metal::CBHandle config_cb;
-    tt::tt_metal::DeviceStorage scalar_config_storage;
+    DeviceStorage scalar_config_storage;
     uint32_t config_cb_id = INVALID_CB_ID;
     Tensor config_tensor;
     if (!one_scalar_per_core) {

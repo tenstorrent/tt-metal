@@ -411,7 +411,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         conv_reader_indices_tensor, parallel_config, false, a.device(), config_tensors_in_dram);
 
     log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
-    const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
+    const DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
     // Pass the actual DRAM/L1-small config buffer page size into get_cb_info so the predicted
     // READER_INDICES CB footprint matches the CB this factory creates. Without this, the in-DRAM

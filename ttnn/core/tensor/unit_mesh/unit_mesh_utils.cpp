@@ -97,7 +97,7 @@ ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
 
     MeshTensor mesh_tensor(mesh_buffer, reference_spec, topology);
 
-    auto result = ttnn::Tensor(tt::tt_metal::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
+    auto result = ttnn::Tensor(ttnn::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     return result;
 }
 

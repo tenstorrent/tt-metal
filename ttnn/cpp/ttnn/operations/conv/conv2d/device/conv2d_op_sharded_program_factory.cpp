@@ -578,7 +578,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         conv_reader_indices_tensor, input_parallel_config, block_sharded, a.device(), config_tensors_in_dram);
 
     log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
-    const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
+    const DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
     TT_FATAL(
         act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0,

@@ -132,7 +132,7 @@ ttnn::Tensor narrow(
                 input_tensor.tensor_spec().page_config(),
                 input_tensor.tensor_spec().memory_config()));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(
+        DeviceStorage subtensor_storage(
             storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
         return Tensor(std::move(subtensor_storage));
     }
@@ -291,7 +291,7 @@ ttnn::Tensor narrow(
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), input_tensor.tensor_spec().page_config(), narrowed_memory_config));
 
-        tt::tt_metal::DeviceStorage subtensor_storage(
+        DeviceStorage subtensor_storage(
             storage, tt::tt_metal::MeshTensor(subtensor_mesh, subtensor_spec, input_tensor.tensor_topology()));
         return Tensor(std::move(subtensor_storage));
     }

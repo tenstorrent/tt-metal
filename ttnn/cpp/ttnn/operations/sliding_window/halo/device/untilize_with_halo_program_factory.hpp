@@ -17,10 +17,10 @@ struct UntilizeWithHaloProgramFactory {
         tt::tt_metal::CBHandle padding_config_cb1{};
         tt::tt_metal::CBHandle gather_config_cb0{};
         tt::tt_metal::CBHandle gather_config_cb1{};
-        tt::tt_metal::DeviceStorage padding_config_storage0;
-        tt::tt_metal::DeviceStorage padding_config_storage1;
-        tt::tt_metal::DeviceStorage gather_config_storage0;
-        tt::tt_metal::DeviceStorage gather_config_storage1;
+        DeviceStorage padding_config_storage0;
+        DeviceStorage padding_config_storage1;
+        DeviceStorage gather_config_storage0;
+        DeviceStorage gather_config_storage1;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
