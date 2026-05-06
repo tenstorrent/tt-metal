@@ -61,7 +61,13 @@ from models.experimental.tt_symbiote.modules.qwen_omni_attention import (
 )
 from models.experimental.tt_symbiote.modules.embedding import TTNNQwen3OmniMoeCodecPredictorEmbedding
 from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu
-from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNSnakeBeta
+from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import (
+    TTNNConv1d,
+    TTNNConv3d,
+    TTNNConvTranspose1d,
+    TTNNSnakeBeta,
+    TTNNQwenOmniConv2dNHWC,
+)
 from models.experimental.tt_symbiote.modules.qwen_omni_decoder import (
     TTNNQwen3OmniMoeCausalConvNet,
     TTNNQwen3OmniMoeCausalTransConvNet,
@@ -91,12 +97,6 @@ from models.experimental.tt_symbiote.modules.qwen_omni_rotary import (
     TTNNQwen3OmniMoeTalkerRotaryEmbedding,
     TTNNQwen3OmniMoeThinkerTextRotaryEmbedding,
     TTNNQwen3OmniMoeVisionRotaryEmbedding,
-)
-from models.experimental.tt_symbiote.modules.conv import (
-    TTNNConv1d,
-    TTNNConv3d,
-    TTNNQwenOmniConv2dNHWC,
-    TTNNConvTranspose1d,
 )
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.utils.device_management import set_device

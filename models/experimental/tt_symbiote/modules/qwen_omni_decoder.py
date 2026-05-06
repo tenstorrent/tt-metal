@@ -146,7 +146,7 @@ class TTNNQwen3OmniMoeCausalConvNet(TTNNModule):
 
     @classmethod
     def from_torch(cls, m, *args, **kwargs):
-        from models.experimental.tt_symbiote.modules.conv import TTNNConv1d
+        from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNConv1d
 
         new = cls()
         new._fallback_torch_layer = m
@@ -207,7 +207,7 @@ class TTNNQwen3OmniMoeCausalTransConvNet(TTNNModule):
 
     @classmethod
     def from_torch(cls, m, *args, **kwargs):
-        from models.experimental.tt_symbiote.modules.conv import TTNNConvTranspose1d
+        from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNConvTranspose1d
 
         new = cls()
         new._fallback_torch_layer = m
