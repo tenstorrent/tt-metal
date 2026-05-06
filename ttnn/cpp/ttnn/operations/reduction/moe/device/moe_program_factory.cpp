@@ -61,9 +61,6 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     uint32_t Kt = (k + tile_width - 1) / tile_width;
 
 
-    TT_FATAL(Ht > 0, "MoE workload Ht must be positive, got {}", Ht);
-    TT_FATAL(Wt > 0, "MoE workload Wt must be positive, got {}", Wt);
-    TT_FATAL(num_out_tiles > 0, "MoE num_out_tiles must be positive, got {}", num_out_tiles);
     // for streaming in input
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;

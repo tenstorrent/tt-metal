@@ -169,7 +169,6 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 
     {
-        using namespace tt::tt_metal;
         const auto device_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
         TT_FATAL(
             device_grid_size.x > 0 && device_grid_size.y > 0,

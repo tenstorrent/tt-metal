@@ -203,12 +203,6 @@ ProgramDescriptor ArgMaxMultiCoreProgramFactory::create_descriptor(
     const uint32_t num_total_cores = num_cores0 + num_cores1;
 
     TT_FATAL(num_total_cores > 0, "Argmax multicore requires at least one worker core");
-    TT_FATAL(
-        all_cores.num_cores() == num_total_cores,
-        "Argmax multicore split core count mismatch: all_cores.num_cores()={} num_total_cores={}",
-        all_cores.num_cores(),
-        num_total_cores);
-
     {
         const auto device_core_grid = device->compute_with_storage_grid_size();
         const CoreRangeSet device_worker_grid =

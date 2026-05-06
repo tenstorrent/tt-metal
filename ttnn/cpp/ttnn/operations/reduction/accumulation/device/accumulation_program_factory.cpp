@@ -86,27 +86,6 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
         num_cores > 0,
         "Accumulation (cumsum/cumprod) requires at least one worker core; num_rows_total={}",
         num_rows_total);
-    TT_FATAL(
-        all_cores.num_cores() == num_cores,
-        "Accumulation core split mismatch: num_cores={} vs all_cores.num_cores()={}",
-        num_cores,
-        all_cores.num_cores());
-    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
-    TT_FATAL(
-        cores.size() == num_cores,
-        "Accumulation resolved core list size {} must match split num_cores {}",
-        cores.size(),
-        num_cores);
-    {
-        const uint32_t workload_g1 = core_group_1.num_cores() * num_cols_per_core_group_1;
-        const uint32_t workload_g2 = core_group_2.num_cores() * num_cols_per_core_group_2;
-        TT_FATAL(
-            workload_g1 + workload_g2 == num_rows_total,
-            "Accumulation workload mismatch: group1_tiles={} + group2_tiles={} must equal num_rows_total={} ",
-            workload_g1,
-            workload_g2,
-            num_rows_total);
-    }
     {
         using namespace tt::tt_metal;
         const CoreRangeSet device_grid = num_cores_to_corerangeset(grid.x * grid.y, grid, false);

@@ -126,12 +126,6 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
         tt::tt_metal::split_work_to_cores(grid_size, num_units);
 
     TT_FATAL(num_cores > 0, "Argmax single-core split requires at least one core ");
-    TT_FATAL(
-        all_cores.num_cores() == num_cores,
-        "Argmax single-core split mismatch: num_cores={} all_cores.num_cores()={}",
-        num_cores,
-        all_cores.num_cores());
-
     {
         const auto device_core_grid = device->compute_with_storage_grid_size();
         const tt::tt_metal::CoreRangeSet device_worker_grid =
