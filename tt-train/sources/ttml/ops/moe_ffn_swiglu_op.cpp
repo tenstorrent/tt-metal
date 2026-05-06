@@ -115,9 +115,6 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         down_proj_parts.push_back(std::move(down_proj_e));
     }
 
-    if (down_proj_parts.empty()) {
-        throw std::runtime_error("moe_ffn_swiglu_fw: all experts empty (token_capacity == 0).");
-    }
     auto y = (down_proj_parts.size() == 1U) ? down_proj_parts.front() : ttnn::concat(down_proj_parts, /*dim=*/2);
     down_proj_parts.clear();
 

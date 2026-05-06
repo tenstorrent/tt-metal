@@ -13,7 +13,7 @@ namespace ttml::ops {
 
 // MoE FFN forward+backward with SwiGLU, for tokens already packed per local
 // expert by the group op. For each local expert e:
-//     Y_e = (SiLU(X_e @ W_gate_e) * (X_e @ W_up_e)) @ W_down_e
+//     Y_e = (SiLU(X_e @ W_gate_e^T) * (X_e @ W_up_e^T)) @ W_down_e^T
 // where X_e = grouped[offsets[e] : offsets[e+1], :].
 //
 // `offsets` carries no gradient and stays a raw ttnn::Tensor.
