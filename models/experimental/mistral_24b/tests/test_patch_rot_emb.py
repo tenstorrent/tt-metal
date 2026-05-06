@@ -66,9 +66,9 @@ def test_rot_emb(seq_len, batch_size, reset_seeds, device):
     num_patches = num_patches_per_dim * num_patches_per_dim
     position_ids = torch.arange(4096, dtype=torch.long)
 
-    x = torch.randn(batch_size, 4096, 1024)
+    x = torch.randn(batch_size, 4096, 1024, dtype=torch.bfloat16)
 
-    cos, sin = reference_model(x.float(), position_ids)
+    cos, sin = reference_model(x, position_ids)
     tt_model = RotarySetup(
         device,
         batch_size,

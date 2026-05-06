@@ -293,7 +293,7 @@ def run_generation_exactly_like_test_end2end(
         decode_output = generator.decode_forward(
             out_tok,
             current_pos,
-            enable_trace=False,
+            enable_trace=True,
             page_table=page_table,
             kv_cache=tt_kv_cache,
         )
@@ -424,7 +424,8 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    # Prefill/decode trace capture needs >30MiB on BH×4 (mesh_trace buffer limit vs trace_region_size).
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 35000000, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(

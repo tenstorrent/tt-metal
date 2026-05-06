@@ -61,7 +61,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     )
     torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
 
-    reference_output = reference_model(torch_input.float())
+    reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,

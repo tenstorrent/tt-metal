@@ -39,7 +39,7 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 35000000, "num_command_queues": 1}],
     indirect=True,
 )
 def test_mistral_vision_model(mesh_device, reset_seeds):
@@ -83,7 +83,7 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
         model_args=model_args,
     )
 
-    tt_output = vision_model(input_tensor.float(), image_sizes=[(H, W)])
+    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, : tt_output.shape[-1]
     ]

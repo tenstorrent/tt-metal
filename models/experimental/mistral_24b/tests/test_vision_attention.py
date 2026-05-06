@@ -38,7 +38,7 @@ from ttnn import ConcatMeshToTensor
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 35000000, "num_command_queues": 1}],
     indirect=True,
 )
 def test_vision_attention(mesh_device, seq_len, batch_size):
@@ -113,9 +113,9 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
     ]
     tt_output_torch = tt_output_torch.squeeze(0)
     reference_output = reference_model(
-        pt_attention_input.float(),
-        attention_mask.float(),
-        position_embeddings=(cos.float(), sin.float()),
+        pt_attention_input,
+        attention_mask,
+        position_embeddings=(cos, sin),
     )[0]
     pcc_required = 0.99
 
