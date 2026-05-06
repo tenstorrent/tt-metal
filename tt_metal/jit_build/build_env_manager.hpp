@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "build.hpp"
+#include "impl/context/context_types.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
@@ -49,7 +50,9 @@ public:
 
     // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
     // build states.  This requires a live device to be available at device_id.
-    void add_build_env(ChipId device_id, uint8_t num_hw_cqs);
+    // `context_id` selects which MetalContext owns the device; required so the right context's runtime state and
+    // hardware query layer is consulted instead of implicitly initializing the silicon default.
+    void add_build_env(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id);
 
     // Add a new build environment for the corresponding device id and device configuration. Also generates the build
     // key and build states.

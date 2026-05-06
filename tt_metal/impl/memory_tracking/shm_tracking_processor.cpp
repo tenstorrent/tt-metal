@@ -26,7 +26,14 @@ static ShmBufferType to_shm_buffer_type(BufferType type) {
 }
 
 ShmTrackingProcessor::ShmTrackingProcessor() :
-    verbose_enabled_(MetalContext::instance().rtoptions().get_shm_verbose()) {}
+    // Process-global graph processor: avoid implicitly initializing the silicon default context.
+    // Use any existing MetalContext's rtoptions; shm_verbose is a process-wide flag.
+    verbose_enabled_([]() {
+        if (auto* ctx = MetalContext::find_any_existing_instance()) {
+            return ctx->rtoptions().get_shm_verbose();
+        }
+        return MetalContext::instance().rtoptions().get_shm_verbose();
+    }()) {}
 
 void ShmTrackingProcessor::track_allocate(const Buffer* buffer) {
     if (!buffer || !buffer->device()) {

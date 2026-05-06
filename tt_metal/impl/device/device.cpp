@@ -466,14 +466,14 @@ bool Device::initialize(
     }
 
     // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1)
-    if (!MetalContext::instance().rtoptions().get_shm_tracking_disabled()) {
+    if (!context_->rtoptions().get_shm_tracking_disabled()) {
         // Use UMD's chip_unique_ids for globally unique chip identification.
         // This ID is computed by topology discovery from hardware-reported board_id and asic_location,
         // and is consistent across all board types (P300, N300, UBB Wormhole, UBB Blackhole, etc.).
         uint64_t asic_id = 0;
 
         try {
-            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            const auto& cluster = context_->get_cluster();
             auto* cluster_desc = cluster.get_cluster_desc();
 
             if (cluster_desc) {

@@ -115,8 +115,13 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     TT_ASSERT(device_id_ >= 0, "Negative device_id {} passed to SHM provider", device_id_);
     region_->device_id = static_cast<uint32_t>(device_id_);
 
-    // Check if tracking should be disabled (enabled by default)
-    const auto& rtopts = MetalContext::instance().rtoptions();
+    // Check if tracking should be disabled (enabled by default).
+    // SharedMemoryStatsProvider is process-global and not bound to a specific MetalContext, so use any
+    // existing context's rtoptions to avoid implicitly initializing the silicon default context (which
+    // would break mock-only / coexistence flows). The shm_tracking flag is process-wide, so the choice
+    // of context is immaterial.
+    auto* any_ctx = MetalContext::find_any_existing_instance();
+    const auto& rtopts = any_ctx != nullptr ? any_ctx->rtoptions() : MetalContext::instance().rtoptions();
     if (rtopts.get_shm_tracking_disabled()) {
         per_pid_tracking_enabled_ = false;
     }
@@ -299,7 +304,9 @@ void SharedMemoryStatsProvider::initialize_region() {
 }
 
 void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
-    bool verbose_enabled = MetalContext::instance().rtoptions().get_shm_verbose();
+    auto* any_ctx = MetalContext::find_any_existing_instance();
+    bool verbose_enabled = any_ctx != nullptr ? any_ctx->rtoptions().get_shm_verbose()
+                                              : MetalContext::instance().rtoptions().get_shm_verbose();
 
     if (!region_) {
         if (verbose_enabled) {
@@ -380,7 +387,9 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
 }
 
 void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
-    bool verbose_enabled = MetalContext::instance().rtoptions().get_shm_verbose();
+    auto* any_ctx = MetalContext::find_any_existing_instance();
+    bool verbose_enabled = any_ctx != nullptr ? any_ctx->rtoptions().get_shm_verbose()
+                                              : MetalContext::instance().rtoptions().get_shm_verbose();
 
     if (!region_) {
         if (verbose_enabled) {

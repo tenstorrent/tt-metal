@@ -372,6 +372,18 @@ bool MetalContext::instance_exists(ContextId context_id) {
     return g_instances[context_id.get()].load(std::memory_order_acquire) != nullptr;
 }
 
+MetalContext* MetalContext::find_any_existing_instance() {
+    if (auto* instance = g_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire)) {
+        return instance;
+    }
+    for (int index = DEFAULT_CONTEXT_ID.get() + 1; index < MAX_CONTEXT_COUNT; ++index) {
+        if (auto* instance = g_instances[index].load(std::memory_order_acquire)) {
+            return instance;
+        }
+    }
+    return nullptr;
+}
+
 MetalContext& MetalContext::instance(ContextId context_id) {
     check_context_id(context_id);
     int index = context_id.get();
@@ -386,11 +398,22 @@ MetalContext& MetalContext::instance(ContextId context_id) {
     // Check again in case another thread created the instance while we were waiting for the lock.
     instance = g_instances[index].load(std::memory_order_acquire);
     if (!instance) {
-        // SILICON_CONTEXT_ID is implicitly created to match legacy behaviour
+        // SILICON_CONTEXT_ID is implicitly created to match legacy behaviour.
         TT_FATAL(
             context_id == DEFAULT_CONTEXT_ID,
             "No MetalContext instance for context_id {}. Create one via create_instance().",
             context_id);
+        // If a non-default context already exists (e.g. a mock cluster context owned by a MetalEnv),
+        // return it rather than implicitly opening the silicon default. This unblocks mock-only and
+        // coexistence flows for callers that still use the bare MetalContext::instance() API
+        // (program/kernel construction, JIT helpers, debug tools, etc.) without forcing every call
+        // site to be migrated to the explicit ContextId form (#39849). The silicon default is only
+        // auto-created when no other context exists, preserving legacy single-cluster behavior.
+        for (int i = DEFAULT_CONTEXT_ID.get() + 1; i < MAX_CONTEXT_COUNT; ++i) {
+            if (auto* existing = g_instances[i].load(std::memory_order_acquire)) {
+                return *existing;
+            }
+        }
         create_default_instance_implicit_locked();
         register_handlers_locked();
         instance = g_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire);

@@ -24,7 +24,19 @@
 namespace tt::tt_metal {
 
 BuildEnvManager& BuildEnvManager::get_instance() {
-    static BuildEnvManager instance(MetalContext::instance().hal());
+    // BuildEnvManager is a process-wide singleton initialized once with a HAL reference. The
+    // HAL is consulted only for arch-derived layout counts (programmable core types, processor
+    // classes, fw binary counts), all of which depend on the architecture and not on whether the
+    // cluster is mock or silicon. Using any already-existing MetalContext's HAL avoids implicitly
+    // initializing the silicon default context when only a mock context exists (e.g. forge's
+    // mock-only flow). If no context exists yet, fall back to the legacy behavior, which will
+    // create the default silicon context on demand.
+    static BuildEnvManager instance([]() -> const Hal& {
+        if (auto* existing = MetalContext::find_any_existing_instance()) {
+            return existing->hal();
+        }
+        return MetalContext::instance().hal();
+    }());
     return instance;
 }
 
@@ -153,10 +165,10 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 
 }  // namespace
 
-void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
+void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    auto dev_config = create_jit_device_config(device_id, num_hw_cqs);
-    add_build_env_locked(device_id, dev_config, MetalContext::instance().rtoptions());
+    auto dev_config = create_jit_device_config(device_id, num_hw_cqs, context_id);
+    add_build_env_locked(device_id, dev_config, MetalContext::instance(context_id).rtoptions());
 }
 
 void BuildEnvManager::add_build_env(

@@ -135,11 +135,16 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
-            BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
+            BuildEnvManager::get_instance().add_build_env(
+                device_id, num_hw_cqs_, descriptor_->metal_context().get_context_id());
+            // Build firmware ELFs unconditionally (mock and emulated included). The build is purely
+            // a compile/link step that does not touch hardware, but the resulting firmware ELFs
+            // export symbols (e.g. __fw_export_text_end) that the kernel linker scripts depend on.
+            // Without these symbols available as link inputs, JIT-compiling kernels on a mock
+            // device fails with "non constant or forward reference address expression". The actual
+            // firmware launch and launch-message clearing remain gated on real hardware below.
+            BuildEnvManager::get_instance().build_firmware(device_id);
             if (!cluster_.is_mock_or_emulated()) {
-                // build_firmware ensures that the FW is built only once for a given build key
-                // (which captures the fw_compile_hash).
-                BuildEnvManager::get_instance().build_firmware(device_id);
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                 // activated. This is required since ethernet cores context switch between application and routing
                 // firmware. If ERISC application firmware is activated before the launch messages are cleared, it
