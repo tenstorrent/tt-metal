@@ -37,46 +37,77 @@ on:
         default: false
         type: boolean
       e2e-post-mock-parent:
-        description: "Post a mock aggregate parent message before running (for E2E testing)"
+        description: "Post a mock aggregate parent message and run slack-report scripts directly (for E2E testing)"
         required: false
         default: false
         type: boolean
 
 
 jobs:
+  # Normal auto-triage path
   auto-triage:
+    if: inputs.e2e-post-mock-parent == false
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
       issues: write
       actions: write
-    env:
-      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # E2E test mode: post a mock aggregate message with @metal infra team as owner
-      - name: "[E2E] Post mock parent message to Slack"
-        id: mock_parent
-        if: inputs.e2e-post-mock-parent == true
+      - name: Run auto triage
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@fix/job-owner-representative-note
+        with:
+          workflow-name: ${{ inputs.workflow_name }}
+          job-name: ${{ inputs.job_name }}
+          copilot-pat: ${{ secrets.AUTO_TRIAGE_TOKEN }}
+          slack_ts: ${{ inputs.slack_ts }}
+          allow-pings: false
+          send-slack-message: ${{ inputs.send-slack-message }}
+          slack-test-only: ${{ inputs.slack-test-only && 'true' || 'false' }}
+          cutoff-commit: ${{ inputs.cutoff_commit }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+
+  # E2E disclaimer test: post mock message, run slack-report scripts directly, verify
+  e2e-disclaimer-test:
+    if: inputs.e2e-post-mock-parent == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+    steps:
+      - name: Checkout tt-auto-triage PR branch
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: fix/job-owner-representative-note
+          path: .tt-auto-triage
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post mock parent message to Slack
+        id: post_parent
         shell: bash
         run: |
           set -euo pipefail
           CHANNEL="${{ inputs.slack_channel_id }}"
-          if [ -z "$CHANNEL" ]; then
-            CHANNEL="${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}"
-          fi
+          : "${CHANNEL:=${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}}"
 
-          MOCK_TEXT="*[E2E TEST — auto-triage disclaimer]* Aggregate Workflow Data run: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|this run>
+          MOCK_TEXT=$(cat <<'ENDMSG'
+          *[E2E TEST — auto-triage disclaimer]* Aggregate Workflow Data run: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|this run>
           [Part 1/3]
 
            Regressions (Pass → Fail):
           (T3K) T3000 perf tests — workflow — run — a04266e
-             • t3000-perf-tests / ${{ inputs.job_name }} @metal infra team"
+             • t3000-perf-tests / ${{ inputs.job_name }} @metal infra team
+          ENDMSG
+          )
 
           RESPONSE=$(curl -s -X POST "https://slack.com/api/chat.postMessage" \
             -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
@@ -93,42 +124,130 @@ jobs:
           fi
 
           THREAD_TS=$(echo "$RESPONSE" | jq -r '.ts')
-          echo "mock_thread_ts=$THREAD_TS" >> "$GITHUB_OUTPUT"
-          echo "Posted mock parent with ts=$THREAD_TS"
+          echo "thread_ts=$THREAD_TS" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Posted mock parent: ts=$THREAD_TS channel=$CHANNEL"
 
-      - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@fix/job-owner-representative-note
-        with:
-          workflow-name: ${{ inputs.workflow_name }}
-          job-name: ${{ inputs.job_name }}
-          copilot-pat: ${{ secrets.AUTO_TRIAGE_TOKEN }}
-          slack_ts: ${{ inputs.e2e-post-mock-parent == true && steps.mock_parent.outputs.mock_thread_ts || inputs.slack_ts }}
-          allow-pings: false
-          send-slack-message: ${{ inputs.send-slack-message }}
-          slack-test-only: ${{ inputs.slack-test-only && 'true' || 'false' }}
-          cutoff-commit: ${{ inputs.cutoff_commit }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id != '' && inputs.slack_channel_id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
-
-      # E2E verification: check the Slack thread for the disclaimer
-      - name: "[E2E] Verify disclaimer in Slack thread"
-        if: always() && inputs.e2e-post-mock-parent == true
+      - name: Seed mock slack_message.json (Case 1)
         shell: bash
         run: |
           set -euo pipefail
-          sleep 5
-          THREAD_TS="${{ steps.mock_parent.outputs.mock_thread_ts }}"
-          CHANNEL="${{ inputs.slack_channel_id }}"
-          if [ -z "$CHANNEL" ]; then
-            CHANNEL="${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}"
+          mkdir -p .auto_triage/output .auto_triage/data .auto_triage/auto_triage/data
+
+          cat > .auto_triage/output/slack_message.json << 'PAYLOAD'
+          {
+            "case": "1",
+            "scenario": "Deterministic failure - single culprit commit identified",
+            "workflow_name": "t3000-perf-tests",
+            "failing_job_name": "t3k_DiT_SD3.5_model_perf_tests",
+            "failing_test_name": "tests/perf/test_dit_sd35.py",
+            "failure_message": "[E2E TEST] Mock failure for default-owner disclaimer verification",
+            "failing_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/0",
+            "failing_run_label": "Run #0 (E2E test)",
+            "commits": [
+              {
+                "hash": "deadbeef1234567890",
+                "url": "https://github.com/tenstorrent/tt-metal/commit/deadbeef",
+                "author": {"name": "E2E Test Author", "login": "test", "slack_id": ""},
+                "confidence": 95,
+                "relevant_files": ["tests/perf/test_dit_sd35.py"],
+                "approvers": [],
+                "relevant_developers": []
+              }
+            ],
+            "notes": "E2E test: verifying default-owner disclaimer appears for Case 1 when metalinfra is fallback owner.",
+            "slack_message": "E2E test payload."
+          }
+          PAYLOAD
+
+      - name: Download Slack directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          SCRIPTS=".tt-auto-triage/.github/actions/auto-triage/auto_triage"
+          if [ -f "$SCRIPTS/download_slack_directory.py" ]; then
+            python3 "$SCRIPTS/download_slack_directory.py" \
+              --output-dir .auto_triage/auto_triage/data \
+              --include-users 2>&1 || echo "Warning: Slack directory download failed (non-fatal)"
+          else
+            echo "download_slack_directory.py not found, creating empty data files"
+            echo '{"users":[]}' > .auto_triage/auto_triage/data/slack_directory.json
+            echo '{"usergroups":[]}' > .auto_triage/auto_triage/data/slack_groups.json
           fi
 
-          echo "Checking thread ts=$THREAD_TS in channel=$CHANNEL"
+      - name: Extract job owner from Slack thread
+        shell: bash
+        env:
+          SLACK_TS: ${{ steps.post_parent.outputs.thread_ts }}
+          CHANNEL_ID: ${{ steps.post_parent.outputs.channel }}
+          JOB_NAME: ${{ inputs.job_name }}
+          JOB_OWNER_FILE: ".auto_triage/data/job_owner.json"
+          SLACK_DATA_DIR: ".auto_triage/auto_triage/data"
+          FETCH_JOB_OWNER_DEBUG: "1"
+        run: |
+          set -euo pipefail
+          SCRIPT=".tt-auto-triage/.github/actions/slack-report-auto-triage/scripts/fetch_job_owner.sh"
+          chmod +x "$SCRIPT"
+          bash "$SCRIPT"
+          echo "=== job_owner.json ==="
+          cat .auto_triage/data/job_owner.json | python3 -m json.tool
+
+      - name: Build Slack payload
+        id: build
+        shell: bash
+        env:
+          MESSAGE_PATH: ".auto_triage/output/slack_message.json"
+          SLACK_TS: ${{ steps.post_parent.outputs.thread_ts }}
+          ALLOW_PINGS: "false"
+          JOB_NAME: ${{ inputs.job_name }}
+          WORKFLOW_NAME: ${{ inputs.workflow_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          SCRIPTS=".tt-auto-triage/.github/actions/slack-report-auto-triage/scripts"
+          chmod +x "$SCRIPTS"/*.sh 2>/dev/null || true
+          bash "$SCRIPTS/build_slack_payload.sh"
+          echo "=== Slack payload ==="
+          cat .auto_triage/slack_payload.json | python3 -m json.tool
+
+      - name: Post triage reply to Slack thread
+        if: steps.build.outputs.has_payload == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PAYLOAD_FILE=".auto_triage/slack_payload.json"
+          CHANNEL="${{ steps.post_parent.outputs.channel }}"
+
+          jq --arg ch "$CHANNEL" '. + {channel: $ch}' "$PAYLOAD_FILE" > /tmp/final_payload.json
+
+          RESPONSE=$(curl -s -X POST "https://slack.com/api/chat.postMessage" \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/final_payload.json)
+
+          echo "Slack send response:"
+          echo "$RESPONSE" | jq .
+
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            echo "::error::Failed to post reply: $(echo "$RESPONSE" | jq -r '.error')"
+            exit 1
+          fi
+
+      - name: Verify disclaimer in Slack thread
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 3
+          THREAD_TS="${{ steps.post_parent.outputs.thread_ts }}"
+          CHANNEL="${{ steps.post_parent.outputs.channel }}"
+
           RESPONSE=$(curl -s "https://slack.com/api/conversations.replies?channel=${CHANNEL}&ts=${THREAD_TS}" \
             -H "Authorization: Bearer $SLACK_BOT_TOKEN")
 
-          echo "Thread messages:"
+          echo "=== Thread messages ==="
           echo "$RESPONSE" | jq -r '.messages[] | "---\n" + (.text // "(no text)")[0:2000]'
 
           DISCLAIMER="Metalinfra was chosen as the default owner"
@@ -136,6 +255,7 @@ jobs:
             echo "::notice::SUCCESS: Disclaimer text found in Slack thread!"
             echo "### E2E Disclaimer Test PASSED" >> "$GITHUB_STEP_SUMMARY"
             echo "Default-owner disclaimer appeared in the thread reply." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "**Thread:** https://tenstorrent.slack.com/archives/${CHANNEL}/p${THREAD_TS//./}" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::error::FAIL: Disclaimer NOT found in Slack thread"
@@ -147,9 +267,13 @@ jobs:
             exit 1
           fi
 
-          # Dump debug artifacts
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "#### job_owner.json" >> "$GITHUB_STEP_SUMMARY"
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           cat .auto_triage/data/job_owner.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "not found" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "#### Slack payload text" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat .auto_triage/slack_payload.json | jq -r '.text // ""' >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "not found" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
