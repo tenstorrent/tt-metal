@@ -16,6 +16,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace constants;
+using ttnn::Tensor;
 
 void run_softmax(distributed::MeshDevice* device, const ttnn::Shape& shape) {
     Tensor input_tensor = ttnn::random::random(shape).to_layout(Layout::TILE).to_device(device);

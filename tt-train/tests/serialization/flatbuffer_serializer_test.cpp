@@ -388,14 +388,14 @@ std::vector<T> make_serializer_fuzz_data(size_t size, uint32_t seed) {
 // storage_type: Storage type (HOST or DEVICE)
 // seed: Random seed for reproducibility
 // device: Target device for tensor creation
-tt::tt_metal::Tensor create_random_tensor(
+ttnn::Tensor create_random_tensor(
     const ttnn::Shape& shape,
     tt::tt_metal::DataType dtype,
     ttnn::Layout layout,
     tt::tt_metal::StorageType storage_type,
     uint32_t seed,
     ttnn::distributed::MeshDevice* device) {
-    tt::tt_metal::Tensor tensor;
+    ttnn::Tensor tensor;
 
     switch (dtype) {
         case tt::tt_metal::DataType::BFLOAT16: {
@@ -588,7 +588,7 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     std::string tensor_filename_read = tensor_filename;
     ASSERT_TRUE(std::filesystem::exists(tensor_filename_read)) << "Tensor file should exist: " << tensor_filename_read;
 
-    tt::tt_metal::Tensor read_tensor;
+    ttnn::Tensor read_tensor;
     // For HOST tensors, pass nullptr to load as CPU tensor
     // For DEVICE tensors, pass device to load and then move to device
     auto* load_device = (test_case.storage_type == tt::tt_metal::StorageType::DEVICE) ? device : nullptr;

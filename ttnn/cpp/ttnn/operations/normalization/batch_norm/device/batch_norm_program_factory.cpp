@@ -16,7 +16,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::normalization;
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const tt::tt_metal::Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const ttnn::Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
     return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};

@@ -121,7 +121,7 @@ std::vector<ttnn::ccl::v2::TensorSlice> split_tensor_slice_across_workers_wrappe
 
 // Assumed that the tensor_slice shape is in terms of pages, not elements
 std::vector<ttnn::ccl::v2::TensorSlice> compute_page_aligned_slices(
-    size_t const num_slices, const Tensor& input_tensor, size_t split_dim) {
+    const size_t num_slices, const Tensor& input_tensor, size_t split_dim) {
     TT_FATAL(num_slices > 0, "Number of slices must be greater than 0");
     std::vector<ttnn::ccl::v2::TensorSlice> tensor_slices;
 

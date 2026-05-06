@@ -16,14 +16,14 @@
 namespace tt::tt_metal {
 
 // Returns true if tensor has Host storage.
-bool is_cpu_tensor(const Tensor& tensor);
+bool is_cpu_tensor(const ttnn::Tensor& tensor);
 
 // Returns true if tensor is on device.
-bool is_device_tensor(const Tensor& tensor);
+bool is_device_tensor(const ttnn::Tensor& tensor);
 
 // Returns the optimal worker cores for a sharded tensor.
 std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
-    const Tensor& tensor, NOC noc = NOC::RISCV_0_default);
+    const ttnn::Tensor& tensor, NOC noc = NOC::RISCV_0_default);
 
 /**
  * @brief Creates a CBDescriptor from a sharded tensor.
@@ -61,7 +61,7 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(
  */
 CBDescriptor cb_descriptor_from_sharded_tensor(
     uint8_t cb_index,
-    const Tensor& tensor,
+    const ttnn::Tensor& tensor,
     uint32_t address_offset = 0,
     uint32_t total_size = 0,
     const std::optional<CoreRangeSet>& core_ranges = std::nullopt);

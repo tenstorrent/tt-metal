@@ -54,13 +54,13 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     std::iota(t0_host_data.begin(), t0_host_data.end(), 1024);
     std::iota(t1_host_data.begin(), t1_host_data.end(), 2048);
 
-    const Tensor t0_host_tensor = Tensor::from_vector(t0_host_data, tensor_spec);
-    const Tensor t1_host_tensor = Tensor::from_vector(t1_host_data, tensor_spec);
+    const ttnn::Tensor t0_host_tensor = ttnn::Tensor::from_vector(t0_host_data, tensor_spec);
+    const ttnn::Tensor t1_host_tensor = ttnn::Tensor::from_vector(t1_host_data, tensor_spec);
 
     constexpr int kNumIterations = 25;
     std::thread t0([&]() {
         for (int j = 0; j < kNumIterations; j++) {
-            Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
+            ttnn::Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
             EXPECT_TRUE(is_device_tensor(t0_tensor));
             EXPECT_EQ(t0_tensor.to_vector<float>(t0_io_cq), t0_host_data);
         }
@@ -68,7 +68,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
 
     std::thread t1([&]() {
         for (int j = 0; j < kNumIterations; j++) {
-            Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
+            ttnn::Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
             EXPECT_TRUE(is_device_tensor(t1_tensor));
             EXPECT_EQ(t1_tensor.to_vector<float>(t1_io_cq), t1_host_data);
         }
@@ -99,7 +99,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     std::optional<tt::tt_metal::distributed::MeshEvent> read_event;
     std::mutex event_mutex;
 
-    Tensor device_tensor = create_device_tensor(tensor_spec, device);
+    ttnn::Tensor device_tensor = create_device_tensor(tensor_spec, device);
 
     constexpr int kNumIterations = 100;
     std::thread t0([&]() {
@@ -123,7 +123,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
 
             // Create tensor and transfer to device
             std::iota(host_data.begin(), host_data.end(), j);
-            const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
+            const ttnn::Tensor host_tensor = ttnn::Tensor::from_vector(host_data, tensor_spec);
             copy_to_device(host_tensor, device_tensor, write_cq);
             EXPECT_TRUE(is_device_tensor(device_tensor));
 
@@ -152,7 +152,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             }
 
             // Read back from device and verify
-            const Tensor readback_tensor = device_tensor.cpu(/*blocking=*/true, read_cq);
+            const ttnn::Tensor readback_tensor = device_tensor.cpu(/*blocking=*/true, read_cq);
             EXPECT_FALSE(is_device_tensor(readback_tensor));
             std::iota(expected_readback_data.begin(), expected_readback_data.end(), j);
             EXPECT_EQ(readback_tensor.to_vector<uint32_t>(), expected_readback_data) << "At iteration " << j;

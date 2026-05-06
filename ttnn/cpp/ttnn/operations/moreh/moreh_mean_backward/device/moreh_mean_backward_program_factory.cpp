@@ -31,7 +31,10 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
 }
 
 ttnn::Shape get_output_grad_shape(
-    const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
+    const ttnn::Tensor& output_grad,
+    const ttnn::Tensor& input_grad,
+    const ttnn::SmallVector<int64_t>& dims,
+    const bool& keepdim) {
     if (keepdim) {
         return output_grad.logical_shape();
     }

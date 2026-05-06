@@ -75,9 +75,9 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Tensor& q = std::get<0>(output);
-    tt_metal::Tensor& k = std::get<1>(output);
-    tt_metal::Tensor& v = std::get<2>(output);
+    Tensor& q = std::get<0>(output);
+    Tensor& k = std::get<1>(output);
+    Tensor& v = std::get<2>(output);
 
     tt_metal::Buffer* q_buffer = q.buffer();
     TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");

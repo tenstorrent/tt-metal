@@ -100,7 +100,7 @@ void py_module(nb::module_& m) {
 
     m.def(
         "zeros_like",
-        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
+        [](const ttnn::Tensor& tensor) -> ttnn::Tensor {
             return ttnn::moreh_full_like(tensor, 0.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
         },
         nb::arg("tensor"),
@@ -108,7 +108,7 @@ void py_module(nb::module_& m) {
 
     m.def(
         "ones_like",
-        [](const tt::tt_metal::Tensor& tensor) -> tt::tt_metal::Tensor {
+        [](const ttnn::Tensor& tensor) -> ttnn::Tensor {
             return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
         },
         nb::arg("tensor"),

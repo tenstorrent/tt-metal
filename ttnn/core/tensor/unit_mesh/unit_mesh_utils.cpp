@@ -32,7 +32,7 @@ void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::Mesh
 
 }  // namespace
 
-Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
+ttnn::Tensor aggregate(const std::vector<ttnn::Tensor>& tensors) {
     TT_FATAL(!tensors.empty(), "Cannot aggregate empty tensor vector");
 
     // Validate all tensors are allocated on the unit meshes.
@@ -97,11 +97,11 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
 
     MeshTensor mesh_tensor(mesh_buffer, reference_spec, topology);
 
-    auto result = Tensor(tt::tt_metal::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
+    auto result = ttnn::Tensor(tt::tt_metal::DeviceStorage(std::move(mesh_tensor), std::move(coords)));
     return result;
 }
 
-std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tensor) {
+std::vector<ttnn::Tensor> disaggregate(const ttnn::Tensor& tensor) {
     using namespace tt::tt_metal;
 
     // Validate the tensor is allocated on mesh device, that is parent mesh of unit meshes.
@@ -129,7 +129,7 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
     const auto& reference_spec = tensor.tensor_spec();
 
     // For all unit meshes, create individual mesh buffers with the same address.
-    std::vector<Tensor> result;
+    std::vector<ttnn::Tensor> result;
     result.reserve(submeshes.size());
     for (const auto& submesh : submeshes) {
         TT_FATAL(
@@ -138,7 +138,7 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_mesh_buffer.global_config(), input_mesh_buffer.device_local_config(), submesh.get(), input_address);
 
-        Tensor unit_tensor(tt::tt_metal::MeshTensor(mesh_buffer, reference_spec, TensorTopology{}));
+        ttnn::Tensor unit_tensor(tt::tt_metal::MeshTensor(mesh_buffer, reference_spec, TensorTopology{}));
         TT_FATAL(
             unit_tensor.device_storage().get_coords().size() == 1 &&
                 unit_tensor.device_storage().get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),

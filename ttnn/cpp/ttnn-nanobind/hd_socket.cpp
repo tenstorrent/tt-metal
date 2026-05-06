@@ -95,7 +95,7 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "write_tensor",
-            [](tt::tt_metal::distributed::H2DSocket& self, tt::tt_metal::Tensor& tensor) {
+            [](tt::tt_metal::distributed::H2DSocket& self, Tensor& tensor) {
                 TT_FATAL(
                     tensor.storage_type() == tt::tt_metal::StorageType::HOST,
                     "write_tensor: tensor must be on host (HostStorage)");
@@ -245,7 +245,7 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "read_tensor",
-            [](tt::tt_metal::distributed::D2HSocket& self, tt::tt_metal::Tensor& tensor, bool notify_sender) {
+            [](tt::tt_metal::distributed::D2HSocket& self, Tensor& tensor, bool notify_sender) {
                 TT_FATAL(
                     tensor.storage_type() == tt::tt_metal::StorageType::HOST,
                     "read_tensor: tensor must be on host (HostStorage)");

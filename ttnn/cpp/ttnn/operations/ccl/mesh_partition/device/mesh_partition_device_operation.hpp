@@ -38,9 +38,9 @@ struct MeshPartitionDeviceOperation {
         using OverrideRuntimeArgsCallback = std::function<void(
             const void*,
             tt::tt_metal::Program&,  // ‼  no const, exact type
-            const std::vector<tt::tt_metal::Tensor>&,
-            const std::vector<std::optional<const tt::tt_metal::Tensor>>&,
-            const std::vector<tt::tt_metal::Tensor>&)>;
+            const std::vector<Tensor>&,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>&)>;
 
         // -- shared variables --------------------------------------------
         using SliceSharedVariables = std::variant<

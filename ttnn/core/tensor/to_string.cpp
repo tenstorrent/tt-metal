@@ -12,7 +12,7 @@
 
 namespace ttnn {
 
-std::string to_string(const tt::tt_metal::Tensor& tensor) {
+std::string to_string(const Tensor& tensor) {
     tt::tt_metal::GraphTracker::instance().track_function_start("ttnn::to_string", tensor);
 
     const auto& shape = tensor.logical_shape();
@@ -26,7 +26,7 @@ std::string to_string(const tt::tt_metal::Tensor& tensor) {
             tensor.layout());
     }
 
-    if (is_device_tensor(tensor)) {
+    if (tt::tt_metal::is_device_tensor(tensor)) {
         if (tensor.is_allocated()) {
             auto* mesh_device = tensor.device();
 

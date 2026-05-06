@@ -41,7 +41,7 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
         TT_THROW("Unsupported architecture for OpPerformanceModel");
     }
 
-    auto tensor_ns = [peak_dram_bw](const Tensor& t) {
+    auto tensor_ns = [peak_dram_bw](const ttnn::Tensor& t) {
         int size_bytes = t.physical_volume() * t.element_size();
         if (t.memory_config().is_dram()) {
             return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
@@ -65,18 +65,18 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
                 this->ideal_bandwidth_ns = tensor_ns(t);
             }
         }
-    } else if constexpr (std::is_same_v<OutputTensors, Tensor>) {
+    } else if constexpr (std::is_same_v<OutputTensors, ttnn::Tensor>) {
         this->outputs_bytes.push_back(output_tensors.physical_volume() * output_tensors.element_size());
         auto output_ns = tensor_ns(output_tensors);
         if (output_ns > this->ideal_bandwidth_ns) {
             this->ideal_bandwidth_ns = output_ns;
         }
     } else if constexpr (
-        std::is_same_v<OutputTensors, std::array<std::vector<Tensor>, 2>> ||
-        std::is_same_v<OutputTensors, std::array<Tensor, 2>>) {
+        std::is_same_v<OutputTensors, std::array<std::vector<ttnn::Tensor>, 2>> ||
+        std::is_same_v<OutputTensors, std::array<ttnn::Tensor, 2>>) {
         // Handle std::array types - iterate over array elements
         for (const auto& element : output_tensors) {
-            if constexpr (std::is_same_v<decltype(element), const std::vector<Tensor>&>) {
+            if constexpr (std::is_same_v<decltype(element), const std::vector<ttnn::Tensor>&>) {
                 // Array of vectors - process each tensor in each vector
                 for (const auto& t : element) {
                     this->outputs_bytes.push_back(t.physical_volume() * t.element_size());
@@ -92,7 +92,7 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
                 }
             }
         }
-    } else if constexpr (std::is_same_v<OutputTensors, std::tuple<Tensor, Tensor>>) {
+    } else if constexpr (std::is_same_v<OutputTensors, std::tuple<ttnn::Tensor, ttnn::Tensor>>) {
         // Handle std::tuple<Tensor, Tensor>
         auto process_tuple_element = [&](const auto& t) {
             this->outputs_bytes.push_back(t.physical_volume() * t.element_size());
@@ -123,7 +123,7 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
 // get_input_bws/get_output_bws are kept inline in header to avoid needing
 // explicit instantiation for every custom result type.
 template OpPerformanceModelGeneral<Tensors>::OpPerformanceModelGeneral(Tensors, const Tensors&, int);
-template OpPerformanceModelGeneral<Tensor>::OpPerformanceModelGeneral(Tensors, const Tensor&, int);
+template OpPerformanceModelGeneral<ttnn::Tensor>::OpPerformanceModelGeneral(Tensors, const ttnn::Tensor&, int);
 template OpPerformanceModelGeneral<OptionalTensors>::OpPerformanceModelGeneral(Tensors, const OptionalTensors&, int);
 
 }  // namespace tt::tt_metal::operation

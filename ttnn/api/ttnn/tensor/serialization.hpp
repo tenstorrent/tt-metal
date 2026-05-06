@@ -23,7 +23,7 @@ enum class DumpTensorMode : std::uint8_t {
 //    tensor data.
 // 2. Metadata includes data offsets and sizes for tensor / tensor shards (multi device context).
 void dump_tensor_flatbuffer(
-    const std::string& file_name, const Tensor& tensor, DumpTensorMode mode = DumpTensorMode::DISTRIBUTED_GATHER);
-Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device = nullptr);
+    const std::string& file_name, const ttnn::Tensor& tensor, DumpTensorMode mode = DumpTensorMode::DISTRIBUTED_GATHER);
+ttnn::Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device = nullptr);
 
 }  // namespace tt::tt_metal

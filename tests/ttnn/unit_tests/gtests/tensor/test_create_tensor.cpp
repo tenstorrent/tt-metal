@@ -59,7 +59,7 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
     auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(device, tensor_spec);
 
-    Tensor input_tensor(tt::tt_metal::MeshTensor(input_buffer, tensor_spec, TensorTopology{}));
+    ttnn::Tensor input_tensor(tt::tt_metal::MeshTensor(input_buffer, tensor_spec, TensorTopology{}));
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
 
@@ -260,7 +260,7 @@ TEST_F(TensorFromDeallocatedStorageTest, ConstructingTensorFromDeallocatedStorag
     TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
     // Step 1: Create initial tensor on device
-    Tensor tensor_a = create_device_tensor(tensor_spec, device_);
+    ttnn::Tensor tensor_a = create_device_tensor(tensor_spec, device_);
 
     ASSERT_NE(tensor_a.device(), nullptr) << "Tensor A should have valid device";
     ASSERT_TRUE(tensor_a.is_allocated()) << "Tensor A should be allocated";
@@ -268,7 +268,7 @@ TEST_F(TensorFromDeallocatedStorageTest, ConstructingTensorFromDeallocatedStorag
     // Step 2: Copy the DeviceStorage (simulating what view() does internally)
     // This creates a separate DeviceStorage with a copy of the shared_ptr<MeshBuffer>
     auto storage_copy = tensor_a.device_storage();  // Makes a copy, not a reference
-    Tensor tensor_b = Tensor(storage_copy);
+    ttnn::Tensor tensor_b = ttnn::Tensor(storage_copy);
 
     ASSERT_NE(tensor_b.device(), nullptr) << "Tensor B should have valid device";
     ASSERT_TRUE(tensor_b.is_allocated()) << "Tensor B should be allocated";
@@ -288,7 +288,7 @@ TEST_F(TensorFromDeallocatedStorageTest, ConstructingTensorFromDeallocatedStorag
     // Step 4: Create tensor C from B's storage (simulating another view() call)
     // This is where the bug manifests - if Tensor constructor uses is_allocated(),
     // mesh_device_ won't be set because is_allocated() returns false
-    Tensor tensor_c = Tensor(storage_b);
+    ttnn::Tensor tensor_c = ttnn::Tensor(storage_b);
 
     // THE KEY ASSERTION: tensor C must have valid device pointer
     // This is the workaround - without it, device() returns nullptr and causes segfaults

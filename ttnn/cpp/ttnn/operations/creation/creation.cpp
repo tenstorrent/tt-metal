@@ -64,7 +64,7 @@ Tensor full_impl(
     Tensor host_tensor(tt::tt_metal::HostBuffer(std::move(owned_buffer)), shape, data_type, layout);
 
     if (optional_output_tensor.has_value()) {
-        copy_to_device(host_tensor, *optional_output_tensor);
+        tt::tt_metal::copy_to_device(host_tensor, *optional_output_tensor);
         return *optional_output_tensor;
     }
     if (device != nullptr) {
@@ -195,7 +195,7 @@ Tensor full_impl(
         case DataType::BFLOAT8_B: {
             TensorSpec tensor_spec(shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
             std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
-            auto output = tt::tt_metal::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
+            auto output = Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
             if (device_to_use != nullptr) {
                 output = output.to_device(device_to_use, mem_cfg);
             }
@@ -375,7 +375,7 @@ Tensor empty_like(
     MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
 
     std::optional<tt::tt_metal::TensorTopology> topology = std::nullopt;
-    if (is_device_tensor(tensor) &&
+    if (tt::tt_metal::is_device_tensor(tensor) &&
         device_ptr->shape().mesh_size() == tensor.tensor_topology().distribution_shape().mesh_size()) {
         topology = tensor.tensor_topology();
     }

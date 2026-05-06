@@ -111,7 +111,7 @@ TEST_P(NDShardingTests, LoopbackTest) {
         data[i] = static_cast<uint16_t>(i);
     }
 
-    auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+    auto tensor = ttnn::Tensor::from_vector(data, tensor_spec, device_);
     EXPECT_TRUE(tensor.buffer()->buffer_distribution_spec().has_value());
     auto readback_data = tensor.to_vector<uint16_t>();
 
@@ -129,12 +129,12 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     for (size_t i = 0; i < data.size(); i++) {
         data[i] = static_cast<uint16_t>(i);
     }
-    auto data_tensor = Tensor::from_vector(data, tensor_spec);
+    auto data_tensor = ttnn::Tensor::from_vector(data, tensor_spec);
     auto tensor_data_span = host_buffer::get_as<uint16_t>(data_tensor);
     auto tensor_data = std::vector<uint16_t>(tensor_data_span.begin(), tensor_data_span.end());
 
     std::vector<uint16_t> empty_data(volume);
-    auto tensor = Tensor::from_vector(empty_data, tensor_spec, device_);
+    auto tensor = ttnn::Tensor::from_vector(empty_data, tensor_spec, device_);
 
     const auto& buffer = tensor.mesh_buffer();
 
@@ -229,7 +229,7 @@ TEST_F(BufferDistributionSpecCreationTests, LegacyAndNdShardSpecCreateBufferDist
         TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
         TensorSpec tensor_spec(shape, tensor_layout);
 
-        auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+        auto tensor = ttnn::Tensor::from_vector(data, tensor_spec, device_);
         EXPECT_TRUE(tensor.buffer()->buffer_distribution_spec().has_value());
     }
 
@@ -238,7 +238,7 @@ TEST_F(BufferDistributionSpecCreationTests, LegacyAndNdShardSpecCreateBufferDist
         TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
         TensorSpec tensor_spec(shape, tensor_layout);
 
-        auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+        auto tensor = ttnn::Tensor::from_vector(data, tensor_spec, device_);
         EXPECT_TRUE(tensor.buffer()->buffer_distribution_spec().has_value());
     }
 }
@@ -261,11 +261,11 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     for (size_t i = 0; i < volume; i++) {
         data[i] = static_cast<float>(i);
     }
-    auto tensor_a = Tensor::from_vector(data, tensor_spec, device_);
+    auto tensor_a = ttnn::Tensor::from_vector(data, tensor_spec, device_);
     for (auto& elem : data) {
         elem *= 2;
     }
-    auto tensor_b = Tensor::from_vector(data, tensor_spec, device_);
+    auto tensor_b = ttnn::Tensor::from_vector(data, tensor_spec, device_);
 
     auto sum_tensor = ttnn::add(tensor_a, tensor_b);
 
@@ -292,7 +292,7 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
     }
 
     auto measure_to_device_time_ns = [&](const TensorSpec& tensor_spec) -> double {
-        auto tensor = Tensor::from_vector(data, tensor_spec);
+        auto tensor = ttnn::Tensor::from_vector(data, tensor_spec);
 
         auto start = std::chrono::high_resolution_clock::now();
         auto device_tensor = tensor.to_device(device_, tensor_spec.memory_config());
@@ -344,7 +344,7 @@ TEST_P(NDShardingBufferSizeTests, TestBufferSize) {
 
     size_t volume = params.shape.volume();
     std::vector<uint8_t> data(volume);
-    auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+    auto tensor = ttnn::Tensor::from_vector(data, tensor_spec, device_);
 
     auto* buffer = tensor.buffer();
     EXPECT_EQ(buffer->size(), params.expected_buffer_size);

@@ -29,6 +29,7 @@
 using namespace tt;
 using namespace tt_metal;
 using namespace constants;
+using ttnn::Tensor;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

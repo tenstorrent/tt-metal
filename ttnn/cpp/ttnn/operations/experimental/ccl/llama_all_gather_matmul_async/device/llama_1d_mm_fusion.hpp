@@ -32,7 +32,7 @@ void override_agmm_fusion_program_parameters(
     const ttnn::prim::matmul_mcast_1d_common_override_variables_t& override_variables,
     const ttnn::prim::MatmulParams& operation,
     tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::Tensor>& input_tensors,
-    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-    const std::vector<tt::tt_metal::Tensor>& output_tensors);
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<Tensor>& output_tensors);
 }  // namespace ttnn::operations::llama_matmul

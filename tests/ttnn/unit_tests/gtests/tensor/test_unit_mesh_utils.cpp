@@ -53,7 +53,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
     auto layout = tt::tt_metal::Layout::TILE;
 
     // Create tensors on each unit mesh at the same address, assuming deterministic lock-step allocation.
-    std::vector<Tensor> unit_tensors;
+    std::vector<ttnn::Tensor> unit_tensors;
     unit_tensors.reserve(unit_meshes.size());
 
     for (const auto& unit_mesh : unit_meshes) {
@@ -97,7 +97,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
 }
 
 TEST_F(UnitMeshUtils2x4Test, AggregateEmptyVector) {
-    std::vector<Tensor> empty_tensors;
+    std::vector<ttnn::Tensor> empty_tensors;
     EXPECT_THAT(
         ([&]() { aggregate(empty_tensors); }),
         ThrowsMessage<std::runtime_error>(HasSubstr("Cannot aggregate empty tensor vector")));
@@ -109,7 +109,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateNonUnitMeshes) {
     auto dtype = tt::tt_metal::DataType::BFLOAT16;
     auto layout = tt::tt_metal::Layout::TILE;
 
-    std::vector<Tensor> tensors;
+    std::vector<ttnn::Tensor> tensors;
     tensors.reserve(non_unit_meshes.size());
     for (const auto& non_unit_mesh : non_unit_meshes) {
         tensors.push_back(create_device_tensor(
@@ -129,7 +129,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedTensorSpecs) {
     auto shape1 = ttnn::Shape(std::array<uint32_t, 2>{32, 32});
     auto shape2 = ttnn::Shape(std::array<uint32_t, 2>{64, 64});
 
-    std::vector<Tensor> tensors;
+    std::vector<ttnn::Tensor> tensors;
     tensors.reserve(unit_meshes.size());
     for (int i = 0; i < unit_meshes.size(); i++) {
         if (i % 2 == 0) {
@@ -173,7 +173,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedAddresses) {
                 tt::tt_metal::MemoryConfig())),
         unit_meshes[0].get());
 
-    std::vector<Tensor> tensors;
+    std::vector<ttnn::Tensor> tensors;
     tensors.reserve(unit_meshes.size());
     for (const auto& unit_mesh : unit_meshes) {
         tensors.push_back(create_device_tensor(
@@ -206,7 +206,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateWrongNumberOfTensors) {
                 tt::tt_metal::MemoryConfig())),
         unit_meshes[0].get());
 
-    std::vector<Tensor> tensors = {tensor};
+    std::vector<ttnn::Tensor> tensors = {tensor};
     EXPECT_THAT(
         ([&]() { aggregate(tensors); }),
         ThrowsMessage<std::runtime_error>(HasSubstr("Input tensors must span the entire parent mesh")));

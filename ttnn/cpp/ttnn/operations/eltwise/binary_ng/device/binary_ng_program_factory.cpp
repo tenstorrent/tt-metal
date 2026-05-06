@@ -20,7 +20,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 using namespace ttnn::operations::binary_ng;
 
 // For rank > 5 dims will be collapsed into a single dim
-uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
+uint32_t extract_nD_dims(const ttnn::Tensor& x, const int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
@@ -32,7 +32,7 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     return nD_dim;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const ttnn::Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
     return {
@@ -62,7 +62,8 @@ std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
     }
 }
 
-TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
+TensorMemoryLayout get_memory_layout(
+    const ttnn::Tensor& a, const std::optional<ttnn::Tensor>& b, const ttnn::Tensor& c) {
     if (!b.has_value()) {
         return TensorMemoryLayout::INTERLEAVED;
     }
@@ -121,7 +122,7 @@ std::optional<AllShardSpecs> get_shard_specs(
 
 bool should_use_row_major_path(
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
-    const std::optional<Tensor>& b,
+    const std::optional<ttnn::Tensor>& b,
     const bool has_sharding) {
     if (operation_attributes.input_layout_a != Layout::ROW_MAJOR ||
         operation_attributes.output_layout != Layout::ROW_MAJOR || has_sharding) {
@@ -159,7 +160,7 @@ class ShardShapeGenerator {
 public:
     ShardShapeGenerator() = default;
 
-    ShardShapeGenerator(const ShardSpec& shard_spec, const Tensor& tensor) :
+    ShardShapeGenerator(const ShardSpec& shard_spec, const ttnn::Tensor& tensor) :
         // core ranges are sorted, so the last one is indeed the last core
         end_core(shard_spec.grid.ranges().rbegin()->end_coord),
         row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR),

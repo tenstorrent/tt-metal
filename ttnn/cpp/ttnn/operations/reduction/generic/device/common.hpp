@@ -22,7 +22,7 @@ enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_C
 namespace ttnn::prim {
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
-    const tt::tt_metal::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
+    const Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
 
 // Returns true if the fused-negate H reduce path's CBs fit in available L1.
 // The reduce_h_neg compute kernel pushes ntiles tiles per inner-loop iteration;
@@ -31,7 +31,7 @@ tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
 // tiles.  For wide reductions this can exceed L1, in which case callers must
 // fall back to external negation around a non-fused (regular) reduce.
 bool h_reduce_negate_fits_in_l1(
-    const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 // Builds a tilized TensorSpec for a reduction-style op output, given the
 // already shape-adjusted output shape and the dimension that was reduced.

@@ -371,7 +371,7 @@ ttnn::Tensor ttnn::reshape(
     }
     TT_FATAL(logical_shape.volume() != 0, "Tensor volume is not 0, but shape volume is 0");
 
-    if (!is_device_tensor(tensor)) {
+    if (!tt::tt_metal::is_device_tensor(tensor)) {
         // This case has been allowed in the past though it means introducing padding values to the data
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }

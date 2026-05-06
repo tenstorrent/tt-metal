@@ -25,6 +25,7 @@ class IDevice;
 using namespace tt;
 using namespace tt_metal;
 using namespace constants;
+using ttnn::Tensor;
 
 bool test_single_tile_single_dram_bank_loopback(distributed::MeshDevice* device) {
     bool pass = true;

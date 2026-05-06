@@ -987,7 +987,7 @@ Result conv_transpose2d_DRAM(
 
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     Tensor input_tensor_on_device = input_tensor;
-    if (!is_device_tensor(input_tensor_on_device)) {
+    if (!tt::tt_metal::is_device_tensor(input_tensor_on_device)) {
         input_tensor_on_device =
             ttnn::operations::core::to_device(input_tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
     }

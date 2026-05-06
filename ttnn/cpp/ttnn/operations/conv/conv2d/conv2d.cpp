@@ -199,7 +199,7 @@ Result conv2d_L1(
         orig_stride);
 
     // Prepare weights and move to device if necessary
-    if (!is_device_tensor(weight_tensor)) {
+    if (!tt::tt_metal::is_device_tensor(weight_tensor)) {
         log_trace(tt::LogOp, "conv2d: Preprocessing weights on host and moving to device.");
         std::tie(weight_tensor_on_device, bias_tensor_on_device) =
             prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
@@ -221,7 +221,7 @@ Result conv2d_L1(
 
     // Prepare bias tensor if it exists and is not yet on device
     if (bias_tensor_on_device.has_value()) {
-        if (!is_device_tensor(bias_tensor_on_device.value())) {
+        if (!tt::tt_metal::is_device_tensor(bias_tensor_on_device.value())) {
             log_trace(tt::LogOp, "conv2d: Preprocessing bias on host and moving to device.");
 
             bias_tensor_on_device = prepare_conv_bias_internal(
@@ -758,7 +758,7 @@ Result conv2d_DRAM(
         padding_n4,
         mm_conv,
         conv_config);
-    if (!is_device_tensor(input_tensor_on_device)) {
+    if (!tt::tt_metal::is_device_tensor(input_tensor_on_device)) {
         input_tensor_on_device =
             ttnn::operations::core::to_device(input_tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
     }

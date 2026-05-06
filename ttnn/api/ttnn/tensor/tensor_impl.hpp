@@ -57,8 +57,8 @@ struct PrintOptions {
 
 extern PrintOptions TTNN_PRINT_OPTIONS;
 
-std::string to_string(const Tensor& tensor);
+std::string to_string(const ttnn::Tensor& tensor);
 
-Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
+ttnn::Tensor extract_shard(const ttnn::Tensor& tensor, const uint32_t& core_id);
 
 }  // namespace tt::tt_metal::tensor_impl

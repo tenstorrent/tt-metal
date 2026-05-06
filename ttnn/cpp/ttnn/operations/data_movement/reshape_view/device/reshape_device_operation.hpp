@@ -34,12 +34,12 @@ struct ReshapeViewDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
-tt::tt_metal::Tensor reshape_view(
+Tensor reshape_view(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid);
 
 }  // namespace ttnn::prim

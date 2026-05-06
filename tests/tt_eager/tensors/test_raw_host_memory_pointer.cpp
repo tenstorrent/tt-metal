@@ -68,7 +68,7 @@ void test_raw_host_memory_pointer() {
     using tt::tt_metal::DataType;
     using tt::tt_metal::HostBuffer;
     using tt::tt_metal::Layout;
-    using tt::tt_metal::Tensor;
+    using ttnn::Tensor;
 
     int device_id = 0;
     auto device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);

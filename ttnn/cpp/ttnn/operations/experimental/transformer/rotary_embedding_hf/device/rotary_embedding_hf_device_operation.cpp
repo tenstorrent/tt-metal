@@ -120,7 +120,7 @@ tt::tt_metal::TensorSpec RotaryEmbeddingHfDeviceOperation::compute_output_specs(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-tt::tt_metal::Tensor RotaryEmbeddingHfDeviceOperation::create_output_tensors(
+Tensor RotaryEmbeddingHfDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tt::tt_metal::create_device_tensor(
         compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
@@ -144,10 +144,10 @@ tt::stl::hash::hash_t RotaryEmbeddingHfDeviceOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-tt::tt_metal::Tensor rotary_embedding_hf(
-    const tt::tt_metal::Tensor& input,
-    const tt::tt_metal::Tensor& cos,
-    const tt::tt_metal::Tensor& sin,
+Tensor rotary_embedding_hf(
+    const Tensor& input,
+    const Tensor& cos,
+    const Tensor& sin,
     bool is_decode_mode,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {

@@ -10,8 +10,8 @@
 namespace tt::tt_metal {
 
 template <PoolType pool>
-Tensor pool_2d(
-    const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& /*output_dtype*/) {
+ttnn::Tensor pool_2d(
+    const ttnn::Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& /*output_dtype*/) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
     const auto& input_shape = input.padded_shape();
     switch (pool) {
@@ -24,8 +24,8 @@ Tensor pool_2d(
     }
 }
 
-Tensor global_avg_pool2d(
-    const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
+ttnn::Tensor global_avg_pool2d(
+    const ttnn::Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
 
     // Handle different tensor ranks: 2D [H,W], 3D [H,W,C], or 4D [N,H,W,C]
@@ -33,7 +33,7 @@ Tensor global_avg_pool2d(
     auto logical_shape = input.logical_shape();
     uint32_t rank = in_shape.rank();
 
-    Tensor input_4d = input;
+    ttnn::Tensor input_4d = input;
 
     // Reshape to 4D if needed
     if (rank == 3) {

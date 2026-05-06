@@ -40,7 +40,7 @@ ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::comp
             operation_attributes.padded_output_shape));
 }
 
-tt::tt_metal::Tensor ReshapeViewDeviceOperation::create_output_tensors(
+Tensor ReshapeViewDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
@@ -62,13 +62,13 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-tt::tt_metal::Tensor reshape_view(
+Tensor reshape_view(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid) {
     return ttnn::device_operation::launch<ReshapeViewDeviceOperation>(
         ReshapeViewParams{
             logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor, sub_core_grid},

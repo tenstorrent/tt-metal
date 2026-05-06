@@ -447,7 +447,9 @@ typename device_operation_t::tensor_return_value_t launch(
     tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
 
     if (!input_tensors.empty()) {
-        TT_FATAL(is_device_tensor(input_tensors.front().get()), "Device Operations expect tensor with Device storage in inputs");
+        TT_FATAL(
+            tt::tt_metal::is_device_tensor(input_tensors.front().get()),
+            "Device Operations expect tensor with Device storage in inputs");
     }
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);

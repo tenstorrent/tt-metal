@@ -29,10 +29,10 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, TileToRowMajorPreservesShapeAndDtyp
     ttnn::Shape shape({1, 1, 32, 32});
     TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor tile_tensor = create_device_tensor(spec, device_);
+    ttnn::Tensor tile_tensor = create_device_tensor(spec, device_);
     ASSERT_EQ(tile_tensor.layout(), Layout::TILE);
 
-    Tensor rm_tensor = unchecked_reinterpret_layout(tile_tensor, Layout::ROW_MAJOR);
+    ttnn::Tensor rm_tensor = unchecked_reinterpret_layout(tile_tensor, Layout::ROW_MAJOR);
 
     EXPECT_EQ(rm_tensor.layout(), Layout::ROW_MAJOR);
     EXPECT_EQ(rm_tensor.logical_shape(), tile_tensor.logical_shape());
@@ -45,10 +45,10 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, RowMajorToTilePreservesShapeAndDtyp
     ttnn::Shape shape({1, 1, 32, 32});
     TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), mem_cfg));
 
-    Tensor rm_tensor = create_device_tensor(spec, device_);
+    ttnn::Tensor rm_tensor = create_device_tensor(spec, device_);
     ASSERT_EQ(rm_tensor.layout(), Layout::ROW_MAJOR);
 
-    Tensor tile_tensor = unchecked_reinterpret_layout(rm_tensor, Layout::TILE);
+    ttnn::Tensor tile_tensor = unchecked_reinterpret_layout(rm_tensor, Layout::TILE);
 
     EXPECT_EQ(tile_tensor.layout(), Layout::TILE);
     EXPECT_EQ(tile_tensor.logical_shape(), rm_tensor.logical_shape());
@@ -62,10 +62,10 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, PreservesNonDefaultTile) {
     ttnn::Shape shape({1, 1, 16, 32});
     TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE, custom_tile), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
+    ttnn::Tensor original = create_device_tensor(spec, device_);
     ASSERT_EQ(original.tensor_spec().tile(), custom_tile);
 
-    Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
+    ttnn::Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
 
     EXPECT_EQ(reinterpreted.layout(), Layout::ROW_MAJOR);
     EXPECT_EQ(reinterpreted.tensor_spec().tile(), custom_tile);
@@ -76,8 +76,8 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, AliasesTheSameDeviceAddress) {
     ttnn::Shape shape({1, 1, 32, 32});
     TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
-    Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
+    ttnn::Tensor original = create_device_tensor(spec, device_);
+    ttnn::Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
 
     EXPECT_EQ(
         original.device_storage().get_mesh_buffer().address(),
@@ -89,8 +89,8 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, SameLayoutIsIdentity) {
     ttnn::Shape shape({1, 1, 32, 32});
     TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
-    Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::TILE);
+    ttnn::Tensor original = create_device_tensor(spec, device_);
+    ttnn::Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::TILE);
 
     EXPECT_EQ(reinterpreted.layout(), Layout::TILE);
     EXPECT_EQ(reinterpreted.tensor_spec(), original.tensor_spec());
@@ -104,9 +104,9 @@ TEST_F(UncheckedReinterpretLayoutDeviceTest, OriginalTensorStaysAliveAfterReinte
     ttnn::Shape shape({1, 1, 32, 32});
     TensorSpec spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
-    Tensor original = create_device_tensor(spec, device_);
+    ttnn::Tensor original = create_device_tensor(spec, device_);
     {
-        Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
+        ttnn::Tensor reinterpreted = unchecked_reinterpret_layout(original, Layout::ROW_MAJOR);
         ASSERT_TRUE(reinterpreted.is_allocated());
     }
     EXPECT_TRUE(original.is_allocated());
@@ -124,10 +124,10 @@ TEST_F(UncheckedReinterpretLayoutHostTest, TileToRowMajorOnHost) {
 
     auto num_elements = shape.volume();
     std::vector<bfloat16> data(num_elements, bfloat16(1.0f));
-    Tensor host_tensor(HostBuffer(data), spec);
+    ttnn::Tensor host_tensor(HostBuffer(data), spec);
     ASSERT_EQ(host_tensor.layout(), Layout::TILE);
 
-    Tensor reinterpreted = unchecked_reinterpret_layout(host_tensor, Layout::ROW_MAJOR);
+    ttnn::Tensor reinterpreted = unchecked_reinterpret_layout(host_tensor, Layout::ROW_MAJOR);
 
     EXPECT_EQ(reinterpreted.layout(), Layout::ROW_MAJOR);
     EXPECT_EQ(reinterpreted.logical_shape(), host_tensor.logical_shape());
@@ -142,10 +142,10 @@ TEST_F(UncheckedReinterpretLayoutHostTest, PreservesNonDefaultTileOnHost) {
 
     auto num_elements = shape.volume();
     std::vector<bfloat16> data(num_elements, bfloat16(1.0f));
-    Tensor host_tensor(HostBuffer(data), spec);
+    ttnn::Tensor host_tensor(HostBuffer(data), spec);
     ASSERT_EQ(host_tensor.tensor_spec().tile(), custom_tile);
 
-    Tensor reinterpreted = unchecked_reinterpret_layout(host_tensor, Layout::ROW_MAJOR);
+    ttnn::Tensor reinterpreted = unchecked_reinterpret_layout(host_tensor, Layout::ROW_MAJOR);
 
     EXPECT_EQ(reinterpreted.layout(), Layout::ROW_MAJOR);
     EXPECT_EQ(reinterpreted.tensor_spec().tile(), custom_tile);
@@ -157,10 +157,10 @@ TEST_F(UncheckedReinterpretLayoutHostTest, RowMajorToTileOnHost) {
 
     auto num_elements = shape.volume();
     std::vector<bfloat16> data(num_elements, bfloat16(2.0f));
-    Tensor host_tensor(HostBuffer(data), spec);
+    ttnn::Tensor host_tensor(HostBuffer(data), spec);
     ASSERT_EQ(host_tensor.layout(), Layout::ROW_MAJOR);
 
-    Tensor reinterpreted = unchecked_reinterpret_layout(host_tensor, Layout::TILE);
+    ttnn::Tensor reinterpreted = unchecked_reinterpret_layout(host_tensor, Layout::TILE);
 
     EXPECT_EQ(reinterpreted.layout(), Layout::TILE);
     EXPECT_EQ(reinterpreted.logical_shape(), host_tensor.logical_shape());

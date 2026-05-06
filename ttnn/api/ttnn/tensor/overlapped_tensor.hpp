@@ -15,7 +15,7 @@ namespace tt::tt_metal {
 
 struct OverlappedTensorView {
     std::string name;
-    Tensor fused_tensor;
+    ttnn::Tensor fused_tensor;
     std::array<uint32_t, 2> tensor_shape;
     std::array<uint32_t, 2> shard_shape;
     CoreRangeSet core_range_set;

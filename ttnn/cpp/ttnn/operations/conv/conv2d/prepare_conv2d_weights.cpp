@@ -146,7 +146,7 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
 
 template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
-    TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
+    TT_FATAL(tt::tt_metal::is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     auto transformed_buffer = input_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
     return Tensor(tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));

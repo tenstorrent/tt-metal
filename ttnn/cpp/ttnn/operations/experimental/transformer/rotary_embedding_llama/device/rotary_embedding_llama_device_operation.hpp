@@ -16,7 +16,7 @@ struct RotaryEmbeddingLlamaDeviceOperation {
     using operation_attributes_t = RotaryEmbeddingLlamaParams;
     using tensor_args_t = RotaryEmbeddingLlamaInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
-    using tensor_return_value_t = tt::tt_metal::Tensor;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         RotaryEmbeddingLlamaMultiCore,
         RotaryEmbeddingLlamaMultiCoreSharded,
@@ -32,11 +32,11 @@ struct RotaryEmbeddingLlamaDeviceOperation {
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-tt::tt_metal::Tensor rotary_embedding_llama(
-    const tt::tt_metal::Tensor& input_tensor,
-    const tt::tt_metal::Tensor& cos_cache,
-    const tt::tt_metal::Tensor& sin_cache,
-    const tt::tt_metal::Tensor& trans_mat,
+Tensor rotary_embedding_llama(
+    const Tensor& input_tensor,
+    const Tensor& cos_cache,
+    const Tensor& sin_cache,
+    const Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);

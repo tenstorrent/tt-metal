@@ -17,9 +17,9 @@ struct RotaryEmbeddingHfParams {
 };
 
 struct RotaryEmbeddingHfInputs {
-    tt::tt_metal::Tensor input_tensor;
-    tt::tt_metal::Tensor cos_cache;
-    tt::tt_metal::Tensor sin_cache;
+    Tensor input_tensor;
+    Tensor cos_cache;
+    Tensor sin_cache;
 };
 
 }  // namespace ttnn::experimental::prim

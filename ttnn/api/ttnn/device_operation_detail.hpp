@@ -12,12 +12,13 @@
 #include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
 
-namespace tt::tt_metal {
-class Tensor;
-namespace distributed {
+namespace tt::tt_metal::distributed {
 class MeshDevice;
-}  // namespace distributed
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::distributed
+
+namespace ttnn {
+class Tensor;
+}  // namespace ttnn
 
 namespace ttnn::device_operation::detail {
 
@@ -33,8 +34,7 @@ namespace ttnn::device_operation::detail {
 std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
-compute_output_placements_and_shape(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors);
+compute_output_placements_and_shape(const std::vector<std::reference_wrapper<const Tensor>>& tensors);
 
 /**
  * Non-template implementation of tensor coordinate extraction.
@@ -42,7 +42,7 @@ compute_output_placements_and_shape(
  * Extracts and validates mesh coordinates from a pre-extracted list of input tensors.
  */
 std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinates_impl(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors,
+    const std::vector<std::reference_wrapper<const Tensor>>& tensors,
     tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 }  // namespace ttnn::device_operation::detail

@@ -32,8 +32,8 @@ enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 }
 static ttnn::prim::matmul_mcast_1d_common_override_variables_t
 process_agmm_fusion_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& /*a*/,
-    const std::vector<tt::tt_metal::Tensor>& b_tensors,
+    const Tensor& /*a*/,
+    const std::vector<Tensor>& b_tensors,
     tt_metal::IDevice* device,
     tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -659,9 +659,9 @@ void override_agmm_fusion_program_parameters(
     const ttnn::prim::matmul_mcast_1d_common_override_variables_t& override_variables,
     const ttnn::prim::MatmulParams& operation,
     tt_metal::Program& program,
-    const std::vector<tt::tt_metal::Tensor>& input_tensors,
-    const std::vector<std::optional<const tt::tt_metal::Tensor>>& /*optional_input_tensors*/,
-    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
+    const std::vector<Tensor>& output_tensors) {
     const auto& global_cb = operation.global_cb;
 
     auto* src_buffer_a = input_tensors[0].buffer();

@@ -12,7 +12,7 @@ namespace ttnn::experimental::prim {
 RotaryEmbeddingLlamaMultiCorePrefillSharded::cached_program_t RotaryEmbeddingLlamaMultiCorePrefillSharded::create(
     const RotaryEmbeddingLlamaParams& operation_attributes,
     const RotaryEmbeddingLlamaInputs& tensor_args,
-    tt::tt_metal::Tensor& output) {
+    Tensor& output) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
     using namespace tt;
@@ -410,7 +410,7 @@ void RotaryEmbeddingLlamaMultiCorePrefillSharded::override_runtime_arguments(
     cached_program_t& cached_program,
     const RotaryEmbeddingLlamaParams& /*operation_attributes*/,
     const RotaryEmbeddingLlamaInputs& tensor_args,
-    tt::tt_metal::Tensor& output) {
+    Tensor& output) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
 

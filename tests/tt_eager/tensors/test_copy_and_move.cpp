@@ -34,6 +34,7 @@ class IDevice;
 using namespace tt;
 using namespace tt_metal;
 using namespace constants;
+using ttnn::Tensor;
 
 void test_tensor_copy_semantics(distributed::MeshDevice* device) {
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});

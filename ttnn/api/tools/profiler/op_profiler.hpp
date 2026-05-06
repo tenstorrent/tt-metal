@@ -32,7 +32,7 @@ namespace tt::tt_metal::op_profiler {
 
 #if defined(TRACY_ENABLE)
 
-static inline json get_tensor_json(const Tensor& tensor) {
+static inline json get_tensor_json(const ttnn::Tensor& tensor) {
     json ret;
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
@@ -65,7 +65,7 @@ static inline json get_tensor_json(const Tensor& tensor) {
     return ret;
 }
 
-static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tensors) {
+static inline std::vector<json> get_tensors_json(const std::vector<ttnn::Tensor>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
     ret.reserve(tensors.size());
@@ -75,7 +75,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tens
     return ret;
 }
 
-static inline std::vector<json> get_tensors_json(const std::vector<std::optional<const Tensor>>& tensors) {
+static inline std::vector<json> get_tensors_json(const std::vector<std::optional<const ttnn::Tensor>>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
     for (const auto& tensor : tensors) {
@@ -86,7 +86,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<std::optional
     return ret;
 }
 
-static inline std::vector<json> get_tensors_json(const std::vector<std::optional<Tensor>>& tensors) {
+static inline std::vector<json> get_tensors_json(const std::vector<std::optional<ttnn::Tensor>>& tensors) {
     ZoneScoped;
     std::vector<json> ret;
     for (const auto& tensor : tensors) {
@@ -101,7 +101,7 @@ template <bool IsExternal = false, typename Operation>
 inline json get_base_json(
     uint32_t opID,
     const Operation& op,
-    const std::vector<Tensor>& input_tensors,
+    const std::vector<ttnn::Tensor>& input_tensors,
     std::optional<std::reference_wrapper<typename Operation::OutputTensors>> output_tensors = std::nullopt) {
     ZoneScoped;
     json j;
@@ -139,7 +139,7 @@ inline json get_base_json(
     j["input_tensors"] = get_tensors_json(input_tensors);
 
     if (output_tensors.has_value()) {
-        j["output_tensors"] = get_tensors_json(output_tensors.value());
+        j["output_tensors"] = get_tensors_json(output_tensors.value().get());
     }
     return j;
 }
@@ -149,7 +149,7 @@ inline json get_base_json(
 inline std::string op_meta_data_serialized_json(
     [[maybe_unused]] uint32_t opID,
     [[maybe_unused]] const tt::tt_metal::operation::ExternalOperation& op,
-    [[maybe_unused]] const std::vector<Tensor>& input_tensors) {
+    [[maybe_unused]] const std::vector<ttnn::Tensor>& input_tensors) {
 #if defined(TRACY_ENABLE)
     if (!is_op_profiler_env_var_set()) {
         return {};

@@ -235,11 +235,11 @@ ttsl::hash::hash_t RotaryEmbeddingLlamaDeviceOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-tt::tt_metal::Tensor rotary_embedding_llama(
-    const tt::tt_metal::Tensor& input_tensor,
-    const tt::tt_metal::Tensor& cos_cache,
-    const tt::tt_metal::Tensor& sin_cache,
-    const tt::tt_metal::Tensor& trans_mat,
+Tensor rotary_embedding_llama(
+    const Tensor& input_tensor,
+    const Tensor& cos_cache,
+    const Tensor& sin_cache,
+    const Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {

@@ -53,7 +53,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     // INPUT TENSOR setup
 
     // Replicate the tensor across (1, num_devices) submesh.
-    const Tensor input_mesh_tensor = ttnn::distributed::distribute_tensor(
+    const ttnn::Tensor input_mesh_tensor = ttnn::distributed::distribute_tensor(
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout),
         *ttnn::distributed::create_mesh_mapper(
             *test_fixture.mesh_device_,

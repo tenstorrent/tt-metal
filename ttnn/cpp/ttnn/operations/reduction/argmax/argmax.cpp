@@ -42,7 +42,7 @@ static Tensor zero_volume_argmax(
     // here because the tensor is 0-volume (i.e., it has no elements).
     auto host_buffer = tt::tt_metal::tensor_impl::allocate_host_buffer(tensor_spec);
     Tensor host_tensor(std::move(host_buffer), output_shape, tensor_spec.data_type(), tensor_spec.layout());
-    copy_to_device(host_tensor, preallocated_tensor);
+    tt::tt_metal::copy_to_device(host_tensor, preallocated_tensor);
 
     return preallocated_tensor;
 }
@@ -57,9 +57,9 @@ Tensor argmax(
     std::optional<Tensor> optional_output_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
-    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
+    TT_FATAL(tt::tt_metal::is_device_tensor(input_tensor), "Input tensor must be on device");
     TT_FATAL(
-        !optional_output_tensor.has_value() || is_device_tensor(optional_output_tensor.value()),
+        !optional_output_tensor.has_value() || tt::tt_metal::is_device_tensor(optional_output_tensor.value()),
         "Preallocated output tensor must be on device");
 
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
@@ -97,7 +97,7 @@ Tensor argmax(
             preallocated_spec.physical_shape().height() * preallocated_spec.physical_shape().width(), 0);
         Tensor host_indices(
             tt::tt_metal::HostBuffer(std::move(result_vec)), input_shape, DataType::UINT32, preallocated_spec.layout());
-        copy_to_device(host_indices, preallocated_tensor);
+        tt::tt_metal::copy_to_device(host_indices, preallocated_tensor);
 
         return preallocated_tensor;
     }

@@ -10,12 +10,15 @@
 #include <string>
 
 namespace tt::tt_metal {
-class Tensor;
 struct ShardSpec;
 
 class IDevice;
 
 }  // namespace tt::tt_metal
+
+namespace ttnn {
+class Tensor;
+}  // namespace ttnn
 
 namespace ttnn::ccl {
 
@@ -43,19 +46,18 @@ args_list_t emit_compile_time(const Shape4D<T>& /*shape*/) {
     return {};
 }
 
-args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* d, const tt::tt_metal::Tensor& tensor);
-args_list_t legacy_emit_address_generator_runtime_args(
-    const tt::tt_metal::IDevice* d, const tt::tt_metal::Tensor& tensor);
-args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& t);
-args_list_t legacy_emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& tensor);
+args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* d, const Tensor& tensor);
+args_list_t legacy_emit_address_generator_runtime_args(const tt::tt_metal::IDevice* d, const Tensor& tensor);
+args_list_t emit_address_generator_compile_time_args(const Tensor& t);
+args_list_t legacy_emit_address_generator_compile_time_args(const Tensor& tensor);
 
 std::pair<CoreCoord, CoreCoord> shard_grid_from_shard_spec(const tt::tt_metal::ShardSpec& shard_spec);
 
 struct ShardedAddrGenArgBuilder {
-    static bool shard_grid_is_transposed(tt::tt_metal::Tensor const& t);
-    static std::vector<uint32_t> emit_ct_args(tt::tt_metal::Tensor const& t);
-    static std::vector<uint32_t> emit_rt_args(tt::tt_metal::IDevice const* d, tt::tt_metal::Tensor const& t);
-    static void log_sharded_tensor_kernel_args(tt::tt_metal::Tensor const& t, std::string const& prefix);
+    static bool shard_grid_is_transposed(const Tensor& t);
+    static std::vector<uint32_t> emit_ct_args(const Tensor& t);
+    static std::vector<uint32_t> emit_rt_args(const tt::tt_metal::IDevice* d, const Tensor& t);
+    static void log_sharded_tensor_kernel_args(const Tensor& t, const std::string& prefix);
 };
 
 }  // namespace ttnn::ccl

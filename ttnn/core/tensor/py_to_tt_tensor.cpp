@@ -208,7 +208,7 @@ ttnn::Shape estimate_per_device_shard_shape(
     return ttnn::Shape(ttsl::Span<const uint32_t>(dims.data(), dims.size()));
 }
 
-Tensor create_tt_tensor_from_host_data(
+ttnn::Tensor create_tt_tensor_from_host_data(
     HostBuffer& host_buffer,
     DataType src_dtype,
     DataType dst_dtype,
@@ -229,7 +229,7 @@ Tensor create_tt_tensor_from_host_data(
         (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? enable_bfloat_opt : true;
 
     using namespace tt::tt_metal;
-    auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
+    auto create_tensor_from_host_buffer = [&]<typename T>() -> ttnn::Tensor {
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
 
         const bool construct_on_device = can_construct_on_device(
@@ -288,10 +288,11 @@ Tensor create_tt_tensor_from_host_data(
                 device, src_tensor_layout, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
 
         if (can_borrow) {
-            return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
+            return ttnn::Tensor::from_borrowed_data(
+                host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
         }
 
-        return Tensor::from_span(
+        return ttnn::Tensor::from_span(
             ttsl::make_const_span(host_buffer.view_as<T>()),
             TensorSpec(tensor_shape, dst_tensor_layout),
             nullptr,

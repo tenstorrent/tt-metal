@@ -57,6 +57,6 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
 
 // Overload in terms of `Tensor`.
 // Deprecated: Use high-level APIs defined in distributed_tensor.hpp
-tt::tt_metal::Tensor concat(const std::vector<tt::tt_metal::Tensor>& tensors, int dim = 0);
+ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim = 0);
 
 }  // namespace tt::tt_metal::experimental::xtensor

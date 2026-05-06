@@ -16,8 +16,8 @@ struct InterleavedToShardedParams {
 };
 
 struct InterleavedToShardedInputs {
-    tt::tt_metal::Tensor input_tensor;
-    std::optional<tt::tt_metal::Tensor> output_tensor;
+    Tensor input_tensor;
+    std::optional<Tensor> output_tensor;
 };
 
 }  // namespace ttnn::prim

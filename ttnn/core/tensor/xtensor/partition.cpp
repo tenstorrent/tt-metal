@@ -236,7 +236,7 @@ namespace adaptor {
 namespace {
 
 template <typename T>
-Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::TensorLayout& layout, int dim) {
+ttnn::Tensor concat_impl(const std::vector<ttnn::Tensor>& tensors, const tt::tt_metal::TensorLayout& layout, int dim) {
     std::vector<xt::xarray<T>> xtensors;
     xtensors.reserve(tensors.size());
     for (const auto& tensor : tensors) {
@@ -249,7 +249,7 @@ Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::Tenso
 }  // namespace
 }  // namespace adaptor
 
-Tensor concat(const std::vector<Tensor>& tensors, int dim) {
+ttnn::Tensor concat(const std::vector<ttnn::Tensor>& tensors, int dim) {
     TT_FATAL(!tensors.empty(), "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {

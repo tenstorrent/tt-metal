@@ -121,7 +121,7 @@ public:
         config_(config) {}
 
     Tensor operator()(const Tensor& tensor) const {
-        auto extract_logical_data = [this]<typename T>(const tt::tt_metal::Tensor& tensor) -> Tensor {
+        auto extract_logical_data = [this]<typename T>(const Tensor& tensor) -> Tensor {
             const bool data_viewable = tensor.tensor_spec().layout() == tt::tt_metal::Layout::ROW_MAJOR &&
                                        tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape();
             tt::tt_metal::HostBuffer host_buffer = data_viewable ? tt::tt_metal::host_buffer::get_host_buffer(tensor)

@@ -420,8 +420,8 @@ bool RunPipelinedWorkersTest(
 
     // Allocate the tensors - pull to function
     const size_t num_tensors = num_stages + 1;
-    std::vector<Tensor> host_tensors;
-    std::vector<Tensor> device_tensors;
+    std::vector<ttnn::Tensor> host_tensors;
+    std::vector<ttnn::Tensor> device_tensors;
     host_tensors.reserve(num_tensors);
     device_tensors.reserve(num_tensors);
     auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());

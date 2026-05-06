@@ -50,8 +50,8 @@ void safe_fwrite_bytes(
 
 constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 
-void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& tensor, DumpTensorMode mode) {
-    Tensor cpu_tensor = tensor.cpu();
+void dump_tensor_flatbuffer_impl(const std::string& file_name, const ttnn::Tensor& tensor, DumpTensorMode mode) {
+    ttnn::Tensor cpu_tensor = tensor.cpu();
 
     if (mode == DumpTensorMode::DISTRIBUTED_GATHER) {
         // Dump tensor to disk from (global) rank 0 host.
@@ -104,11 +104,11 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
 
 }  // namespace
 
-void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor, DumpTensorMode mode) {
+void dump_tensor_flatbuffer(const std::string& file_name, const ttnn::Tensor& tensor, DumpTensorMode mode) {
     dump_tensor_flatbuffer_impl(file_name, tensor, mode);
 }
 
-Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device) {
+ttnn::Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device) {
     int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
     TT_FATAL(fd != -1, "Cannot open \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
     auto cleanup = ttsl::make_cleanup([fd]() { close(fd); });
@@ -153,7 +153,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDev
         (reinterpret_cast<uintptr_t>(data_region) & (kFlatbufferAlignment - 1)) == 0,
         "Tensor data pointer must be 8-byte aligned!");
 
-    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, ttsl::Span<std::byte>(data_region, data_size), memory_pin);
+    ttnn::Tensor tensor = ttnn::from_flatbuffer(fb_tensor, ttsl::Span<std::byte>(data_region, data_size), memory_pin);
     if (device != nullptr) {
         tensor = tensor.to_device(device, tensor.tensor_spec().memory_config());
     }

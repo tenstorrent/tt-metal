@@ -161,7 +161,7 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<tt::tt_metal::HostBuffer>& buffers) {
     TT_FATAL(buffers.empty(), "Buffers vector must be empty");
-    TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
+    TT_FATAL(!tt::tt_metal::is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
     auto tensor_spec_offset = ttnn::to_flatbuffer(tensor.tensor_spec(), builder);
 

@@ -243,7 +243,7 @@ void to_string(
 }  // namespace detail
 
 template <typename T>
-std::string to_string_impl(const Tensor& tensor) {
+std::string to_string_impl(const ttnn::Tensor& tensor) {
     const auto& shape = tensor.logical_shape();
 
     if (!tensor.is_allocated()) {
@@ -255,14 +255,14 @@ std::string to_string_impl(const Tensor& tensor) {
             tensor.layout());
     }
 
-    auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
+    auto get_row_major_tensor = [&](const ttnn::Tensor& tensor) -> ttnn::Tensor {
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
         }
         if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return to_layout(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+            return ttnn::to_layout(tt::tt_metal::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
         }
-        return to_layout(tensor, Layout::ROW_MAJOR);
+        return ttnn::to_layout(tensor, Layout::ROW_MAJOR);
     };
 
     auto get_host_buffers = [&](const HostStorage& storage) {
@@ -272,7 +272,7 @@ std::string to_string_impl(const Tensor& tensor) {
     };
 
     if (is_cpu_tensor(tensor)) {
-        const Tensor row_major_tensor = get_row_major_tensor(tensor);
+        const ttnn::Tensor row_major_tensor = get_row_major_tensor(tensor);
         const auto strides = row_major_tensor.tensor_spec().compute_strides();
         const std::vector<HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
         std::stringstream ss;
@@ -298,7 +298,7 @@ std::string to_string_impl(const Tensor& tensor) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
     // }
 
-    const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
+    const ttnn::Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
     const auto strides = row_major_tensor.tensor_spec().compute_strides();
     const auto coords = storage.get_coords();
     auto coords_it = coords.begin();
@@ -318,16 +318,16 @@ std::string to_string_impl(const Tensor& tensor) {
 }
 
 template <>
-std::string to_string_impl<bfloat8_b>(const Tensor& tensor) {
+std::string to_string_impl<bfloat8_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
 template <>
-std::string to_string_impl<bfloat4_b>(const Tensor& tensor) {
+std::string to_string_impl<bfloat4_b>(const ttnn::Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
-std::string to_string(const Tensor& tensor) {
+std::string to_string(const ttnn::Tensor& tensor) {
     return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
 }
 
@@ -423,7 +423,7 @@ HostTensor view(
 // ======================================================================================
 
 template <typename T>
-Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     auto* buffer = tensor.buffer();
     auto buffer_shard_shape = buffer->shard_spec().shape();
     tt::tt_metal::Shape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
@@ -431,7 +431,7 @@ Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
     ::detail::ReadShard(*buffer, device_data, core_id);
 
     auto output_buffer = std::vector<T>(std::move(device_data));
-    return Tensor(
+    return ttnn::Tensor(
         HostBuffer(std::move(output_buffer)),
         shard_shape,
         tensor.dtype(),
@@ -440,16 +440,16 @@ Tensor extract_shard_impl(const Tensor& tensor, const uint32_t& core_id) {
 }
 
 template <>
-Tensor extract_shard_impl<bfloat8_b>(const Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<bfloat8_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
 template <>
-Tensor extract_shard_impl<bfloat4_b>(const Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard_impl<bfloat4_b>(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
 }
 
-Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
+ttnn::Tensor extract_shard(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     return dispatch(tensor.dtype(), [&]<typename T>() { return extract_shard_impl<T>(tensor, core_id); });
 }
 

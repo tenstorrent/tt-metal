@@ -12,13 +12,13 @@
 
 namespace tt::tt_metal {
 
-bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
+bool is_cpu_tensor(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
-bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
+bool is_device_tensor(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
 CBDescriptor cb_descriptor_from_sharded_tensor(
     uint8_t cb_index,
-    const Tensor& tensor,
+    const ttnn::Tensor& tensor,
     uint32_t address_offset,
     uint32_t total_size,
     const std::optional<CoreRangeSet>& core_ranges) {
@@ -42,7 +42,7 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
         .global_circular_buffer = nullptr};
 }
 
-std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor& tensor, NOC noc) {
+std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const ttnn::Tensor& tensor, NOC noc) {
     /**
     This function takes in a sharded device tensor (can be legacy 2D sharded or ND sharded) and returns the optimal
     worker cores to launch programs on for the tensor.

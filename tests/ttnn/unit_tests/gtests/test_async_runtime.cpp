@@ -60,11 +60,11 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
         host_data[i] = bfloat16(static_cast<float>(1));
     }
     // Create golden data using tt_eager APIs
-    Tensor np_tensor = ttnn::full(input_shape, static_cast<float>(1), DataType::BFLOAT16, Layout::TILE, *device_);
+    ttnn::Tensor np_tensor = ttnn::full(input_shape, static_cast<float>(1), DataType::BFLOAT16, Layout::TILE, *device_);
     ttnn::SmallVector<int64_t> reduce_dims = {3};
-    Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
-    Tensor np_out_host = np_out.cpu();
-    const Tensor reference_tensor = ttnn::distributed::get_device_tensors(np_out_host).front();
+    ttnn::Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
+    ttnn::Tensor np_out_host = np_out.cpu();
+    const ttnn::Tensor reference_tensor = ttnn::distributed::get_device_tensors(np_out_host).front();
     auto golden_output = host_buffer::get_as<bfloat16>(reference_tensor);
     // Events for host - device synchronization
     // Running sum-reduce with preallocated output
@@ -130,7 +130,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             ttnn::wait_for_event(device_->mesh_command_queue(*workload_dispatch_cq), write_event);
 
             // Run operation on cq 0
-            Tensor output_tensor;
+            ttnn::Tensor output_tensor;
             ttnn::with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::sqrt(input_tensor); });
 
             auto dummy_buffer_0 =

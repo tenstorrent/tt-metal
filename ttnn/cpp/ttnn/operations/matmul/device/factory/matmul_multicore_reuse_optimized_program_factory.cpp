@@ -19,7 +19,6 @@ using tt::tt_metal::ComputeConfigDescriptor;
 using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::ProgramDescriptor;
 using tt::tt_metal::ReaderConfigDescriptor;
-using tt::tt_metal::Tensor;
 using tt::tt_metal::WriterConfigDescriptor;
 
 namespace ttnn::prim {

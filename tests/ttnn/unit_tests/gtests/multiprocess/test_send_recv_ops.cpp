@@ -86,7 +86,7 @@ void test_send_recv_async_(
     auto layout = tensor_spec.layout();
     auto dtype = tensor_spec.data_type();
     if (*(distributed_context->rank()) == *sender_rank) {
-        const Tensor input_tensor =
+        const ttnn::Tensor input_tensor =
             ttnn::distributed::distribute_tensor(
                 ttnn::experimental::view(ttnn::arange(seed, seed + num_elems, 1, dtype), input_shape).to_layout(layout),
                 *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device),

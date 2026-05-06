@@ -111,8 +111,8 @@ SplitProgramFactory::cached_program_t SplitProgramFactory::create(
         "Number of output tensors ({}) must equal number of chunks ({})",
         output_tensors.size(),
         num_chunks);
-    tt::tt_metal::Tensor& out0 = output_tensors[0];
-    tt::tt_metal::Tensor& out1 = output_tensors[1];
+    Tensor& out0 = output_tensors[0];
+    Tensor& out1 = output_tensors[1];
 
     tt::tt_metal::Buffer* out0_buffer = out0.buffer();
     TT_FATAL(out0_buffer != nullptr, "Output 0 buffer should be allocated on device!");

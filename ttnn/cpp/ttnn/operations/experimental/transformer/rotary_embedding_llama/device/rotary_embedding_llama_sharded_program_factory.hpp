@@ -29,13 +29,13 @@ struct RotaryEmbeddingLlamaMultiCoreSharded {
     static cached_program_t create(
         const RotaryEmbeddingLlamaParams& operation_attributes,
         const RotaryEmbeddingLlamaInputs& tensor_args,
-        tt::tt_metal::Tensor& output);
+        Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const RotaryEmbeddingLlamaParams& operation_attributes,
         const RotaryEmbeddingLlamaInputs& tensor_args,
-        tt::tt_metal::Tensor& output);
+        Tensor& output);
 };
 
 }  // namespace ttnn::experimental::prim

@@ -73,7 +73,7 @@ uint32_t get_preferred_noc(
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
+    const Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1076,7 +1076,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
+    const Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1925,8 +1925,8 @@ enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0_program_and_create_override_variables(
     tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
-    const std::vector<tt::tt_metal::Tensor>& b_tensors,
+    const Tensor& a,
+    const std::vector<Tensor>& b_tensors,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -2878,7 +2878,7 @@ void override_program_parameters(
 }
 
 static ProgramDescriptor create_program_mcast_in0_descriptor(
-    const tt::tt_metal::Tensor& a,
+    const Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -3893,7 +3893,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 }
 
 static ProgramDescriptor create_program_mcast_in1_descriptor(
-    const tt::tt_metal::Tensor& a,
+    const Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,

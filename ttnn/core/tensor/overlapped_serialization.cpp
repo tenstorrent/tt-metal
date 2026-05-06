@@ -57,7 +57,7 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
             i);
     }
 
-    Tensor cpu_tensor = views[0].fused_tensor.cpu();
+    ttnn::Tensor cpu_tensor = views[0].fused_tensor.cpu();
     cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
 
     // Build a temporary view list with the CPU-side fused tensor for serialization.

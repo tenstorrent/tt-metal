@@ -9,14 +9,17 @@
 
 namespace tt::tt_metal {
 class CoreRangeSet;
-class Tensor;
 }
+
+namespace ttnn {
+class Tensor;
+}  // namespace ttnn
 
 namespace ttnn::experimental::core_subset_write {
 
 void copy_to_device_filtered(
-    const tt::tt_metal::Tensor& host_tensor,
-    tt::tt_metal::Tensor& device_tensor,
+    const Tensor& host_tensor,
+    Tensor& device_tensor,
     const tt::tt_metal::CoreRangeSet& logical_core_filter,
     std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
 
