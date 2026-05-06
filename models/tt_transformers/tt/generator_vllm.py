@@ -227,6 +227,26 @@ class HybridAttentionForCausalLM(Generator):
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
+        """When invoked outside the vLLM hybrid plugin (e.g. by warmup
+        which only knows about the legacy single ``page_table``), broadcast
+        the single page table to a per-layer list. This is required so
+        trace capture exercises the per-layer code path inside
+        ``Transformer.forward`` — otherwise the trace specializes on the
+        legacy fallback branch and runtime per-layer updates are silently
+        ignored at replay (the trace reads from whatever address the
+        legacy single tensor lived at during capture). The persistent
+        device tensors allocated in ``Transformer._page_tables_to_ttnn``
+        are then bound at trace time and updated in place each call.
+        """
+        if page_tables_per_layer is not None or page_table is None:
+            return page_tables_per_layer
+        # Broadcast the same torch tensor across every layer in every
+        # submesh — content is identical, persistent allocation gives each
+        # layer its own device tensor at a stable address.
+        num_layers = len(self.model[0].layers)
+        return [page_table] * num_layers
+
 
 def initialize_vllm_text_transformer(
     hf_config,
@@ -758,10 +778,24 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
         return _Stash(self.model, page_tables_per_layer)
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        # Push the per-layer block IDs into the persistent device buffers
+        # *before* entering ``Generator.prefill_forward_text`` — that path
+        # may execute a captured trace, which reads block IDs from the
+        # persistent addresses and forbids in-trace writes. Allocation
+        # itself happens lazily in ``Transformer._page_tables_to_ttnn``
+        # the first time the inner forward runs (warmup compile).
+        if page_tables_per_layer is not None:
+            for m in self.model:
+                m.update_persistent_per_layer_page_tables(page_tables_per_layer)
         with self._route_per_layer_page_tables(page_tables_per_layer):
             return super().prefill_forward_text(**kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        if page_tables_per_layer is not None:
+            for m in self.model:
+                m.update_persistent_per_layer_page_tables(page_tables_per_layer)
         with self._route_per_layer_page_tables(page_tables_per_layer):
             # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
             # NotImplementedError placeholder; route to ``Generator``'s
@@ -836,10 +870,21 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         return _Stash(self.model, page_tables_per_layer)
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        # See ``Gemma3ForConditionalGeneration.prefill_forward`` for why
+        # the persistent-buffer update has to happen *before* the inner
+        # decode/prefill path that may run captured traces.
+        if page_tables_per_layer is not None:
+            for m in self.model:
+                m.update_persistent_per_layer_page_tables(page_tables_per_layer)
         with self._route_per_layer_page_tables(page_tables_per_layer):
             return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        if page_tables_per_layer is not None:
+            for m in self.model:
+                m.update_persistent_per_layer_page_tables(page_tables_per_layer)
         with self._route_per_layer_page_tables(page_tables_per_layer):
             # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
             # NotImplementedError placeholder; route to ``Generator``'s

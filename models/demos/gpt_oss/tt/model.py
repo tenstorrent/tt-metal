@@ -423,29 +423,59 @@ class Model:
         return logits
 
     def _page_tables_to_ttnn(self, page_tables_per_layer):
-        """Convert a per-layer list of ``torch.Tensor`` page tables to ttnn
-        tensors on this model's mesh. The vLLM hybrid bridge passes torch
-        tensors because the routing kwarg is opaque to ``Generator``'s
-        existing host→device plumbing; do the conversion here so attention
-        layers always see ttnn tensors. Already-ttnn entries pass through.
+        """Resolve a per-layer torch list to *persistent* ttnn device
+        tensors (allocate-only) — see
+        :meth:`Transformer._page_tables_to_ttnn` for the trace-capture
+        rationale. Same pattern: lazy alloc on first call, updates happen
+        from outside the traced forward via
+        :meth:`update_persistent_per_layer_page_tables`.
         """
         if page_tables_per_layer is None:
             return None
-        converted = []
-        for pt in page_tables_per_layer:
-            if pt is None or isinstance(pt, ttnn.Tensor):
-                converted.append(pt)
-                continue
-            converted.append(
-                ttnn.from_torch(
-                    pt,
-                    device=self.mesh_device,
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        n = len(page_tables_per_layer)
+        if persistent is None or len(persistent) != n:
+            persistent = []
+            for pt in page_tables_per_layer:
+                if pt is None:
+                    persistent.append(None)
+                    continue
+                if isinstance(pt, ttnn.Tensor):
+                    persistent.append(pt)
+                    continue
+                persistent.append(
+                    ttnn.from_torch(
+                        pt,
+                        device=self.mesh_device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    )
                 )
+            self._persistent_per_layer_page_tables = persistent
+        return persistent
+
+    def update_persistent_per_layer_page_tables(self, page_tables_per_layer):
+        """Update content of persistent per-layer page_table device
+        tensors in place — see
+        :meth:`Transformer.update_persistent_per_layer_page_tables`.
+        """
+        if page_tables_per_layer is None:
+            return
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        if persistent is None or len(persistent) != len(page_tables_per_layer):
+            return
+        for i, pt in enumerate(page_tables_per_layer):
+            if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
+                continue
+            host_pt = ttnn.from_torch(
+                pt,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        return converted
+            ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
 
     def ttnn_decode_forward(
         self,
