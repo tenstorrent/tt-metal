@@ -25,6 +25,7 @@ NON_EXPERT_DIR = "non_expert"
 EXPERT_DIR = "experts"
 METADATA_FILENAME = "metadata.safetensors"
 _COPIED_CONFIG_FILES = ("config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json")
+_COPIED_ENCODING_FILES = ("encoding/encoding_dsv4.py", "encoding/README.md")
 
 
 def convert_hf_checkpoint(
@@ -118,6 +119,13 @@ def _copy_config_and_tokenizer_files(source_model_path: Path, output_model_path:
         source = source_model_path / filename
         if source.is_file():
             shutil.copy2(source, output_model_path / filename)
+            copied_files.append(filename)
+    for filename in _COPIED_ENCODING_FILES:
+        source = source_model_path / filename
+        if source.is_file():
+            destination = output_model_path / filename
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
             copied_files.append(filename)
     inference_config = source_model_path / "inference" / "config.json"
     if inference_config.is_file():

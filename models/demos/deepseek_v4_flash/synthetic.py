@@ -31,6 +31,7 @@ def generate_tiny_hf_checkpoint(
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True)
     (output_dir / "inference").mkdir()
+    (output_dir / "encoding").mkdir()
 
     config = tiny_config_dict(
         num_hidden_layers=num_hidden_layers,
@@ -40,8 +41,14 @@ def generate_tiny_hf_checkpoint(
     inference_config = tiny_inference_config_dict(config)
     _write_json(output_dir / "config.json", config)
     _write_json(output_dir / "inference" / "config.json", inference_config)
+    _write_json(output_dir / "generation_config.json", {"bos_token_id": 0, "eos_token_id": 1})
     _write_json(output_dir / "tokenizer_config.json", {"model_max_length": 128})
     _write_json(output_dir / "tokenizer.json", {"version": "1.0", "truncation": None})
+    (output_dir / "encoding" / "encoding_dsv4.py").write_text(
+        "def encode_messages(messages, **kwargs):\n"
+        "    return ''.join(str(message.get('content', '')) for message in messages)\n",
+        encoding="utf-8",
+    )
 
     generator = torch.Generator(device="cpu")
     generator.manual_seed(seed)

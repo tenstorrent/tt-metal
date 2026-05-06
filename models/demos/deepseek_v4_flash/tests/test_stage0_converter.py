@@ -109,8 +109,10 @@ def test_generate_and_convert_tiny_one_layer_checkpoint(tmp_path):
     assert manifest["expert_format"]["abi"] == "deepseek_v4_flash.fp4_e2m1fn_x2.block32.v1"
     assert manifest["artifacts"]["copied_files"] == [
         "config.json",
+        "generation_config.json",
         "tokenizer.json",
         "tokenizer_config.json",
+        "encoding/encoding_dsv4.py",
         "inference_config.json",
     ]
 
