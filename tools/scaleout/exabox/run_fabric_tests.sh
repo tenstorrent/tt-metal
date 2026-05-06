@@ -22,6 +22,10 @@ Optional:
                                         (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
+    --cabling-descriptor-path <path>     Path to cabling descriptor file (.textproto or .csv)
+                                        When provided, get_host_order is used to find the optimal
+                                        host ordering for --hosts and the run is aborted
+                                        if no valid cycle exists.
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
     --help                              Display this help message and exit
 
@@ -44,6 +48,7 @@ MESH_GRAPH_DESC_PATH_EXPLICIT=false
 TEST_BINARY="./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric"
 TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml"
 FILTER=""
+CABLING_DESCRIPTOR_PATH=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -110,6 +115,14 @@ while [[ $# -gt 0 ]]; do
             TEST_CONFIG="$2"
             shift 2
             ;;
+        --cabling-descriptor-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --cabling-descriptor-path requires a non-empty value"
+                exit 1
+            fi
+            CABLING_DESCRIPTOR_PATH="$2"
+            shift 2
+            ;;
         --filter)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
                 echo "Error: --filter requires a non-empty value"
@@ -144,6 +157,40 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     echo ""
     show_help
     exit 1
+fi
+
+# If a cabling descriptor was provided, resolve the optimal host order.
+if [[ -n "$CABLING_DESCRIPTOR_PATH" ]]; then
+    GET_HOST_ORDER="$(dirname "$0")/utils/get_host_order.py"
+    if [[ ! -f "$GET_HOST_ORDER" ]]; then
+        echo "Error: get_host_order.py not found at: $GET_HOST_ORDER"
+        exit 1
+    fi
+
+    ORDERED_HOSTS=$(python3 "$GET_HOST_ORDER" "$CABLING_DESCRIPTOR_PATH" "$HOSTS" 2>&1)
+    EXIT_CODE=$?
+    if [[ $EXIT_CODE -ne 0 ]]; then
+        echo "Error: Failed to find a Hamiltonian cycle through the specified hosts."
+        echo "       $ORDERED_HOSTS"
+        echo "       The hosts may not form a valid interconnected path in the cabling topology."
+        echo "       Aborting to prevent a mid-run failure."
+        exit 1
+    fi
+
+    echo "=========================================="
+    echo "Interconnected host cycle found!"
+    echo "  Original: $HOSTS"
+    echo "  Ordered:  $ORDERED_HOSTS"
+    echo "=========================================="
+    echo ""
+    HOSTS="$ORDERED_HOSTS"
+else
+    echo "=========================================="
+    echo "WARNING: Host order not verified!"
+    echo "  Fabric tests require hosts in a valid interconnected cycle."
+    echo "  Provide --cabling-descriptor-path <file.textproto> to automatically resolve the optimal host order and avoid mid-run failures."
+    echo "=========================================="
+    echo ""
 fi
 
 # Set mesh graph descriptor path based on config if not explicitly provided
