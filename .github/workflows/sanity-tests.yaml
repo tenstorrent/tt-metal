@@ -428,8 +428,8 @@ jobs:
     uses: ./.github/workflows/ttsim.yaml
     secrets: inherit
     with:
-      basic-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-docker-image }}
-      test-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.test-docker-image }}
+      basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.resolve-artifacts.outputs.packages-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true
