@@ -923,28 +923,19 @@ inline uint32_t clamp_to_max_fetch(
 }  // namespace PackedWriteUtils
 
 // SD (slow dispatch) dispatch-buffer constants — consumed by execute_generated_commands.
-// Page size and block count reuse the canonical DispatchSettings values.
-// pages-per-block is derived inside cq_dispatch.cpp as DISPATCH_CB_PAGES / DISPATCH_CB_BLOCKS.
+// Sizes that vary per-arch (dispatch_size, prefetch_q_entries, prefetch_scratch_db_size) are
+// read directly from memmap.settings at call sites; only the truly constexpr knobs live here.
 static constexpr uint32_t SD_DISPATCH_BUFFER_PAGE_SIZE = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-static constexpr uint32_t SD_DISPATCH_BUFFER_SIZE_BYTES = 512 * 1024;
 static constexpr uint32_t SD_PREFETCHER_PAGE_BATCH_SIZE = 1;
-static_assert(SD_DISPATCH_BUFFER_SIZE_BYTES % SD_DISPATCH_BUFFER_PAGE_SIZE == 0);
-static_assert(
-    (SD_DISPATCH_BUFFER_SIZE_BYTES / SD_DISPATCH_BUFFER_PAGE_SIZE) % DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS ==
-    0);
 // spoof_prefetch loop uses (cmd_cb_pages-1)/page_batch_size with no remainder handling
 static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 
-// SD (slow dispatch) prefetch constants - consumed by SDPrefetchTestBase.
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
-static constexpr uint32_t SD_PREFETCH_SCRATCH_DB_SIZE = 128 * 1024;
-static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = 256u * 1024u * 1024u;
-static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = 256u * 1024u * 1024u;
-static constexpr uint32_t SD_PREFETCH_Q_ENTRIES = 1534;
-inline constexpr CoreCoord sd_prefetch_core = {0, 0};    // combined prefetch_hd
-inline constexpr CoreCoord sd_prefetch_d_core = {3, 0};  // kept for spoof_prefetch (FD tests)
+static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+inline constexpr CoreCoord sd_prefetch_core = {0, 0};  // combined prefetch_hd
 
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
@@ -1195,6 +1186,10 @@ inline constexpr CoreCoord sd_dispatch_core = {4, 0};
 // SD drives only the core dispatch fields; all fabric-mux, multi-CQ, go-signal, and downstream
 // fields are zeroed since the spoof path never uses them.
 //
+// completion_queue_{base,size} default to 0 for SD dispatcher tests (no host-text writeback).
+// SD prefetcher tests that exercise host writeback must pass real values - cq_dispatch.cpp
+// computes the host PCIe destination from COMPLETION_QUEUE_BASE_ADDR.
+//
 // KEEP IN SYNC WITH: tt_metal/impl/dispatch/kernel_config/dispatch.cpp (the defines block starting
 // around "Add all the dispatch-specific defines"). If a new define is added or removed there,
 // update this map to match - the failure mode is a kernel compile error.
@@ -1311,9 +1306,11 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_size,
     uint32_t prefetch_q_rd_ptr_addr,
+    uint32_t prefetch_q_pcie_rd_ptr_addr,
     uint32_t cmddat_q_base,
     uint32_t cmddat_q_pages,
     uint32_t scratch_db_base,
+    uint32_t scratch_db_size,
     uint32_t dispatch_cb_base,
     uint32_t dispatch_cb_pages,
     uint32_t dispatch_cb_sem_id,
@@ -1343,11 +1340,11 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"PREFETCH_Q_BASE", std::to_string(prefetch_q_base)},
         {"PREFETCH_Q_SIZE", std::to_string(prefetch_q_size)},
         {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr)},
-        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr + sizeof(uint32_t))},
+        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_pcie_rd_ptr_addr)},
         {"CMDDAT_Q_BASE", std::to_string(cmddat_q_base)},
         {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_pages * SD_PREFETCH_CMDDAT_PAGE_SIZE)},
         {"SCRATCH_DB_BASE", std::to_string(scratch_db_base)},
-        {"SCRATCH_DB_SIZE", std::to_string(SD_PREFETCH_SCRATCH_DB_SIZE)},
+        {"SCRATCH_DB_SIZE", std::to_string(scratch_db_size)},
         {"DOWNSTREAM_SYNC_SEM_ID", std::to_string(downstream_sync_sem_id)},
         {"CMDDAT_Q_PAGES", std::to_string(cmddat_q_pages)},
         {"MY_UPSTREAM_CB_SEM_ID", "0"},  // not used when IS_H_VARIANT=1
@@ -1359,7 +1356,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", "0"},
         {"DISPATCH_S_BUFFER_SIZE", "0"},
         {"DISPATCH_S_CB_LOG_PAGE_SIZE", "0"},
-        {"RINGBUFFER_SIZE", std::to_string(SD_PREFETCH_SCRATCH_DB_SIZE)},
+        {"RINGBUFFER_SIZE", std::to_string(scratch_db_size)},
         {"FABRIC_HEADER_RB_BASE", "0"},
         {"FABRIC_HEADER_RB_ENTRIES", "0"},
         {"MY_FABRIC_SYNC_STATUS_ADDR", "0"},
