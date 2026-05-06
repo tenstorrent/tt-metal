@@ -30,11 +30,17 @@ class RVCInferenceConfig:
     protect: float = 0.33
 
 
-def load_ttnn_pipeline(device, model_config: RVCModelConfig, inference_config: RVCInferenceConfig) -> object:
+def load_ttnn_pipeline(
+    device,
+    model_config: RVCModelConfig,
+    inference_config: RVCInferenceConfig,
+    validation=False,
+    performance_runner=False,
+):
     from models.demos.rvc.tt_impl.vc.pipeline import Pipeline as TTPipeline
 
     ttnn_pipeline = TTPipeline(
-        tt_device=device,
+        device=device,
         if_f0=model_config.if_f0,
         version=model_config.version,
         num=model_config.num,
@@ -44,42 +50,14 @@ def load_ttnn_pipeline(device, model_config: RVCModelConfig, inference_config: R
         index_rate=inference_config.index_rate,
         rms_mix_rate=inference_config.rms_mix_rate,
         protect=inference_config.protect,
+        validation=validation,
+        performance_runner=performance_runner,
     )
     return ttnn_pipeline
 
 
-class RVCTestInfra:
-    def __init__(
-        self,
-        device,
-        inference_config: RVCInferenceConfig,
-        model_config: RVCModelConfig | None = None,
-    ):
-        self.device = device
-        self.num_devices = self.device.get_num_devices()
-        self.batch_size = self.num_devices
-        self.inference_config = inference_config
-        self.model_config = model_config or RVCModelConfig()
-
-        self.ttnn_pipeline = load_ttnn_pipeline(self.device, self.model_config, self.inference_config)
-        self.tt_output = None
-
-    def setup_l1_sharded_input(self, device, torch_input_tensor=None):
-        if isinstance(torch_input_tensor, torch.Tensor):
-            return torch_input_tensor, None
-        raise TypeError(f"Expected preprocessed audio tensor, got {type(torch_input_tensor)!r}")
-
-    def setup_dram_sharded_input(self, device, torch_input_tensor=None):
-        audio_tensor, input_mem_config = self.setup_l1_sharded_input(device, torch_input_tensor)
-        return audio_tensor, None, input_mem_config
-
-    def run(self, input_tensor=None) -> torch.Tensor:
-        audio_tensor, _ = self.setup_l1_sharded_input(self.device, input_tensor)
-        return self.ttnn_pipeline._run_pipeline(audio_tensor)
-
-
 class RVCRunner:
-    def __init__(self):
+    def __init__(self, validation=False):
         self.test_infra = None
         self.device = None
         self.initialized = False
@@ -89,21 +67,31 @@ class RVCRunner:
         device,
         config,
         model_config: RVCModelConfig | None = None,
+        input_tensor_torch: torch.Tensor | None = None,
+        validation=False,
+        performance_runner=False,
     ):
         (
             inference_config,
             normalized_model_config,
         ) = self._normalize_runner_config(config, model_config)
-        self.test_infra = RVCTestInfra(device, inference_config, normalized_model_config)
         self.device = device
+        self.num_devices = self.device.get_num_devices()
+        self.batch_size = self.num_devices
+        self.inference_config = inference_config
+        self.model_config = normalized_model_config or RVCModelConfig()
+        self.ttnn_pipeline = load_ttnn_pipeline(
+            self.device,
+            self.model_config,
+            self.inference_config,
+            validation=validation,
+            performance_runner=performance_runner,
+        )
 
         self.initialized = True
 
     def run(self, torch_input_tensor=None) -> np.ndarray:
-        tt_inputs_host, _ = self.test_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
-        if not self.initialized:
-            raise RuntimeError("Runner is not initialized. Call initialize_inference(...) first.")
-        output = self.test_infra.run(tt_inputs_host)
+        output = self.ttnn_pipeline.run(torch_input_tensor)
         return output
 
     @staticmethod
