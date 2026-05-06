@@ -44,8 +44,16 @@ def normalize_existing_source_file_path(file_path: str | None) -> str | None:
 
 
 def read_source_file_contents(file_path: str) -> str | None:
+    """Read text only after the same existence/resolve checks as path normalization.
+
+    Stack-trace-derived paths are not arbitrary remote input, but we still avoid
+    opening a path that is not a verified regular file on disk.
+    """
+    safe = normalize_existing_source_file_path(file_path)
+    if safe is None:
+        return None
     try:
-        return Path(file_path).read_text(encoding="utf-8", errors="replace")
+        return Path(safe).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 
