@@ -3456,6 +3456,8 @@ class ModelArgs:
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Mistral-Small-3.1-24B": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+            "gemma-3-4b": "google/gemma-3-4b-it",
+            "gemma-3-27b": "google/gemma-3-27b-it",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
