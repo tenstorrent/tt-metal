@@ -425,13 +425,13 @@ class TTSampling(LightweightModule):
                         num_buffers_per_channel=2,
                     )
                 else:
-                    x = self._perform_all_gather(
+                    x = ttnn.all_gather(
                         x,
                         dim=3,
-                        cluster_axis=cluster_axis,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         num_links=self.num_argmax_gather_links,
-                        buffer_key="SAMPLING",
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        cluster_axis=cluster_axis,
+                        topology=self.ag_topology,
                     )
             x_untilized = ttnn.untilize(x, use_multicore=True)
             tt_out_tok = ttnn.argmax(
