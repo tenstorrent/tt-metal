@@ -222,14 +222,15 @@ class ModelArgs:
         """
         if dummy_weights:
             # Build a state dict from a randomly-initialised model — uses the
-            # HF config (already loaded; small) and skips the multi-GB weight
-            # download. Produces the same key set / tensor shapes as the real
-            # checkpoint so the convert_hf_qkv_to_meta_format path below and
-            # all downstream `state_dict[...]` lookups behave identically.
+            # HF config already loaded by __init__ (so any num_hidden_layers
+            # override applied by create_tt_model is honoured) and skips the
+            # multi-GB weight download. Produces the same key set / tensor
+            # shapes as the real checkpoint so the convert_hf_qkv_to_meta_format
+            # path below and all downstream `state_dict[...]` lookups behave
+            # identically.
             from transformers import AutoModelForCausalLM as _AutoModelForCausalLM
 
-            config = AutoConfig.from_pretrained(weights_path, trust_remote_code=True)
-            model = _AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+            model = _AutoModelForCausalLM.from_config(self.hf_config, trust_remote_code=True)
         else:
             # Load actual GPT-OSS weights directly from safetensors files
             # Check if we have a cached torch_state_dict.pt file

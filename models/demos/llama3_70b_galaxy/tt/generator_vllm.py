@@ -31,6 +31,33 @@ def _dummy_weights_from_env() -> bool:
     return enabled
 
 
+_DUMMY_NUM_LAYERS_LOGGED = False
+
+
+def _dummy_num_layers_from_env():
+    """vLLM nightly thin-model-shell override (TT_DUMMY_NUM_LAYERS=N).
+
+    Returns ``int | None``. Companion to TT_DUMMY_WEIGHTS — N=1 cuts cold
+    warmup compile + weight upload by ~10x with no meaningful loss for a
+    smoke test running random weights.
+    """
+    raw = os.environ.get("TT_DUMMY_NUM_LAYERS", "").strip()
+    if not raw:
+        return None
+    try:
+        n = int(raw)
+        if n < 1:
+            raise ValueError(f"must be >= 1, got {n}")
+    except ValueError as exc:
+        logger.warning(f"Ignoring TT_DUMMY_NUM_LAYERS={raw!r}: {exc}")
+        return None
+    global _DUMMY_NUM_LAYERS_LOGGED
+    if not _DUMMY_NUM_LAYERS_LOGGED:
+        logger.info(f"TT_DUMMY_NUM_LAYERS={n} detected; building galaxy TT models with {n} layer(s)")
+        _DUMMY_NUM_LAYERS_LOGGED = True
+    return n
+
+
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
     submesh_devices = [model.mesh_device]
     kv_cache = []
@@ -213,7 +240,7 @@ class LlamaForCausalLM(Generator):
             mesh_device,
             max_batch_size,
             max_seq_len=max_seq_len,
-            n_layers=n_layers,
+            n_layers=n_layers if n_layers is not None else _dummy_num_layers_from_env(),
             dtype=ttnn.bfloat8_b,
             optimizations=LlamaOptimizations.performance,
             dummy_weights=_dummy_weights_from_env(),
@@ -259,7 +286,7 @@ class QwenForCausalLM(Generator):
             mesh_device,
             max_batch_size,
             max_seq_len=max_seq_len,
-            n_layers=n_layers,
+            n_layers=n_layers if n_layers is not None else _dummy_num_layers_from_env(),
             dtype=ttnn.bfloat8_b,
             optimizations=LlamaOptimizations.performance,
             dummy_weights=_dummy_weights_from_env(),

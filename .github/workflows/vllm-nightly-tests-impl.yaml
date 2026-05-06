@@ -349,10 +349,13 @@ jobs:
         LOGURU_LEVEL: INFO
         # Allow HF Hub fetches for config + tokenizer (a few MB / model).
         # Weights are NOT downloaded — TT_DUMMY_WEIGHTS=1 routes the TT model
-        # builder to dummy_weights=True, and we pass --load-format dummy to
-        # vLLM-core so it skips its own weight materialisation too.
+        # builder to dummy_weights=True. TT_DUMMY_NUM_LAYERS=1 builds a
+        # 1-layer shell of every model: smoke-test only cares that the path
+        # runs, and warmup compile + weight upload scale with layer count, so
+        # this cuts cold-cache server-ready time by ~5-15x.
         HF_HUB_OFFLINE: 0
         TT_DUMMY_WEIGHTS: 1
+        TT_DUMMY_NUM_LAYERS: 1
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         FILE_SERVER_PID: "./server.pid"
         FILE_INSTALL_LOG: "./output/vllm_install.log"
