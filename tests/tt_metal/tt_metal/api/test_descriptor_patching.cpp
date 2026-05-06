@@ -94,6 +94,28 @@ TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_AllUint32_NoBindings) {
     EXPECT_TRUE(kd.common_buffer_bindings.empty());
 }
 
+// Regression: emplace_runtime_args must accept nullptr Buffer* as a placeholder for
+// an absent optional tensor.  It emits 0u into the runtime arg slot and registers no
+// binding, so the cache-hit fast path stays valid for ops with optional inputs.
+TEST(DescriptorPatching, EmplaceRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
+    KernelDescriptor kd;
+    Buffer* null_buf = nullptr;
+    kd.emplace_runtime_args({0, 0}, {1u, null_buf, 3u});
+
+    ASSERT_EQ(kd.runtime_args.size(), 1u);
+    EXPECT_EQ(kd.runtime_args[0].second, (std::vector<uint32_t>{1u, 0u, 3u}));
+    EXPECT_TRUE(kd.buffer_bindings.empty());
+}
+
+TEST(DescriptorPatching, EmplaceCommonRuntimeArgs_NullBuffer_EmitsZero_NoBinding) {
+    KernelDescriptor kd;
+    Buffer* null_buf = nullptr;
+    kd.emplace_common_runtime_args({7u, null_buf, 9u});
+
+    EXPECT_EQ(kd.common_runtime_args, (std::vector<uint32_t>{7u, 0u, 9u}));
+    EXPECT_TRUE(kd.common_buffer_bindings.empty());
+}
+
 TEST(DescriptorPatching, RTArgList_Uint32Only_NoBufferBindings) {
     KernelDescriptor kd;
     KernelDescriptor::RTArgList args;
