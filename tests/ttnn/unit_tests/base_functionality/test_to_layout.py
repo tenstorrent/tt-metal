@@ -10,7 +10,16 @@ import torch
 
 import ttnn
 
+<<<<<<< HEAD
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, check_with_pcc_without_tensor_printout
+=======
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_equal,
+    assert_allclose,
+    check_with_pcc_without_tensor_printout,
+)
+>>>>>>> f3d346c27ec (replace assert_with_pcc with assert_equal/assert_allclose in tier-1 data movement and base_functionality tests)
 from models.common.utility_functions import torch_random
 
 
@@ -97,6 +106,10 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_input_tensor, output_tensor)
+<<<<<<< HEAD
+=======
+    assert torch.allclose(torch_input_tensor, output_tensor)
+>>>>>>> f3d346c27ec (replace assert_with_pcc with assert_equal/assert_allclose in tier-1 data movement and base_functionality tests)
 
 
 @pytest.mark.parametrize(
@@ -129,6 +142,10 @@ def test_to_layout_wide_tensor(device, shape, on_device, from_layout, to_layout)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_input_tensor, output_tensor)
+<<<<<<< HEAD
+=======
+    assert torch.allclose(torch_input_tensor, output_tensor)
+>>>>>>> f3d346c27ec (replace assert_with_pcc with assert_equal/assert_allclose in tier-1 data movement and base_functionality tests)
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
@@ -282,7 +299,10 @@ def test_to_layout_sharded(dtype, device):
 
     output = ttnn.to_layout(ttnn_input_tensor1, ttnn.ROW_MAJOR_LAYOUT)
 
-    assert_with_pcc(torch_input_tensor1, ttnn.to_torch(output), 0.9999)
+    if dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_input_tensor1, ttnn.to_torch(output), rtol=1e-2, atol=1e-2)
+    else:
+        assert_equal(torch_input_tensor1, ttnn.to_torch(output))
 
 
 @pytest.mark.parametrize("batch_size", [9, 32])
@@ -999,6 +1019,10 @@ def _run_to_layout_nd_sharded(device, tensor_shape, input_mem_config, target_lay
     output_torch = ttnn.to_torch(output_tensor)
     assert tuple(output_torch.shape) == tuple(tensor_shape)
     assert_equal(torch_input, output_torch)
+<<<<<<< HEAD
+=======
+    assert torch.allclose(torch_input, output_torch)
+>>>>>>> f3d346c27ec (replace assert_with_pcc with assert_equal/assert_allclose in tier-1 data movement and base_functionality tests)
 
 
 @pytest.mark.parametrize(

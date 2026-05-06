@@ -9,7 +9,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
@@ -83,7 +83,10 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
         pcc_torch_result = torch_result.to(torch.int32)
         pcc_output = output.to(torch.int32)
 
-    assert_with_pcc(pcc_torch_result, pcc_output, 0.9999)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        assert_allclose(pcc_torch_result, pcc_output, rtol=1e-2, atol=1e-2)
+    else:
+        assert_equal(pcc_torch_result, pcc_output)
 
 
 @pytest.mark.parametrize("layout", layouts)

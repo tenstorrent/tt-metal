@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_allclose, tt_dtype_to_torch_dtype
 
 
 @pytest.mark.parametrize(
@@ -145,9 +145,10 @@ def test_narrow(input_shape, dim, start, length, memory_config, layout, dtype, d
     assert memory_config.buffer_type == ttnn_output.memory_config().buffer_type
     assert memory_config.memory_layout == ttnn_output.memory_config().memory_layout
     output = ttnn.to_torch(ttnn_output)
-    if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
-        target_pcc = 0.95 if dtype == ttnn.bfloat4_b else 0.99
-        assert_with_pcc(torch_result, output, target_pcc)
+    if dtype == ttnn.bfloat8_b:
+        assert_allclose(torch_result, output, rtol=1e-2, atol=1e-2)
+    elif dtype == ttnn.bfloat4_b:
+        assert_with_pcc(torch_result, output, 0.95)
     else:
         assert_equal(torch_result, output)
 
@@ -217,4 +218,4 @@ def test_narrow_regression(input_shape, dim, start, length, memory_config, layou
     assert memory_config.buffer_type == ttnn_output.memory_config().buffer_type
     assert memory_config.memory_layout == ttnn_output.memory_config().memory_layout
     output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_result, output, 0.99)
+    assert_allclose(torch_result, output, rtol=1e-2, atol=1e-2)
