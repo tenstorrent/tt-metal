@@ -248,24 +248,22 @@ void kernel_main() {
             }
             // We don't pop cb_dycopy here.
 
-            // Compute cb_ydy and cb_ydyadd
+            // PARTIAL migration: cb_ydy = cb_y * cb_dycopy (single tile, both WaitAndPop).
+            //   migrated: BinaryFpu(Mul) + PackTile chain.
             constexpr auto cb_ydy = cb_tmp3;
-            // Compute cb_ydy
-            tile_regs_acquire();
-            cb_wait_front(cb_y, onetile);
-            cb_reserve_back(cb_ydy, onetile);
-
-            mul_tiles_init_with_dt(cb_y, cb_dycopy);
-            mul_tiles(cb_y, cb_dycopy, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_ydy);
-
-            cb_pop_front(cb_y, onetile);
-            cb_pop_front(cb_dycopy, onetile);
-            cb_push_back(cb_ydy, onetile);
-            tile_regs_release();
+            {
+                using namespace compute_kernel_lib;
+                using MulElt = BinaryFpu<
+                    cb_y, cb_dycopy, BinaryFpuOp::Mul, BroadcastDim::None,
+                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                eltwise_chain(
+                    onetile,
+                    MulElt{},
+                    PackTile<cb_ydy, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+                             PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+            }
 
             // Compute cb_ydyadd
             if (wt == 0) {
@@ -418,23 +416,25 @@ void kernel_main() {
                 tile_regs_release();
             }
 
-            // Compute cb_ndy
-            // n * dy
+            // PARTIAL migration: cb_ndy = cb_n_recip_n[0] * cb_dycopy.
+            //   migrated: BinaryFpu(Mul) + PackTile chain.
             constexpr auto cb_ndy = cb_tmp1;
-            tile_regs_acquire();
-            cb_wait_front(cb_dycopy, onetile);
-            cb_reserve_back(cb_ndy, onetile);
-
-            mul_tiles_init_with_dt(cb_n_recip_n, cb_dycopy);
-            mul_tiles(cb_n_recip_n, cb_dycopy, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_ndy);
-
-            cb_pop_front(cb_dycopy, onetile);
-            cb_push_back(cb_ndy, onetile);
-            tile_regs_release();
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format(cb_n_recip_n, cb_dycopy);
+            pack_reconfig_data_format(cb_ndy);
+#endif
+            {
+                using namespace compute_kernel_lib;
+                using MulElt = BinaryFpu<
+                    cb_n_recip_n, cb_dycopy, BinaryFpuOp::Mul, BroadcastDim::None,
+                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::None,
+                    CopyTilePolicy::NoWaitNoPop, CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                eltwise_chain(
+                    onetile,
+                    MulElt{},
+                    PackTile<cb_ndy, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+            }
 
             // Compute cb_ndymdysum
             // n * dy - Sum[dy]

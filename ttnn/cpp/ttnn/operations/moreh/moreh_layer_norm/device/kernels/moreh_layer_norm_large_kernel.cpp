@@ -272,18 +272,18 @@ void kernel_main() {
             cb_wait_front(cb_xmm2, block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 if (inner_idx == 0 && j == 0) {
-                    tile_regs_acquire();
-                    cb_reserve_back(cb_xmm2sum, onetile);
-
-                    copy_tile_init_with_dt(cb_xmm2);
-                    copy_tile(cb_xmm2, first_tile, dst0);
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    pack_tile_with_dt(dst0, cb_xmm2sum);
-
-                    cb_push_back(cb_xmm2sum, onetile);
-                    tile_regs_release();
+                    // PARTIAL migration: seed cb_xmm2sum with first cb_xmm2 tile (no pop on cb_xmm2).
+#if defined FP32_DEST_ACC_EN
+                    reconfig_data_format_srca(cb_xmm2);
+                    pack_reconfig_data_format(cb_xmm2sum);
+#endif
+                    {
+                        using namespace compute_kernel_lib;
+                        eltwise_chain(
+                            onetile,
+                            CopyTile<cb_xmm2, Dst::D0, CopyTilePolicy::NoWaitNoPop>{},
+                            PackTile<cb_xmm2sum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+                    }
                 } else {
                     tile_regs_acquire();
                     cb_wait_front(cb_xmm2sum, onetile);

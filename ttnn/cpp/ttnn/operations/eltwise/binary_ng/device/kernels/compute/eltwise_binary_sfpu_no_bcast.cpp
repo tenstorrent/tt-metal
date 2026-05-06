@@ -200,10 +200,10 @@ void kernel_main() {
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
     BINARY_SFPU_INIT
     // No-activations fast path — block-mode chain with stride-2 DEST scratch.
-    using LhsLoad = BlockCopyTileStride2Lhs<cb_post_lhs, cb_post_rhs, num_tiles_per_cycle>;
-    using RhsLoad = BlockCopyTileStride2Rhs<cb_post_rhs, cb_post_lhs, num_tiles_per_cycle>;
+    using LhsLoad = BlockCopyTileStride2Lhs<(uint32_t)cb_post_lhs, (uint32_t)cb_post_rhs, num_tiles_per_cycle>;
+    using RhsLoad = BlockCopyTileStride2Rhs<(uint32_t)cb_post_rhs, (uint32_t)cb_post_lhs, num_tiles_per_cycle>;
     using SfpuStage = LocalBlockSfpuBinary<num_tiles_per_cycle>;
-    using PackStage = BlockPackTileStride2<cb_out, num_tiles_per_cycle>;
+    using PackStage = BlockPackTileStride2<(uint32_t)cb_out, num_tiles_per_cycle>;
 
     const uint32_t num_blocks = num_tiles / num_tiles_per_cycle;
     eltwise_chain(num_blocks, LhsLoad{}, RhsLoad{}, SfpuStage{}, PackStage{});
