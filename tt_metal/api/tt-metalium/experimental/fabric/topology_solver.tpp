@@ -683,7 +683,7 @@ const std::map<TargetNode, std::set<GlobalNode>>& MappingConstraints<TargetNode,
 }
 
 template <typename TargetNode, typename GlobalNode>
-const std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>>&
+const typename MappingConstraints<TargetNode, GlobalNode>::CardinalityConstraintList&
 MappingConstraints<TargetNode, GlobalNode>::get_cardinality_constraints() const {
     return cardinality_constraints_;
 }
@@ -932,7 +932,7 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
-    const std::set<std::pair<TargetNode, GlobalNode>>& mapping_pairs, size_t min_count) {
+    const CardinalityPairSet& mapping_pairs, size_t min_count) {
     if (mapping_pairs.empty()) {
         log_info(tt::LogFabric, "Cardinality constraint requires at least one mapping pair");
         return false;
@@ -1689,7 +1689,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
         // Only add the constraint if we have at least min_count valid pairs
         if (indexed_pairs.size() >= min_count) {
-            cardinality_constraints.emplace_back(std::move(indexed_pairs), min_count);
+            cardinality_constraints.push_back({std::move(indexed_pairs), min_count});
         } else {
             log_warning(
                 tt::LogFabric,

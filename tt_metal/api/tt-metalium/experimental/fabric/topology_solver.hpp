@@ -110,6 +110,13 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_phy
 template <typename TargetNode, typename GlobalNode>
 class MappingConstraints {
 public:
+    /// A set of (target, global) node pairs used in one cardinality constraint.
+    using CardinalityPairSet = std::set<std::pair<TargetNode, GlobalNode>>;
+    /// One cardinality constraint: (pair_set, min_count).
+    using CardinalityConstraintEntry = std::pair<CardinalityPairSet, size_t>;
+    /// The full list of cardinality constraints stored by this object.
+    using CardinalityConstraintList = std::vector<CardinalityConstraintEntry>;
+
     /**
      * @brief Construct empty constraints
      */
@@ -304,8 +311,7 @@ public:
      * @param min_count Minimum number of pairs that must be satisfied (default: 1)
      * @return true if constraint was successfully added, false if constraint is invalid or unsatisfiable
      */
-    bool add_cardinality_constraint(
-        const std::set<std::pair<TargetNode, GlobalNode>>& mapping_pairs, size_t min_count = 1);
+    bool add_cardinality_constraint(const CardinalityPairSet& mapping_pairs, size_t min_count = 1);
 
     /**
      * @brief Add many-to-many cardinality constraint (convenience method)
@@ -370,11 +376,9 @@ public:
     /**
      * @brief Get all cardinality constraints (for solver access)
      *
-     * @return const std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>>&
-     *         Vector of (mapping_pairs, min_count) tuples representing cardinality constraints
+     * @return Vector of (mapping_pairs, min_count) tuples representing cardinality constraints
      */
-    const std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>>& get_cardinality_constraints()
-        const;
+    const CardinalityConstraintList& get_cardinality_constraints() const;
 
     /**
      * @brief Set same-group constraint (for UNSET host rank binding)
@@ -446,9 +450,9 @@ private:
     // Allows add_forbidden_constraint to work without seeding valid_mappings_.
     std::set<std::pair<TargetNode, GlobalNode>> forbidden_pairs_;
 
-    // Cardinality constraints: vector of (mapping_pairs, min_count) tuples
-    // Each constraint requires that at least min_count of the mapping_pairs must be satisfied
-    std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>> cardinality_constraints_;
+    // Cardinality constraints: each entry requires that at least min_count of its
+    // (target, global) node pairs must be satisfied by the mapping.
+    CardinalityConstraintList cardinality_constraints_;
 
     // Same-group constraint: targets in a target group map to at most one global group
     std::vector<std::set<TargetNode>> same_rank_target_groups_;
@@ -657,6 +661,13 @@ struct GraphIndexData {
     void print_adjacency_maps() const;
 };
 
+/// A cardinality constraint in index form: at least @c min_count of the
+/// (target_idx, global_idx) @c pairs must be satisfied by the final mapping.
+struct IndexedCardinalityConstraint {
+    std::set<std::pair<size_t, size_t>> pairs;  ///< (target_idx, global_idx) index pairs
+    size_t min_count = 0;                        ///< Minimum number of pairs that must be mapped
+};
+
 /**
  * @brief Indexed constraint representation for efficient lookups
  *
@@ -677,9 +688,9 @@ struct ConstraintIndexData {
     // Used for optimization, doesn't restrict valid mappings
     std::vector<std::vector<size_t>> preferred_global_indices;
 
-    // Cardinality constraints: vector of (mapping_pairs_as_indices, min_count) tuples
-    // Each constraint requires that at least min_count of the (target_idx, global_idx) pairs must be satisfied
-    std::vector<std::pair<std::set<std::pair<size_t, size_t>>, size_t>> cardinality_constraints;
+    // Cardinality constraints: each entry requires that at least min_count of its
+    // (target_idx, global_idx) pairs are satisfied by the mapping.
+    std::vector<IndexedCardinalityConstraint> cardinality_constraints;
 
     // Same-group: target_idx/global_idx -> group_id (-1 or SIZE_MAX if not in any group)
     std::vector<int> global_to_same_rank_group;
@@ -800,7 +811,7 @@ struct TopologySatConstraintView {
     const std::vector<std::vector<size_t>>& restricted_global_indices;
     const std::vector<std::vector<size_t>>& forbidden_global_indices;
     const std::vector<std::vector<size_t>>& preferred_global_indices;
-    const std::vector<std::pair<std::set<std::pair<size_t, size_t>>, size_t>>& cardinality_constraints;
+    const std::vector<IndexedCardinalityConstraint>& cardinality_constraints;
     const std::vector<int>& global_to_same_rank_group;
     const std::vector<std::set<size_t>>& same_rank_groups;
     const std::vector<size_t>& target_to_group;

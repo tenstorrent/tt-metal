@@ -772,12 +772,10 @@ bool topology_sat_encode_cardinality_constraints(
     static constexpr size_t kMaxCardinalityCombClauses = 500000;
 
     for (const auto& card_entry : constraint_data.cardinality_constraints) {
-        const auto& pair_set = card_entry.first;
-        const size_t min_count = card_entry.second;
+        const auto& pair_set = card_entry.pairs;
+        const size_t min_count = card_entry.min_count;
         std::set<int> distinct_lits;
-        for (const auto& pr : pair_set) {
-            const size_t ti = pr.first;
-            const size_t gi = pr.second;
+        for (const auto& [ti, gi] : pair_set) {
             if (ti >= enc.allowed_global_idx.size()) {
                 continue;
             }
