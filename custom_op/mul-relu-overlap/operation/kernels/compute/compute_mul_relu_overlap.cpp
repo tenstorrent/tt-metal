@@ -48,16 +48,21 @@ void kernel_main() {
 #ifdef OVERLAP_MATH_PACK
         tile_regs_commit();
 
-        // tile_regs_wait();
+        // ~ tile_regs_wait();
+        // Difference: we have to stall CFG because of Dst register flipping
+        // Indeed, if we don't then flipping could happen before FPU completion
+        // (potential data race with Unpack/Math)
         PACK(TTI_SEMWAIT(
                  p_stall::STALL_TDMA | p_stall::STALL_CFG,
                  semaphore::t6_sem(semaphore::MATH_PACK),
                  p_stall::STALL_ON_ZERO););
+        // Flip Halves of Dst register (modifies backend configuration)
         PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()););
 
         // SFPU: relu(DST[0]) in place
         PACK(relu_packthread_tile_init(); relu_packthread_tile(0);)
 
+        // Do not issue PACK instructions while any instruction is running on SFPU
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);)
 #else
         relu_tile_init();
