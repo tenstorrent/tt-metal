@@ -38,7 +38,7 @@ def test_deepseek_v3_moe_perf_loudbox():
     8x4 total from the same two CSVs (no extra device work).
     """
     run_moe_perf_with_approximation(
-        command_8x1=_CMD_8X1,
+        command_8x1=_CMD_2X4,
         expected_ns_8x1=98_450_541,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
