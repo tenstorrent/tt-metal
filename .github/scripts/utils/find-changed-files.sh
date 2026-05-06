@@ -32,6 +32,7 @@ LLK_TESTS_CHANGED=false
 LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
+FABRIC_CPU_TESTS_CHANGED=false
 
 
 while IFS= read -r FILE; do
@@ -78,6 +79,13 @@ while IFS= read -r FILE; do
         .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
+        # Fabric and distributed sources — must come before the generic tt_metal/** catch-all
+        # so all file types (mesh descriptors, textprotos, shell scripts) are also caught.
+        tt_metal/tt_fabric/**|tt_metal/distributed/**)
+            FABRIC_CPU_TESTS_CHANGED=true
+            TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
         tt_metal/**/*.@(h|hpp|c|cpp|cc|py))
             TTMETALIUM_CHANGED=true
             ANY_CODE_CHANGED=true
@@ -95,6 +103,14 @@ while IFS= read -r FILE; do
             ;;
         ttnn/**/*.@(h|hpp|c|cpp|py))
             TTNN_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
+        # Fabric test sources and runner scripts — must come before the generic
+        # tests/tt_metal/** catch-all so non-source files (mesh descriptors, textprotos,
+        # shell scripts) are also caught, and so the narrower flag is set independently.
+        tests/tt_metal/tt_fabric/**|tests/tt_metal/distributed/**|tests/scripts/multihost/**)
+            FABRIC_CPU_TESTS_CHANGED=true
+            TTMETALIUM_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
         tests/tt_metal/**/*.@(h|hpp|c|cpp|py))
@@ -135,6 +151,7 @@ while IFS= read -r FILE; do
         .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml|.github/workflows/ttsim.yaml|.github/workflows/fabric-cpu-only-tests-impl.yaml)
             BUILD_WORKFLOWS_CHANGED=true
             ANY_CODE_CHANGED=true
+            FABRIC_CPU_TESTS_CHANGED=true
             ;;
     esac
 done <<< "$CHANGED_FILES"
@@ -200,6 +217,7 @@ declare -A changes=(
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
+    [fabric-cpu-tests-changed]=$FABRIC_CPU_TESTS_CHANGED
 )
 
 for var in "${!changes[@]}"; do
@@ -209,3 +227,4 @@ for var in "${!changes[@]}"; do
         echo "$var=${changes[$var]}" >> "$GITHUB_OUTPUT"
     fi
 done
+
