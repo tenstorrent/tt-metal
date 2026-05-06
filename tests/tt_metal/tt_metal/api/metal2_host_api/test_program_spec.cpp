@@ -2208,9 +2208,9 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 // require restructuring tensor_accessor.h to isolate the constexpr-only parts.
 
 TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
-    // DM kernel uses make_tensor_accessor + a NoC-using method on the resulting accessor.
-    // Exercises: ta:: namespace token, type alias <name>_t, factory function, CTAD on the
-    // existing (args, addr) deduction guide, get_common_arg_val for the implicit base address.
+    // DM kernel constructs a TensorAccessor from a binding token + invokes a NoC-using method.
+    // Exercises: ta:: namespace token, type alias <name>_t, the token ctor and its deduction
+    // guide, get_common_arg_val for the implicit base address.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -2219,7 +2219,7 @@ TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    auto accessor = make_tensor_accessor(ta::input_tensor);
+    TensorAccessor accessor(ta::input_tensor);
     auto noc_addr = accessor.get_noc_addr(0);
     (void)noc_addr;
 }

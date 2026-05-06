@@ -69,7 +69,6 @@ struct ProgramRunParams {
         TensorParameterName tensor_parameter_name;
 
         // The actual MeshTensor argument
-        // TODO: replace with MeshTensorView
         std::reference_wrapper<const MeshTensor> tensor;
     };
     // TensorArg must be specified for every TensorParameter declared in the ProgramSpec.

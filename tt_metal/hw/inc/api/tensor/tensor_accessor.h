@@ -24,6 +24,10 @@ template <typename T>
 T get_arg_val(int arg_idx);
 
 namespace tensor_accessor {
+
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+struct TensorAccessorBindingToken;  // definition below
+
 // This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
 //      Adds proper xy coordinates for NOC address
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -80,6 +84,16 @@ public:
         const size_t bank_base_address_in,
         const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::AlignedPageSize) :
         dspec_instance(args), bank_base_address(bank_base_address_in), aligned_page_size(page_size_in) {}
+
+    // Construct TensorAccessor directly from a Metal 2.0 binding token.
+    // The token instance is emitted by host codegen into kernel_bindings_generated.h,
+    // based on the information in the user's host code (ProgramSpec).
+    // Delegates to the legacy TensorAccessorArgs ctor.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+    TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
+        TensorAccessor(
+            TensorAccessorArgs<CTA_OFFSET>{},
+            static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -324,6 +338,16 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}),
         aligned_page_size(page_size_in) {}
 
+    // Construct TensorAccessor directly from a Metal 2.0 binding token.
+    // The token instance is emitted by host codegen into kernel_bindings_generated.h,
+    // based on the information in the users's host code (ProgramSpec).
+    // Delegates to the legacy TensorAccessorArgs ctor.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+    TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
+        TensorAccessor(
+            TensorAccessorArgs<CTA_OFFSET>{},
+            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {}
+
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
         DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
@@ -415,6 +439,35 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
 
+// CTAD deduction guide for the Metal 2.0 binding-token ctor.
+// Mirrors the (args, size_t) guide above, using TensorAccessorArgs<CTA_OFFSET> as the static
+// layout source. So, the same DSpec (and same specialization) is selected.
+// NOTE: Currently Metal 2.0 tensor bindings only support CTA TensorAccessorArgs.
+//       This anticipates dynamic support (coming soon) and also maintains symmetry with the
+//       legacy API's deduction guide above.
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>)
+    -> TensorAccessor<tensor_accessor::DistributionSpec<
+        /* RankCT */ TensorAccessorArgs<CTA_OFFSET>::RankCT,
+        /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET>::NumBanksCT,
+        /* TensorShapeWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
+            !TensorAccessorArgs<CTA_OFFSET>::tensor_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET>::TensorShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET>::RankCT>::type,
+        /* ShardShapeWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
+            !TensorAccessorArgs<CTA_OFFSET>::shard_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET>::ShardShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET>::RankCT>::type,
+        /* BankCoordsWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorPackedU16<
+            !TensorAccessorArgs<CTA_OFFSET>::bank_coords_is_crta,
+            TensorAccessorArgs<CTA_OFFSET>::BankCoordsCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET>::NumBanksCT>::type,
+        /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET>::is_sharded,
+        /* IsDram */ TensorAccessorArgs<CTA_OFFSET>::is_dram>>;
+
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
@@ -481,20 +534,39 @@ auto make_tensor_accessor_tuple(const std::tuple<Args...>& args, uint32_t addres
         args, address_rt_arg_index_start, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
 
+// Convention:
+//  - main TensorAccessor public API is in the global namespace
+//  - public API opaque types live in tensor_accessor namespace
 namespace tensor_accessor {
 
-// TensorAccessorBindingToken: codegen-emitted handle for a Metal 2.0 ProgramSpec TensorAccessor
-// binding. Pairs the binding's static layout (TensorAccessorArgs<CTA_OFFSET>) with the byte offset
-// of its implicit base-address CRTA — the slot SetProgramRunParameters fills from the binding's
-// TensorArg entry at enqueue time.
+// TensorAccessorBindingToken:
 //
-// Kernel authors don't construct this directly. Codegen emits a per-binding instance into the
-// `ta::` namespace (see kernel_bindings_generated.h). Use `make_tensor_accessor(ta::name)` at the
-// call site to construct a TensorAccessor.
+// == What is it? ==
+// This is a codegen-emitted handle for a Metal 2.0 kernel's tensor binding.
+// The user never interacts with this type directly; they use an opaque token (defined in the
+// auto-generated kernel_bindings_generated.h) to construct the TensorAccessor directly.
 //
-// Per-binding type alias `<name>_t` is generated alongside the value, providing forward-extension
-// surface for adding token metadata (per-kernel access patterns, alignment hints, etc.) without
-// touching kernel source.
+// The user's kernel code looks like:
+//  auto ta = TensorAccessor(ta::my_host_declared_accessor_name);
+//
+// No more fussing around with TensorAccessorArgs!
+// All of the boilerplate, nasty args offset logic, and raw base pointer are now fully hidden
+// from the kernel author.
+//
+// == How does it work? ==
+// For each kernel tensor binding, headergen emits the following into kernel_bindings_generated.h:
+//   - A type alias:  using my_TA_name_t = TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>;
+//   - A token value: constexpr my_TA_name_t my_TA_name{};
+//
+// This indirection gives us ultimate future-proofing flexibility over what actually goes into the
+// TensorAccessorBindingToken. We can change TensorAccessorBindingToken at any time, or add a
+// wrapper-type indirection, all without disturbing any existing Metal 2.0 kernel code.
+// (Probably overkill, but cheap insurance.)
+//
+// == Current limitations ==
+// The Metal 2.0 binding flow currently packs all DSpec metadata (shape, shard shape, bank coords)
+// as (static) CTAs; the (dynamic) CRTA-based metadata is a planned follow-up.
+//
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
 struct TensorAccessorBindingToken {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
@@ -503,17 +575,6 @@ struct TensorAccessorBindingToken {
 };
 
 }  // namespace tensor_accessor
-
-// Construct a TensorAccessor from a Metal 2.0 binding token.
-// Reads the per-enqueue base address from the implicit CRTA at the token's addr_crta_offset, and
-// delegates to the existing TensorAccessor(args, address) ctor — the deduction guide on that ctor
-// handles selecting the right specialization (interleaved vs sharded, DRAM vs L1, etc).
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-inline auto make_tensor_accessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) {
-    return TensorAccessor(
-        TensorAccessorArgs<CTA_OFFSET>{},
-        static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))));
-}
 
 /**
  * @brief AbstractTensorAccessorWrapper provides a unified interface over templated tensor accessors.
