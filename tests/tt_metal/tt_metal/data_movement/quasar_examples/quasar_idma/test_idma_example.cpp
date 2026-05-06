@@ -31,7 +31,6 @@ constexpr auto kIdma1DStrided =
 static void run_kernel(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& kernel_path,
-    const std::string& program_id,
     experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compile_time_arg_bindings) {
     constexpr const char* DM_KERNEL = "idma";
     const experimental::metal2_host_api::NodeCoord node{0, 0};
@@ -54,7 +53,7 @@ static void run_kernel(
     };
 
     experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = program_id,
+        .program_id = "idma",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
         // TODO(quasar-firmware): Remove once the dmk.cc thread_0_hartid bug is fixed.
@@ -94,7 +93,7 @@ bool run_idma_basic_test(const std::shared_ptr<distributed::MeshDevice>& mesh_de
     }
     tt_metal::detail::WriteToDeviceL1(device, core, src_base, src_data);
 
-    run_kernel(mesh_device, kIdmaBasic, "idma_basic", {{"src_addr", src_base}, {"dst_addr", dst_base}});
+    run_kernel(mesh_device, kIdmaBasic, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
     tt_metal::detail::ReadFromDeviceL1(device, core, dst_base, total_bytes, dst_data);
@@ -147,7 +146,7 @@ bool run_idma_1d_strided_test(const std::shared_ptr<distributed::MeshDevice>& me
         }
     }
 
-    run_kernel(mesh_device, kIdma1DStrided, "idma_1d_strided", {{"src_addr", src_base}, {"dst_addr", dst_base}});
+    run_kernel(mesh_device, kIdma1DStrided, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
     tt_metal::detail::ReadFromDeviceL1(device, core, dst_base, num_elements * elem_size, dst_data);
