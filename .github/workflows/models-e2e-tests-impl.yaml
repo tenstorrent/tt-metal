@@ -61,7 +61,7 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Apply tier and model filters
+      - name: Apply tier and model filters, then group by model
         id: apply-filters
         run: |
           MATRIX='${{ steps.build-matrix.outputs.matrix }}'
@@ -71,12 +71,19 @@ jobs:
           if [ "${{ inputs.model }}" != "all" ]; then
             FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model | test($m; "i"))]')
           fi
-          if [ "$FILTERED" = "[]" ]; then
+          # Group by model_group (falling back to model). One matrix entry per
+          # group; each group will dispatch to the per-model reusable workflow,
+          # which renders as a collapsible group in the Actions UI.
+          GROUPED=$(echo "$FILTERED" | jq -c '
+            [ group_by(.model_group // .model)[]
+              | { model: (.[0].model_group // .[0].model), tests: . } ]
+          ')
+          if [ "$GROUPED" = "[]" ]; then
             echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
             echo "matrix=[]" >> $GITHUB_OUTPUT
           else
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
-            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "$GROUPED" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
@@ -86,73 +93,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
-    name: ${{ matrix.test-group.name }}
-    runs-on: ${{ matrix.test-group.runs_on }}
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        HF_HUB_OFFLINE: 1
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
-        LOGURU_LEVEL: INFO
-        GTEST_OUTPUT: xml:/work/generated/test_reports/
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
-      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job
-      - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ${{ matrix.test-group.name }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports
-          ${{ matrix.test-group.cmd }}
-      - name: Save environment data
-        id: save-environment-data
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          if [ -d "generated/benchmark_data" ]; then
-            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
-          else
-            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
-            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
-          fi
-      - name: Upload benchmark data
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
-        with:
-          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
-          path: /work
-          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - name: Generate gtest annotations on failure
-        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
+        group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.group.model }}
+    uses: ./.github/workflows/models-e2e-per-model.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      model: ${{ matrix.group.model }}
+      tests-json: ${{ toJson(matrix.group.tests) }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only }}

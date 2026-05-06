@@ -9,20 +9,26 @@ This script:
 4. Outputs the filtered matrix as JSON
 
 Usage:
-    python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>
+    python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path> [--group-by-model]
 
 enabled_skus is a comma-separated list, or the literal ALL_SKUS_IN_TESTS to enable every SKU
 key that appears under any test entry's skus mapping in the tests YAML.
 
+Pass --group-by-model to emit a list of {model, tests:[...]} entries instead of a flat list.
+Each group's tests share the same `model` value. This is intended for pipelines that want
+the GitHub Actions UI to render one collapsible group per model.
+
 Examples:
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml
+    python prepare_test_matrix.py tests/pipeline_reorg/models_e2e_tests.yaml "wh_n150" .github/sku_config.yaml --group-by-model
 """
 
 import yaml
 import json
 import sys
 import os
+from collections import OrderedDict
 
 ALL_SKUS_IN_TESTS = "ALL_SKUS_IN_TESTS"
 
@@ -193,22 +199,50 @@ def build_test_matrix(tests, enabled_skus, sku_config):
     return filtered_tests
 
 
+def group_matrix_by_model(matrix):
+    """
+    Group flat matrix entries by their `model_group` field (falling back to `model`).
+
+    Returns a list of {"model": <name>, "tests": [<entry>, ...]} dicts. Order of
+    groups follows first appearance in the input matrix; order of tests within a
+    group is preserved.
+
+    `model_group` lets multiple test entries that share a model (e.g. the standard
+    Llama 3.1-8B run and its data-parallel variant) collapse under a single group
+    in the GitHub Actions UI. Entries with no group key are bucketed under "unknown".
+    """
+    groups = OrderedDict()
+    for entry in matrix:
+        key = entry.get("model_group") or entry.get("model") or "unknown"
+        groups.setdefault(key, []).append(entry)
+    return [{"model": model, "tests": tests} for model, tests in groups.items()]
+
+
 def main():
-    if len(sys.argv) != 4:
-        print("Usage: python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>")
+    args = sys.argv[1:]
+    group_by_model = False
+    if "--group-by-model" in args:
+        group_by_model = True
+        args.remove("--group-by-model")
+
+    if len(args) != 3:
+        print(
+            "Usage: python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path> [--group-by-model]"
+        )
         print("  enabled_skus: comma-separated list, or ALL_SKUS_IN_TESTS")
         print(
             'Example: python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml'
         )
         sys.exit(1)
 
-    tests_yaml_path = sys.argv[1]
-    enabled_skus_str = sys.argv[2]
-    sku_config_path = sys.argv[3]
+    tests_yaml_path = args[0]
+    enabled_skus_str = args[1]
+    sku_config_path = args[2]
 
     print(f"Loading tests from: {tests_yaml_path}")
     print(f"Loading SKU config from: {sku_config_path}")
     print(f"Enabled SKUs: '{enabled_skus_str}'")
+    print(f"Group by model: {group_by_model}")
 
     sku_config = load_sku_config(sku_config_path)
     tests = load_tests(tests_yaml_path)
@@ -224,9 +258,12 @@ def main():
         print(f"Parsed enabled SKUs: {enabled_skus}")
 
     filtered_matrix = build_test_matrix(tests, enabled_skus, sku_config)
+    if group_by_model:
+        filtered_matrix = group_matrix_by_model(filtered_matrix)
 
     # Output as JSON
-    print(f"\nFiltered test matrix ({len(filtered_matrix)} tests):")
+    label = "model groups" if group_by_model else "tests"
+    print(f"\nFiltered test matrix ({len(filtered_matrix)} {label}):")
     json_output_pretty = json.dumps(filtered_matrix, indent=2)
     print(json_output_pretty)
 

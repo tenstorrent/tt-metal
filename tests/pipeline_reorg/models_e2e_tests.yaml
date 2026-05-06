@@ -4,6 +4,10 @@
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run (env vars must be inlined).
 #   model: Model identifier for filtering (workflow_dispatch model selection).
+#   model_group: (Optional) Coarser grouping key. Entries that share a model_group
+#     collapse under a single group in the GitHub Actions UI (e.g. the standard
+#     Llama 3.1-8B run and its data-parallel variant both set model_group: llama3.1-8b).
+#     Defaults to `model` when unset.
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
@@ -20,6 +24,7 @@
     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: llama3.1-8b
+  model_group: llama3.1-8b
   skus:
     wh_n150:
       timeout: 7
@@ -36,6 +41,7 @@
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
   model: llama3.1-8b-dp
+  model_group: llama3.1-8b
   skus:
     wh_llmbox_perf:
       timeout: 20
@@ -112,6 +118,7 @@
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
 
   model: llama3.3-70b
+  model_group: llama3.3-70b
   skus:
     wh_llmbox_perf:
       timeout: 30
@@ -127,6 +134,7 @@
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L"
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat2"
   model: llama3.3-70b-galaxy
+  model_group: llama3.3-70b
   skus:
     wh_galaxy_perf:
       timeout: 30
@@ -140,6 +148,7 @@
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
   model: llama3.3-70b-dp
+  model_group: llama3.3-70b
   skus:
     wh_llmbox_perf:
       timeout: 20
@@ -169,6 +178,7 @@
     pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
   model: qwen3-32b
+  model_group: qwen3-32b
   skus:
     wh_llmbox_perf:
       timeout: 15
@@ -181,6 +191,7 @@
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/tests/test_qwen_accuracy.py
   model: qwen3-32b-galaxy
+  model_group: qwen3-32b
   skus:
     wh_galaxy_perf:
       timeout: 10
