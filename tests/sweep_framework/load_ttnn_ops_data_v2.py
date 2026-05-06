@@ -18,6 +18,7 @@ from datetime import date
 from pathlib import Path
 
 import psycopg2
+from psycopg2 import sql
 
 try:
     import yaml
@@ -477,12 +478,15 @@ def get_or_create_trace_run(
     """
     _validate_schema(schema)
     if trace_uid not in trace_run_cache:
+        trace_run_table = sql.Identifier(schema, "trace_run")
         cur.execute(
-            f"""
-            INSERT INTO {schema}.trace_run (trace_uid, hardware_id, tt_metal_sha, pytest_args)
+            sql.SQL(
+                """
+            INSERT INTO {} (trace_uid, hardware_id, tt_metal_sha, pytest_args)
             VALUES (%s, %s, %s, %s)
             RETURNING trace_run_id
-            """,
+            """
+            ).format(trace_run_table),
             (trace_uid, hardware_id, tt_metal_sha, pytest_args),
         )
         trace_run_cache[trace_uid] = cur.fetchone()[0]
