@@ -96,7 +96,8 @@ SEQ_LEN_25K = 25 * 1024
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8), (SEQ_LEN_25K, 2)],
+    ids=["1024_cf8", "25600_cf8", "25600_cf2"],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -117,7 +118,9 @@ SEQ_LEN_25K = 25 * 1024
     ],
     ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
 )
-@pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
+@pytest.mark.parametrize(
+    "num_iterations", [1, 25, 200, 2000, 5000], ids=["iter1", "iter25", "iter200", "iter2000", "iter5000"]
+)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -136,7 +139,7 @@ SEQ_LEN_25K = 25 * 1024
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=4 * 1088),
             },
             2,
             ttnn.Topology.Linear,
