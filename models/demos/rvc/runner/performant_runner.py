@@ -21,7 +21,6 @@ class RVCModelConfig:
 
 @dataclass(frozen=True)
 class RVCInferenceConfig:
-    num_secs: float
     speaker_id: int = 0
     f0_up_key: int = 0
     f0_method: F0Method = F0Method.RAPT

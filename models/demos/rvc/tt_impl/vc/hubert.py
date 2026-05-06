@@ -49,8 +49,6 @@ class MultiheadSelfAttention:
         self.out_proj.load_state_dict(state_dict=state_dict, key="out_proj", module_prefix=module_prefix)
 
     def __call__(self, query: ttnn.Tensor) -> ttnn.Tensor:
-        src_len = query.shape[0]
-
         query_proj = self.q_proj(query)
         key_proj = self.k_proj(query)
         value_proj = self.v_proj(query)
@@ -227,7 +225,6 @@ class ConvFeatureExtractionModel:
                 group_norm.load_state_dict(state_dict=state_dict, key=f"conv_layers.{i}.1", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        batch_size = x.shape[0]
         for i, conv in enumerate(self.conv_layers):
             if i == 3:
                 x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)

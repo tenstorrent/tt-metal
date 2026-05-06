@@ -33,7 +33,7 @@ from models.demos.rvc.utils.config import (
 )
 from models.demos.rvc.utils.f0 import F0Method
 
-bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)
+highpass_b, highpass_a = signal.butter(N=5, Wn=48, btype="high", fs=16000)
 
 
 def _interpolate_1d(
@@ -50,7 +50,7 @@ def _interpolate_1d(
     return ttnn.squeeze(y_nhwc, dim=1)
 
 
-def _load_hubert(config, hubert_path: str, hubert_cfg_path: str, device):
+def _load_hubert(hubert_path: str, hubert_cfg_path: str, device):
     task = HubertPretrainingTask(HubertPretrainingConfig())
     with open(hubert_cfg_path) as f:
         cfg = json.load(f)
@@ -120,7 +120,7 @@ class RVCRunner:
 
         self.synthesizer, data_cfg = _load_synthesizer(self.device, if_f0, self.version, num, validation=validation)
         self.tgt_sr = data_cfg["sampling_rate"]
-        self.hubert_model = _load_hubert(config, hubert_path, hubert_cfg_path, self.device)
+        self.hubert_model = _load_hubert(hubert_path, hubert_cfg_path, self.device)
         self.torch_input = torch.randn((batch_size, self.t_center // self.batch_size_per_device, 1))
         self.torch_pitch = torch.randint(
             low=0,
@@ -320,7 +320,7 @@ class RVCRunner:
     ):
         assert (
             len(audio.shape) == 3 and audio.shape[2] == 1
-        ), f"Expected audio shape [batch_size, 1, num_samples], got {audio.shape}"
+        ), f"Expected audio shape [batch_size, num_samples, 1], got {audio.shape}"
         logits = self.hubert_model(
             source=audio,
             output_layer=9 if self.version == "v1" else 12,
@@ -633,7 +633,7 @@ class Pipeline:
         audio_output = audio_output[:, : int(audio_secs * self.tgt_sr)]
 
         # Need to use torch for multiple reasons
-        # e.g. ttnn does not support int16 datayeype for tensors
+        # e.g. ttnn does not support int16 datatype for tensors
         # post-process
         if self.rms_mix_rate != 1:
             audio_output = change_rms(audio, self.sr, audio_output, self.tgt_sr, self.rms_mix_rate)
@@ -651,16 +651,16 @@ class Pipeline:
         audio_max = torch.abs(audio).max().item()
         if audio_max > 1:
             audio /= audio_max
-        audio = signal.filtfilt(bh, ah, audio, axis=-1)
+        audio = signal.filtfilt(highpass_b, highpass_a, audio, axis=-1)
         audio = torch.from_numpy(audio.copy()).to(torch.float32)
         if audio.dim() == 1:
             audio = audio.unsqueeze(0)
         return audio
 
-    def prepare_audio_input(self, num_secs: float | None = None) -> torch.Tensor:
+    def prepare_audio_input(self) -> torch.Tensor:
         audio = load_audio(self.sr)
         return self._prepare_loaded_audio(audio)
 
-    def prepare_audio_batch_input(self, num_secs: float | None = None) -> torch.Tensor:
+    def prepare_audio_batch_input(self) -> torch.Tensor:
         audio = load_audio_batch(self.sr)
         return self._prepare_loaded_audio(audio)

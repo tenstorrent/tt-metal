@@ -9,7 +9,6 @@ Example:
     export RVC_ASSETS_DIR="$PWD/models/demos/rvc/data/assets"
 
     ./python_env/bin/python models/demos/rvc/scripts/run_performant_runner.py \
-      --num-secs 3.0 \
       --device-id 0 \
       --warmup-runs 1 \
       --iters 5
@@ -42,7 +41,6 @@ DEFAULT_TRANSCRIPT_PATH = Path(__file__).resolve().parent.parent / "data" / "spe
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the TT-only RVC performant runner.")
     parser.add_argument("-o", "--output", required=False, help="Output audio path (wav).")
-    parser.add_argument("--num-secs", type=float, default=30.0, help="Prepared input audio duration at 16 kHz.")
     parser.add_argument("--speaker-id", type=int, default=0, help="Speaker ID.")
     parser.add_argument("--f0-up-key", type=int, default=0, help="Pitch shift in semitones.")
     parser.add_argument(
@@ -206,7 +204,6 @@ def main() -> None:
     validation = args.check_torch_token_accuracy
     runner = RVCRunner()
     inference_config = RVCInferenceConfig(
-        num_secs=args.num_secs,
         speaker_id=args.speaker_id,
         f0_up_key=args.f0_up_key,
         f0_method=F0Method.from_str(args.f0_method),

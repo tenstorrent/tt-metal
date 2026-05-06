@@ -27,7 +27,7 @@ def run_rvc_e2e_inference(device) -> None:
     _require_assets_env()
     model = RVCRunner()
     input_duration_sec = 11.0
-    inference_config = RVCInferenceConfig(num_secs=input_duration_sec)
+    inference_config = RVCInferenceConfig()
     batch_size = device.get_num_devices()
 
     model.initialize_inference(
@@ -91,7 +91,7 @@ def test_rvc_e2e_no_sync(device):
     _require_assets_env()
     model = RVCRunner()
     input_duration_sec = 11.0
-    inference_config = RVCInferenceConfig(num_secs=input_duration_sec)
+    inference_config = RVCInferenceConfig()
     batch_size = device.get_num_devices()
 
     model.initialize_inference(
