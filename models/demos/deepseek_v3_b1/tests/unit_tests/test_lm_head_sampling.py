@@ -1295,13 +1295,12 @@ def _create_reference_spec_decode_pipeline_configuration(
 def _parse_token_meta_page(raw: torch.Tensor) -> dict[str, int]:
     raw = raw.to(torch.uint32).flatten()
     return {
-        "num_tokens": int(raw[0].item()),
+        "token_type": int(raw[0].item()),
         "tok0_id": int(raw[1].item()),
-        "tok0_type": int(raw[2].item()),
-        "tok0_pos": int(raw[3].item()),
-        "tok1_id": int(raw[4].item()),
-        "tok1_type": int(raw[5].item()),
-        "tok1_pos": int(raw[6].item()),
+        "tok0_pos": int(raw[2].item()),
+        "tok1_id": int(raw[3].item()),
+        "tok1_pos": int(raw[4].item()),
+        "slot_id": int(raw[5].item()),
     }
 
 
@@ -1556,7 +1555,7 @@ def _compute_reference_payload_mtp_metrics_ttnn(
 
         for row_idx in range(total_rows):
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = row_idx
+            torch_token[0, 6] = row_idx
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, token_meta_words, dtype=torch.uint32),
@@ -4430,7 +4429,7 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_p
 
         if pipeline.my_mesh_id == 0:
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = 0
+            torch_token[0, 6] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
@@ -4501,7 +4500,7 @@ def test_persistent_mode(mesh_device, use_fp32, device_params):
         for iteration in range(iterations):
             logger.info(f"Writing token for iteration {iteration}")
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = iteration
+            torch_token[0, 6] = iteration
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
@@ -4549,9 +4548,8 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
     own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
 
     TOKEN_META page layout (uint32 words):
-      [0] num_tokens  (0=stale, 1=accept, 2=reject)
-      [1] tok0_id     [2] tok0_type (0=BASE,1=SPEC)  [3] tok0_pos
-      [4] tok1_id     [5] tok1_type                   [6] tok1_pos
+      [0] token_type  [1] tok0_id  [2] tok0_pos
+      [3] tok1_id     [4] tok1_pos                    [5] slot_id
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -4600,7 +4598,7 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
             for iteration in range(iterations):
                 logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
+                torch_token[0, 6] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
                     torch.zeros(1, token_meta_words, dtype=torch.uint32),
@@ -4613,13 +4611,11 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                 logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
                 raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
-                num_tokens = raw[0].item()
+                token_type = raw[0].item()
                 tok0_id = raw[1].item()
-                tok0_type = raw[2].item()
-                tok0_pos = raw[3].item()
-                tok1_id = raw[4].item()
-                tok1_type = raw[5].item()
-                tok1_pos = raw[6].item()
+                tok0_pos = raw[2].item()
+                tok1_id = raw[3].item()
+                tok1_pos = raw[4].item()
 
                 if run_golden:
                     expected_base, expected_spec = golden[iteration]
@@ -4630,8 +4626,8 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                 type_name = {0: "BASE", 1: "SPEC"}
                 logger.debug(
                     f"[TEST P{pid}] iter {iteration} "
-                    f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
-                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
+                    f"t0={tok0_id}/{type_name.get(token_type,'?')} "
+                    f"t1={tok1_id} ",
                     f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
                     f"golden base token={expected_base} golden spec token={expected_spec}",
                 )
@@ -4716,7 +4712,7 @@ def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_s
             in_tok = int(input_token_ids[iteration].item())
             logger.info(f"Writing token for iteration {iteration} (in_tok={in_tok})")
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = in_tok
+            torch_token[0, 6] = in_tok
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
@@ -4815,7 +4811,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     if pipeline.my_mesh_id == 0:
         for iteration in range(iterations):
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = iteration
+            torch_token[0, 6] = iteration
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
@@ -4863,9 +4859,8 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
 
     TOKEN_META page layout (uint32 words):
-      [0] num_tokens  (0=stale, 1=accept, 2=reject)
-      [1] tok0_id     [2] tok0_type (0=BASE,1=SPEC)  [3] tok0_pos
-      [4] tok1_id     [5] tok1_type                   [6] tok1_pos
+      [0] token_type  [1] tok0_id  [2] tok0_pos
+      [3] tok1_id     [4] tok1_pos                    [5] slot_id
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -4919,19 +4914,19 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 logger.debug(f"[TEST] skipping golden computation")
 
             tok0_id = 0
-            tok0_type = 0
+            token_type = 0
             tok0_pos = 0
             tok1_id = 0
-            tok1_type = 0
             tok1_pos = 0
 
             for iteration in range(iterations):
                 logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 6] = slot_id
+                torch_token[0, 2] = iteration
+                torch_token[0, 5] = slot_id
+                torch_token[0, 6] = iteration
                 torch_token[0, 7] = iteration
                 torch_token[0, 8] = iteration
-                torch_token[0, 9] = iteration
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
                     torch.zeros(1, token_meta_words, dtype=torch.uint32),
@@ -4944,12 +4939,11 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
                 raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
-                tok0_id = raw[0].item()
-                tok0_type = raw[1].item()
+                token_type = raw[0].item()
+                tok0_id = raw[1].item()
                 tok0_pos = raw[2].item()
                 tok1_id = raw[3].item()
-                tok1_type = raw[4].item()
-                tok1_pos = raw[5].item()
+                tok1_pos = raw[4].item()
 
                 if run_golden:
                     expected_base, expected_spec = golden[iteration]
@@ -4960,8 +4954,8 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 type_name = {0: "BASE", 1: "SPEC"}
                 logger.debug(
                     f"[TEST P{pid}] iter {iteration} "
-                    f"t0={tok0_id}/{type_name.get(tok0_type,'?')} "
-                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
+                    f"t0={tok0_id}/{type_name.get(token_type,'?')} "
+                    f"t1={tok1_id} ",
                     f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
                     f"golden base token={expected_base} golden spec token={expected_spec}",
                 )

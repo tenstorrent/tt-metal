@@ -237,7 +237,7 @@ class ModelPipeline:
 
             # logger.debug("Got MD from Device: ")
             # logger.debug(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
-            # logger.debug(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
+            # logger.debug(f"Token Type: {result.token_type}")
             # logger.debug(
             #     f"Token 0: {tokenizer.decode([result.token_0], skip_special_tokens=False)}, Token 1: {tokenizer.decode([result.token_1], skip_special_tokens=False)}"
             # )
@@ -249,7 +249,7 @@ class ModelPipeline:
                 num_emits += 1
                 # logger.debug("Prefill done")
             else:
-                if result.token_0_type == TokenType.BASE:
+                if result.token_type == TokenType.BASE:
                     # On acceptance, we check that the base token matches the first token of the last unverified spec token
                     if result.token_0 == unverified_spec_tokens[-1]:
                         verified_spec_tokens.append(unverified_spec_tokens.pop())
@@ -269,7 +269,7 @@ class ModelPipeline:
                         num_emits += 1
                         signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
 
-                if result.token_0_type == TokenType.SPEC:
+                if result.token_type == TokenType.SPEC:
                     # If we have a verified spec token it means we have an acceptance case, remove it and emit the token
                     if verified_spec_tokens:
                         verified_spec_tokens.pop()
@@ -303,6 +303,13 @@ class ModelPipeline:
         while num_reads < num_writes:
             self.model.read_result()
             num_reads += 1
+
+        accepted_spec_tokens = base_accept
+        rejected_spec_tokens = base_reject
+        self.last_inference_stats = {
+            "num_accepts": accepted_spec_tokens,
+            "num_rejects": rejected_spec_tokens,
+        }
 
         end_time = time.time()
         logger.debug(f"Time taken: {end_time - start_time} seconds")

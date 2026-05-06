@@ -50,22 +50,21 @@ PCIE_PAGE_ALIGNMENT_BYTES: int = 64
 class OutputField:
     """uint32 indices within the 16-word output page."""
 
-    TOKEN_0 = 0
-    TOKEN_0_TYPE = 1
+    TOKEN_TYPE = 0
+    TOKEN_0 = 1
     TOKEN_0_POS = 2
     TOKEN_1 = 3
-    TOKEN_1_TYPE = 4
-    TOKEN_1_POS = 5
+    TOKEN_1_POS = 4
 
 
 class InputField:
     """uint32 indices within the 16-word input page."""
 
-    TOKEN_TYPE = 1
-    USER_ID = 6
-    TOKEN_ID = 7
-    POSITION_ID = 8
-    PREFILL_TOKEN_ID = 9
+    TOKEN_TYPE = 0
+    USER_ID = 5
+    TOKEN_ID = 6
+    POSITION_ID = 7
+    PREFILL_TOKEN_ID = 8
     TOKEN0_POSITION_ID = 2
 
 
@@ -79,10 +78,9 @@ class DecodeResult:
     """Parsed output page from the pipeline."""
 
     token_0: int
-    token_0_type: int
+    token_type: int
     token_0_pos: int
     token_1: int | None = None
-    token_1_type: int | None = None
     token_1_pos: int | None = None
     slot_id: int | None = None
 
@@ -92,10 +90,9 @@ def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
     raw = ttnn.to_torch(output_buffer).to(torch.int32).flatten()
     return DecodeResult(
         token_0=int(raw[OutputField.TOKEN_0].item()),
-        token_0_type=int(raw[OutputField.TOKEN_0_TYPE].item()),
+        token_type=int(raw[OutputField.TOKEN_TYPE].item()),
         token_0_pos=int(raw[OutputField.TOKEN_0_POS].item()),
         token_1=int(raw[OutputField.TOKEN_1].item()),
-        token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()),
         token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()),
         slot_id=int(raw[InputField.USER_ID].item()),
     )

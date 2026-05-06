@@ -640,32 +640,28 @@ void kernel_main() {
             mcast;
 
     uint32_t iteration_count = 0;
-    constexpr uint32_t TOKEN_TYPE_BASE = 0;
-    constexpr uint32_t TOKEN_TYPE_SPEC = 1;
-
 #if defined(COMPILE_FOR_BRISC)
     // Pack up to 2 tokens into a single TOKEN_META page (64 bytes) in the given CB.
-    // Layout: [num_tokens, tok0_id, tok0_type, tok0_pos, tok1_id, tok1_type, tok1_pos, ...]
+    // Layout: [token_type, tok0_id, tok0_pos, tok1_id, tok1_pos, slot_id, token_id, position_id, ...]
     auto write_token_metadata_to_socket_cb = [](uint32_t cb,
+                                                uint32_t token_type,
                                                 uint32_t tok0_id,
-                                                uint32_t tok0_type,
                                                 uint32_t tok0_pos,
                                                 uint32_t tok1_id = 0,
-                                                uint32_t tok1_type = 0,
                                                 uint32_t tok1_pos = 0,
                                                 uint32_t input_pos_id = 0,
                                                 uint32_t slot_id = 0) {
         cb_reserve_back(cb, 1);
         volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb));
-        page[0] = tok0_id;
-        page[1] = tok0_type;
+        page[0] = token_type;
+        page[1] = tok0_id;
         page[2] = tok0_pos;
         page[3] = tok1_id;
-        page[4] = tok1_type;
-        page[5] = tok1_pos;
-        page[6] = slot_id;
-        page[7] = 0; // input token id
-        page[8] = input_pos_id;
+        page[4] = tok1_pos;
+        page[5] = slot_id;
+        page[6] = 0;  // input token id
+        page[7] = input_pos_id;
+        page[8] = 0;  // prefill token id
         cb_push_back(cb, 1);
     };
 #endif
@@ -1029,7 +1025,7 @@ void kernel_main() {
 
             // Write token metadata to gather destination CB
             invalidate_l1_cache();
-            uint32_t base_token_type = metadata_ptr->tok0_type;
+            uint32_t token_type = metadata_ptr->token_type;
             uint32_t base_token_pos = metadata_ptr->position_id;
             uint32_t input_pos_id = metadata_ptr->tok0_pos + 1;
             uint32_t slot_id = metadata_ptr->slot_id;
@@ -1044,7 +1040,7 @@ void kernel_main() {
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
             write_token_metadata_to_socket_cb(
-                eh_gather_dst_cb, base_token_id, base_token_type, base_token_pos, 0, 0, 0, input_pos_id, slot_id);
+                eh_gather_dst_cb, token_type, base_token_id, base_token_pos, 0, 0, input_pos_id, slot_id);
             cb_pop_front(argmax_socket_cb, 1);
         }
 #endif
@@ -1060,7 +1056,7 @@ void kernel_main() {
     // writes a TOKEN_META page with both tokens back to CB 6.
     //
     // Metadata layout from base stage (at metadata_output_l1_addr):
-    //   [0] = num_tokens, [1] = tok0_id, [2] = tok0_type, [3] = tok0_pos, ...
+    //   [0] = token_type, [1] = tok0_id, [2] = tok0_pos, [3] = tok1_id, [4] = tok1_pos, ...
     // ========================================================================
     auto update_speculative_state = [&]() {
 #if defined(COMPILE_FOR_BRISC)
@@ -1085,10 +1081,9 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
             invalidate_l1_cache();
             uint32_t base_token_id = metadata_ptr->tok0_id;
-            uint32_t base_token_type = metadata_ptr->tok0_type;
+            uint32_t token_type = metadata_ptr->token_type;
             uint32_t base_token_pos = metadata_ptr->tok0_pos + 1;
             uint32_t slot_id = metadata_ptr->slot_id;
-            uint32_t spec_token_type = TOKEN_TYPE_SPEC;
             uint32_t spec_token_pos = metadata_ptr->tok0_pos + 2;
             uint32_t input_pos_id = metadata_ptr->position_id;
             cb_pop_front(argmax_socket_cb, 1);
@@ -1096,11 +1091,10 @@ void kernel_main() {
             // Push the base and speculative tokens to the argmax socket CB that will be written to the socket later
             write_token_metadata_to_socket_cb(
                 argmax_socket_cb,
+                token_type,
                 base_token_id,
-                base_token_type,
                 base_token_pos,
                 spec_token_id,
-                spec_token_type,
                 spec_token_pos,
                 input_pos_id,
                 slot_id);

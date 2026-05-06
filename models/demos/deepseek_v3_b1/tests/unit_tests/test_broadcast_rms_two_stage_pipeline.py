@@ -192,7 +192,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
     if is_stage0:
         token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
         torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-        torch_token[0, 0] = token_id
+        torch_token[0, 6] = token_id
         token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         pipeline_block.write_token(token_tensor)
 
