@@ -306,6 +306,7 @@ class LMHeadSampling:
         broadcast_topology_override=None,
         is_mtp_base_stage=False,
         is_mtp_verify_stage=False,
+        mtp_level=0,
         metadata_tensor=None,
         eh_subblock_k=None,
         reduce_semaphores=None,
@@ -1020,18 +1021,25 @@ class LMHeadSampling:
                         sampling_stage2_num_slots * sampling_topk_min_alignment + 1023
                     ) // 1024
                     # Per-stage CT-arg values:
-                    #   * BaseLMHeadStage (default + MTP base): k=32, enable_metadata=1,
-                    #     copy_probabilities=1; k/p/temperature actually consumed at
-                    #     runtime from the metadata packet.
-                    #   * SpecLMHeadStage (is_mtp_verify_stage): k=1, no metadata copy.
-                    if is_mtp_verify_stage:
-                        sampling_topk_k_value = 1
-                        sampling_enable_metadata_value = 0
-                        sampling_copy_probabilities_value = 0
-                    else:
+                    #   * BaseLMHeadStage (mtp_level==0): k=32, enable_metadata=1,
+                    #     copy_probabilities=1 → writes p_indices/p_scores.
+                    #   * SpecLMHeadStage (is_mtp_verify_stage): k=32, enable_metadata=1,
+                    #     copy_probabilities=1, copy_to_q=1 → writes q_indices/q_scores.
+                    #   * MTP intermediate stages (mtp_level > 0): k=1, no metadata copy.
+                    sampling_copy_probabilities_to_q_value = 0
+                    if not is_mtp_verify_stage and mtp_level == 0:
                         sampling_topk_k_value = sampling_topk_k
                         sampling_enable_metadata_value = 1
                         sampling_copy_probabilities_value = 1
+                    elif is_mtp_verify_stage:
+                        sampling_topk_k_value = sampling_topk_k
+                        sampling_enable_metadata_value = 1
+                        sampling_copy_probabilities_value = 1
+                        sampling_copy_probabilities_to_q_value = 1
+                    else:
+                        sampling_topk_k_value = 1
+                        sampling_enable_metadata_value = 0
+                        sampling_copy_probabilities_value = 0
                     # Canonical packings, matching micro_ops/sampling/op.py:
                     #   * inv_temp_bf16: two copies of bf16(1/temp) packed into uint32
                     #     (the LLK softmax recip helper consumes both halves).
@@ -1479,6 +1487,7 @@ class LMHeadSampling:
                     ("sampling_temp_cb", sampling_temp_cb),
                     ("sampling_enable_metadata", sampling_enable_metadata_value),
                     ("sampling_copy_probabilities", sampling_copy_probabilities_value),
+                    ("sampling_copy_probabilities_to_q", sampling_copy_probabilities_to_q_value),
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("termination_semaphore_addr", termination_global_sem_addr),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
@@ -2447,6 +2456,12 @@ class LMHeadSampling:
                             named_compile_time_arg="is_mtp_verify_stage",
                             core_range=all_cores,
                             value=1 if is_mtp_verify_stage else 0,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="mtp_level",
+                            core_range=all_cores,
+                            value=mtp_level,
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(

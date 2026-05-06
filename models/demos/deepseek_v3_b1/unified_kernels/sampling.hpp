@@ -654,7 +654,8 @@ struct TopKSampling {
         uint32_t DeferSocketOutput = 0,
         uint32_t EnableMetadata = 0,
         uint32_t CopyProbabilities = 0,
-        uint32_t MetadataOutputL1Addr = 0>
+        uint32_t MetadataOutputL1Addr = 0,
+        uint32_t CopyProbabilitiesToQ = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
@@ -677,6 +678,7 @@ struct TopKSampling {
         static constexpr bool defer_socket_output = DeferSocketOutput == 1;
         static constexpr bool enable_metadata = EnableMetadata == 1;
         static constexpr bool copy_probabilities = CopyProbabilities == 1;
+        static constexpr bool copy_probabilities_to_q = CopyProbabilitiesToQ == 1;
         static constexpr uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
         static_assert(
             !CopyProbabilities || EnableMetadata,
@@ -1208,6 +1210,8 @@ struct TopKSampling {
             // Output goes to the winner CB in split layout [K scores | K indices].
             // The argmax is global_scores[0] / global_indices[0] (descending order).
             if constexpr (IsFinalCore) {
+                
+                
                 auto recv_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::receiver_semaphore_id));
                 wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);
@@ -1393,7 +1397,7 @@ struct TopKSampling {
                                 std::max(static_cast<uint32_t>(metadata_ptr->k), static_cast<uint32_t>(1)),
                                 static_cast<uint32_t>(32));
                             p = std::min(
-                                std::max(static_cast<float>(metadata_ptr->probability_mass_threshold), 0.0f), 1.0f);
+                                std::max(static_cast<float>(metadata_ptr->p), 0.0f), 1.0f);
                         }
 
                         generate_bcast_unary_scalar(CTArgs::temp_cb, inv_temp_bf16);
@@ -1558,23 +1562,22 @@ struct TopKSampling {
 
                         if constexpr (CTArgs::copy_probabilities) {
                             // Scatter the 32 rescaled top-P probabilities out of the two-face
-                            // tile layout into the contiguous `p_scores[32]` metadata slot,
-                            // and copy the 32 winning indices into `p_indices[32]`. Entries
-                            // beyond `K` are left as whatever is in the tile (garbage, as
-                            // documented in metadata.hpp).
-                            //
-                            // Issue all three packet writes back-to-back so the NOC engine can
-                            // overlap them, then drain with a single barrier:
-                            //   * scores face 0 (tile elems  0..15) -> p_scores[ 0..15]
-                            //   * scores face 1 (tile elems 16..31) -> p_scores[16..31]
-                            //   * winner indices (32 contiguous u32) -> p_indices[ 0..31]
+                            // tile layout and copy the 32 winning indices into the metadata.
+                            // When copy_probabilities_to_q is set (spec/verification stage),
+                            // write to q_scores/q_indices; otherwise write to p_scores/p_indices.
                             constexpr uint32_t HALF_SCORES_BYTES = 16 * sizeof(uint16_t);
                             constexpr uint32_t FACE_BYTES_OFFSET = FACE_ELEMS * sizeof(uint16_t);
 
-                            const uint32_t scores_src_face0 = get_read_ptr(CTArgs::softmax_out_cb);
+                            constexpr auto scores_field = CTArgs::copy_probabilities_to_q
+                                ? offsetof(deepseek_b1_ops::DeepseekMetadata, q_scores)
+                                : offsetof(deepseek_b1_ops::DeepseekMetadata, p_scores);
+                            constexpr auto indices_field = CTArgs::copy_probabilities_to_q
+                                ? offsetof(deepseek_b1_ops::DeepseekMetadata, q_indices)
+                                : offsetof(deepseek_b1_ops::DeepseekMetadata, p_indices);
 
+                            const uint32_t scores_src_face0 = get_read_ptr(CTArgs::softmax_out_cb);
                             const uint32_t scores_dst_face0 =
-                                CTArgs::metadata_output_l1_addr + offsetof(deepseek_b1_ops::DeepseekMetadata, p_scores);
+                                CTArgs::metadata_output_l1_addr + scores_field;
 
                             noc_async_write_one_packet(
                                 scores_src_face0, get_noc_addr(scores_dst_face0), HALF_SCORES_BYTES);
@@ -1585,8 +1588,8 @@ struct TopKSampling {
 
                             const uint32_t indices_src_l1 =
                                 get_read_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_slot_bytes;
-                            const uint32_t indices_dst_l1 = CTArgs::metadata_output_l1_addr +
-                                                            offsetof(deepseek_b1_ops::DeepseekMetadata, p_indices);
+                            const uint32_t indices_dst_l1 =
+                                CTArgs::metadata_output_l1_addr + indices_field;
                             noc_async_write_one_packet(
                                 indices_src_l1, get_noc_addr(indices_dst_l1), 32 * sizeof(uint32_t));
 

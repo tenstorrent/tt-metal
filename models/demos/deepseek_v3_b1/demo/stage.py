@@ -354,10 +354,12 @@ class SpecLMHeadStage(StageKind):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         spec_weights: DeepSeekV3SpecWeights | None = None,
+        mtp_level: int = 1,
     ) -> None:
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
         self._spec_weights = spec_weights
+        self._mtp_level = mtp_level
         self._state: dict[str, Any] = {}
 
     def _get_sender_coord(self, ctx: StageContext, pipeline_block):
@@ -596,6 +598,7 @@ class SpecLMHeadStage(StageKind):
             termination_semaphore=d.get("termination_semaphore"),
             is_mtp_base_stage=False,
             is_mtp_verify_stage=True,
+            mtp_level=self._mtp_level,
             metadata_tensor=d["metadata_tensor"],
             k=1,
         )
@@ -628,6 +631,7 @@ class BaseLMHeadStage(StageKind):
         embedding_weights: DeepSeekV3EmbeddingLayerWeights | None = None,
         send_mtp_output_downstream: bool = False,
         seed: int = 2005,
+        mtp_level: int = 0,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
@@ -636,6 +640,7 @@ class BaseLMHeadStage(StageKind):
         self._persistent_mode = persistent_mode
         self._mtp_weights = mtp_weights
         self._embedding_weights = embedding_weights
+        self._mtp_level = mtp_level
         self._enable_mtp = mtp_weights is not None
         if self._enable_mtp and self._embedding_weights is None:
             raise ValueError("embedding_weights are required when mtp_weights are provided")
@@ -976,6 +981,7 @@ class BaseLMHeadStage(StageKind):
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
             termination_semaphore=d.get("termination_semaphore"),
             is_mtp_base_stage=True,
+            mtp_level=self._mtp_level,
             metadata_tensor=d.get("metadata_tensor"),
             reduce_semaphores=d.get("reduce_semaphores"),
             mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
@@ -1186,12 +1192,14 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         spec_weights: DeepSeekV3SpecWeights | None = None,
+        mtp_level: int = 1,
         loopback_input_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=spec_weights,
+            mtp_level=mtp_level,
         )
         self._embedding_weights = embedding_weights
         self._loopback_input_fifo_pages = loopback_input_fifo_pages
