@@ -16,12 +16,11 @@ namespace sfpu
 {
 inline void _calculate_add_(const DataFormat fmt, const int iterations, const int in0_offset_idx, const int in1_offset_idx, const int out_offset_idx)
 {
-    LLK_ASSERT(fmt != DataFormat::Int32 || fmt != DataFormat::Float16_b, "Only Int32 and Float16_b are currently supported for SFPU add on Quasar");
+    LLK_ASSERT(fmt == DataFormat::Int32 || fmt == DataFormat::Float16_b, "Only Int32 and Float16_b are currently supported for SFPU add on Quasar");
 
     const bool is_int = (fmt == DataFormat::Int32);
-    const auto instr_mod =
-        is_int ? p_sfpu::sfpmem::INT32
-               : p_sfpu::sfpmem::DEFAULT; // There is a quasar bug with implied fmts + upk to dest, so we need use use explicit types for int SFPULOAD/STORE
+    const auto instr_mod = is_int ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::DEFAULT; // There is a quasar bug with implied fmts + upk to dest, so we need use
+                                                                                     // use explicit types for int SFPULOAD/STORE TEN-4674
 
     for (int d = 0; d < iterations; d++)
     {
