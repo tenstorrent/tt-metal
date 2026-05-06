@@ -262,7 +262,7 @@ BINARY_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_fpu.cpp"
 
 
 def _run_binary_with_kernel(
-    device, num_tiles, kernel_path, defines, torch_op, range_a, range_b, pcc, fp32_dest_acc=False, label=""
+    device, num_tiles, kernel_path, defines, torch_op, range_a, range_b, pcc, fp32_dest_acc=False, label="", single_core=False, cb_pages=None
 ):
     shape = [1, num_tiles, 32, 32]
     la, ha = range_a
@@ -275,10 +275,15 @@ def _run_binary_with_kernel(
     b = ttnn.from_torch(data_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
     out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
-    core_grid, group_1, work_per_core = _split_work(num_tiles)
-    cb_a = _make_cb(0, core_grid)
-    cb_b = _make_cb(1, core_grid)
-    cb_out = _make_cb(16, core_grid)
+    if single_core:
+        core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+        group_1 = core_grid
+        work_per_core = num_tiles
+    else:
+        core_grid, group_1, work_per_core = _split_work(num_tiles)
+    cb_a = _make_cb(0, core_grid, n_pages=cb_pages)
+    cb_b = _make_cb(1, core_grid, n_pages=cb_pages)
+    cb_out = _make_cb(16, core_grid, n_pages=cb_pages)
 
     reader_compile_args = (
         [0] + ttnn.TensorAccessorArgs(a).get_compile_time_args() + ttnn.TensorAccessorArgs(b).get_compile_time_args()
@@ -850,6 +855,35 @@ def test_1_copy_upfront_block_iter(device, upfront_n, fp32_dest_acc):
         single_core=True,
     )
     _check_pcc(out, golden, 0.9999, f"copy_upfront UPFRONT_N={upfront_n}")
+
+
+# =============================================================================
+# Block-mode binary FPU (multi-tile DEST scratch)
+# =============================================================================
+
+@pytest.mark.parametrize("num_tiles", [4, 16])
+@pytest.mark.parametrize("fp32_dest_acc", [False, True])
+@pytest.mark.parametrize("block_size", [2, 4])
+@pytest.mark.parametrize(
+    "op_name,torch_op,pcc",
+    [
+        ("Add", torch.add, 0.9999),
+        ("Sub", torch.sub, 0.9999),
+        ("Mul", torch.mul, 0.9999),
+    ],
+)
+def test_block_binary_fpu(device, num_tiles, fp32_dest_acc, block_size, op_name, torch_op, pcc):
+    if num_tiles % block_size != 0:
+        pytest.skip("num_tiles must be divisible by block_size")
+    _run_binary_with_kernel(
+        device, num_tiles,
+        "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/kernels/binary_block.cpp",
+        {"BLOCK_SIZE": str(block_size), "BINARY_OP_NAME": op_name},
+        torch_op, (-2.0, 2.0), (-2.0, 2.0), pcc, fp32_dest_acc,
+        label=f"block_binary_fpu {op_name} N={block_size}",
+        single_core=True,
+        cb_pages=block_size * 2,
+    )
 
 
 # =============================================================================
