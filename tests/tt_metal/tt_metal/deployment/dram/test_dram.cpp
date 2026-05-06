@@ -334,7 +334,7 @@ static void log_galaxy_summary(const char* name, const DramGalaxySummary& s, std
     }
 }
 
-TEST_F(UnitMeshCQProgramFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks) {
+TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks) {
     if (g_stop_requested.load()) {
         GTEST_SKIP() << "Test interrupted by user.";
     }
@@ -539,7 +539,7 @@ TEST_F(UnitMeshCQProgramFixture, DramDeployment_PersistentOptimalWorkersAllDramB
     ASSERT_TRUE(all_pass);
 }
 
-TEST_F(UnitMeshCQProgramFixture, DramDeployment_PersistentAllWorkersSingleDramSequentialSweep) {
+TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequentialSweep) {
     if (g_stop_requested.load()) {
         GTEST_SKIP() << "Test interrupted by user.";
     }
@@ -786,7 +786,7 @@ TEST_F(UnitMeshCQProgramFixture, DramDeployment_PersistentAllWorkersSingleDramSe
     ASSERT_TRUE(all_pass);
 }
 
-TEST_F(UnitMeshCQProgramFixture, DramDeployment_PersistentPartitionedWorkersAllDramBanks) {
+TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBanks) {
     if (g_stop_requested.load()) {
         GTEST_SKIP() << "Test interrupted by user.";
     }
