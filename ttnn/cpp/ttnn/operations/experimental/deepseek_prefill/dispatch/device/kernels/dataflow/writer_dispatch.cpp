@@ -206,7 +206,9 @@ void kernel_main() {
             page_idx,
             (int)aligned_metadata_page_size,
             l1_alignment);
-        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
+        // noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
+        noc_async_write_barrier();
+
 #endif
 
         cb_pop_front(cb_payload_for_writer_id, 1);
@@ -214,7 +216,7 @@ void kernel_main() {
     }
 
 #ifdef DEST_CHIP_ID
-    noc_async_write_barrier();
+    // noc_async_write_barrier();
 
     // Exit semaphore exchange
     {

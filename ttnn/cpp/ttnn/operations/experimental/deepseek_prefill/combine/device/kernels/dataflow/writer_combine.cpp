@@ -220,14 +220,15 @@ void kernel_main() {
             output_page_idx,
             (int)aligned_output_page_size,
             l1_alignment);
-        noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
+        // noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
+        noc_async_write_barrier();
 #endif
 
         cb_pop_front(cb_output_for_writer_id, 1);
     }
 
 #ifdef DEST_CHIP_ID
-    noc_async_write_barrier();
+    // noc_async_write_barrier();
 
     // Exit semaphore exchange — uses a dedicated semaphore (exit_semaphore_address)
     // and the dedicated sem_packet_header so neither can collide with anything from
