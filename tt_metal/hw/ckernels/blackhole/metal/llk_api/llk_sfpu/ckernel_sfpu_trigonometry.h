@@ -128,11 +128,10 @@ inline void calculate_tangent() {
 
         a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
 
-        if constexpr (is_fp32_dest_acc_en) {
-            sfpi::dst_reg[0] = a;
-        } else {
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(a, sfpi::RoundMode::NearestEven);
+        if constexpr (!is_fp32_dest_acc_en) {
+            a = sfpi::float_to_fp16b(a, sfpi::RoundMode::NearestEven);
         }
+        sfpi::dst_reg[0] = a;
         sfpi::dst_reg++;
     }
 }
@@ -197,15 +196,14 @@ inline void calculate_sine() {
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = r;
         } else {
             r = C2 * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven);
+            r = sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven);
         }
-
+        sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
 }
@@ -283,15 +281,14 @@ inline void calculate_cosine() {
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = r;
         } else {
             sfpi::vFloat r = C2 * s + C1;
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven);
+            r = sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven);
         }
-
+        sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
     }
 }

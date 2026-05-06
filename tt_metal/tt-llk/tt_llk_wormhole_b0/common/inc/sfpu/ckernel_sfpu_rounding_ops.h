@@ -187,8 +187,8 @@ sfpi_inline void _calculate_stochastic_round_()
 #pragma GCC unroll ITERATIONS
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat x   = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = sfpi::float_to_fp16b(x, sfpi::RoundMode::Stochastic);
+        sfpi::vFloat x   = sfpi::float_to_fp16b(sfpi::dst_reg[0], sfpi::RoundMode::Stochastic);
+        sfpi::dst_reg[0] = x;
         sfpi::dst_reg++;
     }
 }
