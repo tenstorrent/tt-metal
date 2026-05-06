@@ -318,9 +318,13 @@ public:
     }
 
     bool operator==(const StridedShardPagesIterator& other) const {
-        // Normalize past-end: treat any id >= end_shard_id as "at end"
+        // Normalize past-end: treat any id >= end_shard_id as "at end".
+        // Stride overshoot is expected (stride > 1 means the last ++ may skip past the sentinel),
+        // but the overshoot must be < stride.
         bool lhs_done = current_shard_id_ >= end_shard_id_;
         bool rhs_done = other.current_shard_id_ >= other.end_shard_id_;
+        ASSERT(!lhs_done || (current_shard_id_ - end_shard_id_ < stride_));
+        ASSERT(!rhs_done || (other.current_shard_id_ - other.end_shard_id_ < other.stride_));
         if (lhs_done && rhs_done) {
             return true;
         }

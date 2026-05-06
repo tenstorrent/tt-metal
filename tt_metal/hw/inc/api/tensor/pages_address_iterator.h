@@ -386,7 +386,10 @@ public:
         start_page_id_(start_page_id),
         end_page_id_(end_page_id),
         stride_(stride),
-        noc_(noc) {}
+        noc_(noc) {
+        ASSERT(stride > 0);                    // stride=0 would make the iterator never advance
+        ASSERT(start_page_id <= end_page_id);  // inverted range silently produces no iterations
+    }
 
     iterator begin() const {
         if constexpr (Accessor::DSpec::is_interleaved) {

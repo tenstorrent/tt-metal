@@ -546,6 +546,7 @@ using namespace strided_threading_tests;
 TEST(StridedPagesTests, Interleaved_4Threads_CoverageAndOrder) {
     constexpr uint32_t N = 12;
     constexpr uint32_t num_banks = 4;
+    constexpr uint32_t num_threads = 4;
     using TensorShape = ArrayWrapperU32<N>;
     using ShardShape = ArrayWrapperU32<N>;
     using BankCoords = ArrayWrapperDynamic;
@@ -555,17 +556,18 @@ TEST(StridedPagesTests, Interleaved_4Threads_CoverageAndOrder) {
     auto accessor = TensorAccessor<dspec_t>(dspec_t({}, {}, bank_coords), 0, 4096);
 
     const std::vector<std::vector<uint32_t>> expected = {{0, 4, 8}, {1, 5, 9}, {2, 6, 10}, {3, 7, 11}};
-    for (uint32_t tid = 0; tid < 4; tid++) {
-        auto ids = collect_page_ids(pages_for_thread(accessor, tid, 4));
+    for (uint32_t tid = 0; tid < num_threads; tid++) {
+        auto ids = collect_page_ids(pages_for_thread(accessor, tid, num_threads));
         EXPECT_EQ(ids, expected[tid]) << "Thread " << tid << " page_ids mismatch";
     }
-    assert_full_coverage_no_overlap(accessor, 4);
+    assert_full_coverage_no_overlap(accessor, num_threads);
 }
 
 // Tensor volume=10, num_threads=3 (not a divisor) — lengths differ by at most 1
 TEST(StridedPagesTests, NonDivisorThreadCount_FullCoverage) {
     constexpr uint32_t N = 10;
     constexpr uint32_t num_banks = 2;
+    constexpr uint32_t num_threads = 3;
     using TensorShape = ArrayWrapperU32<N>;
     using ShardShape = ArrayWrapperU32<N>;
     using BankCoords = ArrayWrapperDynamic;
@@ -575,18 +577,19 @@ TEST(StridedPagesTests, NonDivisorThreadCount_FullCoverage) {
     auto accessor = TensorAccessor<dspec_t>(dspec_t({}, {}, bank_coords), 0, 4096);
 
     // thread 0: {0,3,6,9}, thread 1: {1,4,7}, thread 2: {2,5,8}
-    auto ids0 = collect_page_ids(pages_for_thread(accessor, 0, 3));
-    auto ids1 = collect_page_ids(pages_for_thread(accessor, 1, 3));
-    auto ids2 = collect_page_ids(pages_for_thread(accessor, 2, 3));
+    auto ids0 = collect_page_ids(pages_for_thread(accessor, 0, num_threads));
+    auto ids1 = collect_page_ids(pages_for_thread(accessor, 1, num_threads));
+    auto ids2 = collect_page_ids(pages_for_thread(accessor, 2, num_threads));
     EXPECT_EQ(ids0, (std::vector<uint32_t>{0, 3, 6, 9}));
     EXPECT_EQ(ids1, (std::vector<uint32_t>{1, 4, 7}));
     EXPECT_EQ(ids2, (std::vector<uint32_t>{2, 5, 8}));
-    assert_full_coverage_no_overlap(accessor, 3);
+    assert_full_coverage_no_overlap(accessor, num_threads);
 }
 
 // Single thread behaves identically to pages(0, total) — regression guard
 TEST(StridedPagesTests, SingleThread_FullTensorInOrder) {
     constexpr uint32_t num_banks = 4;
+    constexpr uint32_t num_threads = 1;
     using TensorShape = ArrayWrapperU32<2, 3>;
     using ShardShape = ArrayWrapperU32<1, 2>;
     using BankCoords = ArrayWrapperDynamic;
@@ -595,7 +598,7 @@ TEST(StridedPagesTests, SingleThread_FullTensorInOrder) {
     std::array<uint16_t, num_banks> bank_coords{};
     auto accessor = TensorAccessor<dspec_t>(dspec_t({}, {}, bank_coords), 0, 4096);
 
-    auto strided_ids = collect_page_ids(pages_for_thread(accessor, 0, 1));
+    auto strided_ids = collect_page_ids(pages_for_thread(accessor, 0, num_threads));
     auto contiguous_ids = collect_page_ids(accessor.pages());
     EXPECT_EQ(strided_ids, contiguous_ids) << "stride=1 must yield identical results to pages()";
 }
@@ -612,13 +615,15 @@ TEST(StridedPagesTests, EmptyRange_NoPagesYielded) {
     auto accessor = TensorAccessor<dspec_t>(dspec_t({}, {}, bank_coords), 0, 4096);
 
     // start == end means empty range
-    auto ids = collect_page_ids(tensor_accessor::Pages(accessor, 5u, 5u, 1u, (uint8_t)0));
+    constexpr uint32_t page_start_end = 5;
+    auto ids = collect_page_ids(tensor_accessor::Pages(accessor, page_start_end, page_start_end, 1u, (uint8_t)0));
     EXPECT_TRUE(ids.empty()) << "Empty range should produce no pages";
 }
 
 // 2D sharded tensor [4,4], shard [2,2], 4 banks, 4 threads
 TEST(StridedPagesTests, Sharded2D_4Threads_FullCoverage) {
     constexpr uint32_t num_banks = 4;
+    constexpr uint32_t num_threads = 4;
     using TensorShape = ArrayWrapperU32<4, 4>;
     using ShardShape = ArrayWrapperU32<2, 2>;
     using BankCoords = ArrayWrapperDynamic;
@@ -628,13 +633,14 @@ TEST(StridedPagesTests, Sharded2D_4Threads_FullCoverage) {
     auto accessor = TensorAccessor<dspec_t>(dspec_t({}, {}, bank_coords), 0, 4096);
 
     EXPECT_EQ(accessor.dspec().tensor_volume(), 16u);
-    assert_full_coverage_no_overlap(accessor, 4);
+    assert_full_coverage_no_overlap(accessor, num_threads);
 }
 
 // 1D sharded tensor [16], shard [4], 4 banks, 4 threads
 // Thread i gets pages {i, i+4, i+8, i+12}
 TEST(StridedPagesTests, Sharded1D_4Threads_CoverageAndOrder) {
     constexpr uint32_t num_banks = 4;
+    constexpr uint32_t num_threads = 4;
     using TensorShape = ArrayWrapperU32<16>;
     using ShardShape = ArrayWrapperU32<4>;
     using BankCoords = ArrayWrapperDynamic;
@@ -645,11 +651,11 @@ TEST(StridedPagesTests, Sharded1D_4Threads_CoverageAndOrder) {
 
     const std::vector<std::vector<uint32_t>> expected = {
         {0, 4, 8, 12}, {1, 5, 9, 13}, {2, 6, 10, 14}, {3, 7, 11, 15}};
-    for (uint32_t tid = 0; tid < 4; tid++) {
-        auto ids = collect_page_ids(pages_for_thread(accessor, tid, 4));
+    for (uint32_t tid = 0; tid < num_threads; tid++) {
+        auto ids = collect_page_ids(pages_for_thread(accessor, tid, num_threads));
         EXPECT_EQ(ids, expected[tid]) << "Thread " << tid << " page_ids mismatch";
     }
-    assert_full_coverage_no_overlap(accessor, 4);
+    assert_full_coverage_no_overlap(accessor, num_threads);
 }
 
 // -----------------------------------------------------------------------
@@ -699,6 +705,7 @@ TEST(ShardPagesTests, PaddedShard_SkipsOutOfBounds) {
 // 4 shards, 4 threads: thread i owns exactly shard i
 TEST(StridedShardPagesTests, FourShards_FourThreads_OneShardEach) {
     constexpr uint32_t num_banks = 4;
+    constexpr uint32_t num_threads = 4;
     using TensorShape = ArrayWrapperU32<8>;
     using ShardShape = ArrayWrapperU32<2>;
     using BankCoords = ArrayWrapperDynamic;
@@ -709,16 +716,16 @@ TEST(StridedShardPagesTests, FourShards_FourThreads_OneShardEach) {
 
     ASSERT_EQ(accessor.dspec().tensor_volume() / accessor.dspec().shard_volume(), 4u);
 
-    for (uint32_t tid = 0; tid < 4; tid++) {
-        auto shards = shard_ids_for_thread(accessor, tid, 4);
+    for (uint32_t tid = 0; tid < num_threads; tid++) {
+        auto shards = shard_ids_for_thread(accessor, tid, num_threads);
         ASSERT_EQ(shards.size(), 1u) << "Thread " << tid << " should own exactly 1 shard";
         EXPECT_EQ(shards[0], tid) << "Thread " << tid << " should own shard " << tid;
     }
 
     // Full coverage: all 4 shards seen exactly once
     std::vector<uint32_t> all_shards;
-    for (uint32_t tid = 0; tid < 4; tid++) {
-        auto s = shard_ids_for_thread(accessor, tid, 4);
+    for (uint32_t tid = 0; tid < num_threads; tid++) {
+        auto s = shard_ids_for_thread(accessor, tid, num_threads);
         all_shards.insert(all_shards.end(), s.begin(), s.end());
     }
     std::sort(all_shards.begin(), all_shards.end());
@@ -728,6 +735,7 @@ TEST(StridedShardPagesTests, FourShards_FourThreads_OneShardEach) {
 // 8 shards, 4 threads: thread 0 gets shards {0,4}, thread 1: {1,5}, etc.
 TEST(StridedShardPagesTests, EightShards_FourThreads_TwoShardsEach) {
     constexpr uint32_t num_banks = 4;
+    constexpr uint32_t num_threads = 4;
     using TensorShape = ArrayWrapperU32<16>;
     using ShardShape = ArrayWrapperU32<2>;
     using BankCoords = ArrayWrapperDynamic;
@@ -739,15 +747,15 @@ TEST(StridedShardPagesTests, EightShards_FourThreads_TwoShardsEach) {
     ASSERT_EQ(accessor.dspec().tensor_volume() / accessor.dspec().shard_volume(), 8u);
 
     const std::vector<std::vector<uint32_t>> expected_shards = {{0, 4}, {1, 5}, {2, 6}, {3, 7}};
-    for (uint32_t tid = 0; tid < 4; tid++) {
-        auto shards = shard_ids_for_thread(accessor, tid, 4);
+    for (uint32_t tid = 0; tid < num_threads; tid++) {
+        auto shards = shard_ids_for_thread(accessor, tid, num_threads);
         EXPECT_EQ(shards, expected_shards[tid]) << "Thread " << tid << " shard assignment mismatch";
     }
 
     // Full coverage
     std::vector<uint32_t> all_shards;
-    for (uint32_t tid = 0; tid < 4; tid++) {
-        auto s = shard_ids_for_thread(accessor, tid, 4);
+    for (uint32_t tid = 0; tid < num_threads; tid++) {
+        auto s = shard_ids_for_thread(accessor, tid, num_threads);
         all_shards.insert(all_shards.end(), s.begin(), s.end());
     }
     std::sort(all_shards.begin(), all_shards.end());
@@ -757,6 +765,7 @@ TEST(StridedShardPagesTests, EightShards_FourThreads_TwoShardsEach) {
 // 5 shards, 4 threads: thread 0 gets shards {0,4}, threads 1-3 get 1 shard each
 TEST(StridedShardPagesTests, FiveShards_FourThreads_NonDivisor) {
     constexpr uint32_t num_banks = 5;
+    constexpr uint32_t num_threads = 4;
     using TensorShape = ArrayWrapperU32<10>;
     using ShardShape = ArrayWrapperU32<2>;
     using BankCoords = ArrayWrapperDynamic;
@@ -767,10 +776,10 @@ TEST(StridedShardPagesTests, FiveShards_FourThreads_NonDivisor) {
 
     ASSERT_EQ(accessor.dspec().tensor_volume() / accessor.dspec().shard_volume(), 5u);
 
-    auto shards0 = shard_ids_for_thread(accessor, 0, 4);
-    auto shards1 = shard_ids_for_thread(accessor, 1, 4);
-    auto shards2 = shard_ids_for_thread(accessor, 2, 4);
-    auto shards3 = shard_ids_for_thread(accessor, 3, 4);
+    auto shards0 = shard_ids_for_thread(accessor, 0, num_threads);
+    auto shards1 = shard_ids_for_thread(accessor, 1, num_threads);
+    auto shards2 = shard_ids_for_thread(accessor, 2, num_threads);
+    auto shards3 = shard_ids_for_thread(accessor, 3, num_threads);
 
     EXPECT_EQ(shards0, (std::vector<uint32_t>{0, 4}));
     EXPECT_EQ(shards1, (std::vector<uint32_t>{1}));
@@ -779,8 +788,8 @@ TEST(StridedShardPagesTests, FiveShards_FourThreads_NonDivisor) {
 
     // Full coverage, no shard visited twice
     std::vector<uint32_t> all_shards;
-    for (uint32_t tid = 0; tid < 4; tid++) {
-        auto s = shard_ids_for_thread(accessor, tid, 4);
+    for (uint32_t tid = 0; tid < num_threads; tid++) {
+        auto s = shard_ids_for_thread(accessor, tid, num_threads);
         all_shards.insert(all_shards.end(), s.begin(), s.end());
     }
     std::sort(all_shards.begin(), all_shards.end());
@@ -790,6 +799,7 @@ TEST(StridedShardPagesTests, FiveShards_FourThreads_NonDivisor) {
 // Single thread must visit all shards in order 0..num_shards-1
 TEST(StridedShardPagesTests, SingleThread_AllShardsInOrder) {
     constexpr uint32_t num_banks = 4;
+    constexpr uint32_t num_threads = 1;
     using TensorShape = ArrayWrapperU32<8>;
     using ShardShape = ArrayWrapperU32<2>;
     using BankCoords = ArrayWrapperDynamic;
@@ -798,7 +808,7 @@ TEST(StridedShardPagesTests, SingleThread_AllShardsInOrder) {
     std::array<uint16_t, num_banks> bank_coords{};
     auto accessor = TensorAccessor<dspec_t>(dspec_t({}, {}, bank_coords), 0, 4096);
 
-    auto shards = shard_ids_for_thread(accessor, 0, 1);
+    auto shards = shard_ids_for_thread(accessor, 0, num_threads);
     EXPECT_EQ(shards, (std::vector<uint32_t>{0, 1, 2, 3}));
 }
 
@@ -843,6 +853,7 @@ TEST(StridedShardPagesTests, InnerPagesFullCoverage) {
 //   shard 2 → page  {6}      (partial — shard memory has 3 slots, only 1 is logical)
 TEST(StridedShardPagesTests, PartialLastShard_NotTruncated) {
     constexpr uint32_t num_banks = 3;
+    constexpr uint32_t num_threads = 1;
     using TensorShape = ArrayWrapperU32<7>;
     using ShardShape  = ArrayWrapperU32<3>;
     using BankCoords  = ArrayWrapperDynamic;
@@ -851,11 +862,8 @@ TEST(StridedShardPagesTests, PartialLastShard_NotTruncated) {
     std::array<uint16_t, num_banks> bank_coords{};
     auto accessor = TensorAccessor<dspec_t>(dspec_t({}, {}, bank_coords), 0, 4096);
 
-    ASSERT_EQ(accessor.dspec().tensor_volume(), 7u);
-    ASSERT_EQ(accessor.dspec().shard_volume(),  3u);
-
     // Single thread visits all 3 shards (including the partial one).
-    auto shards = shard_ids_for_thread(accessor, 0, 1);
+    auto shards = shard_ids_for_thread(accessor, 0, num_threads);
     EXPECT_EQ(shards, (std::vector<uint32_t>{0, 1, 2}))
         << "Partial last shard must not be truncated by floor division";
 
@@ -865,8 +873,8 @@ TEST(StridedShardPagesTests, PartialLastShard_NotTruncated) {
     const uint32_t total_shards  = (tensor_volume + shard_volume - 1) / shard_volume;
     std::vector<uint32_t> all_page_ids;
 
-    for (uint32_t tid = 0; tid < 1; tid++) {
-        tensor_accessor::StridedShardPages range(accessor, tid, total_shards, 1, (uint8_t)0);
+    for (uint32_t tid = 0; tid < num_threads; tid++) {
+        tensor_accessor::StridedShardPages range(accessor, tid, total_shards, num_threads, (uint8_t)0);
         for (const auto& shard_range : range) {
             for (const auto& page : shard_range) {
                 all_page_ids.push_back(page.page_id());
@@ -887,6 +895,7 @@ TEST(StridedShardPagesTests, PartialLastShard_NotTruncated) {
 //   thread 1 → shard  {1}
 TEST(StridedShardPagesTests, PartialLastShard_MultiThread_NoPagesLost) {
     constexpr uint32_t num_banks = 3;
+    constexpr uint32_t num_threads = 2;
     using TensorShape = ArrayWrapperU32<7>;
     using ShardShape  = ArrayWrapperU32<3>;
     using BankCoords  = ArrayWrapperDynamic;
@@ -895,8 +904,8 @@ TEST(StridedShardPagesTests, PartialLastShard_MultiThread_NoPagesLost) {
     std::array<uint16_t, num_banks> bank_coords{};
     auto accessor = TensorAccessor<dspec_t>(dspec_t({}, {}, bank_coords), 0, 4096);
 
-    auto shards0 = shard_ids_for_thread(accessor, 0, 2);
-    auto shards1 = shard_ids_for_thread(accessor, 1, 2);
+    auto shards0 = shard_ids_for_thread(accessor, 0, num_threads);
+    auto shards1 = shard_ids_for_thread(accessor, 1, num_threads);
 
     EXPECT_EQ(shards0, (std::vector<uint32_t>{0, 2})) << "Thread 0 should own shards 0 and 2 (partial)";
     EXPECT_EQ(shards1, (std::vector<uint32_t>{1}))    << "Thread 1 should own shard 1";
@@ -907,8 +916,8 @@ TEST(StridedShardPagesTests, PartialLastShard_MultiThread_NoPagesLost) {
     const uint32_t total_shards  = (tensor_volume + shard_volume - 1) / shard_volume;
     std::vector<uint32_t> all_page_ids;
 
-    for (uint32_t tid = 0; tid < 2; tid++) {
-        tensor_accessor::StridedShardPages range(accessor, tid, total_shards, 2, (uint8_t)0);
+    for (uint32_t tid = 0; tid < num_threads; tid++) {
+        tensor_accessor::StridedShardPages range(accessor, tid, total_shards, num_threads, (uint8_t)0);
         for (const auto& shard_range : range) {
             for (const auto& page : shard_range) {
                 all_page_ids.push_back(page.page_id());

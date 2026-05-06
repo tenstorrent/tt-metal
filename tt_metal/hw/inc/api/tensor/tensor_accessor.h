@@ -246,8 +246,8 @@ public:
     // Returns a proxy that iterates over the pages owned by the calling DM (strided iteration).
     // Each DM thread i (0..N-1) visits pages i, i+N, i+2N, ...
     tensor_accessor::Pages<TensorAccessor> strided_pages(uint8_t noc = noc_index) const {
-        uint32_t tid = get_my_thread_id();
-        uint32_t num_threads = get_num_threads();
+        const uint32_t tid = get_my_thread_id();
+        const uint32_t num_threads = get_num_threads();
         return tensor_accessor::Pages<TensorAccessor>(
             *this, tid, dspec().tensor_volume(), num_threads, noc);
     }
@@ -259,10 +259,13 @@ public:
         static_assert(DSpec::has_static_rank, "strided_shard_pages is only supported for static rank");
         const uint32_t tensor_volume = dspec().tensor_volume();
         const uint32_t shard_volume = dspec().shard_volume();
+        const uint32_t num_threads = get_num_threads();
+        const uint32_t tid = get_my_thread_id();
+        ASSERT(shard_volume > 0);
         // ShardPagesAddressIterator skips padded slots beyond tensor bounds, so ceiling division is safe.
         const uint32_t total_shards = (tensor_volume + shard_volume - 1) / shard_volume;
         return tensor_accessor::StridedShardPages<TensorAccessor>(
-            *this, get_my_thread_id(), total_shards, get_num_threads(), noc);
+            *this, tid, total_shards, num_threads, noc);
     }
 
 private:
