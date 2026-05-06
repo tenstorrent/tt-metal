@@ -274,20 +274,53 @@ def _collect_active_test_combos(tests_yaml_path: Path) -> list[tuple[str, str]]:
     return combos
 
 
+def _normalize_token(value: Any) -> str:
+    """Normalize string-like values for case-insensitive matching."""
+    return str(value).strip().lower()
+
+
+def _has_model_sku_coverage(targets_yaml: dict[str, Any], model_name: str, sku: str) -> bool:
+    """Return True when centralized targets include at least one entry for model/SKU."""
+    targets = targets_yaml.get("targets", {})
+    if not isinstance(targets, dict):
+        return False
+
+    model_norm = _normalize_token(model_name)
+    sku_norm = model_targets.normalize_sku(sku)
+
+    for model_key, model_block in targets.items():
+        if not isinstance(model_block, dict):
+            continue
+        aliases = model_block.get("aliases", [])
+        if not isinstance(aliases, list):
+            aliases = []
+        model_matches = _normalize_token(model_key) == model_norm or any(
+            _normalize_token(alias) == model_norm for alias in aliases
+        )
+        if not model_matches:
+            continue
+
+        skus = model_block.get("skus", {})
+        if not isinstance(skus, dict):
+            continue
+        for sku_key, sku_block in skus.items():
+            if model_targets.normalize_sku(sku_key) != sku_norm or not isinstance(sku_block, dict):
+                continue
+            entries = sku_block.get("entries", [])
+            if not isinstance(entries, list):
+                return False
+            return any(isinstance(entry, dict) for entry in entries)
+    return False
+
+
 def _validate_gap_coverage(
     tests_yaml_path: Path,
+    targets_yaml: dict[str, Any],
 ) -> list[str]:
     """Ensure each active model/SKU combo has centralized target coverage."""
     errors: list[str] = []
     for model, sku in _collect_active_test_combos(tests_yaml_path):
-        entry = model_targets.resolve_target_entry(
-            model_name=model,
-            sku=sku,
-            batch_size=None,
-            seq_len=None,
-            include_todo=True,
-        )
-        if entry is None:
+        if not _has_model_sku_coverage(targets_yaml, model_name=model, sku=sku):
             errors.append(
                 f"Active test combo model={model}, sku={sku} is missing in centralized targets "
                 "(must be active entry or explicit TODO in models/model_targets.yaml)"
@@ -344,7 +377,7 @@ def main() -> int:
             print(f"::error::{error}")
         return 1
 
-    gap_errors = _validate_gap_coverage(tests_yaml_path)
+    gap_errors = _validate_gap_coverage(tests_yaml_path, targets_yaml)
     if gap_errors:
         for error in gap_errors:
             print(f"::error::{error}")

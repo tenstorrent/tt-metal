@@ -112,6 +112,37 @@ def test_validate_perf_targets_success(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_validate_gap_coverage_accepts_concrete_dims_only_entry(tmp_path):
+    validator = _load_validator_module()
+    tests_yaml_path = tmp_path / "models_e2e_tests.yaml"
+    tests_yaml = [{"model": "llama3.2-1b", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    tests_yaml_path.write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    targets_yaml = {
+        "version": 1,
+        "targets": {
+            "llama3.2-1b": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 32,
+                                "seq_len": 1024,
+                                "status": "active",
+                                "perf": {"decode_t/s/u": 100.0},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+
+    assert validator._validate_gap_coverage(tests_yaml_path, targets_yaml) == []
+
+
 def test_validate_perf_targets_supports_compile_and_prefill_decode_metrics(tmp_path):
     (tmp_path / "generated/benchmark_data").mkdir(parents=True)
     (tmp_path / "models").mkdir(parents=True)
