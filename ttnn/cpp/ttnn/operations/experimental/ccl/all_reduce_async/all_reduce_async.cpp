@@ -221,7 +221,10 @@ ttnn::Tensor all_reduce_async(
             resolved_num_links,
             out_memory_config,
             worker_subdevice_id_opt,
-            std::nullopt);
+            std::nullopt,
+            /*use_l1_small_for_semaphores*/ false,
+            ag_global_semaphores[0],
+            barrier_semaphores[1]);
         reshaped_tensor.deallocate();
 
         // Reduce (num_devices, B, C, H, W) -> (1, B, C, H, W)
@@ -349,7 +352,12 @@ ttnn::Tensor all_reduce_async(
             resolved_num_links,
             change_mem_config ? std::nullopt : std::optional<ttnn::MemoryConfig>(out_memory_config),
             worker_subdevice_id_opt,
-            cluster_axis);
+            cluster_axis,
+            /*use_l1_small_for_semaphores*/ false,
+            ag_global_semaphores.has_value() ? std::optional<GlobalSemaphore>(ag_global_semaphores.value()[0])
+                                             : std::nullopt,
+            barrier_semaphores.has_value() ? std::optional<GlobalSemaphore>(barrier_semaphores.value()[1])
+                                           : std::nullopt);
         reshaped_tensor.deallocate();
 
         // Reduce (num_devices, B, C, H, W) -> (1, B, C, H, W)

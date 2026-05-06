@@ -36,10 +36,10 @@ AllBroadcastProgramFactory::cached_mesh_workload_t AllBroadcastProgramFactory::c
 
     auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
                                                                             : tt::tt_metal::BufferType::L1;
-    auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    auto final_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+    auto init_barrier_semaphore = operation_attributes.semaphore.value_or(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
+    auto final_barrier_semaphore = operation_attributes.barrier_semaphore.value_or(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");

@@ -90,7 +90,9 @@ std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& semaphore,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore) {
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -118,6 +120,8 @@ std::vector<ttnn::Tensor> all_broadcast(
             .output_mem_config = output_mem_config,
             .cluster_axis = cluster_axis,
             .sub_device_id = sub_device_id,
+            .semaphore = semaphore,
+            .barrier_semaphore = barrier_semaphore,
             .topology = topology,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
         input_tensor);

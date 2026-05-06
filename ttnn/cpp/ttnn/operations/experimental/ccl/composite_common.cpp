@@ -336,7 +336,9 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& semaphore,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -382,7 +384,9 @@ ttnn::Tensor composite_all_gather(
         input_tensor.memory_config(),
         num_links,
         ttnn::ccl::Topology::Linear,
-        use_l1_small_for_semaphores);
+        use_l1_small_for_semaphores,
+        semaphore,
+        barrier_semaphore);
 
     // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
@@ -406,12 +410,22 @@ std::vector<ttnn::Tensor> composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& semaphore,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore) {
     std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
         output_tensors.push_back(composite_all_gather(
-            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis, use_l1_small_for_semaphores));
+            input_tensor,
+            dim,
+            num_links,
+            memory_config,
+            subdevice_id,
+            cluster_axis,
+            use_l1_small_for_semaphores,
+            semaphore,
+            barrier_semaphore));
     }
     return output_tensors;
 }
@@ -423,7 +437,9 @@ ttnn::Tensor composite_all_to_all(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& semaphore,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -479,7 +495,9 @@ ttnn::Tensor composite_all_to_all(
         interim_memory_config,
         num_links,
         ttnn::ccl::Topology::Linear,
-        use_l1_small_for_semaphores);
+        use_l1_small_for_semaphores,
+        semaphore,
+        barrier_semaphore);
     input_tensor.deallocate();
 
     // Step 2: Slice out the index range each device cares about, along out_dim
