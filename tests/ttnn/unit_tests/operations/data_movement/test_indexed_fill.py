@@ -40,11 +40,20 @@ def test_indexed_fill_tile_layout(device, input_a_shape, input_b_shape):
     logger.info("Indexed Fill (TILE) Output Tensor Layout:", output_tensor.layout)
 
 
-def test_indexed_fill_sharded(device):
+@pytest.mark.parametrize(
+    "B, b, D",
+    [
+        (8, 3, 64),
+        (4, 2, 32),
+        (6, 4, 128),
+        (2, 1, 64),
+    ],
+    ids=["B8-b3-D64", "B4-b2-D32", "B6-b4-D128", "B2-b1-D64"],
+)
+def test_indexed_fill_sharded(device, B, b, D):
     # HEIGHT_SHARDED L1 example using the native CB-aliased fast path: input_a and the
     # output share the same shard geometry (one batch slab per core) so the kernel writes
     # the result directly into the output's per-core L1 shard with zero copy.
-    B, b, D = 8, 3, 64
     input_a_shape = (B, 1, 1, D)
     input_b_shape = (b, 1, 1, D)
 
@@ -78,22 +87,28 @@ def test_indexed_fill_sharded(device):
     logger.info("Indexed Fill (sharded) Output Memory Layout:", output_tensor.memory_config().memory_layout)
 
 
-def test_indexed_fill_block_sharded_tile(device):
+@pytest.mark.parametrize(
+    "B, H, W, b, core_grid_y, core_grid_x",
+    [
+        (4, 64, 64, 2, 2, 2),
+        (8, 64, 128, 3, 2, 4),
+        (4, 128, 64, 1, 2, 2),
+        (4, 64, 128, 2, 2, 2),
+    ],
+    ids=["B4-H64-W64-b2-2x2", "B8-H64-W128-b3-2x4", "B4-H128-W64-b1-2x2", "B4-H64-W128-b2-2x2"],
+)
+def test_indexed_fill_block_sharded_tile(device, B, H, W, b, core_grid_y, core_grid_x):
     # BLOCK_SHARDED + TILE layout exercises the SHARD_LOCAL_INTERLEAVED_B path with
     # 2D shard geometry: each core owns a (shard_H × shard_W) tile block of input_a
     # and reads its replacement rows from interleaved input_b.
-    B, H, W = 4, 64, 64
-    b = 2
-
     batch_id = torch.randint(0, B, (1, 1, 1, b))
     batch_id_ttnn = ttnn.Tensor(batch_id, ttnn.uint32).to(
         device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     )
 
-    # 2×2 core grid → each core owns (B*H/2) rows × (W/2) cols of tiles.
     block_sharded_mem_config = ttnn.create_sharded_memory_config(
         shape=(B, 1, H, W),
-        core_grid=ttnn.CoreGrid(y=2, x=2),
+        core_grid=ttnn.CoreGrid(y=core_grid_y, x=core_grid_x),
         strategy=ttnn.ShardStrategy.BLOCK,
     )
     interleaved_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
