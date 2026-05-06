@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -111,7 +112,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     auto& dispatch_core_manager = metal.get_dispatch_core_manager();
 
     if (!device->is_mmio_capable()) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: device is not MMIO-capable (remote device). "
             "D2H sockets require the sender core to sit on a PCIe-connected chip.",
@@ -120,7 +121,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     }
 
     if (hal.get_supports_64_bit_pcie_addressing() && !cluster.is_iommu_enabled()) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: this architecture uses 64-bit PCIe "
             "addressing for the D2H socket, which requires IOMMU to be enabled on the host. "
@@ -132,7 +133,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
 
     const auto fabric_tensix_config = metal.get_fabric_tensix_config();
     if (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: fabric tensix datamover is enabled "
             "(FabricTensixConfig={}, FabricUDMMode={}), and fabric_mux_core() will drain the "
@@ -147,7 +148,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
 
     std::optional<tt_cxy_pair> reserved = dispatch_core_manager.get_reserved_realtime_profiler_core(device_id);
     if (!reserved.has_value()) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: no tensix core could be reserved for the "
             "RT profiler. Dispatch is configured for ETH cores, which cannot run the RT profiler "
@@ -175,7 +176,7 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     }
 
     if (metal.rtoptions().get_kernels_nullified()) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Real-time profiler disabled on device {}: null-kernels mode is active "
             "(TT_METAL_NULL_KERNELS / set_kernels_nullified). The RT profiler kernel "
@@ -234,11 +235,14 @@ void parallel_for_each_device_index(const std::vector<size_t>& indices, Fn&& fn)
     if (indices.empty()) {
         return;
     }
+    // Single std::forward: cppcoreguidelines-missing-std-forward; callable is then invoked
+    // many times (not forwarding the parameter each time — bugprone-use-after-move).
+    std::decay_t<Fn> callable = std::forward<Fn>(fn);
     const unsigned hc = std::thread::hardware_concurrency();
     const size_t worker_count = std::min(indices.size(), static_cast<size_t>(std::max(1u, hc)));
     if (worker_count <= 1) {
         for (size_t di : indices) {
-            std::forward<Fn>(fn)(di);
+            callable(di);
         }
         return;
     }
@@ -252,7 +256,7 @@ void parallel_for_each_device_index(const std::vector<size_t>& indices, Fn&& fn)
                 if (k >= indices.size()) {
                     break;
                 }
-                std::forward<Fn>(fn)(indices[k]);
+                callable(indices[k]);
             }
         });
     }
@@ -336,9 +340,9 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         }
         CoreCoord realtime_profiler_core = eligibility.core;
 
-        log_info(
+        log_debug(
             tt::LogMetal,
-            "Using reserved tensix ({}, {}) for real-time profiler on device {}",
+            "[Real-time profiler] Using reserved tensix ({}, {}) for real-time profiler on device {}",
             realtime_profiler_core.x,
             realtime_profiler_core.y,
             device_id);
@@ -354,9 +358,9 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
 
         auto sender_core = MeshCoreCoord{coord, realtime_profiler_core};
 
-        log_info(
+        log_debug(
             tt::LogMetal,
-            "Initializing real-time profiler D2H socket for device {} on MeshDevice {}",
+            "[Real-time profiler] Initializing real-time profiler D2H socket for device {} on MeshDevice {}",
             device_id,
             mesh_device->id());
 
@@ -428,10 +432,11 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 remote_state_addr_data,
                 CoreType::WORKER);
 
-            log_info(
+            log_debug(
                 tt::LogMetal,
-                "Device {}: wrote real-time profiler core info (noc_xy=0x{:x}, remote_state_addr=0x{:x}) to dispatch_s "
-                "({}, {})",
+                "[Real-time profiler] Device {}: wrote real-time profiler core info (noc_xy=0x{:x}, "
+                "remote_state_addr=0x{:x}) "
+                "to dispatch_s ({}, {})",
                 device_id,
                 realtime_profiler_noc_xy,
                 realtime_profiler_core_state_addr,
@@ -548,9 +553,9 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             tt::tt_metal::detail::WriteToDeviceL1(
                 device, realtime_profiler_core, profiler_msg_config_field_addr, addr_data, CoreType::WORKER);
 
-            log_info(
+            log_debug(
                 tt::LogMetal,
-                "Device {}: launched real-time profiler BRISC+NCRISC kernels on core ({}, {}), "
+                "[Real-time profiler] Device {}: launched real-time profiler BRISC+NCRISC kernels on core ({}, {}), "
                 "ring_buffer_addr=0x{:x}, config_buffer_addr=0x{:x}",
                 device_id,
                 realtime_profiler_core.x,
@@ -563,7 +568,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     }
 
     if (devices_.empty()) {
-        log_warning(
+        log_debug(
             tt::LogMetal, "[Real-time profiler] No local devices found in mesh, skipping real-time profiler setup");
         return;
     }
@@ -601,7 +606,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             dev_state.sync_host_start = host_start;
             dev_state.last_finish_sync_at = init_throttle_now;
             skip_init_sync_check[di] = true;
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "[Real-time profiler] Device {}: skipping init run_sync and constructor SYNC_CHECK "
                 "(last init sync within {}s; using AICLK frequency fallback)",
@@ -619,7 +624,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         constexpr uint32_t kRetryDelayMs = 500;
         for (uint32_t attempt = 0; attempt <= kMaxSyncRetries; attempt++) {
             if (attempt > 0) {
-                log_info(
+                log_debug(
                     tt::LogMetal,
                     "[Real-time profiler] Device {} sync retry {}/{}",
                     dev_state.chip_id,
@@ -713,7 +718,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
 
             dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
 
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "[Real-time profiler] Device {} sync check: device_time={} cycles",
                 dev_state.chip_id,
@@ -733,7 +738,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         tracy::SetThreadName("RealtimeProfiler");
         uint64_t pages_received = 0;
 
-        log_info(tt::LogMetal, "[Real-time profiler] Receiver thread started for {} devices", devices_.size());
+        log_debug(tt::LogMetal, "[Real-time profiler] Receiver thread started for {} devices", devices_.size());
 
         // Process one page from a device socket. Returns true if a page was consumed.
         std::vector<uint32_t> page_buf(RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t));
@@ -845,7 +850,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 }
             }
 
-            log_info(
+            log_debug(
                 tt::LogMetal,
                 "[Real-time profiler] Receiver thread stopped after {} pages ({} drained during shutdown)",
                 pages_received,
@@ -914,7 +919,7 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
     constexpr uint32_t kSyncPageWords = 64 / sizeof(uint32_t);
     uint32_t stale_pages = dev_state.socket->discard_pending_pages();
     if (stale_pages > 0) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "[Real-time profiler] Device {} discarded {} stale pages before sync",
             dev_state.chip_id,
