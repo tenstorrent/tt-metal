@@ -107,6 +107,7 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
+    host_loopback: bool = False,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
     P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
@@ -130,10 +131,10 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
         )
 
     def stage_2(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META, host_loopback=host_loopback)
 
     def stage_3(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META, host_loopback=host_loopback)
 
     return PipelineConfiguration(
         {

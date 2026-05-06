@@ -15,6 +15,7 @@ In single-device mode (skip_ccl=True): CCL is skipped and the input is used dire
 """
 import os
 import struct
+import time
 
 import pytest
 import torch
@@ -23,7 +24,10 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
-from models.demos.deepseek_v3_b1.demo.pipeline import create_single_galaxy_spec_decode_pipeline_configuration
+from models.demos.deepseek_v3_b1.demo.pipeline import (
+    create_single_galaxy_spec_decode_pipeline_configuration,
+    create_single_pod_spec_decode_no_decoder_pipeline_configuration,
+)
 from models.demos.deepseek_v3_b1.demo.stage import TOKEN_META_PAGE_SIZE_BYTES
 from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider, _build_synthetic_mtp_state_dict
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
@@ -1705,12 +1709,15 @@ def test_d2d_to_d2h_pipeline(
 def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
     """Parse a 256-byte DeepseekMetadata output page into a dict.
 
-    Layout (64 uint32 words = 256 bytes):
-      words  0-15 : header (tok0_id, tok0_type, tok0_pos, tok1_id, tok1_type, tok1_pos,
-                             slot_id, token_id, position_id, prefill_token_id,
-                             temperature, k, probability_mass_threshold, _pad0-2)
-      words 16-47 : p_indices[32]  (uint32)
-      words 48-63 : p_scores[32]   (bf16 packed as uint16, 2 per uint32)
+    Layout (64 uint32 words = 256 bytes), kept in lock-step with metadata.hpp:
+      words  0..15 : header
+        [0]  tok0_id          [1]  tok0_type    [2]  tok0_pos
+        [3]  tok1_id          [4]  tok1_type    [5]  tok1_pos
+        [6]  slot_id          [7]  token_id     [8]  position_id
+        [9]  prefill_token_id [10] temperature  [11] k
+        [12] probability_mass_threshold        [13..15] _pad0..2
+      words 16..47 : p_indices[32]  (uint32)
+      words 48..63 : p_scores[32]   (bf16 packed as uint16, 2 per uint32)
     """
     raw = ttnn.to_torch(output_tensor).to(torch.int32).flatten()
     assert (
@@ -1749,17 +1756,34 @@ def create_input_page(
     prefill_token_id: int,
     slot_id: int,
     temperature: float = 0.0,
-    top_k: int = 0,
-    probability_mass_threshold: float = 0.0,
+    top_k: int = 1,
+    probability_mass_threshold: float = 1.0,
+    token_type: int = 0,
 ) -> ttnn.Tensor:
-    """Build a TOKEN_PAGE_SIZE_BYTES input page matching the DeepseekMetadata input layout.
+    """Build a TOKEN_META_PAGE_SIZE_BYTES (256B) input page that mirrors
+    `model.to_spec_input` exactly so the unit test feeds the pipeline with
+    the same DeepseekMetadata layout the demo uses.
 
-    Word indices (from model.py InputField):
-      [1] token_type  [2] tok0_position_id  [6] slot_id (user_id)
-      [7] token_id    [8] position_id       [9] prefill_token_id
-      [10] temperature (f32 bits)  [11] top_k  [12] probability_mass_threshold (f32 bits)
+    Layout (uint32 word indices, full DeepseekMetadata struct, 64 words = 256 B):
+      [0]  tok0_id              (output, kernel-written)
+      [1]  tok0_type / TOKEN_TYPE     (input: 0 = BASE, 1 = SPEC)
+      [2]  tok0_pos / TOKEN0_POSITION_ID
+      [3]  tok1_id              (output)
+      [4]  tok1_type            (output)
+      [5]  tok1_pos             (output)
+      [6]  slot_id / USER_ID
+      [7]  token_id             (embedding lookup id)
+      [8]  position_id
+      [9]  prefill_token_id     (-1 = decode mode, otherwise prefill embedding override)
+      [10] temperature          (fp32 bits)
+      [11] k (top-K)            (clamped to [1, 32] inside the kernel)
+      [12] probability_mass_threshold (fp32 bits, clamped to [0, 1])
+      [13..15] padding
+      [16..47] p_indices[32]    (output)
+      [48..63] p_scores[32]     (output, bf16 packed)
     """
     page = torch.zeros(1, METADATA_TENSOR_NUM_UINT32, dtype=torch.int32)
+    page[0, 1] = token_type
     page[0, 2] = position_id
     page[0, 6] = slot_id
     page[0, 7] = token_id
@@ -1789,16 +1813,23 @@ def create_input_page(
     indirect=True,
 )
 def test_persistent_mode_spec_decode(mesh_device, use_fp32):
-    """4-stage 4x2 single-galaxy pipeline with MTP + verification:
-    P1(Embedding + SpecLMHead) -> P2(BaseLMHead+EH Matmul) -> P3(Passthrough ACTIVATION_W_TOKEN_META) -> P4(Passthrough ACTIVATION_W_TOKEN_META) -> P1(D2H TOKEN_META).
+    """4-stage 4x2 single-galaxy pipeline with MTP + verification, matching
+    `create_single_galaxy_spec_decode_pipeline_configuration` in demo/pipeline.py:
 
-    The verification stage (P1) receives gathered logits + token metadata, runs its
-    own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
+      P0 (SpecLMHead + Embedding) -> P1 (BaseLMHead + MTP)
+      -> P2 (Passthrough ACTIVATION_W_TOKEN_META)
+      -> P3 (Passthrough ACTIVATION_W_TOKEN_META)
+      -> P0 (D2H TOKEN_META).
 
-    TOKEN_META page layout (uint32 words):
-      [0] num_tokens  (0=stale, 1=accept, 2=reject)
-      [1] tok0_id     [2] tok0_type (0=BASE,1=SPEC)  [3] tok0_pos
-      [4] tok1_id     [5] tok1_type                   [6] tok1_pos
+    P0 reuses host I/O exactly like the demo: H2D pushes a full 256-byte
+    DeepseekMetadata page (see `create_input_page` / `model.to_spec_input`),
+    the per-stage kernels forward (activation + metadata) downstream, and the
+    spec head writes the final 256-byte DeepseekMetadata page back to D2H.
+
+    Output page layout (see metadata.hpp / `parse_output_page` for full detail):
+      [0]  tok0_id          [1]  tok0_type    [2]  tok0_pos
+      [3]  tok1_id          [4]  tok1_type    [5]  tok1_pos
+      [16..47] p_indices    [48..63] p_scores (bf16 packed).
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -1812,12 +1843,12 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     num_procs = int(ttnn.distributed_context_get_size())
     if num_procs == 4:
         config = create_single_galaxy_spec_decode_pipeline_configuration(
-            SyntheticWeightProvider(fold_rmsnorm_weights=True),
+            SyntheticWeightProvider(),
             fp32_dest_acc_en=use_fp32,
         )
     elif num_procs == 16:
         config = create_single_pod_spec_decode_no_decoder_pipeline_configuration(
-            SyntheticWeightProvider(fold_rmsnorm_weights=True),
+            SyntheticWeightProvider(),
             fp32_dest_acc_en=use_fp32,
         )
     else:
@@ -1853,6 +1884,8 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
         else:
             logger.debug(f"[TEST] skipping golden computation")
 
+        # Reuse a single output buffer across iterations exactly like
+        # `DeepSeekV3.read_result` in the working demo (model.py).
         output_tensor = ttnn.from_torch(
             torch.zeros(1, token_meta_words, dtype=torch.int32),
             dtype=ttnn.uint32,
@@ -1861,18 +1894,23 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
 
         for iteration in range(iterations):
             logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
+
             token_tensor = create_input_page(
                 token_id=10,
                 position_id=iteration,
-                prefill_token_id=10,
+                prefill_token_id=-1,
                 slot_id=slot_id,
                 temperature=0.6,
-                top_k=32,
+                top_k=1,
                 probability_mass_threshold=1.0,
+                token_type=0,
             )
+            t0 = time.perf_counter()
             pipeline.write_token(token_tensor)
             logger.debug(f"[TEST P{pid}] iter {iteration} read_output")
             pipeline.read_output(output_tensor)
+            t1 = time.perf_counter()
+            logger.info(f"[TEST P{pid}] iter {iteration} raw_latency={1000*(t1-t0):.3f} ms")
 
             page = parse_output_page(output_tensor)
             type_name = {0: "BASE", 1: "SPEC"}
