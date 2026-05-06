@@ -1514,10 +1514,10 @@ def test_wan_decoder(
 
 
 @pytest.mark.parametrize(
-    "B, C, T, H, W, height, width, t_chunk_size",
+    "B, C, T, H, W, height, width, t_chunk_size, cached",
     [
-        (1, 16, 7, 60, 104, 480, 832, 7),
-        (1, 16, 21, 90, 160, 720, 1280, None),
+        (1, 16, 7, 60, 104, 480, 832, 7, True),
+        (1, 16, 21, 90, 160, 720, 1280, 21, False),
     ],
     ids=["480p_t7_cached", "720p_t21_fullT"],
 )
@@ -1541,6 +1541,7 @@ def test_wan_decoder_production_blocking(
     height,
     width,
     t_chunk_size,
+    cached,
     h_axis,
     w_axis,
     num_links,
@@ -1602,7 +1603,7 @@ def test_wan_decoder_production_blocking(
         height=height,
         width=width,
         t_chunk_size=t_chunk_size,
-        cached=t_chunk_size is not None,
+        cached=cached,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
@@ -1698,7 +1699,7 @@ def test_wan_encoder_production_blocking(
     dim_mult = [1, 2, 4, 4]
     num_res_blocks = 2
     attn_scales = []
-    temperal_downsample = [True, True, False]
+    temperal_downsample = [False, True, True]
     in_channels = out_channels = 3
     is_residual = False
 

@@ -325,7 +325,11 @@ def test_pipeline_performance(
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
     prepare_latents_times = [benchmark_profiler.get_duration("prepare_latents", i) for i in range(num_perf_runs)]
-    vae_encode_times = [benchmark_profiler.get_duration("vae_encode", i) for i in range(num_perf_runs)]
+    vae_encode_times = (
+        [benchmark_profiler.get_duration("vae_encode", i) for i in range(num_perf_runs)]
+        if model_type == "i2v" and benchmark_profiler.contains_step("vae_encode")
+        else []
+    )
     denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
     vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
     total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
