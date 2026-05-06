@@ -107,6 +107,7 @@ jobs:
       llk-sfpi-changed: ${{ steps.find-changes.outputs.llk-sfpi-changed }}
       llk-unit-tests-changed: ${{ steps.find-changes.outputs.llk-unit-tests-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
+      fabric-cpu-tests-changed: ${{ steps.find-changes.outputs.fabric-cpu-tests-changed }}
     steps:
       # Use the in-tree action (same as pr-gate.yaml) so the llk-* outputs above are
       # available; the previously-pinned @v0.63.0 predates the llk-unit-tests-changed flag.
@@ -366,7 +367,7 @@ jobs:
   fabric-cpu-only-unit-tests:
     needs: [build, find-changes]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
+            needs.find-changes.outputs.fabric-cpu-tests-changed == 'true'
         }}
     secrets: inherit
     strategy:
@@ -545,3 +546,4 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
           owner: "U0AK4BVCFM0,S0985AN7TC5"
+
