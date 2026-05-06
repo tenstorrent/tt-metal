@@ -433,7 +433,7 @@ def test_prefill_block_loop(
         if not skip_reference:
             # bf16 everywhere for clean PCC comparison; skip_reference (perf mode) keeps
             # production defaults (bfp8 activations, bfp4 routed weights, bfp8 shared weights)
-            block_kwargs["dispatch_buffer_capacity_factor"] = 2
+            block_kwargs["dispatch_buffer_capacity_factor"] = 8
             block_kwargs["routed_expert_activations_dtype"] = ttnn.bfloat16
             block_kwargs["routed_expert_weights_dtype"] = ttnn.bfloat16
             block_kwargs["shared_expert_activations_dtype"] = ttnn.bfloat16
