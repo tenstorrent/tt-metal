@@ -10,7 +10,10 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <cstdlib>
 #include <cstring>
+#include <map>
+#include <string>
 
 namespace ttnn::operations::experimental::turbo_quant {
 
@@ -73,6 +76,13 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     auto k_norms_df = datatype_to_dataformat_converter(k_norms.dtype());
     auto bf16_df = tt::DataFormat::Float16_b;
     auto im_df = tt::DataFormat::Float16_b;
+    // K-split BF16-boundary workaround (2026-05-06): all SDPA intermediates
+    // and cross-core merge CBs stay at BF16. The chunk-loop math runs in FP32
+    // inside DST (via fp32_dest_acc_en=true), packing back to BF16 on every CB
+    // store. The fully-FP32 CB config was tried earlier and ran into an LLK
+    // bug in the FP32 unpack-to-dest fast path that produced an interleaved
+    // DST layout in the merge cluster — see auto-memory
+    // `project_kvcache_kksplit_llk_bug` for the diagnostic trail.
 
     uint32_t q_tile_size = tile_size(q_df);
     [[maybe_unused]] uint32_t k_idx_tile_size = tile_size(k_idx_df);
@@ -377,6 +387,12 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
     // combine (see turbo_quant/LSE_COMBINE_DESIGN.md).
     compute_ct_args.push_back(attrs.return_lse ? 1 : 0);
 
+    // K-split FP32 merge-boundary DPRINTs: enable by setting TT_TQ_DPRINT_KSPLIT=1
+    // in the host environment. Off by default (no overhead in production builds).
+    std::map<std::string, std::string> compute_defines = {{"SDPA_TQ_DECODE", "1"}};
+    if (const char* dbg = std::getenv("TT_TQ_DPRINT_KSPLIT"); dbg != nullptr && std::string(dbg) != "0") {
+        compute_defines["TQ_DPRINT_KSPLIT"] = "1";
+    }
     KernelHandle compute_kernel = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/turbo_quant/sdpa/kernels/compute/sdpa_tq_decode.cpp",
@@ -386,7 +402,7 @@ SDPATQDeviceOperation::MultiCore::cached_program_t SDPATQDeviceOperation::MultiC
             .fp32_dest_acc_en = true,
             .math_approx_mode = true,
             .compile_args = compute_ct_args,
-            .defines = {{"SDPA_TQ_DECODE", "1"}}});
+            .defines = compute_defines});
 
     // ── Page table CB (paged mode only) ──
     // Single page_table row (covers one batch slot). For B cores each reading their

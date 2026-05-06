@@ -39,6 +39,16 @@
 #include "api/compute/bcast.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+// K-split FP32 merge-boundary DPRINTs (2026-05-02). Gated so they only
+// activate when TQ_DPRINT_KSPLIT is set in the kernel defines (program
+// factory passes this through). Pattern: dump 4 FP32 values from the
+// first row of the target tile at the worker pack-out, the reducer
+// wait_front, and after each max_block in the merge loop.
+#ifdef TQ_DPRINT_KSPLIT
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tile.h"
+#endif
+
 // Include existing SDPA compute building blocks (matmul_blocks, softmax helpers, etc.)
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
@@ -884,6 +894,20 @@ void kernel_main() {
                             pack_tile(0, cb_partial_max);
                             tile_regs_release();
                         }
+#ifdef TQ_DPRINT_KSPLIT
+                        // Worker side: dump just-packed cb_partial_max contents so we
+                        // can confirm the FP32 bytes leaving the worker are finite.
+                        // On TRISC, TileSlice takes only (cb, tile_idx, slice, endl_rows, untilize).
+                        DPRINT_PACK(
+                            DPRINT << "[TQ_DBG] WRK nq=" << (uint32_t)nq << " idx=" << core_idx_in_group_arg << " PMAX="
+                                   << TileSlice(
+                                          cb_partial_max,
+                                          0,
+                                          SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1},
+                                          true,
+                                          true)
+                                   << ENDL());
+#endif
                         cb_push_back(cb_partial_max, Sq_chunk_t);
 
                         // alias_prev_sum → cb_partial_sum
@@ -942,6 +966,24 @@ void kernel_main() {
                         cb_wait_front(cb_remote_sum, cores_per_head_arg * Sq_chunk_t);
                         cb_wait_front(cb_remote_out, cores_per_head_arg * out_chunk_tiles);
 
+#ifdef TQ_DPRINT_KSPLIT
+                        // Reducer side: dump cb_remote_max for every slot 0..K-1 so we
+                        // can confirm the worker bytes actually arrived intact via NoC.
+                        // Slot 0 is reducer's own (never written), slots 1..K-1 are
+                        // peer partials. TRISC TileSlice always uses unpack-side metadata.
+                        for (uint32_t s = 0; s < cores_per_head_arg; ++s) {
+                            DPRINT_UNPACK(
+                                DPRINT << "[TQ_DBG] RED nq=" << (uint32_t)nq << " RMAX[" << s << "]="
+                                       << TileSlice(
+                                              cb_remote_max,
+                                              s,
+                                              SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1},
+                                              true,
+                                              true)
+                                       << ENDL());
+                        }
+#endif
+
                         // Discard slot 0 (reducer's own slot, never written).
                         cb_pop_front(cb_remote_max, Sq_chunk_t);
                         cb_pop_front(cb_remote_sum, Sq_chunk_t);
@@ -951,6 +993,21 @@ void kernel_main() {
                             // 1. cb_merge_new_max = max(alias_prev_max, cb_remote_max[front])
                             //    max_block does NOT pop either input.
                             max_block<>(alias_prev_max, cb_remote_max, cb_merge_new_max, Sq_chunk_t);
+#ifdef TQ_DPRINT_KSPLIT
+                            // After max_block: dump cb_merge_new_max — first op in the
+                            // merge cluster; if this goes non-finite the bug is upstream
+                            // (max_block reading cross-format inputs incorrectly), if
+                            // it stays finite the bug is in a later merge op.
+                            DPRINT_UNPACK(
+                                DPRINT << "[TQ_DBG] RED nq=" << (uint32_t)nq << " w=" << w << " NEWMAX="
+                                       << TileSlice(
+                                              cb_merge_new_max,
+                                              0,
+                                              SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1},
+                                              true,
+                                              true)
+                                       << ENDL());
+#endif
 
                             // 2. cb_exp_max_diff = exp((alias_prev_max - cb_merge_new_max) * scale)
                             sub_exp_block<scale_fp32>(alias_prev_max, cb_merge_new_max, cb_exp_max_diff, Sq_chunk_t);
