@@ -370,6 +370,7 @@ void kernel_main() {
                 // row directly to output DRAM, then set c_9[0] = batch_count as the signal.
                 uint32_t metadata_unicast_bytes = batch_count * aligned_dispatched_metadata_page_size;
                 noc_async_write(metadata_base, idle_metadata_noc_addrs[current_idle_core], metadata_unicast_bytes);
+                noc_async_write_barrier();
                 noc_inline_dw_write(idle_metadata_noc_addrs[current_idle_core], batch_count);
             }
             noc_async_write_barrier();
