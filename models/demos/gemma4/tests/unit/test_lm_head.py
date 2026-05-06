@@ -5,8 +5,7 @@
 
 Loads the real lm_head weight (= embed_tokens.weight.T, tied), runs a random
 hidden state through the TT path (column-parallel linear → softcap → all-gather)
-and compares against a torch reference. Isolates whether bugs in test_full_model
-live in the lm_head path itself or upstream in the layer trunk.
+and compares against a torch reference.
 
     pytest -k "1x8"   # T3K (TP=8, column-parallel lm_head)
 """
@@ -43,7 +42,6 @@ def test_lm_head(mesh_device, reset_seeds, request):
 
     gc.collect()
 
-    vocab_size = embed_weight.shape[0]
     seq_len = 32
 
     # Random hidden state at unit RMS — matches what hits lm_head after final norm.
@@ -97,21 +95,6 @@ def test_lm_head(mesh_device, reset_seeds, request):
         tt_logits_torch = ttnn.to_torch(ttnn.get_device_tensors(logits_tt)[0]).float()
     else:
         tt_logits_torch = ttnn.to_torch(logits_tt).float()
-
-    logger.info(
-        f"ref shape={ref_logits.shape} range=[{ref_logits.min():.2f},{ref_logits.max():.2f}]  "
-        f"tt shape={tt_logits_torch.shape} range=[{tt_logits_torch.min():.2f},{tt_logits_torch.max():.2f}]"
-    )
-
-    # Per-shard PCC: catches any all-gather/ordering issue.
-    if tp > 1:
-        shard = vocab_size // tp
-        for i in range(tp):
-            s, e = i * shard, (i + 1) * shard
-            ref_s = ref_logits[..., s:e].flatten().float()
-            tt_s = tt_logits_torch[..., s:e].flatten().float()
-            pcc = torch.corrcoef(torch.stack([ref_s, tt_s]))[0, 1].item()
-            logger.info(f"  vocab[{s}:{e}] PCC: {pcc:.4f}")
 
     passing, pcc_msg = compare_tensors(tt_logits_torch, ref_logits, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"LM head PCC too low: {pcc_msg}"

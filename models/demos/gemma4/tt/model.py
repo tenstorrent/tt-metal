@@ -127,12 +127,6 @@ class Gemma4Model:
         self.hidden_size_per_layer_input = getattr(hf_config, "hidden_size_per_layer_input", 0) or 0
         n_layers = num_layers or hf_config.num_hidden_layers
 
-        # Diagnostic: when enabled, the prefill forward records each decoder
-        # layer's output as a torch tensor in self._captured_layer_outputs.
-        # Off by default — only flipped on by bisection tests.
-        self._capture_layer_outputs = False
-        self._captured_layer_outputs = None
-
         # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
         # any overrides loaded from precision_overrides.json; modules without
         # an override fall back to ``dtype`` (the model-wide default). Dtypes
@@ -480,9 +474,6 @@ class Gemma4Model:
         # Store K/V from source layers for sharing during prefill
         shared_kv_store = {}  # source_layer_idx -> (tt_k, tt_v) kept alive on device
 
-        if self._capture_layer_outputs:
-            self._captured_layer_outputs = []
-
         for i, layer in enumerate(self.layers):
             # Per-layer RoPE: sliding and global layers have different cos/sin
             if rope_mats is not None:
@@ -542,15 +533,6 @@ class Gemma4Model:
                 is_kv_shared=is_kv_shared,
                 position_idx_cache=position_idx_cache,
             )
-
-            if self._capture_layer_outputs:
-                # Pull device 0's view; hidden_states is replicated post-CCL.
-                hs_torch = (
-                    ttnn.to_torch(ttnn.get_device_tensors(hidden_states)[0])
-                    if is_mesh
-                    else ttnn.to_torch(hidden_states)
-                )
-                self._captured_layer_outputs.append(hs_torch.float().clone())
 
             # For KV source layers during prefill, capture the K/V from the attention
             # The K/V are kept alive on device (not deallocated) when keep_kv=True
