@@ -41,16 +41,16 @@ def _bf16_bits(value: float) -> int:
 class DeepseekMetadata:
     FIELD_SIZE_BYTES = 4  # Each field is uint32_t
 
+    token_type: int = 0
     tok0_id: int = 0
-    tok0_type: int = 0
     tok0_pos: int = 0
     tok1_id: int = 0
-    tok1_type: int = 0
     tok1_pos: int = 0
     slot_id: int = 0
     token_id: int = 0
     position_id: int = 0
     prefill_token_id: int = 0
+    _reserved0: int = 0
     temperature: float = 0.0
     k: int = 0
     probability_mass_threshold: float = 0.0
@@ -74,7 +74,9 @@ class DeepseekMetadata:
         # on-device DeepseekMetadata struct layout from metadata.hpp:
         #
         #   words  0..15 : header
-        #     0..12  → 13 scalar fields (floats bit-cast as uint32)
+        #     0..8   → token metadata fields
+        #     9      → reserved padding
+        #     10..12 → sampling controls (floats bit-cast as uint32)
         #     13..15 → _pad0 / _pad1 / _pad2
         #   words 16..47 : p_indices[32]  — one uint32 per index
         #   words 48..63 : p_scores[32]   — 32 bf16 packed two-per-uint32
@@ -83,16 +85,16 @@ class DeepseekMetadata:
         #
         # Total: 64 uint32 words = METADATA_TENSOR_BYTES (256 B).
         words: list[int] = [
+            self.token_type & 0xFFFFFFFF,
             self.tok0_id & 0xFFFFFFFF,
-            self.tok0_type & 0xFFFFFFFF,
             self.tok0_pos & 0xFFFFFFFF,
             self.tok1_id & 0xFFFFFFFF,
-            self.tok1_type & 0xFFFFFFFF,
             self.tok1_pos & 0xFFFFFFFF,
             self.slot_id & 0xFFFFFFFF,
             self.token_id & 0xFFFFFFFF,
             self.position_id & 0xFFFFFFFF,
             self.prefill_token_id & 0xFFFFFFFF,
+            self._reserved0 & 0xFFFFFFFF,
             _f32_bits(self.temperature),
             self.k & 0xFFFFFFFF,
             _f32_bits(self.probability_mass_threshold),

@@ -1711,11 +1711,11 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
 
     Layout (64 uint32 words = 256 bytes), kept in lock-step with metadata.hpp:
       words  0..15 : header
-        [0]  tok0_id          [1]  tok0_type    [2]  tok0_pos
-        [3]  tok1_id          [4]  tok1_type    [5]  tok1_pos
-        [6]  slot_id          [7]  token_id     [8]  position_id
-        [9]  prefill_token_id [10] temperature  [11] k
-        [12] probability_mass_threshold        [13..15] _pad0..2
+        [0]  token_type       [1]  tok0_id      [2]  tok0_pos
+        [3]  tok1_id          [4]  tok1_pos     [5]  slot_id
+        [6]  token_id         [7]  position_id  [8]  prefill_token_id
+        [9]  reserved         [10] temperature  [11] k
+        [12] probability_mass_threshold         [13..15] _pad0..2
       words 16..47 : p_indices[32]  (uint32)
       words 48..63 : p_scores[32]   (bf16 packed as uint16, 2 per uint32)
     """
@@ -1732,16 +1732,15 @@ def parse_output_page(output_tensor: ttnn.Tensor) -> dict:
     p_scores = scores_packed.float().tolist()
 
     return {
-        "tok0_id": int(raw[0].item()),
-        "tok0_type": int(raw[1].item()),
+        "token_type": int(raw[0].item()),
+        "tok0_id": int(raw[1].item()),
         "tok0_pos": int(raw[2].item()),
         "tok1_id": int(raw[3].item()),
-        "tok1_type": int(raw[4].item()),
-        "tok1_pos": int(raw[5].item()),
-        "slot_id": int(raw[6].item()),
-        "token_id": int(raw[7].item()),
-        "position_id": int(raw[8].item()),
-        "prefill_token_id": int(raw[9].item()),
+        "tok1_pos": int(raw[4].item()),
+        "slot_id": int(raw[5].item()),
+        "token_id": int(raw[6].item()),
+        "position_id": int(raw[7].item()),
+        "prefill_token_id": int(raw[8].item()),
         "temperature": _u32_to_f32(raw[10].item()),
         "k": int(raw[11].item()),
         "probability_mass_threshold": _u32_to_f32(raw[12].item()),
@@ -1765,16 +1764,16 @@ def create_input_page(
     the same DeepseekMetadata layout the demo uses.
 
     Layout (uint32 word indices, full DeepseekMetadata struct, 64 words = 256 B):
-      [0]  tok0_id              (output, kernel-written)
-      [1]  tok0_type / TOKEN_TYPE     (input: 0 = BASE, 1 = SPEC)
+      [0]  token_type           (0 = BASE, 1 = SPEC)
+      [1]  tok0_id              (output, kernel-written)
       [2]  tok0_pos / TOKEN0_POSITION_ID
       [3]  tok1_id              (output)
-      [4]  tok1_type            (output)
-      [5]  tok1_pos             (output)
-      [6]  slot_id / USER_ID
-      [7]  token_id             (embedding lookup id)
-      [8]  position_id
-      [9]  prefill_token_id     (-1 = decode mode, otherwise prefill embedding override)
+      [4]  tok1_pos             (output)
+      [5]  slot_id / USER_ID
+      [6]  token_id             (embedding lookup id)
+      [7]  position_id
+      [8]  prefill_token_id     (-1 = decode mode, otherwise prefill embedding override)
+      [9]  reserved
       [10] temperature          (fp32 bits)
       [11] k (top-K)            (clamped to [1, 32] inside the kernel)
       [12] probability_mass_threshold (fp32 bits, clamped to [0, 1])
@@ -1783,12 +1782,12 @@ def create_input_page(
       [48..63] p_scores[32]     (output, bf16 packed)
     """
     page = torch.zeros(1, METADATA_TENSOR_NUM_UINT32, dtype=torch.int32)
-    page[0, 1] = token_type
+    page[0, 0] = token_type
     page[0, 2] = position_id
-    page[0, 6] = slot_id
-    page[0, 7] = token_id
-    page[0, 8] = position_id
-    page[0, 9] = prefill_token_id
+    page[0, 5] = slot_id
+    page[0, 6] = token_id
+    page[0, 7] = position_id
+    page[0, 8] = prefill_token_id
     page[0, 10] = float_to_uint32(temperature)
     page[0, 11] = top_k
     page[0, 12] = float_to_uint32(probability_mass_threshold)
@@ -1827,8 +1826,8 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     spec head writes the final 256-byte DeepseekMetadata page back to D2H.
 
     Output page layout (see metadata.hpp / `parse_output_page` for full detail):
-      [0]  tok0_id          [1]  tok0_type    [2]  tok0_pos
-      [3]  tok1_id          [4]  tok1_type    [5]  tok1_pos
+      [0]  token_type       [1]  tok0_id      [2]  tok0_pos
+      [3]  tok1_id          [4]  tok1_pos     [5]  slot_id
       [16..47] p_indices    [48..63] p_scores (bf16 packed).
     """
     if not is_slow_dispatch():
@@ -1937,8 +1936,8 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
 
             logger.info(
                 f"[TEST P{pid}] iter {iteration} | "
-                f"t0={page['tok0_id']}/{type_name.get(page['tok0_type'], '?')} pos={page['tok0_pos']} | "
-                f"t1={page['tok1_id']}/{type_name.get(page['tok1_type'], '?')} pos={page['tok1_pos']} | "
+                f"t0={page['tok0_id']}/{type_name.get(page['token_type'], '?')} pos={page['tok0_pos']} | "
+                f"t1={page['tok1_id']} pos={page['tok1_pos']} | "
                 f"slot_id={page['slot_id']} token_id={page['token_id']} "
                 f"position_id={page['position_id']} prefill_token_id={page['prefill_token_id']} | "
                 f"temperature={page['temperature']:.4f} k={page['k']} "

@@ -201,7 +201,7 @@ def test_broadcast_rms_single_device(
     if use_socket:
         token_size_datums = token_page_size // 4
         torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-        torch_token[0, 0] = 0
+        torch_token[0, 6] = 0
         token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         h2d_socket.write_tensor(token_tensor)
         host_io.terminate(False)

@@ -111,7 +111,6 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
 @pytest.mark.parametrize(
     "token_fifo_size, embedding_fifo_factor",
     [
-        (128, 2),
         (256, 4),
         (512, 8),
     ],
@@ -127,7 +126,7 @@ def test_host_io_loopback_with_embedding(
 
     embedding_dtype = torch.bfloat16
     token_dtype = torch.uint32
-    token_size_bytes = 64
+    token_size_bytes = DeepseekMetadata.aligned_size_bytes()
 
     embedding_shape = (1, 1, vocab_size, embedding_dim)
     embedding_fifo_size = embedding_dim * dtype_size(embedding_dtype) * embedding_fifo_factor
@@ -415,8 +414,8 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
 @pytest.mark.parametrize(
     "token_fifo_size, embedding_fifo_factor",
     [
-        (128, 2),
         (256, 4),
+        (512, 8),
     ],
 )
 @pytest.mark.parametrize(
@@ -447,7 +446,7 @@ def test_multi_stage_pipeline_loopback_with_embedding(
 
     embedding_dtype = torch.bfloat16
     token_dtype = torch.uint32
-    token_size_bytes = 64
+    token_size_bytes = DeepseekMetadata.aligned_size_bytes()
 
     embedding_shape = (1, 1, vocab_size, embedding_dim)
     embedding_fifo_size = embedding_dim * dtype_size(embedding_dtype) * embedding_fifo_factor
