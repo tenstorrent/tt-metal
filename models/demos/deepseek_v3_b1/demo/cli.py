@@ -17,7 +17,11 @@ from transformers import AutoTokenizer
 
 import ttnn
 from conftest import bh_2d_mesh_device_context
-from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
+from models.demos.deepseek_v3_b1.demo.model_pipeline import (
+    DEFAULT_RELAXED_ACCEPT_DELTA,
+    DEFAULT_RELAXED_ACCEPT_TOPN,
+    ModelPipeline,
+)
 from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
@@ -131,6 +135,18 @@ def create_parser() -> argparse.ArgumentParser:
         help="Number of users/slots (KV cache batch size) for the decoder stages",
     )
     parser.add_argument(
+        "--relaxed-accept-topn",
+        type=int,
+        default=DEFAULT_RELAXED_ACCEPT_TOPN,
+        help="Number of target-model top probabilities used for relaxed speculative acceptance",
+    )
+    parser.add_argument(
+        "--relaxed-accept-delta",
+        type=float,
+        default=DEFAULT_RELAXED_ACCEPT_DELTA,
+        help="Accept speculative token when prob(token) >= prob(top1) - delta",
+    )
+    parser.add_argument(
         "--launch-only",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -168,6 +184,8 @@ def run_demo(
     launch_only: bool = False,
     io_socket_descriptor_prefix: str | None = None,
     num_slots: int = 64,
+    relaxed_accept_topn: int = DEFAULT_RELAXED_ACCEPT_TOPN,
+    relaxed_accept_delta: float = DEFAULT_RELAXED_ACCEPT_DELTA,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -186,6 +204,8 @@ def run_demo(
             moe_layer_id_override=moe_layer_id_override,
             io_socket_descriptor_prefix=io_socket_descriptor_prefix,
             num_slots=num_slots,
+            relaxed_accept_topn=relaxed_accept_topn,
+            relaxed_accept_delta=relaxed_accept_delta,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -264,6 +284,8 @@ def main(argv: list[str] | None = None) -> int:
         launch_only=args.launch_only,
         io_socket_descriptor_prefix=io_socket_descriptor_prefix,
         num_slots=args.num_slots,
+        relaxed_accept_topn=args.relaxed_accept_topn,
+        relaxed_accept_delta=args.relaxed_accept_delta,
     )
     print(file=sys.stdout, flush=True)
     return 0

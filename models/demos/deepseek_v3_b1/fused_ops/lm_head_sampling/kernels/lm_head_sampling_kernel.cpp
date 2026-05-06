@@ -106,6 +106,7 @@ struct Core {
     static constexpr bool enable_mtp = get_named_compile_time_arg_val("enable_mtp") == 1;
     static constexpr bool is_base_stage = get_named_compile_time_arg_val("is_mtp_base_stage") == 1;
     static constexpr bool is_spec_stage = get_named_compile_time_arg_val("is_mtp_verify_stage") == 1;
+    static constexpr uint32_t num_speculative_tokens = get_named_compile_time_arg_val("num_speculative_tokens");
     static constexpr bool is_eh_matmul_core = enable_mtp && get_named_compile_time_arg_val("is_eh_matmul_core") == 1;
     static constexpr bool is_eh_reduce_worker_core =
         enable_mtp && get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
@@ -117,6 +118,11 @@ struct Core {
     // ── Verify stage metadata transfer ───────────────────────────────
     static constexpr bool is_exit_device = get_named_compile_time_arg_val("is_exit_device") == 1;
 };
+
+static_assert(Core::num_speculative_tokens >= 1, "num_speculative_tokens must be at least 1");
+static_assert(
+    Core::num_speculative_tokens <= deepseek_b1_ops::MAX_SPECULATIVE_TOKENS,
+    "num_speculative_tokens exceeds the fixed metadata token slots");
 
 void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
@@ -641,28 +647,39 @@ void kernel_main() {
 
     uint32_t iteration_count = 0;
 #if defined(COMPILE_FOR_BRISC)
-    // Pack up to 2 tokens into a single TOKEN_META page (64 bytes) in the given CB.
-    // Layout: [token_type, tok0_id, tok0_pos, tok1_id, tok1_pos, slot_id, token_id, position_id, ...]
+    // Pack token metadata into a fixed-size TOKEN_META page in the given CB.
     auto write_token_metadata_to_socket_cb = [](uint32_t cb,
                                                 uint32_t token_type,
-                                                uint32_t tok0_id,
-                                                uint32_t tok0_pos,
-                                                uint32_t tok1_id = 0,
-                                                uint32_t tok1_pos = 0,
+                                                uint32_t slot_id = 0,
+                                                uint32_t input_token_id = 0,
                                                 uint32_t input_pos_id = 0,
-                                                uint32_t slot_id = 0) {
-        cb_reserve_back(cb, 1);
+                                                uint32_t prefill_token_id = 0,
+                                                uint32_t lane_idx = 0,
+                                                uint32_t window_start_pos = 0,
+                                                uint32_t num_window_tokens = 0,
+                                                const uint32_t* candidate_token_ids = nullptr,
+                                                const uint32_t* candidate_positions = nullptr,
+                                                uint32_t metadata_num_pages = 1) {
+        cb_reserve_back(cb, metadata_num_pages);
         volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb));
+        for (uint32_t i = 0; i < deepseek_b1_ops::METADATA_PAGE_WORDS; ++i) {
+            page[i] = 0;
+        }
         page[0] = token_type;
-        page[1] = tok0_id;
-        page[2] = tok0_pos;
-        page[3] = tok1_id;
-        page[4] = tok1_pos;
-        page[5] = slot_id;
-        page[6] = 0;  // input token id
-        page[7] = input_pos_id;
-        page[8] = 0;  // prefill token id
-        cb_push_back(cb, 1);
+        page[1] = slot_id;
+        page[2] = input_token_id;
+        page[3] = input_pos_id;
+        page[4] = prefill_token_id;
+        page[5] = lane_idx;
+        page[6] = window_start_pos;
+        page[7] = num_window_tokens;
+        if (candidate_token_ids != nullptr && candidate_positions != nullptr) {
+            for (uint32_t slot_idx = 0; slot_idx < deepseek_b1_ops::MAX_WINDOW_TOKENS; ++slot_idx) {
+                page[8 + slot_idx] = candidate_token_ids[slot_idx];
+                page[8 + deepseek_b1_ops::MAX_WINDOW_TOKENS + slot_idx] = candidate_positions[slot_idx];
+            }
+        }
+        cb_push_back(cb, metadata_num_pages);
     };
 #endif
 
@@ -731,7 +748,7 @@ void kernel_main() {
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t argmax_noc_x = get_named_compile_time_arg_val("argmax_core_noc_x");
             constexpr uint32_t argmax_noc_y = get_named_compile_time_arg_val("argmax_core_noc_y");
-            constexpr uint32_t metadata_size = 64;
+            constexpr uint32_t metadata_size = sizeof(deepseek_b1_ops::DeepseekMetadata);
             constexpr uint32_t bcast_num_pages = 225;
             constexpr uint32_t activation_size_bytes = 14336;
             uint32_t rmsnorm_buffer_addr = get_read_ptr(rmsnorm_input_cb);
@@ -1026,21 +1043,41 @@ void kernel_main() {
             // Write token metadata to gather destination CB
             invalidate_l1_cache();
             uint32_t token_type = metadata_ptr->token_type;
-            uint32_t base_token_pos = metadata_ptr->position_id;
-            uint32_t input_pos_id = metadata_ptr->tok0_pos + 1;
+            uint32_t base_token_pos = metadata_ptr->position_id + 1;
+            uint32_t input_pos_id = metadata_ptr->position_id;
             uint32_t slot_id = metadata_ptr->slot_id;
+            uint32_t lane_idx = metadata_ptr->lane_idx;
+            uint32_t window_start_pos = metadata_ptr->window_start_pos + 1;
+            uint32_t num_window_tokens = metadata_ptr->num_window_tokens != 0 ? metadata_ptr->num_window_tokens : 1;
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t argmax_socket_cb = get_named_compile_time_arg_val("argmax_socket_cb");
             constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages");
+            constexpr uint32_t eh_gather_metadata_num_pages =
+                get_named_compile_time_arg_val("gather_metadata_num_pages");
 
             cb_reserve_back(eh_gather_dst_cb, eh_gather_num_pages);
             cb_push_back(eh_gather_dst_cb, eh_gather_num_pages);
 
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
+            uint32_t candidate_token_ids[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            uint32_t candidate_positions[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            candidate_token_ids[0] = base_token_id;
+            candidate_positions[0] = base_token_pos;
             write_token_metadata_to_socket_cb(
-                eh_gather_dst_cb, token_type, base_token_id, base_token_pos, 0, 0, input_pos_id, slot_id);
+                eh_gather_dst_cb,
+                token_type,
+                slot_id,
+                0,
+                input_pos_id,
+                0,
+                lane_idx,
+                window_start_pos,
+                num_window_tokens,
+                candidate_token_ids,
+                candidate_positions,
+                eh_gather_metadata_num_pages);
             cb_pop_front(argmax_socket_cb, 1);
         }
 #endif
@@ -1055,8 +1092,7 @@ void kernel_main() {
     // token from metadata L1 (transferred by NCRISC during the broadcast phase), and
     // writes a TOKEN_META page with both tokens back to CB 6.
     //
-    // Metadata layout from base stage (at metadata_output_l1_addr):
-    //   [0] = token_type, [1] = tok0_id, [2] = tok0_pos, [3] = tok1_id, [4] = tok1_pos, ...
+    // Metadata layout from base stage (at metadata_output_l1_addr) is DeepseekMetadata.
     // ========================================================================
     auto update_speculative_state = [&]() {
 #if defined(COMPILE_FOR_BRISC)
@@ -1080,24 +1116,36 @@ void kernel_main() {
             volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
                 reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
             invalidate_l1_cache();
-            uint32_t base_token_id = metadata_ptr->tok0_id;
+            uint32_t base_token_id = metadata_ptr->candidate_token_ids[0];
             uint32_t token_type = metadata_ptr->token_type;
-            uint32_t base_token_pos = metadata_ptr->tok0_pos + 1;
+            uint32_t base_token_pos = metadata_ptr->candidate_positions[0];
             uint32_t slot_id = metadata_ptr->slot_id;
-            uint32_t spec_token_pos = metadata_ptr->tok0_pos + 2;
+            uint32_t spec_token_pos = base_token_pos + 1;
             uint32_t input_pos_id = metadata_ptr->position_id;
+            uint32_t lane_idx = metadata_ptr->lane_idx;
+            uint32_t window_start_pos = metadata_ptr->window_start_pos;
+            uint32_t num_window_tokens = metadata_ptr->num_window_tokens >= 2 ? metadata_ptr->num_window_tokens : 2;
             cb_pop_front(argmax_socket_cb, 1);
 
             // Push the base and speculative tokens to the argmax socket CB that will be written to the socket later
+            uint32_t candidate_token_ids[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            uint32_t candidate_positions[deepseek_b1_ops::MAX_WINDOW_TOKENS] = {0};
+            candidate_token_ids[0] = base_token_id;
+            candidate_positions[0] = base_token_pos;
+            candidate_token_ids[1] = spec_token_id;
+            candidate_positions[1] = spec_token_pos;
             write_token_metadata_to_socket_cb(
                 argmax_socket_cb,
                 token_type,
-                base_token_id,
-                base_token_pos,
-                spec_token_id,
-                spec_token_pos,
+                slot_id,
+                0,
                 input_pos_id,
-                slot_id);
+                0,
+                lane_idx,
+                window_start_pos,
+                num_window_tokens,
+                candidate_token_ids,
+                candidate_positions);
         }
 #endif
     };
@@ -1132,7 +1180,9 @@ void kernel_main() {
             if constexpr (Core::is_base_stage) {
                 if constexpr (Core::enable_mtp) {
                     constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
-                    constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages") + 1;
+                    constexpr uint32_t eh_gather_num_pages =
+                        get_named_compile_time_arg_val("gather_dst_num_pages") +
+                        get_named_compile_time_arg_val("gather_metadata_num_pages");
                     constexpr uint32_t eh_gather_total_bytes =
                         get_named_compile_time_arg_val("gather_send_total_bytes");
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(

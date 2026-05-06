@@ -32,6 +32,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MESH_LEAF, MESH_ROOT1, MESH_ROOT2, MESH_ROOT3
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul.op import get_max_page_size_and_num_pages
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_device_role as get_reduce_device_role
@@ -63,7 +64,7 @@ def _is_singleton_prefix_shape(shape, expected_last_dim: int) -> bool:
 # hold token metadata (see demo/stage.py). RMSNorm + gamma still apply only to the first K activations.
 # If we use input_shape[-1] for RMS tile picking, (K+32)//32 can make (num_cols % 32) != 0 and incorrectly
 # select the 16x32 RMS path while rms_num_tiles stays 7 (seven 32x32 tiles = K elements) — wrong norm.
-_SPEC_VERIFY_METADATA_BF16_COLS = 32
+_SPEC_VERIFY_METADATA_BF16_COLS = DeepseekMetadata.aligned_size_bytes() // 2
 
 
 class LMHeadSampling:
@@ -289,6 +290,7 @@ class LMHeadSampling:
         reduce_output_tensor=None,
         mtp_bcast_semaphores=None,
         base_token_buffer=None,
+        num_speculative_tokens=1,
     ):
         logger.debug(f"broadcast sender_coord={sender_coord}")
         """
@@ -332,6 +334,12 @@ class LMHeadSampling:
         logger.debug(
             f"[OP] entered mtp_base={is_mtp_base_stage} mtp_verify={is_mtp_verify_stage} persistent={persistent_mode}",
         )
+        if not 1 <= int(num_speculative_tokens) <= DeepseekMetadata.MAX_SPECULATIVE_TOKENS:
+            raise ValueError(
+                f"num_speculative_tokens must be between 1 and {DeepseekMetadata.MAX_SPECULATIVE_TOKENS}, "
+                f"got {num_speculative_tokens}"
+            )
+        num_speculative_tokens = int(num_speculative_tokens)
         # LMHeadSampling is always fused with k=1 sampling (argmax fast path).
 
         enable_argmax = True
@@ -355,7 +363,7 @@ class LMHeadSampling:
         socket_mode_none = 0
         socket_mode_d2h = 1
         socket_mode_d2d = 2
-        socket_page_size_bytes = 64
+        socket_page_size_bytes = DeepseekMetadata.aligned_size_bytes()
         input_socket_mode_none = 0
         input_socket_mode_d2d = 2
 
@@ -1018,8 +1026,13 @@ class LMHeadSampling:
                 # [MTP] EH output parameters (used by socket send for gather_dst_cb sizing)
                 eh_output_tile_size = out_tile.get_tile_size(data_format) if enable_mtp_on_device else 0
                 eh_gather_dst_num_pages = eh_matmul_num_cores * eh_out_w_per_core if enable_mtp_on_device else 0
+                eh_gather_metadata_num_pages = (
+                    DeepseekMetadata.aligned_size_bytes() // eh_output_tile_size if enable_mtp_on_device else 0
+                )
                 eh_gather_send_total_bytes = (
-                    (eh_gather_dst_num_pages + 1) * eh_output_tile_size if enable_mtp_on_device else 0
+                    (eh_gather_dst_num_pages * eh_output_tile_size + DeepseekMetadata.aligned_size_bytes())
+                    if enable_mtp_on_device
+                    else 0
                 )
                 eh_gather_output_tensor = eh_gather_per_device[device_idx] if eh_gather_per_device is not None else None
 
@@ -1140,6 +1153,7 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("num_speculative_tokens", num_speculative_tokens),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
@@ -1261,6 +1275,7 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("num_speculative_tokens", num_speculative_tokens),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
@@ -1298,6 +1313,7 @@ class LMHeadSampling:
                     ("metadata_ready_semaphore_id", metadata_ready_semaphore_id),
                     ("gather_dst_cb", eh_gather_dst_cb if enable_mtp_on_device else 0),
                     ("gather_dst_num_pages", eh_gather_dst_num_pages),
+                    ("gather_metadata_num_pages", eh_gather_metadata_num_pages),
                     ("gather_send_total_bytes", eh_gather_send_total_bytes),
                     ("metadata_output_l1_addr", metadata_output_l1_addr),
                     ("is_e_norm_device", 1 if is_e_norm_device else 0),
@@ -1362,6 +1378,7 @@ class LMHeadSampling:
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("num_speculative_tokens", num_speculative_tokens),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),

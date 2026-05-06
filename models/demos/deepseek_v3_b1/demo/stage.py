@@ -18,6 +18,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import (
@@ -37,7 +38,7 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
 )
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
-TOKEN_PAGE_SIZE_BYTES = 64
+TOKEN_PAGE_SIZE_BYTES = DeepseekMetadata.aligned_size_bytes()
 TOKEN_FIFO_NUM_PAGES = 64
 TOKEN_FIFO_SIZE = TOKEN_PAGE_SIZE_BYTES * TOKEN_FIFO_NUM_PAGES
 ACTIVATION_DIM = 7168
@@ -65,17 +66,26 @@ ARGMAX_RELAY_CORE = ttnn.CoreCoord(12, 2)
 embedding_dim = 7168
 mtp_output_dim = 7168
 num_dram_banks = 8
-METADATA_NUM_ELEMS = 32
+METADATA_NUM_ELEMS = DeepseekMetadata.aligned_size_bytes() // 2
 mtp_n_per_core = mtp_output_dim // num_dram_banks
 mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
 # Token metadata payload: just token info (id, type, pos) — same physical size as TOKEN.
-TOKEN_META_PAGE_SIZE_BYTES = TOKEN_PAGE_SIZE_BYTES
+TOKEN_META_PAGE_SIZE_BYTES = DeepseekMetadata.aligned_size_bytes()
 TOKEN_META_FIFO_SIZE = TOKEN_FIFO_SIZE
 
 # Activation + token metadata payload: logits + 1 metadata tile (token).
 ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = ACTIVATION_PAGE_SIZE_BYTES + TOKEN_PAGE_SIZE_BYTES
 ACTIVATION_W_TOKEN_META_FIFO_SIZE = activation_fifo_size_bytes(ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES)
+
+
+def _validate_num_speculative_tokens(num_speculative_tokens: int) -> int:
+    if not 1 <= num_speculative_tokens <= DeepseekMetadata.MAX_SPECULATIVE_TOKENS:
+        raise ValueError(
+            f"num_speculative_tokens must be between 1 and {DeepseekMetadata.MAX_SPECULATIVE_TOKENS}, "
+            f"got {num_speculative_tokens}"
+        )
+    return int(num_speculative_tokens)
 
 
 @dataclass
@@ -316,11 +326,13 @@ class SpecLMHeadStage(StageKind):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         spec_weights: DeepSeekV3SpecWeights | None = None,
+        num_speculative_tokens: int = 1,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
         self._spec_weights = spec_weights
+        self._num_speculative_tokens = _validate_num_speculative_tokens(num_speculative_tokens)
         self._state: dict[str, Any] = {}
 
     def _get_sender_coord(self, ctx: StageContext, pipeline_block):
@@ -362,7 +374,7 @@ class SpecLMHeadStage(StageKind):
         my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
 
-        # +32 for metadata (32 * 2 bytes = 64 bytes of metadata)
+        # Extra BF16 columns carry the fixed-size MTP metadata page.
         torch_a = torch.zeros((SpecLMHeadStage.M, SpecLMHeadStage.K + METADATA_NUM_ELEMS), dtype=torch.bfloat16)
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
@@ -468,7 +480,7 @@ class SpecLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        # Metadata buffer on argmax_final_core (64 B TOKEN_META page; NCRISC unicast target).
+        # Metadata buffer on argmax_final_core (TOKEN_META page; NCRISC unicast target).
         METADATA_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
         metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -546,6 +558,7 @@ class SpecLMHeadStage(StageKind):
             is_mtp_base_stage=False,
             is_mtp_verify_stage=True,
             metadata_tensor=d["metadata_tensor"],
+            num_speculative_tokens=self._num_speculative_tokens,
         )
 
 
@@ -575,6 +588,7 @@ class BaseLMHeadStage(StageKind):
         send_mtp_output_downstream: bool = False,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        num_speculative_tokens: int = 1,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
@@ -587,6 +601,7 @@ class BaseLMHeadStage(StageKind):
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
         self._send_mtp_output_downstream = send_mtp_output_downstream and self._enable_mtp
+        self._num_speculative_tokens = _validate_num_speculative_tokens(num_speculative_tokens)
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -844,9 +859,13 @@ class BaseLMHeadStage(StageKind):
 
         if self._enable_mtp:
             eh_out_w_per_core = mtp_n_per_core // BaseLMHeadStage.OUT_TILE.tile_shape[1]
-            eh_gather_total_tiles = num_dram_banks * eh_out_w_per_core + 1
             out_tile_h = BaseLMHeadStage.OUT_TILE.tile_shape[0]
             out_tile_w = BaseLMHeadStage.OUT_TILE.tile_shape[1]
+            metadata_tile_size_bytes = out_tile_h * out_tile_w * 2
+            if TOKEN_META_PAGE_SIZE_BYTES % metadata_tile_size_bytes != 0:
+                raise ValueError("TOKEN_META_PAGE_SIZE_BYTES must be divisible by BaseLMHeadStage.OUT_TILE size")
+            metadata_tile_pages = TOKEN_META_PAGE_SIZE_BYTES // metadata_tile_size_bytes
+            eh_gather_total_tiles = num_dram_banks * eh_out_w_per_core + metadata_tile_pages
             eh_gather_shard_shape = (eh_gather_total_tiles * out_tile_h, out_tile_w)
             eh_gather_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -960,6 +979,7 @@ class BaseLMHeadStage(StageKind):
             reduce_output_tensor=d.get("eh_gather_output_buf"),
             mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
             base_token_buffer=d.get("base_token_buffer"),
+            num_speculative_tokens=self._num_speculative_tokens,
         )
 
 
@@ -1144,12 +1164,14 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         persistent_mode: bool = True,
         spec_weights: DeepSeekV3SpecWeights | None = None,
         loopback_input_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
+        num_speculative_tokens: int = 1,
     ) -> None:
         super().__init__(
             weights,
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=spec_weights,
+            num_speculative_tokens=num_speculative_tokens,
         )
         self._embedding_weights = embedding_weights
         self._loopback_input_fifo_pages = loopback_input_fifo_pages

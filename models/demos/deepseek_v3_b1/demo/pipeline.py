@@ -78,6 +78,7 @@ def create_single_galaxy_pipeline_configuration(
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
     enable_mtp: bool = False,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
@@ -100,6 +101,7 @@ def create_single_galaxy_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device) if enable_mtp else None,
             upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
             downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     return PipelineConfiguration(
@@ -117,6 +119,7 @@ def create_single_galaxy_pipeline_spec_stage_only_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META
@@ -133,6 +136,7 @@ def create_single_galaxy_pipeline_spec_stage_only_configuration(
             weights=weight_provider.load_lm_head(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     return PipelineConfiguration(
@@ -150,6 +154,7 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy MTP speculative decoding pipeline:
     Embed -> LMHead+MTP -> Passthrough(ACTIVATION_W_TOKEN_META) -> Verify -> loopback(TOKEN_META)."""
@@ -171,6 +176,7 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
             downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def stage_2(device: ttnn.MeshDevice) -> StageKind:
@@ -182,6 +188,7 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=weight_provider.load_spec(device),
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     return PipelineConfiguration(
@@ -199,6 +206,7 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
     P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
@@ -211,6 +219,7 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
             persistent_mode=persistent_mode,
             spec_weights=weight_provider.load_spec(device),
             loopback_input_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
@@ -232,6 +241,7 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
             downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     return PipelineConfiguration(
@@ -310,6 +320,7 @@ def create_single_pod_pipeline_configuration(
     enable_mtp: bool = False,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
 
@@ -332,6 +343,7 @@ def create_single_pod_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device) if enable_mtp else None,
             upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
             downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def _dense_stage(layer_id: int):
@@ -384,6 +396,7 @@ def create_sp4_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """64-stage super-pod: Embed -> Dense(0,1,2) -> Decoder(3..60) -> LMHead -> Token fwd.
 
@@ -399,6 +412,7 @@ def create_sp4_pipeline_configuration(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=weight_provider.load_spec(device) if enable_mtp else None,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
@@ -412,6 +426,7 @@ def create_sp4_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
             downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def _dense_stage(layer_id: int):
@@ -467,6 +482,7 @@ def create_pipeline_configuration_from_num_procs(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
     if num_procs == 4:
@@ -475,6 +491,7 @@ def create_pipeline_configuration_from_num_procs(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             enable_mtp=enable_mtp,
+            num_speculative_tokens=num_speculative_tokens,
         )
     if num_procs == 16:
         assert enable_mtp, "16-proc pipeline currently requires enable_mtp=True and uses the spec decode topology"
@@ -486,6 +503,7 @@ def create_pipeline_configuration_from_num_procs(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             num_slots=num_slots,
+            num_speculative_tokens=num_speculative_tokens,
         )
     if num_procs == 64:
         return create_sp4_pipeline_configuration(
@@ -496,6 +514,7 @@ def create_pipeline_configuration_from_num_procs(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             num_slots=num_slots,
+            num_speculative_tokens=num_speculative_tokens,
         )
     raise ValueError(f"Unsupported num_procs: {num_procs}")
 
@@ -669,6 +688,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
 
@@ -684,6 +704,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=weight_provider.load_spec(device) if enable_mtp else None,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
@@ -697,6 +718,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             upstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
             downstream_fifo_pages=LMHEAD_SPECIAL_FIFO_PAGES if enable_mtp else DEFAULT_ACTIVATION_FIFO_PAGES,
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def _dense_stage(layer_id: int):
@@ -750,6 +772,7 @@ def create_single_pod_combined_spec_decode_pipeline_configuration(
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
+    num_speculative_tokens: int = 1,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
     P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
@@ -760,7 +783,8 @@ def create_single_pod_combined_spec_decode_pipeline_configuration(
             embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            shared_head_norm=weight_provider.load_shared_head_norm(device),
+            spec_weights=weight_provider.load_spec(device),
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     def passthrough_stage(device: ttnn.MeshDevice) -> StageKind:
@@ -774,6 +798,7 @@ def create_single_pod_combined_spec_decode_pipeline_configuration(
             mtp_weights=weight_provider.load_mtp(device),
             send_mtp_output_downstream=True,
             embedding_weights=weight_provider.load_embedding(device),
+            num_speculative_tokens=num_speculative_tokens,
         )
 
     return PipelineConfiguration(

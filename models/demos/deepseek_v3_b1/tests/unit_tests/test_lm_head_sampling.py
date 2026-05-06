@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSamp
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
+from models.demos.deepseek_v3_b1.model import MAX_WINDOW_TOKENS, InputField, OutputField
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
     create_fabric_router_config,
@@ -1292,15 +1293,20 @@ def _create_reference_spec_decode_pipeline_configuration(
     return PipelineConfiguration({0: stage_0, 1: stage_1, 2: stage_2, 3: stage_3})
 
 
-def _parse_token_meta_page(raw: torch.Tensor) -> dict[str, int]:
+def _parse_token_meta_page(raw: torch.Tensor) -> dict[str, int | list[int]]:
     raw = raw.to(torch.uint32).flatten()
     return {
-        "token_type": int(raw[0].item()),
-        "tok0_id": int(raw[1].item()),
-        "tok0_pos": int(raw[2].item()),
-        "tok1_id": int(raw[3].item()),
-        "tok1_pos": int(raw[4].item()),
-        "slot_id": int(raw[5].item()),
+        "token_type": int(raw[OutputField.TOKEN_TYPE].item()),
+        "slot_id": int(raw[OutputField.USER_ID].item()),
+        "lane_idx": int(raw[OutputField.LANE_IDX].item()),
+        "window_start_pos": int(raw[OutputField.WINDOW_START_POS].item()),
+        "num_window_tokens": int(raw[OutputField.NUM_WINDOW_TOKENS].item()),
+        "candidate_token_ids": [
+            int(raw[OutputField.CANDIDATE_TOKEN_IDS + slot_idx].item()) for slot_idx in range(MAX_WINDOW_TOKENS)
+        ],
+        "candidate_positions": [
+            int(raw[OutputField.CANDIDATE_POSITIONS + slot_idx].item()) for slot_idx in range(MAX_WINDOW_TOKENS)
+        ],
     }
 
 
@@ -1555,7 +1561,7 @@ def _compute_reference_payload_mtp_metrics_ttnn(
 
         for row_idx in range(total_rows):
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 6] = row_idx
+            torch_token[0, InputField.TOKEN_ID] = row_idx
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, token_meta_words, dtype=torch.uint32),
@@ -1566,8 +1572,8 @@ def _compute_reference_payload_mtp_metrics_ttnn(
             pipeline.read_output(output_tensor)
             token_meta = _parse_token_meta_page(ttnn.to_torch(output_tensor))
 
-            got_base_token = token_meta["tok0_id"]
-            got_spec_token = token_meta["tok1_id"]
+            got_base_token = token_meta["candidate_token_ids"][0]
+            got_spec_token = token_meta["candidate_token_ids"][1]
             expected_base_token = int(base_output_tokens[row_idx].item())
             expected_spec_token = int(mtp_speculation_tokens[row_idx].item())
 
@@ -4429,7 +4435,7 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_p
 
         if pipeline.my_mesh_id == 0:
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 6] = 0
+            torch_token[0, InputField.TOKEN_ID] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
@@ -4500,7 +4506,7 @@ def test_persistent_mode(mesh_device, use_fp32, device_params):
         for iteration in range(iterations):
             logger.info(f"Writing token for iteration {iteration}")
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 6] = iteration
+            torch_token[0, InputField.TOKEN_ID] = iteration
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
@@ -4547,9 +4553,8 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
     The verification stage (P4) receives gathered logits + token metadata, runs its
     own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
 
-    TOKEN_META page layout (uint32 words):
-      [0] token_type  [1] tok0_id  [2] tok0_pos
-      [3] tok1_id     [4] tok1_pos                    [5] slot_id
+    TOKEN_META page layout is the fixed DeepseekMetadata page:
+      header fields, candidate_token_ids[0:5], then candidate_positions[0:5].
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -4598,7 +4603,10 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
             for iteration in range(iterations):
                 logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 6] = iteration
+                torch_token[0, InputField.TOKEN_ID] = iteration
+                torch_token[0, InputField.POSITION_ID] = iteration
+                torch_token[0, InputField.WINDOW_START_POS] = iteration
+                torch_token[0, InputField.NUM_WINDOW_TOKENS] = 2
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
                     torch.zeros(1, token_meta_words, dtype=torch.uint32),
@@ -4611,11 +4619,11 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                 logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
                 raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
-                token_type = raw[0].item()
-                tok0_id = raw[1].item()
-                tok0_pos = raw[2].item()
-                tok1_id = raw[3].item()
-                tok1_pos = raw[4].item()
+                token_type = raw[OutputField.TOKEN_TYPE].item()
+                candidate0_id = raw[OutputField.CANDIDATE_TOKEN_IDS].item()
+                candidate0_pos = raw[OutputField.CANDIDATE_POSITIONS].item()
+                candidate1_id = raw[OutputField.CANDIDATE_TOKEN_IDS + 1].item()
+                candidate1_pos = raw[OutputField.CANDIDATE_POSITIONS + 1].item()
 
                 if run_golden:
                     expected_base, expected_spec = golden[iteration]
@@ -4626,9 +4634,9 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                 type_name = {0: "BASE", 1: "SPEC"}
                 logger.debug(
                     f"[TEST P{pid}] iter {iteration} "
-                    f"t0={tok0_id}/{type_name.get(token_type,'?')} "
-                    f"t1={tok1_id} ",
-                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
+                    f"candidate0={candidate0_id}/{type_name.get(token_type,'?')} "
+                    f"candidate1={candidate1_id} ",
+                    f"candidate0 pos={candidate0_pos} candidate1 pos={candidate1_pos} ",
                     f"golden base token={expected_base} golden spec token={expected_spec}",
                 )
                 if run_golden:
@@ -4712,7 +4720,7 @@ def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_s
             in_tok = int(input_token_ids[iteration].item())
             logger.info(f"Writing token for iteration {iteration} (in_tok={in_tok})")
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 6] = in_tok
+            torch_token[0, InputField.TOKEN_ID] = in_tok
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
@@ -4811,7 +4819,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     if pipeline.my_mesh_id == 0:
         for iteration in range(iterations):
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 6] = iteration
+            torch_token[0, InputField.TOKEN_ID] = iteration
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
                 torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
@@ -4858,9 +4866,8 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
     The verification stage (P1) receives gathered logits + token metadata, runs its
     own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
 
-    TOKEN_META page layout (uint32 words):
-      [0] token_type  [1] tok0_id  [2] tok0_pos
-      [3] tok1_id     [4] tok1_pos                    [5] slot_id
+    TOKEN_META page layout is the fixed DeepseekMetadata page:
+      header fields, candidate_token_ids[0:5], then candidate_positions[0:5].
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -4913,20 +4920,17 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
             else:
                 logger.debug(f"[TEST] skipping golden computation")
 
-            tok0_id = 0
             token_type = 0
-            tok0_pos = 0
-            tok1_id = 0
-            tok1_pos = 0
 
             for iteration in range(iterations):
                 logger.debug(f"[TEST P{pid}] iter {iteration} write_token")
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 2] = iteration
-                torch_token[0, 5] = slot_id
-                torch_token[0, 6] = iteration
-                torch_token[0, 7] = iteration
-                torch_token[0, 8] = iteration
+                torch_token[0, InputField.USER_ID] = slot_id
+                torch_token[0, InputField.TOKEN_ID] = iteration
+                torch_token[0, InputField.POSITION_ID] = iteration
+                torch_token[0, InputField.PREFILL_TOKEN_ID] = iteration
+                torch_token[0, InputField.WINDOW_START_POS] = iteration
+                torch_token[0, InputField.NUM_WINDOW_TOKENS] = 2
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
                     torch.zeros(1, token_meta_words, dtype=torch.uint32),
@@ -4939,11 +4943,11 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 logger.debug(f"[TEST P{pid}] iter {iteration} to_torch")
                 raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
-                token_type = raw[0].item()
-                tok0_id = raw[1].item()
-                tok0_pos = raw[2].item()
-                tok1_id = raw[3].item()
-                tok1_pos = raw[4].item()
+                token_type = raw[OutputField.TOKEN_TYPE].item()
+                candidate0_id = raw[OutputField.CANDIDATE_TOKEN_IDS].item()
+                candidate0_pos = raw[OutputField.CANDIDATE_POSITIONS].item()
+                candidate1_id = raw[OutputField.CANDIDATE_TOKEN_IDS + 1].item()
+                candidate1_pos = raw[OutputField.CANDIDATE_POSITIONS + 1].item()
 
                 if run_golden:
                     expected_base, expected_spec = golden[iteration]
@@ -4954,9 +4958,9 @@ def test_persistent_mode_spec_decode(mesh_device, use_fp32):
                 type_name = {0: "BASE", 1: "SPEC"}
                 logger.debug(
                     f"[TEST P{pid}] iter {iteration} "
-                    f"t0={tok0_id}/{type_name.get(token_type,'?')} "
-                    f"t1={tok1_id} ",
-                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
+                    f"candidate0={candidate0_id}/{type_name.get(token_type,'?')} "
+                    f"candidate1={candidate1_id} ",
+                    f"candidate0 pos={candidate0_pos} candidate1 pos={candidate1_pos} ",
                     f"golden base token={expected_base} golden spec token={expected_spec}",
                 )
 
