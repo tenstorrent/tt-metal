@@ -151,7 +151,6 @@ class TtMoe(LightweightModule):
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
-        dispatch_sd_rows: int = 2,
     ):
         """
         Initialize TtMoe module.
@@ -259,6 +258,7 @@ class TtMoe(LightweightModule):
         #   sub-device 0 (dispatch_sd):     rows [0, dispatch_sd_rows)
         #   sub-device 1 (shared_sd):       rows [dispatch_sd_rows, grid_y)
         # ========================================
+        dispatch_sd_rows = 1
         grid = mesh_device.compute_with_storage_grid_size()
         grid_x, grid_y = grid.x, grid.y
         assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
@@ -273,6 +273,10 @@ class TtMoe(LightweightModule):
         self.sd_manager_id = mesh_device.create_sub_device_manager([dispatch_sd, shared_sd], 0)
         self.dispatch_sd_id = ttnn.SubDeviceId(0)
         self.shared_sd_id = ttnn.SubDeviceId(1)
+        # Stash the CoreRangeSet of each sub-device so downstream modules (e.g. TtSharedExpert)
+        # can build sub-device-confined shard_specs in Python without a C++ worker_cores binding.
+        self.dispatch_sd_cores = dispatch_cores
+        self.shared_sd_cores = shared_cores
         logger.debug(
             f"Sub-devices: grid={grid_x}x{grid_y}, dispatch=rows[0,{dispatch_sd_rows}), "
             f"shared=rows[{dispatch_sd_rows},{grid_y})"
@@ -355,6 +359,7 @@ class TtMoe(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
             subdevice_id=self.shared_sd_id,
+            subdevice_cores=self.shared_sd_cores,
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)

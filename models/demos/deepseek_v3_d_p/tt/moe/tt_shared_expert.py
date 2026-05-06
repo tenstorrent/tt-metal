@@ -160,6 +160,7 @@ class TtSharedExpert(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         subdevice_id: Optional[ttnn.SubDeviceId] = None,
+        subdevice_cores: Optional[ttnn.CoreRangeSet] = None,
     ):
         """
         Initialize TtSharedExpert module.
@@ -188,6 +189,7 @@ class TtSharedExpert(LightweightModule):
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
         self.subdevice_id = subdevice_id
+        self.subdevice_cores = subdevice_cores
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
 
@@ -331,18 +333,93 @@ class TtSharedExpert(LightweightModule):
             self.gate_proj.shape[-1] == self.down_proj.shape[-2]
         ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
 
-        output = ttnn.experimental.deepseek_prefill.shared_expert_ffn(
+        # ===== Inlined shared expert FFN — height-sharded on BH 11x9 sub-device =====
+        # in0_block_w / subblocks pinned to 1 for minimum L1 — you'll tune.
+        TILE = 32
+        MAX_CORES = 11 * 9  # available cores in the shared sub-device
+
+        # Pick the largest divisor of M_tiles that fits in the sub-device — gives
+        # max parallelism with no padding waste.
+        m_tiles = x.padded_shape[-2] // TILE
+        num_cores = m_tiles
+        while num_cores > MAX_CORES or m_tiles % num_cores != 0:
+            num_cores -= 1
+        per_core_M = m_tiles // num_cores
+
+        gate_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 9),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=per_core_M,
+            per_core_N=self.gate_proj.padded_shape[-1] // TILE,
+            fuse_batch=False,
+            mcast_in0=False,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        )
+        up_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 9),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=per_core_M,
+            per_core_N=self.gate_proj.padded_shape[-1] // TILE,
+            fuse_batch=False,
+            mcast_in0=False,
+        )
+        down_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 9),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=per_core_M,
+            per_core_N=self.down_proj.padded_shape[-1] // TILE,
+            fuse_batch=False,
+            mcast_in0=False,
+        )
+
+        # 1) Compute gate and up projections
+        gate_out = ttnn.matmul(
             x,
             self.gate_proj,
-            self.up_proj,
-            self.down_proj,
-            cluster_axis=1,
-            tp_axis_size=self.mesh_device.shape[1],
-            num_links=self.num_links,
-            topology=self.topology,
+            program_config=gate_program_config,
             compute_kernel_config=self.compute_kernel_config,
-            subdevice_id=self.subdevice_id,
+            sub_device_id=self.subdevice_id,
         )
+        up_out = ttnn.matmul(
+            x,
+            self.up_proj,
+            program_config=up_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+            sub_device_id=self.subdevice_id,
+        )
+
+        # 2) Multiply gate and up projection
+        ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
+        ttnn.deallocate(up_out)
+
+        # 3) Compute down projection
+        output_full = ttnn.matmul(
+            gate_out,
+            self.down_proj,
+            program_config=down_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+            sub_device_id=self.subdevice_id,
+        )
+        ttnn.deallocate(gate_out)
+
+        # 4) Reduce-scatter across mesh columns when TP > 1.
+        if self.mesh_device.shape[1] > 1:
+            output = ttnn.reduce_scatter(
+                output_full,
+                dim=-1,
+                cluster_axis=1,
+                num_links=self.num_links,
+                topology=self.topology,
+                subdevice_id=self.subdevice_id,
+            )
+        else:
+            output = output_full
         logger.debug(f"After shared_expert_ffn: {output.shape}")
 
         return output
