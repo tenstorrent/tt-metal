@@ -45,8 +45,10 @@ struct RealtimeProfilerCoreL1Addrs {
 //   * shutdown() (or destruction) signals receiver termination, joins the thread, and
 //     drops the Tracy handler. Idempotent.
 //   * trigger_sync_check() pauses the receiver, runs a sync handshake only on devices
-//     whose last finish/init sync was at least 1s ago (each device tracked separately),
+//     whose last finish/init sync was at least 60s ago (each device tracked separately),
 //     then resumes the receiver. Called from the FD command queue's finish path.
+//     Constructor init uses the same interval process-wide per chip_id to throttle full
+//     run_sync + SYNC_CHECK when reopening meshes on the same chips.
 class RealtimeProfilerManager {
 public:
     explicit RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device);
@@ -64,7 +66,7 @@ public:
     // Pauses receiver if at least one device needs a sync, then performs the handshake
     // only on those devices (others are unchanged). No-op when no devices are active,
     // the Tracy handler has been released, or every device was synced within the last
-    // second.
+    // 60 seconds.
     void trigger_sync_check();
 
     // First active device's D2H socket, or nullptr if no device is active.
@@ -91,7 +93,7 @@ private:
         std::atomic<bool> sync_response_received{true};
         int64_t sync_host_time_before = 0;
         // Updated after a successful finish-path or init SYNC_CHECK handshake; used to
-        // throttle redundant finish syncs (minimum 1s between attempts per device).
+        // throttle redundant finish syncs (minimum 60s between attempts per device).
         std::optional<std::chrono::steady_clock::time_point> last_finish_sync_at;
 
         DeviceState();

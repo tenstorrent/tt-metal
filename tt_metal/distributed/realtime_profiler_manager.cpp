@@ -10,9 +10,11 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -51,6 +53,16 @@
 namespace tt::tt_metal::distributed {
 
 namespace {
+
+// Minimum wall time between full init calibrations (run_sync + constructor SYNC_CHECK) and
+// between finish-path sync checks, per physical chip. Matches the finish-path throttle.
+constexpr auto kRtProfilerMinSyncInterval = std::chrono::seconds(60);
+
+// Last time we completed a full init sync (run_sync success) for a chip, process-wide
+// (across MeshDevice open/close). Used to avoid repeating ~0.5s+ run_sync on every mesh
+// open when the same host chips are frequently reconstructed.
+std::mutex g_rt_profiler_init_sync_mu;
+std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> g_rt_profiler_last_init_sync_by_chip;
 
 // Sync marker ID — must match device-side REALTIME_PROFILER_SYNC_MARKER_ID.
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
@@ -525,9 +537,41 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
     }
 
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto init_throttle_now = std::chrono::steady_clock::now();
+    std::vector<bool> skip_init_sync_check(devices_.size(), false);
+
     // Run our own host-device sync; the device profiler's SyncInfo masks the high word to
-    // 12 bits and would shift RT zones by hours in Tracy.
-    for (auto& dev_state : devices_) {
+    // 12 bits and would shift RT zones by hours in Tracy. Skip full calibration for chips
+    // that were init-synced recently (same window as finish-path trigger_sync_check).
+    for (size_t di = 0; di < devices_.size(); ++di) {
+        auto& dev_state = devices_[di];
+        bool throttle_skip = false;
+        {
+            std::lock_guard<std::mutex> lock(g_rt_profiler_init_sync_mu);
+            const auto it = g_rt_profiler_last_init_sync_by_chip.find(dev_state.chip_id);
+            if (it != g_rt_profiler_last_init_sync_by_chip.end() &&
+                init_throttle_now - it->second < kRtProfilerMinSyncInterval) {
+                throttle_skip = true;
+            }
+        }
+
+        if (throttle_skip) {
+            const int64_t host_start = rt_profiler_host_ticks();
+            dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
+            dev_state.first_timestamp = 0;
+            dev_state.sync_host_start = host_start;
+            dev_state.last_finish_sync_at = init_throttle_now;
+            skip_init_sync_check[di] = true;
+            log_info(
+                tt::LogMetal,
+                "[Real-time profiler] Device {}: skipping init run_sync and constructor SYNC_CHECK "
+                "(last init sync within {}s; using AICLK frequency fallback)",
+                dev_state.chip_id,
+                static_cast<int>(kRtProfilerMinSyncInterval.count()));
+            continue;
+        }
+
         constexpr uint32_t kMaxSyncRetries = 3;
         constexpr uint32_t kRetryDelayMs = 500;
         for (uint32_t attempt = 0; attempt <= kMaxSyncRetries; attempt++) {
@@ -545,6 +589,10 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 break;
             }
         }
+        if (dev_state.first_timestamp != 0) {
+            std::lock_guard<std::mutex> lock(g_rt_profiler_init_sync_mu);
+            g_rt_profiler_last_init_sync_by_chip[dev_state.chip_id] = std::chrono::steady_clock::now();
+        }
     }
 
     tracy_handler_ = std::make_unique<RealtimeProfilerTracyHandler>();
@@ -559,7 +607,11 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
     // Emit sync verification markers: take one independent device measurement per device
     // and push paired host + device events. In Tracy, the horizontal distance between the
     // host "SYNC_CHECK" zone and the device "SYNC_CHECK" zone is the sync error.
-    for (auto& dev_state : devices_) {
+    for (size_t di = 0; di < devices_.size(); ++di) {
+        if (skip_init_sync_check[di]) {
+            continue;
+        }
+        auto& dev_state = devices_[di];
         std::vector<uint32_t> sync_req = {1};
         tt::tt_metal::detail::WriteToDeviceL1(
             dev_state.device,
@@ -979,7 +1031,6 @@ void RealtimeProfilerManager::trigger_sync_check() {
     constexpr uint32_t kPageWords = kPageSize / sizeof(uint32_t);
     constexpr uint32_t kSyncTimeoutMs = 5000;
     constexpr uint32_t kPauseTimeoutMs = 2000;
-    constexpr auto kMinIntervalBetweenFinishSync = std::chrono::seconds(60);
 
     const auto throttle_now = std::chrono::steady_clock::now();
     std::vector<size_t> device_indices_to_sync;
@@ -987,7 +1038,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
     for (size_t i = 0; i < devices_.size(); i++) {
         const auto& dev_state = devices_[i];
         if (!dev_state.last_finish_sync_at.has_value() ||
-            throttle_now - *dev_state.last_finish_sync_at >= kMinIntervalBetweenFinishSync) {
+            throttle_now - *dev_state.last_finish_sync_at >= kRtProfilerMinSyncInterval) {
             device_indices_to_sync.push_back(i);
         }
     }
