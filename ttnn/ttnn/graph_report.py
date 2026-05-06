@@ -30,14 +30,16 @@ from loguru import logger
 
 if __package__ in (None, ""):
     from stack_trace_source import (
-        ensure_source_file_id,
+        get_source_file_id,
+        insert_source_file_id_column,
         extract_stack_trace_file,
         normalize_existing_source_file_path,
         read_source_file_contents,
     )
 else:
     from .stack_trace_source import (
-        ensure_source_file_id,
+        get_source_file_id,
+        insert_source_file_id_column,
         extract_stack_trace_file,
         normalize_existing_source_file_path,
         read_source_file_contents,
@@ -258,6 +260,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         )
     """
     )
+    insert_source_file_id_column(cursor)
 
     # Input/output tensors
     cursor.execute(
@@ -1154,7 +1157,7 @@ def import_graph(
         cursor.executemany("""INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)""", edges_batch)
     path_to_source_id: dict[str, int] = {}
     for path, contents in source_files_batch:
-        path_to_source_id[path] = ensure_source_file_id(cursor, path, contents)
+        path_to_source_id[path] = get_source_file_id(cursor, path, contents)
     stack_traces_rows = [
         (op_id, trace, path_to_source_id[path] if path else None) for op_id, trace, path in stack_traces_with_paths
     ]

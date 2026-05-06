@@ -5,14 +5,14 @@
 import dataclasses
 import sqlite3
 import json
-from pathlib import Path
 
 from loguru import logger
 import networkx as nx
 
 import ttnn
 from .stack_trace_source import (
-    ensure_source_file_id,
+    get_source_file_id,
+    insert_source_file_id_column,
     extract_stack_trace_file,
     normalize_existing_source_file_path,
     read_source_file_contents,
@@ -211,6 +211,7 @@ def get_or_create_sqlite_db(report_path):
         """CREATE TABLE IF NOT EXISTS stack_traces
                 (operation_id int, stack_trace text, source_file_id int REFERENCES source_files(id))"""
     )
+    insert_source_file_id_column(cursor)
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS input_tensors
                 (operation_id int, input_index int, tensor_id int)"""
@@ -334,7 +335,7 @@ def insert_stack_trace(report_path, operation_id, stack_trace):
     if normalized_path is not None:
         file_contents = read_source_file_contents(normalized_path)
         if file_contents is not None:
-            source_file_id = ensure_source_file_id(cursor, normalized_path, file_contents)
+            source_file_id = get_source_file_id(cursor, normalized_path, file_contents)
 
     statement = "INSERT INTO stack_traces (operation_id, stack_trace, source_file_id) VALUES (?, ?, ?)"
     cursor.execute(statement, (operation_id, formatted_stack_trace, source_file_id))
