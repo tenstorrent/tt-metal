@@ -2016,7 +2016,7 @@ void py_module(nb::module_& mod) {
             const std::optional<std::string>&,
             const std::optional<const DataType>&,
             const std::optional<MemoryConfig>&,
-            std::optional<Tensor>,
+            const std::optional<Tensor>&,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
             ttsl::Span<const unary::EltwiseUnaryWithParam>,
