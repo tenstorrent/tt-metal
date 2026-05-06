@@ -207,19 +207,6 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        # (  # Batch-32 run with 512x512 image and ~128 token text prompt, repeated 8 times
-        #     "models/demos/qwen3_vl/demo/sample_prompts/batch32_512x512_128tok.json",
-        #     True,  # instruct mode
-        #     32,  # repeat_batches to simulate multiple users with the same prompt
-        #     4096,  # max_seq_len, allow for image tokens
-        #     32,  # batch_size -- samples to load from the prompt JSON
-        #     200,  # max_generated_tokens
-        #     True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
-        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-        #     True,  # stop_at_eos
-        #     False,  # ci_only
-        # ),
     ],
     ids=[
         "batch-1",  # latency
@@ -230,7 +217,6 @@ def create_tt_model(
         "long-context-32k",  # real-world test for 300DPI scanned document with 32k long context
         "long-context-64k",  # real-world test for 300DPI scanned document with 64k long context
         "long-context-128k",  # real-world test for 300DPI scanned document with 128k long context
-        # "batch-32-512x512-128tok-8repeat",  # batch-32 with 512x512 image, 128 token prompt, 8 repeat batches
     ],
 )
 @pytest.mark.parametrize(
@@ -256,7 +242,6 @@ def create_tt_model(
     ],
     indirect=True,
 )
-@pytest.mark.timeout(3600)
 def test_demo(
     input_prompts,
     instruct,
