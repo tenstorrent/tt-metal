@@ -104,7 +104,12 @@ def run_shell_command(
 
 
 def calculate_read_byte_count(format: FormatConfig, array_size: int, sfpu=False) -> int:
-    total_bytes = int(array_size * format.output_format.size)
+    total = array_size * format.output_format.size
+    assert total.denominator == 1, (
+        f"array_size={array_size} not aligned to {format.output_format} "
+        f"element size ({format.output_format.size}); would drop a partial byte"
+    )
+    total_bytes = total.numerator
     if format.output_format == DataFormat.Bfp8_b:
         total_bytes += total_bytes // 16
     return total_bytes

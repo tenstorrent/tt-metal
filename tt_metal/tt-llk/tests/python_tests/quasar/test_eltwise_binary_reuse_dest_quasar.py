@@ -106,12 +106,12 @@ def test_eltwise_binary_reuse_dest_quasar(
         or formats.input_format == DataFormat.MxFp8P
     ):
         pytest.skip(
-            "Elwmul with MxFp8R or MxFp8P input and reuse_dest has golden vs hardware rounding differences; skip to avoid flaky tolerance failures"
+            "Elwmul with MxFp8R or MxFp8P input and reuse_dest has rounding differences; skip to avoid flaky tolerance failures"
         )
 
     if mathop == MathOperation.Elwmul and formats.output_format == DataFormat.MxFp4:
         pytest.skip(
-            "Elwmul with MxFp4 output and reuse_dest has golden vs hardware rounding differences; skip to avoid flaky tolerance failures"
+            "Elwmul with MxFp4 output and reuse_dest has rounding differences; skip to avoid flaky tolerance failures"
         )
 
     # MX formats require implied_math_format=Yes on Quasar; set it and disable_format_inference so golden matches.
