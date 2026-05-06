@@ -13,11 +13,13 @@ import yaml
 
 TARGETS_YAML_PATH_DEFAULT = str(Path(__file__).resolve().parents[2] / "model_targets.yaml")
 
-# Backward-compatible alias for existing imports.
-DEFAULT_MODEL_TARGETS_PATH = TARGETS_YAML_PATH_DEFAULT
-
+# Keep SKU aliases explicit and unambiguous so models with multiple
+# SKU blocks (e.g. wh_n150 + wh_llmbox_perf) resolve correctly.
 _SKU_ALIASES = {
-    "wormhole": {"n300", "n150", "wh_n150", "wh_n300", "tg", "wh_llmbox_perf", "wh_galaxy_perf"},
+    "wh_n150": {"wh_n150", "n150"},
+    "wh_n300": {"wh_n300", "n300"},
+    "wh_llmbox_perf": {"wh_llmbox_perf"},
+    "wh_galaxy_perf": {"wh_galaxy_perf"},
     "t3k": {"t3k"},
     "glx": {"glx", "bhglx"},
     "blackhole": {"blackhole", "bh", "p150", "p300", "p150x8"},
@@ -25,10 +27,12 @@ _SKU_ALIASES = {
 
 
 def _normalize_token(value: Any) -> str:
+    """Normalize external string-like values for case-insensitive matching."""
     return str(value).strip().lower()
 
 
 def normalize_sku(sku: Any) -> str:
+    """Map a SKU alias to a canonical SKU token."""
     token = _normalize_token(sku)
     for canonical, aliases in _SKU_ALIASES.items():
         if token in aliases:
@@ -36,8 +40,9 @@ def normalize_sku(sku: Any) -> str:
     return token
 
 
-def load_model_targets() -> dict[str, Any]:
-    path = Path(TARGETS_YAML_PATH_DEFAULT)
+def load_model_targets(targets_yaml_path: str | Path | None = None) -> dict[str, Any]:
+    """Load centralized targets YAML from an optional explicit path."""
+    path = Path(targets_yaml_path) if targets_yaml_path is not None else Path(TARGETS_YAML_PATH_DEFAULT)
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
@@ -46,6 +51,7 @@ def load_model_targets() -> dict[str, Any]:
 
 
 def _model_matches(model_key: str, model_name: str, model_block: dict[str, Any]) -> bool:
+    """Check if a model key (or alias) matches the requested model."""
     model_norm = _normalize_token(model_name)
     if _normalize_token(model_key) == model_norm:
         return True
@@ -54,16 +60,26 @@ def _model_matches(model_key: str, model_name: str, model_block: dict[str, Any])
 
 
 def _entry_matches(entry: dict[str, Any], batch_size: int | None, seq_len: int | None) -> bool:
+    """Match entry dimensions using strict fallback semantics for None values."""
     entry_batch = entry.get("batch_size")
     entry_seq = entry.get("seq_len")
-    if batch_size is not None and entry_batch is not None and entry_batch != batch_size:
+
+    if batch_size is None:
+        if entry_batch is not None:
+            return False
+    elif entry_batch is not None and entry_batch != batch_size:
         return False
-    if seq_len is not None and entry_seq is not None and entry_seq != seq_len:
+
+    if seq_len is None:
+        if entry_seq is not None:
+            return False
+    elif entry_seq is not None and entry_seq != seq_len:
         return False
     return True
 
 
 def _entry_specificity(entry: dict[str, Any]) -> int:
+    """Rank entries so the most specific matching target is selected."""
     score = 0
     if entry.get("batch_size") is not None:
         score += 1
@@ -78,8 +94,10 @@ def resolve_target_entry(
     batch_size: int | None = None,
     seq_len: int | None = None,
     include_todo: bool = False,
+    targets_yaml_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    targets_doc = load_model_targets()
+    """Resolve the best matching centralized target entry for model and SKU."""
+    targets_doc = load_model_targets(targets_yaml_path=targets_yaml_path)
     targets = targets_doc.get("targets", {})
     sku_norm = normalize_sku(sku)
 
@@ -111,13 +129,16 @@ def resolve_perf_targets(
     sku: str,
     batch_size: int | None = None,
     seq_len: int | None = None,
+    targets_yaml_path: str | Path | None = None,
 ) -> dict[str, float] | None:
+    """Resolve only the perf metrics for a given model/SKU combo."""
     entry = resolve_target_entry(
         model_name=model_name,
         sku=sku,
         batch_size=batch_size,
         seq_len=seq_len,
         include_todo=False,
+        targets_yaml_path=targets_yaml_path,
     )
     if not entry:
         return None
@@ -130,13 +151,16 @@ def resolve_accuracy_targets(
     sku: str,
     batch_size: int | None = None,
     seq_len: int | None = None,
+    targets_yaml_path: str | Path | None = None,
 ) -> dict[str, float] | None:
+    """Resolve only the accuracy metrics for a given model/SKU combo."""
     entry = resolve_target_entry(
         model_name=model_name,
         sku=sku,
         batch_size=batch_size,
         seq_len=seq_len,
         include_todo=False,
+        targets_yaml_path=targets_yaml_path,
     )
     if not entry:
         return None

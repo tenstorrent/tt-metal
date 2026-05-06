@@ -218,3 +218,9 @@ def verify_perf(
             PerfRegressionWarning,
             stacklevel=2,
         )
+        # Keep this assert until centralized targets migration is complete:
+        # https://github.com/tenstorrent/tt-metal/issues/42782
+        assert does_pass, (
+            "Performance regression detected. Failing fast to avoid silently accepting "
+            "degraded model performance while centralized targets rollout is in progress."
+        )

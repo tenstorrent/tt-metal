@@ -15,7 +15,14 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / ".github/scripts/utils/validate_perf_targets.py"
 
 
-def _write_complete_run(path: Path, model: str, batch_size: int, seq_len: int, decode_tsu: float) -> None:
+def _write_complete_run(
+    path: Path,
+    model: str,
+    batch_size: int,
+    seq_len: int,
+    decode_tsu: float,
+    extra_measurements: list[dict] | None = None,
+) -> None:
     payload = {
         "ml_model_name": model,
         "batch_size": batch_size,
@@ -24,6 +31,8 @@ def _write_complete_run(path: Path, model: str, batch_size: int, seq_len: int, d
             {"step_name": "inference_decode", "name": "tokens/s/user", "value": decode_tsu},
         ],
     }
+    if extra_measurements:
+        payload["measurements"].extend(extra_measurements)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -137,6 +146,52 @@ def test_validate_perf_targets_detects_regression(tmp_path):
     assert "decode_t/s/u" in result.stdout
 
 
+def test_validate_perf_targets_detects_accuracy_regression(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+        extra_measurements=[
+            {"step_name": "inference_decode", "name": "top1_token_accuracy", "value": 80.0},
+        ],
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {"decode_t/s/u": 90.0},
+                                "accuracy": {"top1": 90.0},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1
+    assert "top1" in result.stdout
+
+
 def test_validate_perf_targets_todo_entry_respects_strict_flag(tmp_path):
     (tmp_path / "generated/benchmark_data").mkdir(parents=True)
     (tmp_path / "models").mkdir(parents=True)
@@ -205,3 +260,50 @@ def test_validate_perf_targets_rejects_unknown_path_profile(tmp_path):
     )
     assert result.returncode != 0
     assert "invalid choice" in result.stderr
+
+
+def test_validate_perf_targets_fails_for_ambiguous_metric_lookup(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+        extra_measurements=[
+            {"step_name": "inference_prefill", "name": "token_verification", "value": 50.0},
+            {"step_name": "inference_decode", "name": "token_verification", "value": 150.0},
+        ],
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {"token_verification": 100.0},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1
+    assert "ambiguous metric" in result.stdout

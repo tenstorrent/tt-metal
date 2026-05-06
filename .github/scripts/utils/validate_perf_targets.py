@@ -45,12 +45,30 @@ METRIC_NAME_MAP = {
     "top5": ("inference_decode", "top5_token_accuracy"),
 }
 
+ALLOWED_TARGET_METRIC_NAMES = {
+    "compile_decode",
+    "compile_prefill",
+    "decode_t/s",
+    "decode_t/s/u",
+    "prefill_decode_t/s/u",
+    "prefill_t/s",
+    "prefill_time_to_token",
+    "top1",
+    "top5",
+}
+TOLERANCE_FAMILY_ALIASES = {
+    "decode_t/s": "decode_tolerance",
+    "decode_t/s/u": "decode_tolerance",
+}
+
 
 def _is_number(value: Any) -> bool:
+    """Return True for int/float (but not bool)."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _load_yaml(path: Path) -> Any:
+    """Load YAML and normalize empty content to an empty mapping."""
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if data is None:
@@ -59,6 +77,7 @@ def _load_yaml(path: Path) -> Any:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    """Load and type-check benchmark payload JSON."""
     with path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
     if not isinstance(payload, dict):
@@ -67,6 +86,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _measurement_lookup(benchmark_json: dict[str, Any]) -> dict[tuple[str, str], float]:
+    """Build (step_name, metric_name) -> value lookup from benchmark payload."""
     lookup: dict[tuple[str, str], float] = {}
     for measurement in benchmark_json.get("measurements", []):
         if not isinstance(measurement, dict):
@@ -80,21 +100,41 @@ def _measurement_lookup(benchmark_json: dict[str, Any]) -> dict[tuple[str, str],
 
 
 def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]) -> float | None:
+    """Resolve a metric value, failing on ambiguous unqualified metric names."""
     if metric_name in METRIC_NAME_MAP:
         return lookup.get(METRIC_NAME_MAP[metric_name])
 
+    matches: list[tuple[str, str, float]] = []
     for (step_name, name), value in lookup.items():
         if name == metric_name:
-            return value
+            matches.append((step_name, name, value))
         if f"{step_name}.{name}" == metric_name:
             return value
-    return None
+
+    if not matches:
+        return None
+    if len(matches) > 1:
+        candidates = ", ".join(sorted(f"{step}.{name}" for step, name, _ in matches))
+        raise ValueError(
+            f"Metric '{metric_name}' is ambiguous across multiple steps: {candidates}. "
+            "Use an explicit step-qualified metric name."
+        )
+    return matches[0][2]
 
 
 def _metric_tolerance(metric_name: str, thresholds: dict[str, Any], default_high_tolerance: float) -> float:
-    explicit = thresholds.get(f"{metric_name}_tolerance")
-    if _is_number(explicit):
-        return float(explicit)
+    """Resolve effective tolerance for a metric using explicit and family aliases."""
+    explicit_candidates = [
+        f"{metric_name}_tolerance",
+        f"{metric_name.replace('/', '_')}_tolerance",
+    ]
+    metric_family_alias = TOLERANCE_FAMILY_ALIASES.get(metric_name)
+    if metric_family_alias:
+        explicit_candidates.append(metric_family_alias)
+    for explicit_key in explicit_candidates:
+        explicit = thresholds.get(explicit_key)
+        if _is_number(explicit):
+            return float(explicit)
     generic = thresholds.get("tolerance")
     if _is_number(generic):
         return float(generic)
@@ -107,6 +147,7 @@ def _check_metric(
     measured_value: float,
     high_tolerance: float,
 ) -> str | None:
+    """Compare measured and expected values using asymmetric regression bounds."""
     if metric_name in LOWER_IS_BETTER_METRICS:
         if measured_value > expected_value:
             return f"{metric_name}: measured={measured_value} > expected={expected_value}"
@@ -130,10 +171,12 @@ def _check_metric(
 
 
 def _benchmark_files(benchmark_dir: Path) -> list[Path]:
+    """Return benchmark payload files in deterministic order."""
     return sorted(benchmark_dir.glob("complete_run_*.json"))
 
 
 def _validate_targets_schema(targets_yaml: dict[str, Any]) -> list[str]:
+    """Validate centralized target schema and semantic consistency."""
     errors: list[str] = []
     targets = targets_yaml.get("targets")
     if not isinstance(targets, dict):
@@ -152,6 +195,7 @@ def _validate_targets_schema(targets_yaml: dict[str, Any]) -> list[str]:
             if not isinstance(entries, list):
                 errors.append(f"Model '{model_name}' sku '{sku_name}' must provide an entries list")
                 continue
+            seen_entry_dims: set[tuple[Any, Any]] = set()
             for idx, entry in enumerate(entries):
                 if not isinstance(entry, dict):
                     errors.append(f"Model '{model_name}' sku '{sku_name}' entry #{idx} must be a dict")
@@ -161,10 +205,51 @@ def _validate_targets_schema(targets_yaml: dict[str, Any]) -> list[str]:
                     errors.append(
                         f"Model '{model_name}' sku '{sku_name}' entry #{idx} has invalid status '{entry.get('status')}'"
                     )
+                dims = (entry.get("batch_size"), entry.get("seq_len"))
+                if dims in seen_entry_dims:
+                    errors.append(
+                        f"Model '{model_name}' sku '{sku_name}' has duplicate entry for batch_size={dims[0]}, seq_len={dims[1]}"
+                    )
+                else:
+                    seen_entry_dims.add(dims)
+
+                for block_name in ("perf", "accuracy"):
+                    block = entry.get(block_name, {})
+                    if not isinstance(block, dict):
+                        errors.append(
+                            f"Model '{model_name}' sku '{sku_name}' entry #{idx} has non-dict '{block_name}' block"
+                        )
+                        continue
+                    for metric_name, metric_value in block.items():
+                        is_tolerance_key = (
+                            metric_name == "tolerance"
+                            or metric_name == "decode_tolerance"
+                            or metric_name.endswith("_tolerance")
+                        )
+                        if is_tolerance_key:
+                            if not _is_number(metric_value):
+                                errors.append(
+                                    f"Model '{model_name}' sku '{sku_name}' entry #{idx} has non-numeric tolerance '{metric_name}'"
+                                )
+                            elif float(metric_value) <= 1.0:
+                                errors.append(
+                                    f"Model '{model_name}' sku '{sku_name}' entry #{idx} has tolerance '{metric_name}' <= 1.0"
+                                )
+                            continue
+                        if metric_name not in ALLOWED_TARGET_METRIC_NAMES:
+                            errors.append(
+                                f"Model '{model_name}' sku '{sku_name}' entry #{idx} has unknown metric '{metric_name}'"
+                            )
+                            continue
+                        if not _is_number(metric_value):
+                            errors.append(
+                                f"Model '{model_name}' sku '{sku_name}' entry #{idx} has non-numeric metric '{metric_name}'"
+                            )
     return errors
 
 
 def _collect_active_test_combos(tests_yaml_path: Path) -> list[tuple[str, str]]:
+    """Collect all active model/SKU combos in tier-1/2/3 CI tests."""
     tests_yaml = _load_yaml(tests_yaml_path)
     if not isinstance(tests_yaml, list):
         raise ValueError(f"Invalid tests YAML format at {tests_yaml_path}: expected top-level list of tests")
@@ -188,7 +273,9 @@ def _collect_active_test_combos(tests_yaml_path: Path) -> list[tuple[str, str]]:
 
 def _validate_gap_coverage(
     tests_yaml_path: Path,
+    targets_yaml_path: Path,
 ) -> list[str]:
+    """Ensure each active model/SKU combo has centralized target coverage."""
     errors: list[str] = []
     for model, sku in _collect_active_test_combos(tests_yaml_path):
         entry = resolve_target_entry(
@@ -197,16 +284,18 @@ def _validate_gap_coverage(
             batch_size=None,
             seq_len=None,
             include_todo=True,
+            targets_yaml_path=targets_yaml_path,
         )
         if entry is None:
             errors.append(
                 f"Active test combo model={model}, sku={sku} is missing in centralized targets "
-                "(must be active entry or explicit TODO)"
+                "(must be active entry or explicit TODO in models/model_targets.yaml)"
             )
     return errors
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate validator CLI arguments."""
     parser = argparse.ArgumentParser(
         description="Validate benchmark artifacts against centralized perf/accuracy targets."
     )
@@ -217,12 +306,17 @@ def parse_args() -> argparse.Namespace:
         help="Path root profile used to resolve benchmark and target files",
     )
     parser.add_argument("--sku", default=None, help="Override SKU for this job (recommended in CI matrix jobs)")
+    # TODO: Enable strict-missing by default in CI once model targets migration is complete.
     parser.add_argument("--strict-missing", action="store_true", help="Fail when matching target is TODO or missing")
     parser.add_argument("--high-tol-percentage", type=float, default=1.15)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.high_tol_percentage <= 1.0:
+        parser.error("--high-tol-percentage must be > 1.0")
+    return args
 
 
 def _resolve_paths(path_profile: PathProfile) -> tuple[Path, Path, Path]:
+    """Resolve target/test/benchmark paths from selected path profile."""
     base_path = REPO_ROOT if path_profile is PathProfile.REPO_ROOT else Path.cwd().resolve()
     targets_yaml_path = base_path / TARGETS_YAML_RELATIVE_PATH
     benchmark_dir = base_path / BENCHMARK_DIR_RELATIVE_PATH
@@ -231,6 +325,7 @@ def _resolve_paths(path_profile: PathProfile) -> tuple[Path, Path, Path]:
 
 
 def main() -> int:
+    """Run centralized target validation over benchmark artifacts."""
     args = parse_args()
     path_profile = PathProfile(args.path_profile)
     targets_yaml_path, benchmark_dir, tests_yaml_path = _resolve_paths(path_profile)
@@ -245,7 +340,7 @@ def main() -> int:
             print(f"::error::{error}")
         return 1
 
-    gap_errors = _validate_gap_coverage(tests_yaml_path)
+    gap_errors = _validate_gap_coverage(tests_yaml_path, targets_yaml_path)
     if gap_errors:
         for error in gap_errors:
             print(f"::error::{error}")
@@ -286,6 +381,7 @@ def main() -> int:
             batch_size=batch_size,
             seq_len=seq_len,
             include_todo=True,
+            targets_yaml_path=targets_yaml_path,
         )
         if entry is None:
             missing_entries.append(
@@ -309,11 +405,17 @@ def main() -> int:
             thresholds.update(accuracy)
 
         for metric_name, expected in thresholds.items():
-            if metric_name.endswith("_tolerance") or metric_name == "tolerance":
+            if metric_name.endswith("_tolerance") or metric_name in {"tolerance", "decode_tolerance"}:
                 continue
             if not _is_number(expected):
                 continue
-            measured_value = _extract_metric_value(metric_name, measured)
+            try:
+                measured_value = _extract_metric_value(metric_name, measured)
+            except ValueError as exc:
+                hard_failures.append(
+                    f"{benchmark_file.name}: ambiguous metric '{metric_name}' for model={model_name}, sku={sku}: {exc}"
+                )
+                continue
             if measured_value is None or math.isnan(measured_value):
                 hard_failures.append(
                     f"{benchmark_file.name}: metric '{metric_name}' missing in benchmark payload for "
