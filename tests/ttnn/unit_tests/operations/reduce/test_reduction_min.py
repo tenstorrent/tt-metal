@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 
 TEST_PADDING_VALUE = -142
 
@@ -104,7 +104,10 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     "input_shape",
     [
         (32, 32, 32, 32, 32),
-        (3, 6, 40, 64, 32),
+        pytest.param(
+            (3, 6, 40, 64, 32),
+            marks=pytest.mark.skipif(is_blackhole(), reason="Issue #43742: LLK_ASSERT hang on Blackhole"),
+        ),
         (3, 6, 40, 63, 20),
     ],
 )
