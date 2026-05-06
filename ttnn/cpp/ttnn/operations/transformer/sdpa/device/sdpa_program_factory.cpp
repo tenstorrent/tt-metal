@@ -56,6 +56,21 @@ struct CoreChainInfo {
     uint32_t mcast_sender_wait = 0;  // number of actual receivers that signal back (always chain_size - 1)
 };
 
+// Batch-level K chain (MLA mode: NKH==1 && B==1). 2D mcast across the full worker grid:
+// the heaviest-loaded core injects each K chunk, every other core receives. Ports the
+// K-chain mechanism from ring_joint_sdpa_program_factory.cpp.
+struct CoreBatchChainInfo {
+    bool participates = false;
+    bool is_injector = false;
+    bool is_sink = false;
+    uint32_t batch = 0;
+    CoreCoord mcast_start = CoreCoord{0, 0};
+    CoreCoord mcast_end = CoreCoord{0, 0};
+    CoreCoord injector_physical = CoreCoord{0, 0};
+    uint32_t mcast_num_dests = 0;
+    uint32_t mcast_sender_wait = 0;
+};
+
 namespace {
 
 // Select the mask data format: user-provided mask dtype, or Float16_b for streaming (avoids Bfp4_b precision loss),
@@ -609,13 +624,24 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       (std::uint32_t)mla_kv_overlap,
                                                       qk_out_subblock_h};
 
+    // Batch-level K chain is the MLA optimization (port of ring_joint_sdpa K-chain): when K is
+    // shared across heads (NKH == 1) and there's a single batch (B == 1), the full grid joins one
+    // 2D-mcast chain so K is read from DRAM once by an injector and broadcast to every other core.
+    // Restricted to flat-work distribution because the iteration loop is padded to max global_q_count
+    // (a flat-work concept) — receivers walk the same global index range as the injector.
+    const bool batch_k_chain_eligible = chain_enabled && flatten_work && (NKH == 1) && (B == 1) && (num_cores >= 2);
+
     // Placeholder semaphore IDs for KV chain forwarding (will be filled later if enabled)
     // Add these BEFORE TensorAccessorArgs to keep indexing consistent with kernel expectations
     const auto sem_args_offset = reader_compile_time_args.size();
-    reader_compile_time_args.push_back(0);  // sender_semaphore_id placeholder
-    reader_compile_time_args.push_back(0);  // receiver_semaphore_id placeholder
-    reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
-    reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
+    reader_compile_time_args.push_back(0);  // [+0] head sender_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);  // [+1] head receiver_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);  // [+2] head valid_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);  // [+3] head mcast_enabled placeholder
+    reader_compile_time_args.push_back(0);  // [+4] batch sender_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);  // [+5] batch receiver_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);  // [+6] batch valid_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);  // [+7] batch_k_chain_enabled placeholder (1 ⇒ K mcast on)
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -651,6 +677,21 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             sender_semaphore_id,
             receiver_semaphore_id,
             valid_semaphore_id);
+    }
+
+    // Batch-level K chain semaphores (MLA mode). Allocated up front so the kernel sees stable
+    // CT-arg slots; whether the kernel actually uses them is gated by the [+7] flag patched
+    // after chain construction.
+    uint32_t batch_sender_semaphore_id = 0;
+    uint32_t batch_receiver_semaphore_id = 0;
+    uint32_t batch_valid_semaphore_id = 0;
+    if (batch_k_chain_eligible) {
+        batch_sender_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
+        batch_receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
+        batch_valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
+        reader_compile_time_args[sem_args_offset + 4] = batch_sender_semaphore_id;
+        reader_compile_time_args[sem_args_offset + 5] = batch_receiver_semaphore_id;
+        reader_compile_time_args[sem_args_offset + 6] = batch_valid_semaphore_id;
     }
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -1424,6 +1465,63 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
+    // Build the batch-level K chain (MLA mode): a single full-grid 2D mcast where the heaviest-
+    // loaded core is the injector. Receivers loop the same number of q iterations as the injector
+    // (max_q_per_core), padding lighter cores' tails with K-only mcast-sync iterations.
+    std::vector<CoreBatchChainInfo> core_batch_chain_info(num_cores);
+    uint32_t batch_chain_max_q_per_core = 0;
+    bool batch_k_chain_enabled = false;
+    if (batch_k_chain_eligible) {
+        // Pick injector = core with the most q work. For flat-work this is global_q_count;
+        // hierarchical SDPA never sets flatten_work, but we fall back to the head-segment
+        // sum so the injector is still the loaded core if the path ever activates there.
+        uint32_t injector_idx = 0;
+        for (uint32_t ci = 0; ci < num_cores; ++ci) {
+            uint32_t total_q = core_work[ci].global_q_count;
+            if (total_q == 0) {
+                for (const auto& hw : core_work[ci].head_work) {
+                    total_q += hw.q_chunk_count;
+                }
+            }
+            if (total_q > batch_chain_max_q_per_core) {
+                batch_chain_max_q_per_core = total_q;
+                injector_idx = ci;
+            }
+        }
+        if (batch_chain_max_q_per_core > 0) {
+            const CoreCoord phys_start = device->worker_core_from_logical_core(CoreCoord{0, 0});
+            const CoreCoord phys_end =
+                device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, grid_size.y - 1});
+            const uint32_t num_receivers = num_cores - 1;
+            for (uint32_t ci = 0; ci < num_cores; ++ci) {
+                auto& bc = core_batch_chain_info[ci];
+                bc.participates = true;
+                bc.batch = 0;
+                bc.mcast_start = phys_start;
+                bc.mcast_end = phys_end;
+                bc.injector_physical = core_work[injector_idx].physical_core;
+                bc.is_injector = (ci == injector_idx);
+                bc.is_sink = !bc.is_injector;
+                if (bc.is_injector) {
+                    bc.mcast_num_dests = num_receivers;
+                    bc.mcast_sender_wait = num_receivers;
+                }
+            }
+            batch_k_chain_enabled = true;
+            log_debug(
+                tt::LogOp,
+                "Batch K mcast enabled: {} cores, injector=core {} (max_q={}), rect ({},{}) to ({},{})",
+                num_cores,
+                injector_idx,
+                batch_chain_max_q_per_core,
+                phys_start.x,
+                phys_start.y,
+                phys_end.x,
+                phys_end.y);
+        }
+    }
+    reader_compile_time_args[sem_args_offset + 7] = batch_k_chain_enabled ? 1 : 0;
+
     // Create kernels (deferred until after chain construction for mcast_enabled flag)
     auto reader_kernels_id = CreateKernel(
         program,
@@ -1535,6 +1633,23 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             reader_args.push_back(chain.next_core_q_chunks);
             reader_args.push_back(chain.mcast_num_dests);
             reader_args.push_back(chain.mcast_sender_wait);
+        }
+
+        if (batch_k_chain_enabled) {
+            const auto& bc = core_batch_chain_info[i];
+            reader_args.push_back(static_cast<uint32_t>(bc.participates));
+            reader_args.push_back(static_cast<uint32_t>(bc.is_injector));
+            reader_args.push_back(static_cast<uint32_t>(bc.is_sink));
+            reader_args.push_back(bc.batch);
+            reader_args.push_back(static_cast<uint32_t>(bc.mcast_start.x));
+            reader_args.push_back(static_cast<uint32_t>(bc.mcast_start.y));
+            reader_args.push_back(static_cast<uint32_t>(bc.mcast_end.x));
+            reader_args.push_back(static_cast<uint32_t>(bc.mcast_end.y));
+            reader_args.push_back(static_cast<uint32_t>(bc.injector_physical.x));
+            reader_args.push_back(static_cast<uint32_t>(bc.injector_physical.y));
+            reader_args.push_back(bc.mcast_num_dests);
+            reader_args.push_back(bc.mcast_sender_wait);
+            reader_args.push_back(batch_chain_max_q_per_core);
         }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
