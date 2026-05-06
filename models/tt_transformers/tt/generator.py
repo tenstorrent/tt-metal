@@ -31,6 +31,7 @@ from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_block_size,
     get_max_prefill_chunk_size,
+    get_padded_prefill_len,
     num_blocks_in_seq,
 )
 
@@ -511,7 +512,11 @@ class Generator(WarmupForwardMixin):
         if not isinstance(prompt_lens, list):
             prompt_lens = prompt_lens.tolist()
 
-        prefill_seq_lens = [self.model_args[0].padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        padded_prefill = getattr(self.model_args[0], "padded_prefill_len", None)
+        if callable(padded_prefill):
+            prefill_seq_lens = [padded_prefill(seq_len) for seq_len in prompt_lens]
+        else:
+            prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # Only used when device sampling is active (sampling_params is not None)
         # and the prompt uses the harmony chat template (first token is <|start|>=200006).
