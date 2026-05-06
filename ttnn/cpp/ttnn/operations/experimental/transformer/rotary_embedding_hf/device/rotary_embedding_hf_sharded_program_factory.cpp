@@ -43,6 +43,7 @@ RotaryEmbeddingHfMultiCoreSharded::cached_program_t RotaryEmbeddingHfMultiCoreSh
 
     const uint32_t batch = input.padded_shape()[1];
     const uint32_t n_heads_t = shard_spec->shape[0] / constants::TILE_HEIGHT;
+    const uint32_t n_heads_per_batch_t = input.padded_shape()[2] / constants::TILE_HEIGHT;
     const uint32_t head_dim_t = shard_spec->shape[1] / constants::TILE_WIDTH;
 
     tt_metal::IDevice* device = input.device();
@@ -144,6 +145,8 @@ RotaryEmbeddingHfMultiCoreSharded::cached_program_t RotaryEmbeddingHfMultiCoreSh
         (std::uint32_t)output_cb_index,
         (std::uint32_t)head_dim_t,
         (std::uint32_t)n_heads_t,
+        (std::uint32_t)n_heads_per_batch_t,
+        (std::uint32_t)batch_per_core,
     };
 
     tt_metal::CreateKernel(

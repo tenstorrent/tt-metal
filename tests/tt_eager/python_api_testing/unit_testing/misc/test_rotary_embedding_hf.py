@@ -340,10 +340,6 @@ def test_rotary_embedding_hf_decode_per_batch_position(device):
     ttnn.deallocate(sin_tt)
 
 
-@pytest.mark.xfail(
-    reason="Known decode bug: batch_per_core > 1 reuses cos/sin rows per core in sharded kernel",
-    strict=True,
-)
 def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device):
     """Decode mode regression: force ``batch_per_core > 1`` and verify per-batch cos/sin rows are honored."""
     torch.manual_seed(0)
