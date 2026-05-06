@@ -1171,17 +1171,8 @@ class Attention(LightweightModule):
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
-        # reshaping long sequence to matmul fit on device (chunks of 1024 along seq)
-        seq_len_1024_aligned = seq_len
         if seq_len > 1024:
-            seq_len_1024_aligned = ((seq_len + 1023) // 1024) * 1024
-            if seq_len_1024_aligned != seq_len:
-                attn_output_11SH = ttnn.pad(
-                    attn_output_11SH,
-                    padding=((0, 0), (0, 0), (0, seq_len_1024_aligned - seq_len), (0, 0)),
-                    value=0.0,
-                )
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len_1024_aligned // 1024, 1024, -1])
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
         # Non fused All Gather Matmul (multi-device only; single-chip skips fabric CCL)
         if self.use_fused_all_gather_matmul and self.num_devices > 1:
@@ -1209,13 +1200,11 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
             memory_config=wo_memcfg,
-            program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len_1024_aligned, None),
+            program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
         )
 
         if seq_len > 1024:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len_1024_aligned, -1])
-            if seq_len_1024_aligned != seq_len:
-                output_11SH = output_11SH[:, :, :seq_len, :]
+            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
         # Attention output all-reduce (tt_all_reduce no-ops on 1×1 mesh; skip call on single device)
