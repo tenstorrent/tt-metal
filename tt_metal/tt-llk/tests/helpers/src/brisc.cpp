@@ -148,7 +148,7 @@ int main()
 
 #else
 
-int main(void)
+int main()
 {
 }
 
