@@ -25,6 +25,7 @@ def create_tt_model(
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         hf_model_name=hf_model_name,
+        dtype=dtype,
     )
 
     if not state_dict:
