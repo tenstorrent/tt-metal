@@ -26,6 +26,7 @@ def _mesh_mapper_and_composer(device):
 
 def ttnn_randn_fallback(shape, dtype, device, cache, mesh_mapper="auto") -> ttnn.Tensor:
     # Fallback random generator using PyTorch, since TTNN's random generation is not available in the current version.
+    # we also cache because, tracing wont allow reading from host to device
     cache_key = (shape, mesh_mapper)
     if mesh_mapper == "auto":
         mesh_mapper, _ = _mesh_mapper_and_composer(device)
@@ -182,7 +183,6 @@ class MultiHeadAttention:
     def _get_relative_embeddings(self, relative_embeddings: ttnn.Tensor, length: int) -> ttnn.Tensor:
         if self.window_size is None:
             raise ValueError("window_size must be set for relative attention.")
-        pad_length: int = max(length - (self.window_size + 1), 0)
 
         embeddings = relative_embeddings
         return ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
@@ -1035,8 +1035,6 @@ class GeneratorNSF:
         for i, (ups, noise_convs) in enumerate(zip(self.ups, self.noise_convs, strict=True)):
             x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope, output_tensor=x)
             x = ups(x)
-            # the layout conversion happens inside noise_convs because doign it here causes oom for some reason
-            # TODO: investigate the reasoning behind this
             source_features = noise_convs(harmonic_source)
             x = ttnn.add(x, source_features, output_tensor=x)
             resblock_sum = self.resblocks[i * self.num_kernels](x)
