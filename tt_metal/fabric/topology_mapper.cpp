@@ -64,6 +64,8 @@ FabricNodeId decode_fabric_node_id(std::uint64_t encoded_value) {
 }
 
 // Generic timeout mechanism that can handle different types of operations
+// NOTE: Uses heap-allocated shared state so the detached thread never accesses freed stack
+// memory if a timeout fires before the operation completes.
 template <typename OperationType, typename... Args>
 void execute_with_timeout(
     OperationType&& operation,
@@ -71,41 +73,44 @@ void execute_with_timeout(
     std::chrono::duration<float> timeout,
     const tt::tt_metal::distributed::multihost::DistributedContext* /* abort_on_timeout */,
     Args&&... args) {
-    std::atomic<bool> operation_completed{false};
-    std::atomic<bool> operation_failed{false};
-    std::exception_ptr exception_ptr{nullptr};
+    // Heap-allocated shared state so detached threads never access freed stack variables
+    struct SharedState {
+        std::atomic<bool> operation_completed{false};
+        std::atomic<bool> operation_failed{false};
+        std::exception_ptr exception_ptr{nullptr};
+    };
+    auto state = std::make_shared<SharedState>();
 
-    // Use internal flag
-    std::atomic<bool>* operation_failed_to_use = &operation_failed;
-
-    // Run operation in a separate thread
-    std::thread operation_thread([&]() {
-        try {
-            // Check if we should abort before starting
-            if (operation_failed_to_use->load()) {
-                throw std::runtime_error("Operation cancelled due to timeout on another rank");
+    // Capture operation and args by value into the thread so they remain valid
+    // even if execute_with_timeout returns (via timeout exception) before the thread exits.
+    std::thread operation_thread(
+        [state, op = std::forward<OperationType>(operation), args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable {
+            try {
+                // Check if we should abort before starting
+                if (state->operation_failed.load()) {
+                    throw std::runtime_error("Operation cancelled due to timeout on another rank");
+                }
+                std::apply(op, args_tuple);
+                if (!state->operation_failed.load()) {
+                    state->operation_completed = true;
+                }
+            } catch (...) {
+                state->exception_ptr = std::current_exception();
+                state->operation_failed.store(true);
             }
-            operation(std::forward<Args>(args)...);
-            if (!operation_failed_to_use->load()) {
-                operation_completed = true;
-            }
-        } catch (...) {
-            exception_ptr = std::current_exception();
-            operation_failed_to_use->store(true);
-        }
-    });
+        });
 
     // Wait for completion or timeout
     auto start = std::chrono::steady_clock::now();
-    while (!operation_completed && !operation_failed_to_use->load()) {
+    while (!state->operation_completed && !state->operation_failed.load()) {
         std::this_thread::yield();
         if (timeout.count() > 0.0f) {
             auto now = std::chrono::steady_clock::now();
             float elapsed = std::chrono::duration<float>(now - start).count();
             if (elapsed >= timeout.count()) {
-                // Timeout occurred - signal the operation thread to stop and throw
-                // The operation thread will check operation_failed and throw if needed
-                operation_failed_to_use->store(true);
+                // Timeout occurred - signal the operation thread to stop and throw.
+                // The thread holds shared_ptr<SharedState> so state remains valid after detach.
+                state->operation_failed.store(true);
                 // Wait briefly for thread to respond, then detach if still running
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 if (operation_thread.joinable()) {
@@ -124,8 +129,8 @@ void execute_with_timeout(
     }
 
     // Re-throw any exception that occurred in the thread
-    if (operation_failed_to_use->load() && exception_ptr) {
-        std::rethrow_exception(exception_ptr);
+    if (state->operation_failed.load() && state->exception_ptr) {
+        std::rethrow_exception(state->exception_ptr);
     }
 }
 
