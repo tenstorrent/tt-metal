@@ -23,4 +23,5 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_trig.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_rand.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"

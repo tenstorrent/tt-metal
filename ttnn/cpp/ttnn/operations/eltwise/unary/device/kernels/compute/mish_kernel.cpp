@@ -4,69 +4,73 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/log1p.h"
-#include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_trig.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
+
+namespace cklib = compute_kernel_lib;
+
+template <bool USE_APPROX>
+inline void run_mish(uint32_t num_tiles) {
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+    constexpr cklib::Approx approx = USE_APPROX ? cklib::Approx::Fast : cklib::Approx::Exact;
+
+#ifdef INP_FLOAT32
+    using Chain = cklib::EltwiseChain<
+        cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>,
+        cklib::Exp<approx, approx, cklib::Dst::D0>,
+        cklib::Log1p<approx, cklib::Dst::D0>,
+        cklib::Tanh<cklib::Dst::D0>,
+        cklib::CopyTile<cb_input, cklib::Dst::D1, cklib::CopyTilePolicy::NoWaitPop>,
+        cklib::MulBinary<cklib::Dst::D0, cklib::Dst::D1, cklib::Dst::D0>,
+        cklib::PackTile<cb_output, cklib::Dst::D0, cklib::PackTilePolicy::PerTileReserveAndPush>
+    >;
+    cklib::eltwise_pipeline_init<Chain>();
+    cklib::eltwise_chain(
+        num_tiles,
+        cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>{},
+        cklib::Exp<approx, approx, cklib::Dst::D0>{},
+        cklib::Log1p<approx, cklib::Dst::D0>{},
+        cklib::Tanh<cklib::Dst::D0>{},
+        cklib::CopyTile<cb_input, cklib::Dst::D1, cklib::CopyTilePolicy::NoWaitPop>{},
+        cklib::MulBinary<cklib::Dst::D0, cklib::Dst::D1, cklib::Dst::D0>{},
+        cklib::PackTile<cb_output, cklib::Dst::D0, cklib::PackTilePolicy::PerTileReserveAndPush>{}
+    );
+#endif
+#ifdef INP_FLOAT
+    using Chain = cklib::EltwiseChain<
+        cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>,
+        cklib::Exp<approx, approx, cklib::Dst::D0>,
+        cklib::Log1p<approx, cklib::Dst::D0>,
+        cklib::Tanh<cklib::Dst::D0>,
+        cklib::DestReuseBinary<cb_input, cklib::BinaryFpuOp::Mul, cklib::DestReuseType::DEST_TO_SRCA,
+                               cklib::Dst::D0, cklib::Dst::D0, cklib::DestReuseReconfig::None,
+                               cklib::CopyTilePolicy::NoWaitPop, cklib::CbIndexMode::FirstTile>,
+        cklib::PackTile<cb_output, cklib::Dst::D0, cklib::PackTilePolicy::PerTileReserveAndPush>
+    >;
+    cklib::eltwise_pipeline_init<Chain>();
+    cklib::eltwise_chain(
+        num_tiles,
+        cklib::CopyTile<cb_input, cklib::Dst::D0, cklib::CopyTilePolicy::WaitNoPop>{},
+        cklib::Exp<approx, approx, cklib::Dst::D0>{},
+        cklib::Log1p<approx, cklib::Dst::D0>{},
+        cklib::Tanh<cklib::Dst::D0>{},
+        cklib::DestReuseBinary<cb_input, cklib::BinaryFpuOp::Mul, cklib::DestReuseType::DEST_TO_SRCA,
+                               cklib::Dst::D0, cklib::Dst::D0, cklib::DestReuseReconfig::None,
+                               cklib::CopyTilePolicy::NoWaitPop, cklib::CbIndexMode::FirstTile>{},
+        cklib::PackTile<cb_output, cklib::Dst::D0, cklib::PackTilePolicy::PerTileReserveAndPush>{}
+    );
+#endif
+}
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t approx_arg = get_arg_val<uint32_t>(1);
-    const bool use_approx = (approx_arg != 0u);
-
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
-
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
-
-    init_sfpu(cb_input, cb_output);
-
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-        tile_regs_acquire();
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);
-
-        if (use_approx) {
-            exp_tile_init<true>();
-            exp_tile<true>(0);
-            log1p_tile_init<true>();
-            log1p_tile<true>(0);
-        } else {
-            exp_tile_init<false>();
-            exp_tile<false>(0);
-            log1p_tile_init<false>();
-            log1p_tile<false>(0);
-        }
-        tanh_tile_init<false>();
-        tanh_tile<false>(0);
-
-#ifdef INP_FLOAT32
-        copy_tile(cb_input, 0, 1);
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
-#endif
-#ifdef INP_FLOAT
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input, 0, 0);
-#endif
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
+    if (approx_arg != 0u) {
+        run_mish<true>(num_tiles);
+    } else {
+        run_mish<false>(num_tiles);
     }
 }

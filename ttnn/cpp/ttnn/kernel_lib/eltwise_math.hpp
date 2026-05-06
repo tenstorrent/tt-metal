@@ -68,11 +68,11 @@ struct Cbrt : UnaryOp<Cbrt<Slot>, Slot> {
     static ALWI void call(uint32_t idst) { cbrt_tile(idst); }
 };
 
-// ---- Log1p ----
-template <Dst Slot = Dst::D0>
-struct Log1p : UnaryOp<Log1p<Slot>, Slot> {
-    static ALWI void init() { log1p_tile_init(); }
-    static ALWI void call(uint32_t idst) { log1p_tile(idst); }
+// ---- Log1p — fast_and_approx template ----
+template <Approx fast = Approx::Fast, Dst Slot = Dst::D0>
+struct Log1p : UnaryOp<Log1p<fast, Slot>, Slot> {
+    static ALWI void init() { log1p_tile_init<fast == Approx::Fast>(); }
+    static ALWI void call(uint32_t idst) { log1p_tile<fast == Approx::Fast>(idst); }
 };
 
 // ---- Power — runtime exponent (passes uint32_t param). ----
