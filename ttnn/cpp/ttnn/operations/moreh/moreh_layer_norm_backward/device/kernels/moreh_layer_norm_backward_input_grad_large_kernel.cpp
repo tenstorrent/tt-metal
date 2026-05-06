@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -544,42 +545,38 @@ void kernel_main() {
             cb_push_back(cb_yydysum, onetile);
             tile_regs_release();
 
-            // Compute cb_tmp4
-            // (n * dy - Sum[dy]) - (y * Sum[y * dy])
+            // PARTIAL migration: cb_tmp4 = cb_ndymdysum - cb_yydysum.
+            //   migrated: BinaryFpu(Sub) + PackTile chain.
             constexpr auto cb_tmp4 = cb_y;
-            tile_regs_acquire();
-            cb_wait_front(cb_ndymdysum, onetile);
-            cb_wait_front(cb_yydysum, onetile);
-            cb_reserve_back(cb_tmp4, onetile);
+            {
+                using namespace compute_kernel_lib;
+                using SubElt = BinaryFpu<
+                    cb_ndymdysum, cb_yydysum, BinaryFpuOp::Sub, BroadcastDim::None,
+                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
+                    CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                eltwise_chain(
+                    onetile,
+                    SubElt{},
+                    PackTile<cb_tmp4, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+                             PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+            }
 
-            sub_tiles_init_with_dt(cb_ndymdysum, cb_yydysum);
-            sub_tiles(cb_ndymdysum, cb_yydysum, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_tmp4);
-
-            cb_pop_front(cb_ndymdysum, onetile);
-            cb_pop_front(cb_yydysum, onetile);
-            cb_push_back(cb_tmp4, onetile);
-            tile_regs_release();
-
-            // Compute cb_dx
-            // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
-            tile_regs_acquire();
-            cb_wait_front(cb_tmp4, onetile);
-            cb_reserve_back(cb_dx, onetile);
-
-            mul_tiles_init_with_dt(cb_tmp4, cb_recip_nrstd);
-            mul_tiles(cb_tmp4, cb_recip_nrstd, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_dx);
-
-            cb_pop_front(cb_tmp4, onetile);
-            cb_push_back(cb_dx, onetile);
-            tile_regs_release();
+            // PARTIAL migration: cb_dx = cb_tmp4 * cb_recip_nrstd.
+            //   migrated: BinaryFpu(Mul) + PackTile chain.
+            {
+                using namespace compute_kernel_lib;
+                using MulElt = BinaryFpu<
+                    cb_tmp4, cb_recip_nrstd, BinaryFpuOp::Mul, BroadcastDim::None,
+                    BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
+                    CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
+                    CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                eltwise_chain(
+                    onetile,
+                    MulElt{},
+                    PackTile<cb_dx, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+                             PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+            }
         }  // Wt loop
         cb_pop_front(cb_recip_nrstd, onetile);
         cb_pop_front(cb_dysum, onetile);

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -211,21 +212,21 @@ void kernel_main() {
                 cb_push_back(cb_y, onetile);
                 tile_regs_release();
 
-                // Compute cb_ydy
-                tile_regs_acquire();
-                cb_wait_front(cb_y, onetile);
-                cb_reserve_back(cb_ydy, onetile);
-
-                mul_tiles_init_with_dt(cb_y, cb_dycopy);
-                mul_tiles(cb_y, cb_dycopy, 0, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_ydy);
-
-                cb_pop_front(cb_y, onetile);
-                cb_push_back(cb_ydy, onetile);
-                tile_regs_release();
+                // PARTIAL migration: cb_ydy = cb_y * cb_dycopy.
+                //   migrated: BinaryFpu(Mul) + PackTile chain.
+                {
+                    using namespace compute_kernel_lib;
+                    using MulElt = BinaryFpu<
+                        cb_y, cb_dycopy, BinaryFpuOp::Mul, BroadcastDim::None,
+                        BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
+                        CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
+                        CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+                    eltwise_chain(
+                        onetile,
+                        MulElt{},
+                        PackTile<cb_ydy, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+                                 PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+                }
 
                 // Compute cb_ydyadd
                 if (inner_idx == 0) {

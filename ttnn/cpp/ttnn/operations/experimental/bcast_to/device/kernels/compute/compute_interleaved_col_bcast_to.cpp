@@ -7,7 +7,15 @@
 #include "api/compute/eltwise_binary.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
+// Migrated stages: per-tile UnaryBcast<Col> + PackTile body.
+// Skipped stages: irregular outer (n, c, th) iteration with `num_tiles_read += Wt - start_tw` early-exit
+// stays raw — the chain helper iterates a single linear count and cannot express the multi-axis early exit
+// or the irregular increment.
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t arg_index = 0;
     uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
     uint32_t start_c = get_arg_val<uint32_t>(arg_index++);
@@ -24,25 +32,17 @@ void kernel_main() {
 
     constexpr auto cb_id_src = get_compile_time_arg_val(0);
     constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    unary_bcast_init<BroadcastType::COL>(cb_id_src, cb_id_dst);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
-                cb_wait_front(tt::CBIndex::c_0, 1);
-                tile_regs_acquire();
-                unary_bcast<BroadcastType::COL>(cb_id_src, 0, 0);
-                tile_regs_commit();
-
-                cb_pop_front(cb_id_src, 1);
-                cb_reserve_back(cb_id_dst, 1);
-                tile_regs_wait();
-                pack_tile(0, cb_id_dst);
-
-                cb_push_back(cb_id_dst, 1);
-                tile_regs_release();
+                eltwise_chain(
+                    1u,
+                    UnaryBcast<BroadcastDim::Col, cb_id_src, cb_id_dst, Dst::D0,
+                               CopyTilePolicy::WaitAndPop>{},
+                    PackTile<cb_id_dst, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
                 num_tiles_read += Wt - start_tw;
             }
         }

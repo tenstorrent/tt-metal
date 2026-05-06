@@ -12,7 +12,20 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
 #include "experimental/circular_buffer.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_block.hpp"
+
+#if BINARY_OP_TYPE == EltwiseBinaryType::ELWADD
+constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Add;
+#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWSUB
+constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Sub;
+#elif BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL
+constexpr auto FPU_OP = compute_kernel_lib::BinaryFpuOp::Mul;
+#endif
+
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
@@ -47,6 +60,7 @@ void kernel_main() {
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
+        // ----- LLK row-broadcast preamble (kept raw) -----
         exp_cb_bcast.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
@@ -60,7 +74,6 @@ void kernel_main() {
         exp_cb_llk_post.push_back(num_tiles_per_cycle);
         tile_regs_release();
         exp_cb_bcast.pop_front(num_tiles_per_cycle);
-        // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 #ifdef ARCH_BLACKHOLE
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
@@ -72,6 +85,18 @@ void kernel_main() {
         PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
+        // ---- Migrated stage: BlockBinaryFpu + BlockPackTile (no-activations path).
+        //      CB lifecycle for inputs is owned by the outer scope (PREPROCESS / cb_post_*).
+        using BinElt = BlockBinaryFpu<cb_post_lhs, cb_post_rhs, FPU_OP, num_tiles_per_cycle,
+                                      Dst::D0, BroadcastDim::None,
+                                      BinaryDataFormatReconfig::None,
+                                      CopyTilePolicy::NoWaitNoPop, CopyTilePolicy::NoWaitNoPop>;
+        using PackElt = BlockPackTile<cb_out, num_tiles_per_cycle>;
+        // BlockBinaryFpu::init() emits the appropriate add/sub/mul_tiles_init internally.
+        eltwise_chain(1u, BinElt{}, PackElt{});
+#else
+        // Activations path — keep raw (PROCESS_POST_ACTIVATIONS macro injection).
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
         exp_cb_out.reserve_back(num_tiles_per_cycle);
 
@@ -85,6 +110,7 @@ void kernel_main() {
         tile_regs_release();
 
         exp_cb_out.push_back(num_tiles_per_cycle);
+#endif
         exp_cb_post_lhs.pop_front(num_tiles_per_cycle);
         exp_cb_post_rhs.pop_front(num_tiles_per_cycle);
     }

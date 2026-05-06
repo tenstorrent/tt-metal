@@ -16,51 +16,46 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"
 
 
 namespace blocks {
-void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_tiles) {
+template <uint32_t cb_in_scores, uint32_t cb_sigmoid_scores>
+void sigmoid(uint32_t width_tiles) {
     // Perform sigmoid on scores
     // Reconfigure pack/unpack for bfloat16 after topk operations used UInt16
-    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_wait_front(cb_in_scores, 1);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_in_scores);
-        // copy tile from scores cb to destination register 0
-        copy_tile_to_dst_init_short(cb_in_scores);
-        copy_tile(cb_in_scores, 0, 0);
-        // perform sigmoid on tile
-        sigmoid_tile_init();
-        sigmoid_tile(0);
-        tile_regs_commit();
-        cb_pop_front(cb_in_scores, 1);
-
-        cb_reserve_back(cb_sigmoid_scores, 1);
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_sigmoid_scores);
-        pack_tile(0, cb_sigmoid_scores);
-        tile_regs_release();
-        cb_push_back(cb_sigmoid_scores, 1);
-    }
+    using namespace compute_kernel_lib;
+    // One-time srca/pack reconfig before chain (matches original per-iter reconfig effect — idempotent).
+    reconfig_data_format_srca(cb_in_scores);
+    pack_reconfig_data_format(cb_sigmoid_scores);
+    eltwise_chain(
+        width_tiles,
+        CopyTile<cb_in_scores, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+        Sigmoid<Dst::D0>{},
+        PackTile<cb_sigmoid_scores, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
-void add_bias(uint32_t cb_sigmoid_scores, uint32_t cb_in_bias, uint32_t cb_biased_scores, uint32_t width_tiles) {
+template <uint32_t cb_sigmoid_scores, uint32_t cb_in_bias, uint32_t cb_biased_scores>
+void add_bias(uint32_t width_tiles) {
     // Perform add bias on sigmoid scores
-    add_tiles_init(cb_sigmoid_scores, cb_in_bias, false);
+    // cb_sigmoid_scores: pre-waited upfront, NoWaitNoPop with BlockIter index (caller leaves tiles).
+    // cb_in_bias: per-tile WaitAndPop at index 0.
+    using namespace compute_kernel_lib;
     cb_wait_front(cb_sigmoid_scores, width_tiles);
-    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_wait_front(cb_in_bias, 1);
-        tile_regs_acquire();
-        add_tiles(cb_sigmoid_scores, cb_in_bias, width_tile, 0, 0);
-        tile_regs_commit();
-        cb_pop_front(cb_in_bias, 1);
-
-        cb_reserve_back(cb_biased_scores, 1);
-        tile_regs_wait();
-        pack_tile(0, cb_biased_scores);
-        tile_regs_release();
-        cb_push_back(cb_biased_scores, 1);
-    }
+    eltwise_chain(
+        width_tiles,
+        BinaryFpu<cb_sigmoid_scores, cb_in_bias,
+                  BinaryFpuOp::Add,
+                  BroadcastDim::None,
+                  BinaryFpuOutputPolicy::PerTile,
+                  BinaryDataFormatReconfig::None,
+                  CopyTilePolicy::NoWaitNoPop,   // A: pre-waited
+                  CopyTilePolicy::WaitAndPop,    // B: per-tile
+                  CbIndexMode::BlockIter,
+                  CbIndexMode::FirstTile,
+                  Dst::D0>{},
+        PackTile<cb_biased_scores, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
 void process_and_sort_tiles(
@@ -389,10 +384,10 @@ void kernel_main() {
     binary_op_init_common(cb_in_scores, cb_in_bias, cb_biased_scores);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        blocks::sigmoid(cb_in_scores, cb_sigmoid_scores, width_tiles);
+        blocks::sigmoid<cb_in_scores, cb_sigmoid_scores>(width_tiles);
 
         // Perform add bias on sigmoid scores
-        blocks::add_bias(cb_sigmoid_scores, cb_in_bias, cb_biased_scores, width_tiles);
+        blocks::add_bias<cb_sigmoid_scores, cb_in_bias, cb_biased_scores>(width_tiles);
         // Note: cb_sigmoid_scores is NOT popped here - writer will pop it after gather
         // Transpose tiles into dest and then perform topk_local_sort
         blocks::process_and_sort_tiles(

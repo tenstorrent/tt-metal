@@ -9,6 +9,8 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+
 constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
 
 // Staging CB always has NUM_TILES_IN_TILIZED_CHUNK tiles; pop the full chunk to keep it clean.
@@ -49,87 +51,69 @@ FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, ui
     tilize_uninit(cb_in, cb_out);
 }
 
-FORCE_INLINE void mul(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    reconfig_data_format(cb_a, cb_b);
-    pack_reconfig_data_format(cb_out);
-
-    mul_tiles_init(cb_a, cb_b);
-
-    cb_wait_front(cb_a, 1);
-    cb_wait_front(cb_b, 1);
-    cb_reserve_back(cb_out, 1);
-
-    tile_regs_acquire();
-    mul_tiles(cb_a, cb_b, 0, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_out);
-    tile_regs_release();
-
-    cb_push_back(cb_out, 1);
-    cb_pop_front(cb_a, 1);
-    cb_pop_front(cb_b, 1);
+// Migrated stages: mul / sum / copy single-tile chains use eltwise_chain (BinaryFpu / CopyTile + PackTile).
+// Skipped stages: pack_block_rows_into_tiles / pack_block_tiles_into_rows (untilize_block / tilize_block),
+// remain on raw — chain helper does not cover tilize/untilize.
+template <uint32_t cb_a, uint32_t cb_b, uint32_t cb_out>
+FORCE_INLINE void mul() {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        1u,
+        BinaryFpu<cb_a, cb_b, BinaryFpuOp::Mul, BroadcastDim::None,
+                  BinaryFpuOutputPolicy::PerTile,
+                  BinaryDataFormatReconfig::InputAndOutput,
+                  CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
+                  CbIndexMode::FirstTile, CbIndexMode::FirstTile,
+                  Dst::D0, /*OldCbA*/0, /*OldCbB*/0, /*OldCbOut*/0, /*CbOut*/cb_out>{},
+        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
-FORCE_INLINE void sum(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    reconfig_data_format(cb_a, cb_b);
-    pack_reconfig_data_format(cb_out);
-
-    add_tiles_init(cb_a, cb_b);
-
-    cb_wait_front(cb_a, 1);
-    cb_wait_front(cb_b, 1);
-    cb_reserve_back(cb_out, 1);
-
-    tile_regs_acquire();
-    add_tiles(cb_a, cb_b, 0, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_out);
-    tile_regs_release();
-
-    cb_push_back(cb_out, 1);
-    cb_pop_front(cb_a, 1);
-    cb_pop_front(cb_b, 1);
+template <uint32_t cb_a, uint32_t cb_b, uint32_t cb_out>
+FORCE_INLINE void sum() {
+    using namespace compute_kernel_lib;
+    eltwise_chain(
+        1u,
+        BinaryFpu<cb_a, cb_b, BinaryFpuOp::Add, BroadcastDim::None,
+                  BinaryFpuOutputPolicy::PerTile,
+                  BinaryDataFormatReconfig::InputAndOutput,
+                  CopyTilePolicy::WaitAndPop, CopyTilePolicy::WaitAndPop,
+                  CbIndexMode::FirstTile, CbIndexMode::FirstTile,
+                  Dst::D0, /*OldCbA*/0, /*OldCbB*/0, /*OldCbOut*/0, /*CbOut*/cb_out>{},
+        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 }
 
-FORCE_INLINE void copy(uint32_t cb_in, uint32_t cb_out, uint32_t num_input_units = 1) {
-    reconfig_data_format_srca(cb_in);
-    pack_reconfig_data_format(cb_out);
-
-    copy_tile_to_dst_init_short(cb_in);
-
-    cb_wait_front(cb_in, num_input_units);
-    cb_reserve_back(cb_out, 1);
-
-    tile_regs_acquire();
-    copy_tile(cb_in, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_out);
-    tile_regs_release();
-
-    // Don't pop the copied tile - caller can do it
-    cb_push_back(cb_out, 1);
+// Note: original copy() takes a runtime num_input_units to allow caller to pre-wait a block of N input tiles
+// then copy only the first one (without popping). This wait-N-copy-1-no-pop shape is preserved by using
+// `WaitNoPop` policy plus a separate cb_wait_front for the larger N (only pays off when N > 1).
+template <uint32_t cb_in, uint32_t cb_out>
+FORCE_INLINE void copy(uint32_t num_input_units = 1) {
+    using namespace compute_kernel_lib;
+    if (num_input_units > 1) {
+        cb_wait_front(cb_in, num_input_units);  // chain only waits for 1
+    }
+    eltwise_chain(
+        1u,
+        CopyTile<cb_in, Dst::D0, CopyTilePolicy::WaitNoPop, CbIndexMode::FirstTile>{},
+        PackTile<cb_out, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
+    // Don't pop the copied tile - caller can do it (matches original semantics).
 }
 
-FORCE_INLINE void compute_ht(
-    uint32_t cb_a,
-    uint32_t cb_bx,
-    uint32_t cb_out,
-    uint32_t cb_h_prev,
-    uint32_t cb_ah,
-    uint32_t cb_h,
-    uint32_t cb_h_acc,
-    uint32_t num_tiles) {
+template <uint32_t cb_a,
+          uint32_t cb_bx,
+          uint32_t cb_out,
+          uint32_t cb_h_prev,
+          uint32_t cb_ah,
+          uint32_t cb_h,
+          uint32_t cb_h_acc>
+FORCE_INLINE void compute_ht(uint32_t num_tiles) {
     for (uint32_t idx = 0; idx < num_tiles; idx++) {
-        mul(cb_a, cb_h_prev, cb_ah);
-        sum(cb_ah, cb_bx, cb_h);
-        copy(cb_h, cb_h_prev);
-        copy(cb_h, cb_out);  // TODO: Get rid of this extraneous copy
+        mul<cb_a, cb_h_prev, cb_ah>();
+        sum<cb_ah, cb_bx, cb_h>();
+        copy<cb_h, cb_h_prev>();
+        copy<cb_h, cb_out>();  // TODO: Get rid of this extraneous copy
         cb_pop_front(cb_h, 1);
     }
-    copy(cb_h_prev, cb_h_acc);  // Store the last row of this tile for the next iteration
+    copy<cb_h_prev, cb_h_acc>();  // Store the last row of this tile for the next iteration
 
     // Make sure to remove the last hidden state
     cb_wait_front(cb_h_prev, 1);
@@ -163,7 +147,7 @@ void kernel_main() {
     for (uint32_t tilized_chunk_idx = 0; tilized_chunk_idx < num_chunks_per_row; tilized_chunk_idx++) {
         const uint32_t remaining_tiles_in_chunk =
             tilized_chunk_idx == num_chunks_per_row - 1 ? num_tiles_last_chunk : NUM_TILES_IN_TILIZED_CHUNK;
-        copy(cb_h_in, cb_h_acc, remaining_tiles_in_chunk);
+        copy<cb_h_in, cb_h_acc>(remaining_tiles_in_chunk);
         cb_pop_front(cb_h_in, remaining_tiles_in_chunk);
     }
 
@@ -171,7 +155,7 @@ void kernel_main() {
     for (uint32_t row_idx = 0; row_idx < total_tiles_per_col; row_idx++) {
         for (uint32_t tilized_chunk_idx = 0; tilized_chunk_idx < num_chunks_per_row; tilized_chunk_idx++) {
             // Load the last row from the hidden state above this row
-            copy(cb_h_acc, cb_h_prev);
+            copy<cb_h_acc, cb_h_prev>();
             cb_pop_front(cb_h_acc, 1);
 
             // If we don't have a full chunk (NUM_TILES_IN_TILIZED_CHUNK tiles) we should figure out how many tiles we
@@ -182,14 +166,7 @@ void kernel_main() {
             pack_block_rows_into_tiles(cb_a_in, cb_a_tilize_in);
             pack_block_rows_into_tiles(cb_bx_in, cb_bx_tilize_in);
 
-            compute_ht(
-                cb_a_tilize_in,
-                cb_bx_tilize_in,
-                cb_tilize_out,
-                cb_h_prev,
-                cb_ah,
-                cb_h,
-                cb_h_acc,
+            compute_ht<cb_a_tilize_in, cb_bx_tilize_in, cb_tilize_out, cb_h_prev, cb_ah, cb_h, cb_h_acc>(
                 NUM_TILES_IN_TILIZED_CHUNK);
 
             pack_block_tiles_into_rows(cb_tilize_out, cb_out, remaining_tiles_in_chunk);

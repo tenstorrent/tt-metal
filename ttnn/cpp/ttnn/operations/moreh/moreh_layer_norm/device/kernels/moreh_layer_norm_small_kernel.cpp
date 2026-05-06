@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Rsqrt
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -295,24 +297,26 @@ void kernel_main() {
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
          * cb_recip_std
+         *
+         * PARTIAL migration: rsqrt(var + eps) chain.
+         *   migrated: BinaryFpu(Add, cb_var/cb_eps) + Rsqrt + PackTile(cb_recip_std).
+         *   skipped : reduce<>, mid-kernel reconfig outside this stage stay raw.
          */
-        cb_wait_front(cb_var, onetile);
-        cb_reserve_back(cb_recip_std, onetile);
-
-        tile_regs_acquire();
-        add_tiles_init_with_dt(cb_var, cb_eps);
-        add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
-
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_recip_std);
-
-        cb_pop_front(cb_var, onetile);
-        cb_push_back(cb_recip_std, onetile);
-        tile_regs_release();
+        {
+            using namespace compute_kernel_lib;
+            // cb_var is per-iteration WaitAndPop; cb_eps is held across kernel (NoWaitNoPop).
+            using AddRsqrt = BinaryFpu<
+                cb_var, cb_eps, BinaryFpuOp::Add, BroadcastDim::None,
+                BinaryFpuOutputPolicy::PerTile, BinaryDataFormatReconfig::Input,
+                CopyTilePolicy::WaitAndPop, CopyTilePolicy::NoWaitNoPop,
+                CbIndexMode::FirstTile, CbIndexMode::FirstTile, Dst::D0>;
+            eltwise_chain(
+                onetile,
+                AddRsqrt{},
+                Rsqrt<Approx::Exact, Dst::D0>{},
+                PackTile<cb_recip_std, Dst::D0, PackTilePolicy::PerTileReserveAndPush,
+                         PackTileIndexMode::FirstTile, PackTileReconfig::Output>{});
+        }
 
         cb_wait_front(cb_recip_std, onetile);
         if (rstd_has_value) {

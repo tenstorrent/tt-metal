@@ -13,6 +13,9 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"
+
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "swiglu_sfpu.h"
@@ -119,16 +122,11 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Create a ones-tile for bias addition (matmul with ones × bias_row = bias)
     unary_op_init_common(cb_c2c_ones_tile, cb_c2c_ones_tile);
-    tile_regs_acquire();
-    fill_tile_init();
-    constexpr uint32_t dst0 = 0;
-    fill_tile(dst0, 1.f);
-    tile_regs_commit();
-    tile_regs_wait();
-    cb_reserve_back(cb_c2c_ones_tile, 1);
-    pack_tile(dst0, cb_c2c_ones_tile);
-    tile_regs_release();
-    cb_push_back(cb_c2c_ones_tile, 1);
+    compute_kernel_lib::eltwise_chain(
+        1u,
+        compute_kernel_lib::FillScalar<compute_kernel_lib::Dst::D0>{1.f},
+        compute_kernel_lib::PackTile<cb_c2c_ones_tile, compute_kernel_lib::Dst::D0,
+                                     compute_kernel_lib::PackTilePolicy::PerTileReserveAndPush>{});
 
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_s2c_in2);
