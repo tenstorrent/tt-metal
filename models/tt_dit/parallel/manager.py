@@ -173,6 +173,8 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
+        if dim < 0:  # support negative dimensions
+            dim += len(shape)
         cache_key = ("ag", tuple(shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
