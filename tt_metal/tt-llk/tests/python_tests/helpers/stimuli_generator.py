@@ -132,6 +132,18 @@ def generate_random_face(
     return srcA_face
 
 
+def _exclude_mx_subnormals(
+    face_data: torch.Tensor, mx_format: DataFormat
+) -> torch.Tensor:
+    """Bump magnitudes below MX_FORMAT_MIN_MAGNITUDE up to that threshold, preserving sign.
+
+    Ensures generated stimuli never land in `mx_format`'s subnormal range. Zeros stay zero.
+    """
+    min_magnitude = MX_FORMAT_MIN_MAGNITUDE[mx_format]
+    bumped = torch.sign(face_data) * min_magnitude
+    return torch.where(face_data.abs() < min_magnitude, bumped, face_data)
+
+
 def _generate_mxfp8_face(stimuli_format, size, const_face, const_value, sfpu):
     """
     Generate test data for MXFP8 formats using normal distribution scaled to format range.
@@ -155,7 +167,7 @@ def _generate_mxfp8_face(stimuli_format, size, const_face, const_value, sfpu):
     if sfpu:
         face_data += 0.1
 
-    return face_data
+    return _exclude_mx_subnormals(face_data, stimuli_format)
 
 
 def _generate_mxfp4_face(size, const_face, const_value, sfpu, negative_values=False):
@@ -199,7 +211,7 @@ def _generate_mxfp4_face(size, const_face, const_value, sfpu, negative_values=Fa
     if sfpu:
         face_data += 0.1
 
-    return face_data
+    return _exclude_mx_subnormals(face_data, DataFormat.MxFp4)
 
 
 def generate_identity_face_tensor(
