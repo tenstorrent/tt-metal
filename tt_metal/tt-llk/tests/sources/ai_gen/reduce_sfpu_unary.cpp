@@ -128,7 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
 
-    _llk_pack_init_wrapper_<false, false>(formats.pack_dst);
+    _llk_pack_init_<false, false>(formats.pack_dst);
     _llk_pack_reduce_mask_config_<false, REDUCE_DIM>();
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncFull, is_fp32_dest_acc_en, false>();
