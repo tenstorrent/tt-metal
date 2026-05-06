@@ -51,7 +51,7 @@ targets:
         - efficientnetb0
         - llama-3.2-1b
         - tt_dit_2
-      trace: [7, 8, 16]
+      trace: [7, 8, 21, 22]
 
 registry:
   - trace_id: 1
@@ -194,3 +194,25 @@ registry:
     config_count: 209
     loaded_at: '2026-05-01'
     notes: 'flux 1 dev via pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py   -k "4x8sp0tp1 and encoder_device and 28 and yes_use_cache and not not_traced"'
+
+  - trace_id: 21
+    status: draft
+    models: [tt_dit_2]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 11c30671-abfd-41f9-8d4b-14d691e3d9c7
+    tt_metal_sha: cc14411f2f49d0186885a69879632adc7138266a
+    config_count: 209
+    loaded_at: '2026-05-06'
+    notes: ''
+    pytest_args: '-k 4x8sp0tp1 and encoder_device and 28 and yes_use_cache and not not_traced --tb=short'
+
+  - trace_id: 22
+    status: draft
+    models: [tt_dit_2]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: 2856b234-c200-486e-b729-bec4361460db
+    tt_metal_sha: cc14411f2f49d0186885a69879632adc7138266a
+    config_count: 203
+    loaded_at: '2026-05-06'
+    notes: ''
+    pytest_args: '-k schnell and 4x8sp0tp1 and traced and encoder_device --tb=short'
