@@ -109,4 +109,60 @@ TEST_F(ExecCommandTest, InvalidLogPathReturnsFalse) {
     EXPECT_FALSE(fs::exists(invalid_log_path));
 }
 
+// ---------------------------------------------------------------------------
+// map_path_prefix tests
+// ---------------------------------------------------------------------------
+
+TEST(MapPathPrefix, BasicPrefixMapping) {
+    fs::path mapped;
+    EXPECT_TRUE(tt::filesystem::map_path_prefix("/src/foo/bar.o", "/src", "/dst", mapped));
+    EXPECT_EQ(mapped, fs::path("/dst/foo/bar.o"));
+}
+
+TEST(MapPathPrefix, NonMatchingPrefix) {
+    fs::path mapped = "/sentinel";
+    EXPECT_FALSE(tt::filesystem::map_path_prefix("/other/foo.o", "/src", "/dst", mapped));
+    EXPECT_EQ(mapped, fs::path("/sentinel"));
+}
+
+TEST(MapPathPrefix, ExactPrefixMatchReturnsFalse) {
+    fs::path mapped = "/sentinel";
+    EXPECT_FALSE(tt::filesystem::map_path_prefix("/src", "/src", "/dst", mapped));
+    EXPECT_EQ(mapped, fs::path("/sentinel"));
+}
+
+TEST(MapPathPrefix, TrailingSlashNormalization) {
+    fs::path mapped;
+    EXPECT_TRUE(tt::filesystem::map_path_prefix("/src/foo/bar.o", "/src/", "/dst/", mapped));
+    EXPECT_EQ(mapped, fs::path("/dst/foo/bar.o"));
+}
+
+// ---------------------------------------------------------------------------
+// make_relative_if_under tests
+// ---------------------------------------------------------------------------
+
+TEST(MakeRelativeIfUnder, BasicRelativePath) {
+    fs::path relative;
+    EXPECT_TRUE(tt::filesystem::make_relative_if_under("/data/proj/build/out.o", "/data/proj", relative));
+    EXPECT_EQ(relative, fs::path("build/out.o"));
+}
+
+TEST(MakeRelativeIfUnder, PathEqualsBaseReturnsFalse) {
+    fs::path relative = "sentinel";
+    EXPECT_FALSE(tt::filesystem::make_relative_if_under("/data/proj", "/data/proj", relative));
+    EXPECT_EQ(relative, fs::path("sentinel"));
+}
+
+TEST(MakeRelativeIfUnder, PathNotUnderBaseReturnsFalse) {
+    fs::path relative = "sentinel";
+    EXPECT_FALSE(tt::filesystem::make_relative_if_under("/data/other/file.txt", "/data/proj", relative));
+    EXPECT_EQ(relative, fs::path("sentinel"));
+}
+
+TEST(MakeRelativeIfUnder, DeeplyNested) {
+    fs::path relative;
+    EXPECT_TRUE(tt::filesystem::make_relative_if_under("/a/b/c/d/e.txt", "/a/b", relative));
+    EXPECT_EQ(relative, fs::path("c/d/e.txt"));
+}
+
 }  // namespace
