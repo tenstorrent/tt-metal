@@ -51,13 +51,16 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     uint32_t datum_size = tt::datum_size(dst_cb_data_format);
 
     tt_metal::IDevice* device = a.device();
-    const uint32_t rm_page_size = a.buffer()->page_size();
+    const uint32_t src_rm_page_size = a.buffer()->page_size();
     uint32_t src_datum_size = tt::datum_size(src0_cb_data_format);
+    const uint32_t logical_row_bytes = W_logical * src_datum_size;
+    const uint32_t tilize_row_bytes = Wt * tile_width * src_datum_size;
+    const uint32_t rm_staging_page_size = std::max(src_rm_page_size, tilize_row_bytes);
     TT_FATAL(
-        W_logical * src_datum_size <= rm_page_size,
+        logical_row_bytes <= src_rm_page_size,
         "Dense RM reduce: logical row size {} bytes exceeds RM page size {} (W_logical={}, dtype)",
-        W_logical * src_datum_size,
-        rm_page_size,
+        logical_row_bytes,
+        src_rm_page_size,
         W_logical);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -84,12 +87,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWRmProgram
     constexpr uint32_t cb_rm = tt::CBIndex::c_24;
     uint32_t num_rm_pages = 2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_rm_pages * rm_page_size,
+        .total_size = num_rm_pages * rm_staging_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_rm),
             .data_format = src0_cb_data_format,
-            .page_size = rm_page_size,
+            .page_size = rm_staging_page_size,
         }}},
     });
 
