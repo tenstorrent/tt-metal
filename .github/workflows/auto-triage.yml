@@ -198,7 +198,7 @@ jobs:
         env:
           MESSAGE_PATH: ".auto_triage/output/slack_message.json"
           SLACK_TS: ${{ steps.post_parent.outputs.thread_ts }}
-          ALLOW_PINGS: "false"
+          ALLOW_PINGS: "true"
           JOB_NAME: ${{ inputs.job_name }}
           WORKFLOW_NAME: ${{ inputs.workflow_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}
