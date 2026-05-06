@@ -8,7 +8,6 @@ This module provides functionality to automatically infer data formats across
 the unpacking, math, and packing stages of compute pipelines, handling
 architecture-specific differences between Wormhole and Blackhole.
 """
-import warnings
 from typing import List, Optional
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
