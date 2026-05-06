@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import importlib.util
 import os
 import subprocess
 import sys
@@ -13,6 +14,14 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / ".github/scripts/utils/validate_perf_targets.py"
+
+
+def _load_validator_module():
+    spec = importlib.util.spec_from_file_location("validate_perf_targets", SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _write_complete_run(
@@ -70,7 +79,7 @@ def test_validate_perf_targets_success(tmp_path):
         model="demo-model",
         batch_size=1,
         seq_len=128,
-        decode_tsu=120.0,
+        decode_tsu=110.0,
     )
 
     targets = {
@@ -86,6 +95,58 @@ def test_validate_perf_targets_success(tmp_path):
                                 "seq_len": 128,
                                 "status": "active",
                                 "perf": {"decode_t/s/u": 100.0},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_validate_perf_targets_supports_compile_and_prefill_decode_metrics(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+        extra_measurements=[
+            {"step_name": "compile_prefill", "name": "time(s)", "value": 15.0},
+            {"step_name": "compile_decode", "name": "time(s)", "value": 8.0},
+            {"step_name": "inference_prefill_decode", "name": "tokens/s/user", "value": 55.0},
+        ],
+    )
+
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": {
+                                    "compile_prefill": 15.0,
+                                    "compile_decode": 8.0,
+                                    "prefill_decode_t/s/u": 55.0,
+                                },
                                 "accuracy": {},
                             }
                         ]
@@ -262,48 +323,15 @@ def test_validate_perf_targets_rejects_unknown_path_profile(tmp_path):
     assert "invalid choice" in result.stderr
 
 
-def test_validate_perf_targets_fails_for_ambiguous_metric_lookup(tmp_path):
-    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
-    (tmp_path / "models").mkdir(parents=True)
-    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
-
-    _write_complete_run(
-        tmp_path / "generated/benchmark_data/complete_run_1.json",
-        model="demo-model",
-        batch_size=1,
-        seq_len=128,
-        decode_tsu=100.0,
-        extra_measurements=[
-            {"step_name": "inference_prefill", "name": "token_verification", "value": 50.0},
-            {"step_name": "inference_decode", "name": "token_verification", "value": 150.0},
-        ],
-    )
-
-    targets = {
-        "version": 1,
-        "targets": {
-            "demo-model": {
-                "aliases": [],
-                "skus": {
-                    "wh_n150": {
-                        "entries": [
-                            {
-                                "batch_size": 1,
-                                "seq_len": 128,
-                                "status": "active",
-                                "perf": {"token_verification": 100.0},
-                                "accuracy": {},
-                            }
-                        ]
-                    }
-                },
-            }
-        },
+def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():
+    validator = _load_validator_module()
+    lookup = {
+        ("inference_prefill", "token_verification"): 50.0,
+        ("inference_decode", "token_verification"): 150.0,
     }
-    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
-    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
-    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
 
-    result = _run_validator(tmp_path)
-    assert result.returncode == 1
-    assert "ambiguous metric" in result.stdout
+    try:
+        validator._extract_metric_value("token_verification", lookup)
+        assert False, "Expected ValueError for ambiguous metric lookup"
+    except ValueError as exc:
+        assert "ambiguous" in str(exc)

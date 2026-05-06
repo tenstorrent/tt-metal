@@ -37,8 +37,11 @@ class PathProfile(str, Enum):
 
 
 METRIC_NAME_MAP = {
+    "compile_prefill": ("compile_prefill", "time(s)"),
+    "compile_decode": ("compile_decode", "time(s)"),
     "prefill_t/s": ("inference_prefill", "tokens/s"),
     "prefill_time_to_token": ("inference_prefill", "time_to_token"),
+    "prefill_decode_t/s/u": ("inference_prefill_decode", "tokens/s/user"),
     "decode_t/s": ("inference_decode", "tokens/s"),
     "decode_t/s/u": ("inference_decode", "tokens/s/user"),
     "top1": ("inference_decode", "top1_token_accuracy"),
