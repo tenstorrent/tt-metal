@@ -15,6 +15,7 @@ on:
           - multiprocess
           - prefetcher
           - distributed-ops
+          - tttv2
       platform:
         required: false
         type: choice
@@ -62,5 +63,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: wh_galaxy,wh_galaxy_perf
       model: ${{ inputs.model || 'all' }}
       topology: topology-6u

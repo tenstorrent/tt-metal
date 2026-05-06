@@ -73,6 +73,7 @@ ttnn:
     bh_p150b_civ2: 545
   unit:
     wh_llmbox: 50
+    wh_galaxy: 35
   e2e:
     wh_llmbox: 90
     wh_galaxy: 70
@@ -89,6 +90,9 @@ shield:
 scaleout:
   unit:
     wh_llmbox: 60
+    wh_galaxy: 25
+  stress:
+    wh_galaxy_perf: 120
   integration:
     wh_llmbox: 40
   health:
@@ -133,6 +137,8 @@ llk:
 models:
   sanity:
     wh_galaxy_perf: 10
+  stress:
+    wh_galaxy_perf: 500
   e2e:
     wh_llmbox: 198
     wh_llmbox_perf: 312
