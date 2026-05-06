@@ -128,14 +128,20 @@ Tensor reduce(
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
     if (is_multicore_hw || (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
-        // Multi-core HW reduction: first reduce W, then reduce H on the result
+        // Multi-core HW reduction: first reduce W, then reduce H on the result.
+        // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
+        const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
+        const bool keep_w_fp32 = output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+                                 tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32;
+        const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
+
         const Tensor output_tensor = ttnn::prim::reduce(
             tilized_input,
             reduce_math,
             tt::tt_metal::ReduceOpDim::W,
             1.0f,
             output_mem_config,
-            output_dtype.value_or(input_tensor.dtype()),
+            out_w_dtype,
             config,
             sub_core_grids,
             negate,
@@ -147,7 +153,7 @@ Tensor reduce(
             tt::tt_metal::ReduceOpDim::H,
             reduce_scaler,
             output_mem_config,
-            output_dtype.value_or(input_tensor.dtype()),
+            out_final_dtype,
             config,
             sub_core_grids,
             negate,

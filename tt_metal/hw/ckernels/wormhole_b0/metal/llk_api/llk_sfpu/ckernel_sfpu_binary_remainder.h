@@ -30,7 +30,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     v_endif;
 
     // Compute reciprocal of b
-    sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(b_f));
+    sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, b_f);
 
     sfpi::vFloat inv_b_f = sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1 * neg_b_f;
 
@@ -55,7 +55,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // Initial quotient approximation : q = a * 1/b
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
-    sfpi::vUInt q = sfpi::exman9(q_f);
+    sfpi::vUInt q = sfpi::exman(q_f);
 
     // Recompute b for chunk extraction to reduce register pressure
     b = sfpi::abs(b_signed);
@@ -76,8 +76,8 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
-    sfpi::vInt qb = sfpi::exman9(lo) << 11;
-    qb += sfpi::exman9(hi) << 22;
+    sfpi::vInt qb = sfpi::exman(lo) << 11;
+    qb += sfpi::exman(hi) << 22;
 
     // Compute remainder - recompute abs(a_signed)
     a = sfpi::abs(a_signed);
@@ -102,9 +102,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vFloat mid = correction_f * b1 + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
 
-    sfpi::vInt tmp = sfpi::exman9(low);
-    tmp += sfpi::exman9(mid) << 11;
-    tmp += sfpi::exman9(top) << 22;
+    sfpi::vInt tmp = sfpi::exman(low);
+    tmp += sfpi::exman(mid) << 11;
+    tmp += sfpi::exman(top) << 22;
 
     // Extract sign mask of r
     // r_sign = 0 if r >= 0, -1 if r < 0

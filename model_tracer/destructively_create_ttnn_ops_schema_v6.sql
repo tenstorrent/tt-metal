@@ -129,13 +129,19 @@ CREATE TABLE ttnn_ops_v6.trace_run (
     tt_metal_sha    TEXT,
     traced_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     config_count    INTEGER,    -- denormalized, updated after aggregate refresh
-    notes           TEXT
+    notes           TEXT,
+    -- The pytest CLI args (everything after `--`) used for this trace
+    -- invocation. Lets us answer "have I traced model X with these args
+    -- on hardware Y?" without re-running the tracer.
+    pytest_args     TEXT
 );
 CREATE INDEX trace_run_trace_uid_idx      ON ttnn_ops_v6.trace_run(trace_uid);
 CREATE INDEX trace_run_hardware_id_idx  ON ttnn_ops_v6.trace_run(hardware_id);
 CREATE INDEX trace_run_traced_at_idx    ON ttnn_ops_v6.trace_run(traced_at DESC);
 CREATE INDEX trace_run_sha_idx          ON ttnn_ops_v6.trace_run(tt_metal_sha)
     WHERE tt_metal_sha IS NOT NULL;
+CREATE INDEX trace_run_pytest_args_idx  ON ttnn_ops_v6.trace_run(pytest_args)
+    WHERE pytest_args IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- 8. trace_run_configuration_model
