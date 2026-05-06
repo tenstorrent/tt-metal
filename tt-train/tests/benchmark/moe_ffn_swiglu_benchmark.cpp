@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <numeric>
 #include <random>
 #include <sstream>
@@ -95,15 +94,6 @@ ttml::autograd::TensorPtr build_grouped_tensor(
     return ttml::autograd::create_tensor(ttml::core::from_xtensor(grouped, device), /*requires_grad=*/true);
 }
 
-double percentile(std::vector<double> v, double p) {
-    if (v.empty()) {
-        return 0.0;
-    }
-    std::sort(v.begin(), v.end());
-    const auto idx = static_cast<std::size_t>(p * (v.size() - 1));
-    return v[idx];
-}
-
 Stats summarize(const std::vector<double>& times_us) {
     Stats s;
     if (times_us.empty()) {
@@ -112,7 +102,10 @@ Stats summarize(const std::vector<double>& times_us) {
     s.avg_us = std::accumulate(times_us.begin(), times_us.end(), 0.0) / static_cast<double>(times_us.size());
     s.min_us = *std::min_element(times_us.begin(), times_us.end());
     s.max_us = *std::max_element(times_us.begin(), times_us.end());
-    s.p50_us = percentile(times_us, 0.5);
+    std::vector<double> sorted = times_us;
+    const auto mid = sorted.begin() + sorted.size() / 2;
+    std::nth_element(sorted.begin(), mid, sorted.end());
+    s.p50_us = *mid;
     return s;
 }
 
@@ -245,19 +238,12 @@ void print_footer() {
 // Main
 // ---------------------------------------------------------------------------
 
-uint32_t env_u32(const char* name, uint32_t fallback) {
-    if (const char* v = std::getenv(name)) {
-        return static_cast<uint32_t>(std::stoul(v));
-    }
-    return fallback;
-}
-
 }  // namespace
 
 int main() {
     try {
-        const uint32_t num_warmup = env_u32("TTML_MOE_BENCH_WARMUP", 2U);
-        const uint32_t num_measure = env_u32("TTML_MOE_BENCH_MEASURE", 10U);
+        constexpr uint32_t num_warmup = 2U;
+        constexpr uint32_t num_measure = 10U;
 
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
         ttml::autograd::ctx().open_device(mesh);
