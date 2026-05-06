@@ -166,7 +166,7 @@ ttnn::Tensor permute(
     TT_FATAL(
         input_rank == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
-    TT_FATAL(tt::tt_metal::is_device_tensor(input_tensor), "Tensor must already be on device");
+    TT_FATAL(is_device_tensor(input_tensor), "Tensor must already be on device");
 
     SmallVector<uint32_t> normalized_dims(dims.size());
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {

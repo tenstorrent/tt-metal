@@ -448,7 +448,7 @@ typename device_operation_t::tensor_return_value_t launch(
 
     if (!input_tensors.empty()) {
         TT_FATAL(
-            tt::tt_metal::is_device_tensor(input_tensors.front().get()),
+            is_device_tensor(input_tensors.front().get()),
             "Device Operations expect tensor with Device storage in inputs");
     }
 

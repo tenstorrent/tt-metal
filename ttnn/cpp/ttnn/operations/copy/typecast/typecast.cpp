@@ -16,7 +16,7 @@ inline Tensor typecast_impl(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     // Handle host tensors by delegating to to_dtype
-    if (tt::tt_metal::is_cpu_tensor(input_tensor)) {
+    if (ttnn::is_cpu_tensor(input_tensor)) {
         TT_FATAL(
             !optional_output_tensor.has_value(),
             "Preallocated output tensor is not supported for host tensor typecast. "

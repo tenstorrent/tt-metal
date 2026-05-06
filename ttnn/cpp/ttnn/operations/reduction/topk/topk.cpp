@@ -198,7 +198,7 @@ std::vector<Tensor> topk(
     // Store original shape for final output validation
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
-    TT_FATAL(tt::tt_metal::is_device_tensor(input_tensor), "Input tensor must be on device");
+    TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
 
     // Analyze input tensor properties to determine required transformations
     std::size_t rank_st = input_tensor.logical_shape().rank();
@@ -231,11 +231,8 @@ std::vector<Tensor> topk(
     if (preallocated_output_tensors.has_value()) {
         const Tensor& preallocated_values = std::get<0>(preallocated_output_tensors.value());
         const Tensor& preallocated_indices = std::get<1>(preallocated_output_tensors.value());
-        TT_FATAL(
-            tt::tt_metal::is_device_tensor(preallocated_values), "Preallocated output values tensor must be on device");
-        TT_FATAL(
-            tt::tt_metal::is_device_tensor(preallocated_indices),
-            "Preallocated output indices tensor must be on device");
+        TT_FATAL(is_device_tensor(preallocated_values), "Preallocated output values tensor must be on device");
+        TT_FATAL(is_device_tensor(preallocated_indices), "Preallocated output indices tensor must be on device");
 
         TT_FATAL(
             preallocated_values.logical_shape() == desired_final_shape,

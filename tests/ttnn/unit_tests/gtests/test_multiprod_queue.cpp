@@ -30,8 +30,6 @@
 namespace tt::tt_metal {
 namespace {
 
-using ::tt::tt_metal::is_device_tensor;
-
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 
 TEST_F(MultiProducerCommandQueueTest, Stress) {
@@ -61,7 +59,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     std::thread t0([&]() {
         for (int j = 0; j < kNumIterations; j++) {
             ttnn::Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
-            EXPECT_TRUE(is_device_tensor(t0_tensor));
+            EXPECT_TRUE(ttnn::is_device_tensor(t0_tensor));
             EXPECT_EQ(t0_tensor.to_vector<float>(t0_io_cq), t0_host_data);
         }
     });
@@ -69,7 +67,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     std::thread t1([&]() {
         for (int j = 0; j < kNumIterations; j++) {
             ttnn::Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
-            EXPECT_TRUE(is_device_tensor(t1_tensor));
+            EXPECT_TRUE(ttnn::is_device_tensor(t1_tensor));
             EXPECT_EQ(t1_tensor.to_vector<float>(t1_io_cq), t1_host_data);
         }
     });
@@ -125,7 +123,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             std::iota(host_data.begin(), host_data.end(), j);
             const ttnn::Tensor host_tensor = ttnn::Tensor::from_vector(host_data, tensor_spec);
             copy_to_device(host_tensor, device_tensor, write_cq);
-            EXPECT_TRUE(is_device_tensor(device_tensor));
+            EXPECT_TRUE(ttnn::is_device_tensor(device_tensor));
 
             {
                 std::unique_lock<std::mutex> lock(event_mutex);
@@ -153,7 +151,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
 
             // Read back from device and verify
             const ttnn::Tensor readback_tensor = device_tensor.cpu(/*blocking=*/true, read_cq);
-            EXPECT_FALSE(is_device_tensor(readback_tensor));
+            EXPECT_FALSE(ttnn::is_device_tensor(readback_tensor));
             std::iota(expected_readback_data.begin(), expected_readback_data.end(), j);
             EXPECT_EQ(readback_tensor.to_vector<uint32_t>(), expected_readback_data) << "At iteration " << j;
 

@@ -26,7 +26,7 @@ std::string to_string(const Tensor& tensor) {
             tensor.layout());
     }
 
-    if (tt::tt_metal::is_device_tensor(tensor)) {
+    if (is_device_tensor(tensor)) {
         if (tensor.is_allocated()) {
             auto* mesh_device = tensor.device();
 

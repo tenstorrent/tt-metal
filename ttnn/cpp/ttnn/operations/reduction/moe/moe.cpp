@@ -37,7 +37,7 @@ Tensor moe(
         }
 
         const Tensor& preallocated_tensor = output_tensor.value();
-        TT_FATAL(tt::tt_metal::is_device_tensor(preallocated_tensor), "Preallocated output tensor must be on device");
+        TT_FATAL(is_device_tensor(preallocated_tensor), "Preallocated output tensor must be on device");
 
         TT_FATAL(
             preallocated_tensor.logical_shape() == desired_output_shape,

@@ -1657,7 +1657,7 @@ void pytensor_module(nb::module_& mod) {
 
     mod.def(
         "get_optimal_worker_cores_for_sharded_tensor",
-        &tt::tt_metal::get_optimal_worker_cores_for_sharded_tensor,
+        &get_optimal_worker_cores_for_sharded_tensor,
         nb::arg("tensor"),
         nb::arg("noc") = tt::tt_metal::NOC::RISCV_0_default,
         R"doc(

@@ -73,7 +73,7 @@ Tensor postprocess_output_tensor(
 }
 
 void validate_output_tensor(const Tensor& input_tensor, const Tensor& output_tensor) {
-    TT_FATAL(tt::tt_metal::is_device_tensor(output_tensor), "Preallocated output tensor must be on device");
+    TT_FATAL(is_device_tensor(output_tensor), "Preallocated output tensor must be on device");
     TT_FATAL(
         input_tensor.logical_shape() == output_tensor.logical_shape(),
         "Shape mismatch: input tensor shape {} does not match output tensor shape {}.",

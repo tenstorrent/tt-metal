@@ -15,7 +15,7 @@ bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& st
 }
 
 std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor) {
-    if (not tensor.is_allocated() or not tt::tt_metal::is_device_tensor(tensor)) {
+    if (not tensor.is_allocated() or not is_device_tensor(tensor)) {
         return std::nullopt;
     }
     return tensor.memory_config();

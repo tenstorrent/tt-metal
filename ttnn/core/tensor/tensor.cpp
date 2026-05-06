@@ -372,9 +372,7 @@ Tensor Tensor::unpad_from_tile(const tt::tt_metal::Shape& output_tensor_shape) c
     return tt::tt_metal::unpad_from_tile(*this, output_tensor_shape);
 }
 
-bool Tensor::is_sharded() const {
-    return tt::tt_metal::is_device_tensor(*this) ? this->memory_config().is_sharded() : false;
-}
+bool Tensor::is_sharded() const { return is_device_tensor(*this) ? this->memory_config().is_sharded() : false; }
 
 uint32_t Tensor::element_size() const {
     switch (this->dtype()) {

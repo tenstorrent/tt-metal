@@ -79,9 +79,7 @@ ConvTranspose2dDimensions compute_conv_transpose2d_dimensions(
 
 template <typename T>
 ttnn::Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel = true) {
-    TT_FATAL(
-        tt::tt_metal::is_cpu_tensor(conv_weight_tensor),
-        "transform_weights_for_conv_transpose2d only supports host tensors");
+    TT_FATAL(is_cpu_tensor(conv_weight_tensor), "transform_weights_for_conv_transpose2d only supports host tensors");
 
     // in_w_shape = {in_channels, out_channels, kernel_height, kernel_width}
     // out_w_shape = {out_channels, in_channels, kernel_height, kernel_width}
@@ -143,7 +141,7 @@ ttnn::Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_t
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
     Tensor to_mirror_tensor;
-    if (tt::tt_metal::is_device_tensor(conv_weight_tensor)) {
+    if (is_device_tensor(conv_weight_tensor)) {
         log_warning(
             tt::LogOp,
             "Prepare Weights for ConvTranspose2D needs weights on host, but they are already on device. The op will "

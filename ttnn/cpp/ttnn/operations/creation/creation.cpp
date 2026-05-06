@@ -220,7 +220,7 @@ Tensor full_like_impl(
     DataType dtype_value =
         optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
     const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
-    if (tt::tt_metal::is_device_tensor(tensor)) {
+    if (is_device_tensor(tensor)) {
         // requires reference tensor to be in TILE for device operation fill - this will be changed later
         if (is_tile_layout &&
             (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||
@@ -375,7 +375,7 @@ Tensor empty_like(
     MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.device();
 
     std::optional<tt::tt_metal::TensorTopology> topology = std::nullopt;
-    if (tt::tt_metal::is_device_tensor(tensor) &&
+    if (is_device_tensor(tensor) &&
         device_ptr->shape().mesh_size() == tensor.tensor_topology().distribution_shape().mesh_size()) {
         topology = tensor.tensor_topology();
     }

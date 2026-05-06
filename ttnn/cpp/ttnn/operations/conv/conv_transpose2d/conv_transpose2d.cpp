@@ -141,8 +141,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             input_tensor.layout(),
             input_tensor.dtype(),
             output_dtype,
-            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                         : std::nullopt,
+            ttnn::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt,
             kernel_size,
             ConvTranspose2dDimensions::CONV2D_STRIDE,
             dilation,
@@ -206,7 +205,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim);
 
-    bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
+    bool weight_is_on_device = ttnn::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (!weight_is_on_device) {
@@ -987,7 +986,7 @@ Result conv_transpose2d_DRAM(
 
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     Tensor input_tensor_on_device = input_tensor;
-    if (!tt::tt_metal::is_device_tensor(input_tensor_on_device)) {
+    if (!ttnn::is_device_tensor(input_tensor_on_device)) {
         input_tensor_on_device =
             ttnn::operations::core::to_device(input_tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
     }

@@ -146,7 +146,7 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
 
 template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
-    TT_FATAL(tt::tt_metal::is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
+    TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     auto transformed_buffer = input_tensor.host_storage().buffer().transform(
         compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
     return Tensor(tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, input_tensor.tensor_topology()));
@@ -774,15 +774,15 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
                 {DataType::BFLOAT4_B, &conv_group_weight_zero_pad_helper<uint32_t>},
             };
 
-    if (tt_metal::is_device_tensor(conv_weight_tensor)) {
+    if (is_device_tensor(conv_weight_tensor)) {
         log_warning(
             tt::LogOp,
             "Prepare weights for Conv2D with groups > 1 expects weights on host, but they are on device. The op will "
             "move them back to host.");
     }
     return convert_tensor_to_tiled_layout_common(
-        tt_metal::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
-                                                       : conv_weight_tensor,
+        is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
+                                             : conv_weight_tensor,
         output_dtype,
         to_w_tile_layout_map,
         original_conv_weight_tensor_shape,
@@ -881,15 +881,15 @@ Tensor convert_conv_weight_tensor_to_grouped_layout_for_conv_transpose2d(
                 {DataType::BFLOAT4_B, &conv_transpose2d_group_weight_zero_pad_helper<uint32_t>},
             };
 
-    if (tt_metal::is_device_tensor(conv_weight_tensor)) {
+    if (is_device_tensor(conv_weight_tensor)) {
         log_warning(
             tt::LogOp,
             "Prepare weights for ConvTranspose2D with groups > 1 expects weights on host, but they are on device. The "
             "op will move them back to host.");
     }
     return convert_tensor_to_tiled_layout_common(
-        tt_metal::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
-                                                       : conv_weight_tensor,
+        is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
+                                             : conv_weight_tensor,
         output_dtype,
         to_w_tile_layout_map,
         original_conv_weight_tensor_shape,
@@ -926,15 +926,15 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
         };
     output_dtype = ((output_dtype == DataType::BFLOAT8_B) || (output_dtype == DataType::BFLOAT4_B)) ? DataType::FLOAT32
                                                                                                     : output_dtype;
-    if (tt_metal::is_device_tensor(conv_weight_tensor)) {
+    if (is_device_tensor(conv_weight_tensor)) {
         log_warning(
             tt::LogOp,
             "Prepare weights for Depthwise Conv1D expects weights on host, but they are on device. The op will move "
             "them back to host.");
     }
     return convert_tensor_to_tiled_layout_common(
-        tt_metal::is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
-                                                       : conv_weight_tensor,
+        is_device_tensor(conv_weight_tensor) ? ttnn::operations::core::from_device(conv_weight_tensor)
+                                             : conv_weight_tensor,
         output_dtype,
         to_w_tile_layout_map,
         original_conv_weight_tensor_shape,
@@ -1635,7 +1635,7 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     }
 
     ttnn::Tensor bias_tensor_ = bias_tensor.value();
-    bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);
+    bool is_bias_tensor_is_on_device = is_device_tensor(bias_tensor_);
     if (!is_bias_tensor_is_on_device) {
         TT_FATAL(bias_tensor_.logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
         uint32_t out_channels_padded = tt::round_up(out_channels, constants::TILE_WIDTH);
