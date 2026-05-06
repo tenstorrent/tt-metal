@@ -29,6 +29,16 @@ namespace tt::tt_metal {
 // The mutex name and dirty shm are derived from the sorted set of chip IDs, so two processes
 // sharing the same mesh contend on the same lock, while non-overlapping meshes run in parallel.
 //
+// Requires 'tt-smi' on PATH; construction throws if it's absent.
+//
+// Known limitation: the guard is constructed inside initialize_device_manager(), which is called
+// after MetalEnvImpl::initialize_base_objects() has already opened the UMD cluster. As a result,
+// the dirty-bit check and tt-smi reset run while the UMD driver is already live. If a previous
+// process left the device with dispatch firmware still running, the tt-smi reset issued by the
+// new acquirer will corrupt that firmware mid-initialization, causing FW init failures. The
+// practical fix is to move SafeDeviceGuard construction to before the UMD cluster is created; that
+// requires knowing the device IDs before topology discovery, which needs a refactor.
+//
 // Replaces the flock + dirty-file + tt-smi shellout choreography in scripts/run_safe_pytest.sh.
 // This is a userspace stopgap until the KMD lock-63 pattern (auto-release on FD close) is viable.
 //

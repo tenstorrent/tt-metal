@@ -53,10 +53,19 @@ std::string dirty_shm_name_for(const std::vector<tt::ChipId>& ids) {
     return fmt::format("{}{}", kDirtyShmPrefix, mesh_key(ids));
 }
 
+void verify_tt_smi_available() {
+    if (std::system("which tt-smi > /dev/null 2>&1") != 0) {
+        TT_THROW(
+            "TT_METAL_SAFE_DEVICE_OPEN=1 requires 'tt-smi' on PATH for device recovery. "
+            "Install it with: pip install tt-smi");
+    }
+}
+
 }  // namespace
 
 SafeDeviceGuard::SafeDeviceGuard(const std::vector<tt::ChipId>& device_ids)
     : device_ids_(device_ids), mutex_(mutex_name_for(device_ids)) {
+    verify_tt_smi_available();
     try {
         mutex_.initialize();
         mutex_.lock();
