@@ -44,7 +44,8 @@ from qwen_omni_utils import process_mm_info
 from models.common.utility_functions import comp_pcc
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, TracedRun
-from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP, TTNNQwen3TalkerMoE
+from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP
+from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import TTNNQwen3TalkerMoE
 from models.experimental.tt_symbiote.modules.qwen_omni_moe import (
     TTNNQwen3OmniThinkerMoE,
 )

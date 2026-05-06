@@ -1294,3 +1294,9 @@ def get_tensor_run_implementation():
             get_active_dispatcher() == cpu_dispatcher
         ), f"CPU dispatcher needs to be active to run {result.__name__} run mode. `export TT_SYMBIOTE_DISPATCHER=CPU`"
     return result
+
+
+from models.experimental.tt_symbiote.models.qwen_omni.distributed_config import (  # noqa: E402
+    DistributedConfig,
+    DistributedTensorConfig,
+)

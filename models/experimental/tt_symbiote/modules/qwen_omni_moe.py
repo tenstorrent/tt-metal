@@ -10,7 +10,8 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
-from models.experimental.tt_symbiote.modules.moe import TTNNExperts, _to_torch_any, _to_ttnn_raw
+from models.experimental.tt_symbiote.models.qwen_omni.qwen_omni_modules import _to_ttnn_raw
+from models.experimental.tt_symbiote.modules.moe import TTNNExperts, _to_torch_any
 
 
 def _thinker_experts_adapter(thinker_mlp):
