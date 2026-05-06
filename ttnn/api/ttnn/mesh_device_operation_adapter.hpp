@@ -238,6 +238,10 @@ public:
         // across calls without storing raw pointers.  Resource tensors are included
         // so factories can bind kernel runtime args to halo lookup tables and other
         // op-owned buffers via emplace_runtime_args() / Buffer*.
+        //
+        // The resources visit is gated on has_prepare_resources because empty_resource_t
+        // is not guaranteed to be reflectable, and visit_object_of_type would throw at
+        // runtime on an unreflectable type that is not the target object_t.
         static std::vector<tt::tt_metal::Buffer*> collect_tensor_buffers(
             const tensor_args_t& tensor_args,
             const tensor_return_value_t& tensor_return_value,
@@ -246,7 +250,9 @@ public:
             auto collect = [&buffers](const Tensor& t) { buffers.push_back(t.buffer()); };
             ttsl::reflection::visit_object_of_type<Tensor>(collect, tensor_args);
             ttsl::reflection::visit_object_of_type<Tensor>(collect, tensor_return_value);
-            ttsl::reflection::visit_object_of_type<Tensor>(collect, resources);
+            if constexpr (has_prepare_resources) {
+                ttsl::reflection::visit_object_of_type<Tensor>(collect, resources);
+            }
             return buffers;
         }
 
