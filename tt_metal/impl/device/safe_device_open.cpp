@@ -11,6 +11,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -26,20 +27,100 @@ namespace tt::tt_metal {
 
 namespace {
 
-constexpr const char* kDirtyShmPrefix = "TT_METAL_DEVICE_DIRTY.";
-constexpr const char* kMutexNamePrefix = "tt-metal-device-";
+constexpr std::string_view kDirtyShmPrefix = "/TT_METAL_DEVICE_DIRTY.mesh-";
+constexpr std::string_view kMutexNamePrefix = "tt-metal-mesh-";
 
-std::string mutex_name_for(tt::ChipId id) { return fmt::format("{}{}", kMutexNamePrefix, id); }
+// Canonical string for a set of chip IDs: sorted, joined with '-'.
+// e.g. {3,0,2,1} -> "0-1-2-3"
+std::string mesh_key(const std::vector<tt::ChipId>& ids) {
+    std::vector<tt::ChipId> sorted(ids);
+    std::sort(sorted.begin(), sorted.end());
+    std::string key;
+    for (size_t i = 0; i < sorted.size(); ++i) {
+        if (i > 0) {
+            key += '-';
+        }
+        key += std::to_string(sorted[i]);
+    }
+    return key;
+}
 
-std::string dirty_shm_name_for(tt::ChipId id) { return fmt::format("/{}{}", kDirtyShmPrefix, id); }
+std::string mutex_name_for(const std::vector<tt::ChipId>& ids) {
+    return fmt::format("{}{}", kMutexNamePrefix, mesh_key(ids));
+}
+
+std::string dirty_shm_name_for(const std::vector<tt::ChipId>& ids) {
+    return fmt::format("{}{}", kDirtyShmPrefix, mesh_key(ids));
+}
 
 }  // namespace
 
-SafeDeviceGuard::PerDevice::PerDevice(tt::ChipId id_in) : id(id_in), mutex(mutex_name_for(id_in)) {}
+SafeDeviceGuard::SafeDeviceGuard(const std::vector<tt::ChipId>& device_ids)
+    : device_ids_(device_ids), mutex_(mutex_name_for(device_ids)) {
+    try {
+        mutex_.initialize();
+        mutex_.lock();
+        locked_ = true;
 
-SafeDeviceGuard::DirtyShm SafeDeviceGuard::open_dirty_shm(tt::ChipId id) {
+        dirty_ = open_dirty_shm(dirty_shm_name_for(device_ids));
+
+        if (*dirty_.ptr != 0) {
+            run_tt_smi_reset();
+        }
+        // Pessimistic: assume this process will dirty the mesh. Cleared in destructor on graceful
+        // exit; persists if the process is killed before we get there.
+        *dirty_.ptr = 1;
+    } catch (...) {
+        if (dirty_.ptr != nullptr) {
+            *dirty_.ptr = 0;
+            close_dirty_shm(dirty_);
+        }
+        if (locked_) {
+            try {
+                mutex_.unlock();
+            } catch (...) {
+            }
+            locked_ = false;
+        }
+        throw;
+    }
+}
+
+SafeDeviceGuard::~SafeDeviceGuard() {
+    if (dirty_.ptr != nullptr) {
+        // If on_hang() fired, leave dirty=1 so the next process double-checks via tt-smi -r.
+        // Otherwise this was a graceful run — clear the bit.
+        if (!hang_handled_.load(std::memory_order_acquire)) {
+            *dirty_.ptr = 0;
+        }
+        close_dirty_shm(dirty_);
+    }
+    if (locked_) {
+        try {
+            mutex_.unlock();
+        } catch (const std::exception& e) {
+            log_warning(tt::LogMetal, "SafeDeviceGuard: mesh unlock failed: {}", e.what());
+        }
+        locked_ = false;
+    }
+}
+
+void SafeDeviceGuard::on_hang() {
+    bool expected = false;
+    if (!hang_handled_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;  // already handled
+    }
+    // Mark dirty before the reset so a crash mid-reset still leaves the next acquirer with a
+    // definitive "must reset" signal.
+    if (dirty_.ptr != nullptr) {
+        *dirty_.ptr = 1;
+    }
+    run_tt_smi_reset();
+}
+
+SafeDeviceGuard::DirtyShm SafeDeviceGuard::open_dirty_shm(std::string_view shm_name) {
     DirtyShm s;
-    const std::string name = dirty_shm_name_for(id);
+    const std::string name(shm_name);
 
     auto old_umask = umask(0);
     s.fd = shm_open(name.c_str(), O_RDWR | O_CREAT, 0666);
@@ -91,98 +172,16 @@ void SafeDeviceGuard::close_dirty_shm(DirtyShm& s) {
     }
 }
 
-void SafeDeviceGuard::run_tt_smi_reset(tt::ChipId id) {
-    // tt-smi -r <int> resets by UMD logical ID — same id space tt-metal's Cluster exposes.
-    const std::string cmd = fmt::format("tt-smi -r {}", id);
-    log_warning(tt::LogMetal, "SafeDeviceGuard: device {} dirty, running: {}", id, cmd);
-    int rc = std::system(cmd.c_str());
+void SafeDeviceGuard::run_tt_smi_reset() {
+    log_warning(tt::LogMetal, "SafeDeviceGuard: mesh dirty, running: tt-smi -r");
+    int rc = std::system("tt-smi -r");
     if (rc != 0) {
         log_warning(
             tt::LogMetal,
-            "SafeDeviceGuard: '{}' returned non-zero exit code: {} (is tt-smi on PATH?)",
-            cmd,
+            "SafeDeviceGuard: 'tt-smi -r' returned non-zero exit code: {} (is tt-smi on PATH?)",
             WEXITSTATUS(rc));
     } else {
-        log_info(tt::LogMetal, "SafeDeviceGuard: device {} reset complete", id);
-    }
-}
-
-SafeDeviceGuard::SafeDeviceGuard(const std::vector<tt::ChipId>& device_ids) {
-    per_device_.reserve(device_ids.size());
-    try {
-        for (auto id : device_ids) {
-            auto pd = std::make_unique<PerDevice>(id);
-
-            // Acquire the cross-process mutex first, then act on the dirty bit under the lock.
-            pd->mutex.initialize();
-            pd->mutex.lock();
-            pd->locked = true;
-
-            pd->dirty = open_dirty_shm(pd->id);
-
-            if (*pd->dirty.ptr != 0) {
-                run_tt_smi_reset(pd->id);
-            }
-            // Pessimistic: assume this process will dirty the device. Cleared in destructor on
-            // graceful exit; persists if the process is killed before we get there.
-            *pd->dirty.ptr = 1;
-
-            per_device_.push_back(std::move(pd));
-        }
-    } catch (...) {
-        // Roll back partial acquisitions before propagating.
-        for (auto& pd : per_device_) {
-            if (pd->dirty.ptr != nullptr) {
-                *pd->dirty.ptr = 0;
-                close_dirty_shm(pd->dirty);
-            }
-            if (pd->locked) {
-                try {
-                    pd->mutex.unlock();
-                } catch (...) {
-                    // best-effort
-                }
-                pd->locked = false;
-            }
-        }
-        per_device_.clear();
-        throw;
-    }
-}
-
-SafeDeviceGuard::~SafeDeviceGuard() {
-    for (auto& pd : per_device_) {
-        if (pd->dirty.ptr != nullptr) {
-            // If on_hang() fired, leave dirty=1 so the next process double-checks via tt-smi -r.
-            // Otherwise this was a graceful run — clear the bit.
-            if (!hang_handled_.load(std::memory_order_acquire)) {
-                *pd->dirty.ptr = 0;
-            }
-            close_dirty_shm(pd->dirty);
-        }
-        if (pd->locked) {
-            try {
-                pd->mutex.unlock();
-            } catch (const std::exception& e) {
-                log_warning(tt::LogMetal, "SafeDeviceGuard: unlock failed for device {}: {}", pd->id, e.what());
-            }
-            pd->locked = false;
-        }
-    }
-}
-
-void SafeDeviceGuard::on_hang() {
-    bool expected = false;
-    if (!hang_handled_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        return;  // already handled
-    }
-    for (auto& pd : per_device_) {
-        // Mark dirty in shmem first so any handler crash before the reset completes still leaves
-        // the next acquirer with a definitive "must reset" signal.
-        if (pd->dirty.ptr != nullptr) {
-            *pd->dirty.ptr = 1;
-        }
-        run_tt_smi_reset(pd->id);
+        log_info(tt::LogMetal, "SafeDeviceGuard: mesh reset complete");
     }
 }
 
