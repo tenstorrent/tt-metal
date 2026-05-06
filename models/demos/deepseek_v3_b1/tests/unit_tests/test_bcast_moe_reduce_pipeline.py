@@ -145,6 +145,7 @@ def test_bcast_moe_reduce_pipeline(
     pipeline_core = ttnn.CoreCoord(12, 8)
     core_io = ttnn.CoreCoord(0, 2)
     moe_sender_core = ttnn.CoreCoord(12, 9)
+
     moe_worker_core_grid = build_worker_grid_excluding_cores(device_grid, [pipeline_core])
 
     token_size_bytes = 64
@@ -299,16 +300,37 @@ def test_bcast_moe_reduce_pipeline(
         ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         print(f"[TEST] stage0: generate_blitz_decode_pipeline done", flush=True)
 
-        fwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in entry_column_coords]
-        bwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in exit_column_coords]
+        # Stage 0 uses two columns: col 1 for forward exit (H2D → stage 1) and
+        # col 0 for loopback entry (stage 15 → D2H). This avoids semaphore
+        # conflicts since the programs land on different physical devices.
+        stage0_exit_col = int(pipeline_config[0].exit_node_coord[1])  # col 1
+        stage0_exit_dcs = [ttnn.MeshCoordinate(r, stage0_exit_col) for r in range(int(mesh_rows))]
+        loopback_entry_col = int(pipeline_config[num_procs].entry_node_coord[1])  # col 0
+        loopback_entry_dcs = [ttnn.MeshCoordinate(r, loopback_entry_col) for r in range(int(mesh_rows))]
+
+        fwd_send_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in stage0_exit_dcs]
+        fwd_recv_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in entry_column_coords]
+        # Loopback: sender is stage 15 col 1 on pipeline_core; receiver is stage 0 col 0
+        bwd_send_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in exit_column_coords]
+        bwd_recv_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in loopback_entry_dcs]
         print(
-            f"[TEST] stage0: fwd_d2d_cores(col {entry_column})="
-            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_d2d_cores]}",
+            f"[TEST] stage0: fwd_send_d2d_cores(stage0 exit col {stage0_exit_col})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_send_d2d_cores]}",
             flush=True,
         )
         print(
-            f"[TEST] stage0: bwd_d2d_cores(col {reduce_exit_column})="
-            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_d2d_cores]}",
+            f"[TEST] stage0: fwd_recv_d2d_cores(stage1 entry col {entry_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_recv_d2d_cores]}",
+            flush=True,
+        )
+        print(
+            f"[TEST] stage0: bwd_send_d2d_cores(stage15 exit col {reduce_exit_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_send_d2d_cores]}",
+            flush=True,
+        )
+        print(
+            f"[TEST] stage0: bwd_recv_d2d_cores(loopback entry col {loopback_entry_col})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_recv_d2d_cores]}",
             flush=True,
         )
 
@@ -317,8 +339,8 @@ def test_bcast_moe_reduce_pipeline(
         exit_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=fwd_d2d_cores,
-            recv_core_coords=fwd_d2d_cores,
+            send_core_coords=fwd_send_d2d_cores,
+            recv_core_coords=fwd_recv_d2d_cores,
             sender_mesh=MeshWrapper(mesh_device),
             receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
         )
@@ -329,36 +351,33 @@ def test_bcast_moe_reduce_pipeline(
         entry_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=bwd_d2d_cores,
-            recv_core_coords=bwd_d2d_cores,
+            send_core_coords=bwd_send_d2d_cores,
+            recv_core_coords=bwd_recv_d2d_cores,
             sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
             receiver_mesh=MeshWrapper(mesh_device),
             receiver_use_reader_config=True,
         )
         print(f"[TEST] stage0: entry_socket_interface done in {_time.time()-_t0:.3f}s", flush=True)
 
-        print(f"[TEST] stage0: creating H2D/D2H/HostInterface for {len(exit_column_coords)} devices...")
+        # H2D on col 1 (forward path), D2H on col 0 (loopback path)
+        print(f"[TEST] stage0: creating H2D/D2H/HostInterface...")
         _t0 = _time.time()
         h2d_sockets = []
         d2h_sockets = []
         host_ios = []
-        stage1_col = int(pipeline_config[1].entry_node_coord[1])  # stage 1 entry column
-        stage1_entry_dcs = [ttnn.MeshCoordinate(r, stage1_col) for r in range(int(mesh_rows))]
-        stage15_col = int(pipeline_config[num_procs - 1].exit_node_coord[1])  # stage 15 exit column
-        stage15_exit_dcs = [ttnn.MeshCoordinate(r, stage15_col) for r in range(int(mesh_rows))]
 
-        for dc_idx, dc in enumerate(exit_column_coords):
+        for dc_idx in range(len(stage0_exit_dcs)):
             _t_dc = _time.time()
             h2d = ttnn.H2DSocket(
                 mesh_device,
-                ttnn.MeshCoreCoord(exit_column_coords[dc_idx], core_io),
+                ttnn.MeshCoreCoord(stage0_exit_dcs[dc_idx], core_io),
                 ttnn.BufferType.L1,
                 token_size_bytes * 2,
                 ttnn.H2DMode.HOST_PUSH,
             )
             d2h = ttnn.D2HSocket(
                 mesh_device,
-                ttnn.MeshCoreCoord(exit_column_coords[dc_idx], core_io),
+                ttnn.MeshCoreCoord(loopback_entry_dcs[dc_idx], core_io),
                 embedding_fifo_size,
             )
             hio = HostInterface(
@@ -367,14 +386,13 @@ def test_bcast_moe_reduce_pipeline(
                 token_size_bytes,
                 embedding_size_bytes,
                 core_to_core_socket_buffer_size=embedding_fifo_size,
-                h2d_downstream_core=ttnn.MeshCoreCoord(stage1_entry_dcs[dc_idx], pipeline_core),
-                d2h_upstream_core=ttnn.MeshCoreCoord(stage15_exit_dcs[dc_idx], pipeline_core),
+                h2d_downstream_core=ttnn.MeshCoreCoord(stage0_exit_dcs[dc_idx], pipeline_core),
+                d2h_upstream_core=ttnn.MeshCoreCoord(loopback_entry_dcs[dc_idx], pipeline_core),
                 embedding_tensor=embedding_tensor,
             )
             h2d_sockets.append(h2d)
             d2h_sockets.append(d2h)
             host_ios.append(hio)
-            print(f"[TEST] stage0:   device[{dc_idx}] dc={dc} done in {_time.time()-_t_dc:.3f}s", flush=True)
 
         print(f"[TEST] stage0: all H2D/D2H/HostInterface done in {_time.time()-_t0:.3f}s", flush=True)
 
@@ -934,6 +952,7 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
     pipeline_core = ttnn.CoreCoord(12, 8)
     core_io = ttnn.CoreCoord(0, 2)
     moe_sender_core = ttnn.CoreCoord(12, 9)
+
     moe_worker_core_grid = build_worker_grid_excluding_cores(device_grid, [pipeline_core])
 
     token_size_bytes = 64
@@ -1078,16 +1097,37 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
         ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
         print(f"[TEST] stage0: generate_blitz_decode_pipeline done", flush=True)
 
-        fwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in entry_column_coords]
-        bwd_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in exit_column_coords]
+        # Stage 0 uses two columns: col 1 for forward exit (H2D → stage 1) and
+        # col 0 for loopback entry (stage 15 → D2H). This avoids semaphore
+        # conflicts since the programs land on different physical devices.
+        stage0_exit_col = int(pipeline_config[0].exit_node_coord[1])  # col 1
+        stage0_exit_dcs = [ttnn.MeshCoordinate(r, stage0_exit_col) for r in range(int(mesh_rows))]
+        loopback_entry_col = int(pipeline_config[num_procs].entry_node_coord[1])  # col 0
+        loopback_entry_dcs = [ttnn.MeshCoordinate(r, loopback_entry_col) for r in range(int(mesh_rows))]
+
+        fwd_send_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in stage0_exit_dcs]
+        fwd_recv_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in entry_column_coords]
+        # Loopback: sender is stage 15 col 1 on pipeline_core; receiver is stage 0 col 0
+        bwd_send_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in exit_column_coords]
+        bwd_recv_d2d_cores = [ttnn.MeshCoreCoord(dc, pipeline_core) for dc in loopback_entry_dcs]
         print(
-            f"[TEST] stage0: fwd_d2d_cores(col {entry_column})="
-            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_d2d_cores]}",
+            f"[TEST] stage0: fwd_send_d2d_cores(stage0 exit col {stage0_exit_col})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_send_d2d_cores]}",
             flush=True,
         )
         print(
-            f"[TEST] stage0: bwd_d2d_cores(col {reduce_exit_column})="
-            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_d2d_cores]}",
+            f"[TEST] stage0: fwd_recv_d2d_cores(stage1 entry col {entry_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in fwd_recv_d2d_cores]}",
+            flush=True,
+        )
+        print(
+            f"[TEST] stage0: bwd_send_d2d_cores(stage15 exit col {reduce_exit_column})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_send_d2d_cores]}",
+            flush=True,
+        )
+        print(
+            f"[TEST] stage0: bwd_recv_d2d_cores(loopback entry col {loopback_entry_col})="
+            f"{[(str(c.device_coord),str(c.core_coord)) for c in bwd_recv_d2d_cores]}",
             flush=True,
         )
 
@@ -1096,8 +1136,8 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
         exit_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=fwd_d2d_cores,
-            recv_core_coords=fwd_d2d_cores,
+            send_core_coords=fwd_send_d2d_cores,
+            recv_core_coords=fwd_recv_d2d_cores,
             sender_mesh=MeshWrapper(mesh_device),
             receiver_mesh=MeshWrapper(mesh_id=my_mesh_id + 1),
         )
@@ -1108,32 +1148,33 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
         entry_socket_interface = ParallelSocketInterface(
             embedding_size_bytes,
             embedding_fifo_size,
-            send_core_coords=bwd_d2d_cores,
-            recv_core_coords=bwd_d2d_cores,
+            send_core_coords=bwd_send_d2d_cores,
+            recv_core_coords=bwd_recv_d2d_cores,
             sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
             receiver_mesh=MeshWrapper(mesh_device),
             receiver_use_reader_config=True,
         )
         print(f"[TEST] stage0: entry_socket_interface done in {_time.time()-_t0:.3f}s", flush=True)
 
-        print(f"[TEST] stage0: creating H2D/D2H/HostInterface for {len(exit_column_coords)} devices...")
+        # H2D on col 1 (forward path), D2H on col 0 (loopback path)
+        print(f"[TEST] stage0: creating H2D/D2H/HostInterface...")
         _t0 = _time.time()
         h2d_sockets = []
         d2h_sockets = []
         host_ios = []
 
-        for dc_idx, dc in enumerate(exit_column_coords):
+        for dc_idx in range(len(stage0_exit_dcs)):
             _t_dc = _time.time()
             h2d = ttnn.H2DSocket(
                 mesh_device,
-                ttnn.MeshCoreCoord(dc, core_io),
+                ttnn.MeshCoreCoord(stage0_exit_dcs[dc_idx], core_io),
                 ttnn.BufferType.L1,
                 token_size_bytes * 2,
                 ttnn.H2DMode.HOST_PUSH,
             )
             d2h = ttnn.D2HSocket(
                 mesh_device,
-                ttnn.MeshCoreCoord(dc, core_io),
+                ttnn.MeshCoreCoord(loopback_entry_dcs[dc_idx], core_io),
                 embedding_fifo_size,
             )
             hio = HostInterface(
@@ -1142,14 +1183,13 @@ def test_persistent_reduce_pipeline_multi_exit_nodes(
                 token_size_bytes,
                 embedding_size_bytes,
                 core_to_core_socket_buffer_size=embedding_fifo_size,
-                h2d_downstream_core=ttnn.MeshCoreCoord(entry_column_coords[dc_idx], pipeline_core),
-                d2h_upstream_core=ttnn.MeshCoreCoord(dc, pipeline_core),
+                h2d_downstream_core=ttnn.MeshCoreCoord(stage0_exit_dcs[dc_idx], pipeline_core),
+                d2h_upstream_core=ttnn.MeshCoreCoord(loopback_entry_dcs[dc_idx], pipeline_core),
                 embedding_tensor=embedding_tensor,
             )
             h2d_sockets.append(h2d)
             d2h_sockets.append(d2h)
             host_ios.append(hio)
-            print(f"[TEST] stage0:   device[{dc_idx}] dc={dc} done in {_time.time()-_t_dc:.3f}s", flush=True)
 
         print(f"[TEST] stage0: all H2D/D2H/HostInterface done in {_time.time()-_t0:.3f}s", flush=True)
 

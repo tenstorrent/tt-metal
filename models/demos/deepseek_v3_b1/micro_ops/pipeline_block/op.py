@@ -45,12 +45,15 @@ There are five distinct stage configurations:
 
 Per-device parallel mode (pipeline_device_coords):
   When a list of MeshCoordinate device coordinates is provided, each channel
-  maps to a different device in the mesh. Within each device, pipeline_core_coord
-  (entry) and pipeline_exit_core_coord (exit) handle incoming and outgoing data,
-  matching the caller-supplied pattern used by the single-channel forwarding stage.
-  All programs are merged per device and dispatched in a single generic_op to avoid
-  deadlock. Optionally supports the d2d_exchange_multiple_upstreams kernel per device
-  via exit_upstream_cores and exit_upstream_page_size parameters.
+  maps to mesh row ``i`` (same count as coordinates in the list). Device
+  endpoints for cross-rank sockets follow ``pipeline_config`` like the
+  single-channel path (prev exit → this entry; this exit → next entry, using the
+  loopback config row after the last stage). ``pipeline_device_coords`` /
+  ``entry_device_coords`` / ``exit_device_coords`` set channel count and
+  optional placement hints; core placement still uses pipeline_core_coord /
+  pipeline_exit_core_coord. Programs are merged per device and dispatched in one
+  ``generic_op``. Optionally uses ``d2d_exchange_multiple_upstreams`` via
+  ``exit_upstream_cores`` and ``exit_upstream_page_size``.
 
 entry_socket_interface / exit_socket_interface can be any of:
   - None: not applicable for this stage
@@ -69,6 +72,17 @@ from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface, _group_by_device
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
+
+
+def _blitz_mesh_coord_for_parallel_row(template: ttnn.MeshCoordinate, row: int) -> ttnn.MeshCoordinate:
+    """Expand a blitz template device coord to parallel lane ``row``.
+
+    Blitz stores per-stage ``entry_node_coord`` / ``exit_node_coord`` with row 0
+    and the fabric column in the second component; each parallel channel sweeps
+    mesh rows 0..R-1 while keeping that column (same convention as
+    ``MeshCoordinate(r, int(template[1]))`` in tests).
+    """
+    return ttnn.MeshCoordinate(int(row), int(template[1]))
 
 
 @dataclass
@@ -343,6 +357,7 @@ class PipelineBlock:
                     exit_upstream_page_size=exit_upstream_page_size,
                     entry_device_coords=entry_device_coords,
                     exit_device_coords=exit_device_coords,
+                    loopback_entry_core=None,
                 )
             else:
                 self._init_forwarding_stage(
@@ -701,14 +716,23 @@ class PipelineBlock:
         exit_upstream_page_size=None,
         entry_device_coords=None,
         exit_device_coords=None,
+        loopback_entry_core=None,
     ):
         """Per-device parallel forwarding stage.
 
-        Each channel maps to a different device in the mesh. Within each device,
-        core_entry (pipeline_core_coord) and core_exit (pipeline_exit_core_coord)
-        handle incoming and outgoing data respectively. Both are caller-supplied,
-        mirroring the pattern used by _init_forwarding_stage where device coords
-        come from the pipeline config and the core coord is caller-supplied.
+        Each channel index ``i`` maps to mesh row ``i``. Per-channel **device**
+        endpoints for ``SocketInterface`` / ``MeshSocket`` are taken from
+        ``self.pipeline_config`` the same way as ``_init_forwarding_stage``:
+        previous stage **exit**, this stage **entry** / **exit**, and
+        ``pipeline_config[my_stage_idx + 1].entry`` on the far side of the exit
+        hop (including the loopback row when ``is_last_stage``). Blitz templates
+        use row 0 with the fabric column in the second component; we expand to
+        ``MeshCoordinate(i, template[1])`` for each parallel lane.
+
+        ``entry_device_coords`` / ``exit_device_coords`` (or default
+        ``pipeline_device_coords``) still set the **number of channels** and are
+        logged for comparison; they are not used as socket mesh endpoints when
+        wiring cross-rank hops.
 
         Optional entry_downstream_core specifies where entry forwards data for compute.
 
@@ -745,15 +769,29 @@ class PipelineBlock:
 
         effective_downstream_core = entry_downstream_core if entry_downstream_core else core_exit
 
-        for dc in actual_entry_coords:
+        next_cfg_idx = self.my_stage_idx + 1
+        num_channels = len(actual_entry_coords)
+
+        for i in range(num_channels):
+            prev_exit_dc = _blitz_mesh_coord_for_parallel_row(self.pipeline_config[prev_stage].exit_node_coord, i)
+            this_entry_dc = _blitz_mesh_coord_for_parallel_row(
+                self.pipeline_config[self.my_stage_idx].entry_node_coord, i
+            )
+            this_exit_dc_for_downstream = _blitz_mesh_coord_for_parallel_row(
+                self.pipeline_config[self.my_stage_idx].exit_node_coord, i
+            )
             entry_use_reader = (core_entry == core_exit) and not use_multi_upstream
+            # For passthrough stages where entry and exit are on different devices,
+            # place the downstream on the exit device so the exit sender program
+            # can find its upstream socket locally.
+            downstream_dc = this_exit_dc_for_downstream if not use_multi_upstream else this_entry_dc
             entry_si = SocketInterface(
                 upstream_d2d_socket_page_size,
                 upstream_d2d_socket_fifo_size,
                 upstream_d2d_socket_page_size,
-                ttnn.MeshCoreCoord(dc, core_exit),
-                ttnn.MeshCoreCoord(dc, core_entry),
-                downstream_core_coord=ttnn.MeshCoreCoord(dc, effective_downstream_core),
+                ttnn.MeshCoreCoord(prev_exit_dc, core_exit),
+                ttnn.MeshCoreCoord(this_entry_dc, core_entry),
+                downstream_core_coord=ttnn.MeshCoreCoord(downstream_dc, effective_downstream_core),
                 sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
                 receiver_mesh=MeshWrapper(mesh_device),
                 receiver_use_reader_config=entry_use_reader,
@@ -765,17 +803,25 @@ class PipelineBlock:
             f"device coords must have the same length"
         )
 
-        for i, dc in enumerate(actual_exit_coords):
+        for i in range(num_channels):
             entry_si = self.entry_socket_interface[i]
+            this_exit_dc = _blitz_mesh_coord_for_parallel_row(
+                self.pipeline_config[self.my_stage_idx].exit_node_coord, i
+            )
+            next_entry_dc = _blitz_mesh_coord_for_parallel_row(self.pipeline_config[next_cfg_idx].entry_node_coord, i)
+            # For loopback, stage 0 may place the loopback receiver on a
+            # different core to avoid semaphore conflicts with the forward exit
+            # sender (which lives on a different device column on stage 0).
+            exit_recv_core = loopback_entry_core if (self.is_last_stage and loopback_entry_core) else core_entry
 
             if use_multi_upstream and len(exit_upstream_cores) > 0:
-                per_device_upstream_cores = [ttnn.MeshCoreCoord(dc, uc) for uc in exit_upstream_cores]
+                per_device_upstream_cores = [ttnn.MeshCoreCoord(this_exit_dc, uc) for uc in exit_upstream_cores]
                 exit_si = SocketInterface(
                     downstream_d2d_socket_page_size,
                     downstream_d2d_socket_fifo_size,
                     downstream_d2d_socket_page_size,
-                    ttnn.MeshCoreCoord(dc, core_exit),
-                    ttnn.MeshCoreCoord(dc, core_entry),
+                    ttnn.MeshCoreCoord(this_exit_dc, core_exit),
+                    ttnn.MeshCoreCoord(next_entry_dc, exit_recv_core),
                     sender_mesh=MeshWrapper(mesh_device),
                     receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
                     upstream_core_coords=per_device_upstream_cores,
@@ -786,8 +832,8 @@ class PipelineBlock:
                     downstream_d2d_socket_page_size,
                     downstream_d2d_socket_fifo_size,
                     downstream_d2d_socket_page_size,
-                    ttnn.MeshCoreCoord(dc, core_exit),
-                    ttnn.MeshCoreCoord(dc, core_entry),
+                    ttnn.MeshCoreCoord(this_exit_dc, core_exit),
+                    ttnn.MeshCoreCoord(next_entry_dc, exit_recv_core),
                     sender_mesh=MeshWrapper(mesh_device),
                     receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
                     upstream_sockets=[entry_si.get_downstream_socket()],
@@ -798,8 +844,8 @@ class PipelineBlock:
                     downstream_d2d_socket_page_size,
                     downstream_d2d_socket_fifo_size,
                     downstream_d2d_socket_page_size,
-                    ttnn.MeshCoreCoord(dc, core_exit),
-                    ttnn.MeshCoreCoord(dc, core_entry),
+                    ttnn.MeshCoreCoord(this_exit_dc, core_exit),
+                    ttnn.MeshCoreCoord(next_entry_dc, exit_recv_core),
                     upstream_socket=entry_si.get_downstream_socket(),
                     sender_mesh=MeshWrapper(mesh_device),
                     receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
@@ -807,7 +853,6 @@ class PipelineBlock:
             self.exit_socket_interface.append(exit_si)
 
         if self.my_stage_idx >= 2:
-            next_cfg_idx = self.my_stage_idx + 1
             pc_prev = self.pipeline_config[prev_stage]
             pc_curr = self.pipeline_config[self.my_stage_idx]
             pc_next = self.pipeline_config[next_cfg_idx]
@@ -826,22 +871,23 @@ class PipelineBlock:
                 f"cfg[prev] entry={pc_prev.entry_node_coord} exit={pc_prev.exit_node_coord} "
                 f"cfg[this] entry={pc_curr.entry_node_coord} exit={pc_curr.exit_node_coord} "
                 f"cfg[next_cfg] entry={pc_next.entry_node_coord} exit={pc_next.exit_node_coord} "
-                f"n_channels={len(actual_entry_coords)} "
+                f"n_channels={num_channels} "
                 f"core_entry={core_entry} core_exit={core_exit} effective_downstream={effective_downstream_core} "
                 f"upstream_page={upstream_d2d_socket_page_size} downstream_page={downstream_d2d_socket_page_size}"
             )
-            for i in range(len(actual_entry_coords)):
-                dc_e = actual_entry_coords[i]
-                dc_x = actual_exit_coords[i]
-                same_col = str(dc_e) == str(dc_x)
+            for i in range(num_channels):
+                prev_exit_dc = _blitz_mesh_coord_for_parallel_row(pc_prev.exit_node_coord, i)
+                this_entry_dc = _blitz_mesh_coord_for_parallel_row(pc_curr.entry_node_coord, i)
+                this_exit_dc = _blitz_mesh_coord_for_parallel_row(pc_curr.exit_node_coord, i)
+                next_entry_dc = _blitz_mesh_coord_for_parallel_row(pc_next.entry_node_coord, i)
+                caller_entry = actual_entry_coords[i]
+                caller_exit = actual_exit_coords[i]
                 logger.info(
                     f"PipelineBlock parallel passive ch[{i}]: "
-                    f"entry_dc={dc_e} exit_dc={dc_x} same_mesh_device_coord={same_col} | "
-                    f"entry: prev->{self.my_stage_idx} d2d "
-                    f"MeshCoreCoord({dc_e},{core_exit}) <-> MeshCoreCoord({dc_e},{core_entry}) "
-                    f"-> downstream MeshCoreCoord({dc_e},{effective_downstream_core}); "
-                    f"exit: {self.my_stage_idx}->{next_stage} d2d "
-                    f"MeshCoreCoord({dc_x},{core_exit}) <-> MeshCoreCoord({dc_x},{core_entry})"
+                    f"blitz prev_exit={prev_exit_dc} this_entry={this_entry_dc} this_exit={this_exit_dc} "
+                    f"next_entry={next_entry_dc} | caller entry_dc={caller_entry} exit_dc={caller_exit} | "
+                    f"entry hop MeshCoreCoord(prev_exit,{core_exit})<->{this_entry_dc},{core_entry} "
+                    f"downstream@{this_entry_dc}; exit hop {this_exit_dc}->{next_entry_dc}"
                 )
 
     def _dispatch_parallel_device_programs(self):
