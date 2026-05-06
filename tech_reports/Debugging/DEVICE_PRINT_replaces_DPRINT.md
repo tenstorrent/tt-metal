@@ -6,7 +6,7 @@
 - During the deprecation window, set `TT_METAL_DEVICE_PRINT=1` to opt into the new system; legacy `DPRINT` still works but is deprecated.
 - After the window, `DPRINT` remains only as a thin alias for `DEVICE_PRINT`; old stream-style `DPRINT << ... << ENDL();` will not compile.
 
-We are deprecating the legacy **`DPRINT`** device-side debug print API in favor of the new **`DEVICE_PRINT`** system. `DEVICE_PRINT` is now our recommended, production-ready mechanism for printing from firmware and kernels. During a transition period, `DPRINT` will remain available, after which it will be removed.
+We are deprecating the legacy **`DPRINT`** device-side debug print API in favor of the new **`DEVICE_PRINT`** system. `DEVICE_PRINT` is now our recommended, production-ready mechanism for printing from firmware and kernels. During a transition period, the legacy `DPRINT` implementation will remain available; after the window, the old stream-style `DPRINT` form will be removed, and `DPRINT` will be retained only as a thin alias for `DEVICE_PRINT`.
 
 ---
 
@@ -231,7 +231,7 @@ export TT_METAL_DEVICE_PRINT=1
 With this configuration:
 
 - Your new `DEVICE_PRINT(...)` calls will use the new system.
-- Legacy `DPRINT` calls will be ignored by the compiler (only `DEVICE_PRINT`-style usage is honored when `TT_METAL_DEVICE_PRINT` is set).
+- Legacy `DPRINT` calls are disabled and compiled out (that is, they are not executed, even though they may still be type-checked); only `DEVICE_PRINT`-style usage is honored when `TT_METAL_DEVICE_PRINT` is set.
 
 If you **do not** set `TT_METAL_DEVICE_PRINT`:
 
