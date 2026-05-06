@@ -78,7 +78,7 @@ Tensor div(
     const std::optional<std::string>& rounding_mode = std::nullopt,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> output_tensor = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},

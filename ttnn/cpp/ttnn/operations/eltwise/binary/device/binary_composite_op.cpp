@@ -171,7 +171,7 @@ Tensor div(
     const std::optional<std::string>& rounding_mode,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor,
+    const std::optional<Tensor>& output_tensor,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
