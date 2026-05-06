@@ -143,7 +143,7 @@ TEST_F(JitBuildDependencyTests, ConcurrentUpToDateCheck) {
     constexpr int kNumFiles = 20;
     constexpr int kNumThreads = 16;
 
-    std::vector<std::string> dep_names;
+    std::vector<std::filesystem::path> dep_names;
     dep_names.reserve(kNumFiles);
     for (int i = 0; i < kNumFiles; ++i) {
         dep_names.push_back("dep_" + std::to_string(i) + ".txt");
@@ -175,7 +175,7 @@ TEST_F(JitBuildDependencyTests, ConcurrentInvalidation) {
     constexpr int kNumFiles = 20;
     constexpr int kNumThreads = 16;
 
-    std::vector<std::string> dep_names;
+    std::vector<std::filesystem::path> dep_names;
     dep_names.reserve(kNumFiles);
     for (int i = 0; i < kNumFiles; ++i) {
         dep_names.push_back("dep_" + std::to_string(i) + ".txt");

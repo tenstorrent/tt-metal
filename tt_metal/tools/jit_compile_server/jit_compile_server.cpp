@@ -4,18 +4,21 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 
+#include "common/filesystem_utils.hpp"
 #include "impl/jit_server/jit_compile_server_controller.hpp"
 #include "impl/jit_server/types.hpp"
 #include "jit_build/depend.hpp"
@@ -76,7 +79,7 @@ constexpr const char* kEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
 constexpr const char* kDefaultEndpoint = "localhost:9876";
 constexpr const char* kServerCacheRootEnv = "TT_METAL_JIT_SERVER_CACHE_ROOT";
 constexpr const char* kDefaultServerCacheRoot = "/tmp/tt-metal-cache/";
-std::string g_server_cache_root = kDefaultServerCacheRoot;
+fs::path g_server_cache_root = kDefaultServerCacheRoot;
 
 // Reject paths that could escape the cache root: absolute paths, ".." components, or
 // empty strings.  Throws on violation.
@@ -94,30 +97,27 @@ void validate_safe_relative_path(const std::string& path, const char* field_name
     }
 }
 
-std::string normalize_cache_root(std::string cache_root) {
+fs::path normalize_cache_root(const std::string& cache_root) {
     if (cache_root.empty()) {
-        return std::string(kDefaultServerCacheRoot);
+        return fs::path(kDefaultServerCacheRoot);
     }
-    if (cache_root.back() != '/') {
-        cache_root.push_back('/');
-    }
-    return cache_root;
+    return fs::path(cache_root);
 }
 
 // All client-supplied path components (kernel_name, target_name, obj names, generated file
 // names) are validated by validate_safe_relative_path() before reaching these helpers.
-std::string kernel_cache_dir(std::uint64_t build_key, const std::string& kernel_name) {
-    return (fs::path(g_server_cache_root) / std::to_string(build_key) / "kernels" / kernel_name).string() + "/";
+fs::path kernel_cache_dir(std::uint64_t build_key, const std::string& kernel_name) {
+    return g_server_cache_root / std::to_string(build_key) / "kernels" / kernel_name;
 }
 
-std::string target_cache_dir(std::uint64_t build_key, const std::string& kernel_name, const std::string& target_name) {
-    return (fs::path(kernel_cache_dir(build_key, kernel_name)) / target_name).string() + "/";
+fs::path target_cache_dir(std::uint64_t build_key, const std::string& kernel_name, const std::string& target_name) {
+    return kernel_cache_dir(build_key, kernel_name) / target_name;
 }
 
 void handle_signal(int /*signal*/) { g_keep_running.store(false); }
 
-std::string firmware_cache_dir(std::uint64_t build_key, const std::string& target_name) {
-    return (fs::path(g_server_cache_root) / std::to_string(build_key) / "firmware" / target_name).string() + "/";
+fs::path firmware_cache_dir(std::uint64_t build_key, const std::string& target_name) {
+    return g_server_cache_root / std::to_string(build_key) / "firmware" / target_name;
 }
 
 // Resolve firmware path from the server cache populated by uploadFirmware RPC.
@@ -128,9 +128,9 @@ fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_me
         throw std::runtime_error(
             fmt::format("Internal error: expected non-empty weakened_firmware_name for target {}", target.target_name));
     }
-    const std::string firmware_file = fs::path(target.weakened_firmware_name).filename().string();
-    const std::string fw_dir = firmware_cache_dir(build_key, target.target_name);
-    fs::path candidate = fs::path(fw_dir) / firmware_file;
+    const fs::path firmware_file = fs::path(target.weakened_firmware_name).filename();
+    const fs::path fw_dir = firmware_cache_dir(build_key, target.target_name);
+    fs::path candidate = fw_dir / firmware_file;
     if (fs::exists(candidate)) {
         return candidate;
     }
@@ -140,27 +140,26 @@ fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_me
         "Expected at {}. Ensure the client uploads firmware via uploadFirmware RPC before compiling.",
         build_key,
         target.target_name,
-        firmware_file,
+        firmware_file.string(),
         candidate.string()));
 }
 
-void build_failure(
-    const std::string& target, const std::string& op, const std::string& cmd, const std::string& log_file) {
+void build_failure(const std::string& target, const std::string& op, const std::string& cmd, const fs::path& log_file) {
     std::ifstream file{log_file};
     if (file.is_open()) {
         std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         throw std::runtime_error(fmt::format("{} {} failure -- cmd: {}\nLog: {}", target, op, cmd, log_contents));
     }
     throw std::runtime_error(
-        fmt::format("{} {} failure -- cmd: {} (log file {} not found)", target, op, cmd, log_file));
+        fmt::format("{} {} failure -- cmd: {} (log file {} not found)", target, op, cmd, log_file.string()));
 }
 
-bool need_compile(const std::string& out_dir, const std::string& obj) {
-    return !fs::exists(out_dir + obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj);
+bool need_compile(const fs::path& out_dir, const fs::path& obj) {
+    return !fs::exists(out_dir / obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
-bool need_link(const std::string& out_dir, const std::string& target_name) {
-    std::string elf_path = out_dir + target_name + ".elf";
+bool need_link(const fs::path& out_dir, const std::string& target_name) {
+    fs::path elf_path = out_dir / (target_name + ".elf");
     return !fs::exists(elf_path) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
@@ -185,47 +184,51 @@ void append_tokenized(std::vector<std::string>& args, const std::string& flags) 
 void compile_one(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
-    const std::string& out_dir,
+    const fs::path& out_dir,
     size_t src_index,
-    const std::string& temp_obj) {
+    const fs::path& temp_obj) {
     std::vector<std::string> args;
     append_tokenized(args, gpp);
     args.push_back("-" + target.compiler_opt_level);
     append_tokenized(args, target.cflags);
     append_tokenized(args, target.includes);
 
-    std::string obj_path = out_dir + target.objs[src_index];
-    std::string obj_temp_path = out_dir + temp_obj;
-    std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
+    fs::path obj_path = out_dir / target.objs[src_index];
+    fs::path obj_temp_path = out_dir / temp_obj;
+    fs::path temp_d_path = fs::path(obj_temp_path).replace_extension("d");
     args.push_back("-c");
     args.push_back("-o");
-    args.push_back(obj_temp_path);
+    args.push_back(obj_temp_path.string());
     args.push_back(target.srcs[src_index]);
     args.push_back("-MF");
-    args.push_back(temp_d_path);
+    args.push_back(temp_d_path.string());
     args.insert(args.end(), target.defines.begin(), target.defines.end());
 
-    tt::jit_build::utils::FileRenamer log_file(obj_path + ".log");
-    fs::remove(log_file.path());
+    fs::path log_path = obj_path;
+    log_path.concat(".log");
+    tt::jit_build::utils::FileRenamer log_file(log_path);
+    tt::filesystem::safe_remove(log_file.path());
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
         build_failure(target.target_name, "compile", format_args(args), log_file.path());
     }
-    tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    fs::path dephash_path = obj_temp_path;
+    dephash_path.concat(".dephash");
+    tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_path);
     fs::remove(temp_d_path);
 }
 
 void link_one(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
-    const std::string& out_dir,
-    const std::vector<std::string>& link_obj_paths) {
+    const fs::path& out_dir,
+    const std::vector<fs::path>& link_obj_paths) {
     std::vector<std::string> args;
     append_tokenized(args, gpp);
     args.push_back("-" + target.linker_opt_level);
 
-    std::vector<std::string> link_deps = {target.linker_script};
+    std::vector<fs::path> link_deps = {fs::path(target.linker_script)};
     if (!target.weakened_firmware_name.empty()) {
-        link_deps.push_back(target.weakened_firmware_name);
+        link_deps.push_back(fs::path(target.weakened_firmware_name));
         if (!target.firmware_is_kernel_object) {
             args.push_back("-Wl,--just-symbols=" + target.weakened_firmware_name);
         } else {
@@ -235,21 +238,27 @@ void link_one(
 
     append_tokenized(args, target.lflags);
     append_tokenized(args, target.extra_link_objs);
-    args.insert(args.end(), link_obj_paths.begin(), link_obj_paths.end());
-    std::string elf_name = out_dir + target.target_name + ".elf";
-    tt::jit_build::utils::FileRenamer elf_file(elf_name);
+    for (const auto& link_obj_path : link_obj_paths) {
+        args.push_back(link_obj_path.string());
+    }
+    fs::path elf_path = out_dir / (target.target_name + ".elf");
+    tt::jit_build::utils::FileRenamer elf_file(elf_path);
     args.push_back("-o");
-    args.push_back(elf_file.path());
+    args.push_back(elf_file.path().string());
 
-    tt::jit_build::utils::FileRenamer log_file(elf_name + ".log");
+    fs::path log_path = elf_path;
+    log_path.concat(".log");
+    tt::jit_build::utils::FileRenamer log_file(log_path);
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
         build_failure(target.target_name, "link", format_args(args), log_file.path());
     }
 
-    tt::jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
+    fs::path dephash_path = elf_path;
+    dephash_path.concat(".dephash");
+    tt::jit_build::utils::FileRenamer dephash_file(dephash_path);
     std::ofstream hash_file(dephash_file.path());
-    tt::jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
+    tt::jit_build::write_dependency_hashes({{elf_path, std::move(link_deps)}}, out_dir, elf_path, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
         fs::remove(dephash_file.path());
@@ -259,7 +268,7 @@ void link_one(
 void build_target(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
-    const std::string& out_dir,
+    const fs::path& out_dir,
     tt::tt_metal::jit_server::CompileResponse& response) {
     if (target.srcs.size() != target.objs.size()) {
         throw std::runtime_error("srcs and objs must have the same size for target " + target.target_name);
@@ -268,7 +277,7 @@ void build_target(
     fs::create_directories(out_dir);
 
     const size_t num_objs = target.objs.size();
-    std::vector<std::string> temp_objs;
+    std::vector<fs::path> temp_objs;
     temp_objs.reserve(num_objs);
     for (const auto& obj : target.objs) {
         temp_objs.push_back(tt::jit_build::utils::FileRenamer::generate_temp_path(obj));
@@ -301,15 +310,16 @@ void build_target(
     }
 
     if (recompiled > 0 || needs_link) {
-        std::vector<std::string> link_obj_paths;
+        std::vector<fs::path> link_obj_paths;
         link_obj_paths.reserve(num_objs);
         for (size_t i = 0; i < num_objs; ++i) {
-            std::string temp_path = out_dir + temp_objs[i];
+            fs::path temp_path = out_dir / temp_objs[i];
             if (!compiled[i]) {
                 std::error_code ec;
-                fs::create_hard_link(out_dir + target.objs[i], temp_path, ec);
+                fs::path obj_path = out_dir / target.objs[i];
+                fs::create_hard_link(obj_path, temp_path, ec);
                 if (ec) {
-                    fs::copy_file(out_dir + target.objs[i], temp_path, fs::copy_options::overwrite_existing);
+                    fs::copy_file(obj_path, temp_path, fs::copy_options::overwrite_existing);
                 }
             }
             link_obj_paths.push_back(std::move(temp_path));
@@ -318,8 +328,8 @@ void build_target(
     }
 
     for (size_t i = 0; i < num_objs; ++i) {
-        fs::path src_path = out_dir + temp_objs[i];
-        fs::path dst_path = out_dir + target.objs[i];
+        fs::path src_path = out_dir / temp_objs[i];
+        fs::path dst_path = out_dir / target.objs[i];
         if (compiled[i]) {
             fs::rename(src_path, dst_path);
             fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"));
@@ -328,7 +338,7 @@ void build_target(
         }
     }
 
-    std::string elf_path = out_dir + target.target_name + ".elf";
+    fs::path elf_path = out_dir / (target.target_name + ".elf");
     tt::tt_metal::jit_server::ElfBlob blob;
     blob.name = target.target_name;
     blob.data = tt::jit_build::utils::read_file_bytes(elf_path);
@@ -364,17 +374,17 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             const fs::path genfiles_dir = kernel_cache_dir(request.build_key, request.kernel_name);
             fs::create_directories(genfiles_dir);
             for (const auto& file : request.generated_files) {
-                std::string target_path = (genfiles_dir / file.name).string();
+                fs::path target_path = genfiles_dir / file.name;
                 tt::jit_build::utils::FileRenamer tmp(target_path);
                 std::ofstream out(tmp.path(), std::ios::binary);
                 if (!out.is_open()) {
-                    throw std::runtime_error("Cannot create file: " + target_path);
+                    throw std::runtime_error("Cannot create file: " + target_path.string());
                 }
                 out.write(
                     reinterpret_cast<const char*>(file.content.data()),
                     static_cast<std::streamsize>(file.content.size()));
                 if (!out) {
-                    throw std::runtime_error("Failed to write file: " + target_path);
+                    throw std::runtime_error("Failed to write file: " + target_path.string());
                 }
             }
         }
@@ -385,7 +395,7 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                 resolved_target.weakened_firmware_name =
                     resolve_uploaded_firmware_path(request.build_key, resolved_target).string();
             }
-            std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
+            fs::path out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
             build_target(request.gpp, resolved_target, out_dir, response);
         }
 
@@ -422,20 +432,20 @@ tt::tt_metal::jit_server::UploadFirmwareResponse upload_firmware_callback(
                     artifact.file_name));
             }
 
-            std::string fw_dir = firmware_cache_dir(request.build_key, safe_target);
+            fs::path fw_dir = firmware_cache_dir(request.build_key, safe_target);
             fs::create_directories(fw_dir);
-            std::string target_path = fw_dir + safe_file;
+            fs::path target_path = fw_dir / safe_file;
 
             tt::jit_build::utils::FileRenamer tmp(target_path);
             std::ofstream out(tmp.path(), std::ios::binary);
             if (!out.is_open()) {
-                throw std::runtime_error("Cannot create firmware file: " + target_path);
+                throw std::runtime_error("Cannot create firmware file: " + target_path.string());
             }
             out.write(
                 reinterpret_cast<const char*>(artifact.data.data()),
                 static_cast<std::streamsize>(artifact.data.size()));
             if (!out) {
-                throw std::runtime_error("Failed to write firmware file: " + target_path);
+                throw std::runtime_error("Failed to write firmware file: " + target_path.string());
             }
 
             log_info(
@@ -470,7 +480,7 @@ int main() {
     tt::tt_metal::jit_server::JitCompileServerController server(compile_callback, upload_firmware_callback);
     server.start(endpoint);
     log_info(tt::LogMetal, "JIT compile server listening on {}", endpoint);
-    log_info(tt::LogMetal, "JIT compile server cache root: {}", g_server_cache_root);
+    log_info(tt::LogMetal, "JIT compile server cache root: {}", g_server_cache_root.string());
 
     while (g_keep_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));

@@ -3,12 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include "jit_build_utils.hpp"
+#include "common/filesystem_utils.hpp"
 #include <cstddef>
 #include <fstream>
 #include <map>
 #include <mutex>
 #include <string>
+#include <system_error>
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -52,21 +55,29 @@ void log_kernel_defines_and_args(
     }
 }
 
-void dump_kernel_defines_and_args(const string& out_kernel_root_path) {
-    // Make sure the directory exists
-    tt::jit_build::utils::create_file(out_kernel_root_path);
+void dump_kernel_defines_and_args(const std::filesystem::path& out_kernel_root_path) {
+    tt::filesystem::safe_create_directories(out_kernel_root_path);
 
-    string kernel_args_csv = out_kernel_root_path + "kernel_args.csv";
+    auto kernel_args_csv = out_kernel_root_path / "kernel_args.csv";
+    auto tmp_path = tt::jit_build::utils::FileRenamer::generate_temp_path(kernel_args_csv);
 
     std::lock_guard<std::mutex> lock(mutex_kernel_defines_and_args_);
-    ofstream file(kernel_args_csv, ios::trunc);
-    if (file.is_open()) {
-        for (auto const& [full_kernel_name, defines_and_args_str] : kernel_defines_and_args_) {
-            file << full_kernel_name << defines_and_args_str << "\n";
-        }
-        file.close();
-    } else {
-        TT_THROW("Failed to open file: {}", kernel_args_csv);
+    ofstream file;
+    std::error_code open_ec;
+    if (!tt::filesystem::safe_open(file, tmp_path, ios::out | ios::trunc, open_ec)) {
+        TT_THROW("Failed to open file: {}: {}", tmp_path, open_ec.message());
+    }
+    for (const auto& [full_kernel_name, defines_and_args_str] : kernel_defines_and_args_) {
+        file << full_kernel_name << defines_and_args_str << "\n";
+    }
+    file.close();
+    if (file.fail()) {
+        tt::filesystem::safe_remove(tmp_path);
+        TT_THROW("Failed to write file: {}", tmp_path);
+    }
+    if (!tt::filesystem::safe_rename(tmp_path, kernel_args_csv, false)) {
+        tt::filesystem::safe_remove(tmp_path);
+        TT_THROW("Failed to rename {} to {}", tmp_path, kernel_args_csv);
     }
 }
 
