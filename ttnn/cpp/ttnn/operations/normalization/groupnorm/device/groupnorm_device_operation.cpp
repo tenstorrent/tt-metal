@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
+#include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -67,61 +68,11 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         tile_height);
 
     if (a.is_sharded()) {
-        const auto& shard_spec = a.shard_spec().value();
-        const auto& shard_shape = shard_spec.shape;
-        const auto& shard_grid = shard_spec.grid;
-
-        const auto device_grid = a.device()->compute_with_storage_grid_size();
         const auto program_grid =
             std::visit([](const auto& config) { return config.compute_with_storage_grid_size; }, args.program_config);
-
-        TT_FATAL(shard_grid.num_cores() > 0, "Shard grid must have at least one core");
-
-        const CoreRange device_range(CoreCoord{0, 0}, CoreCoord{device_grid.x - 1, device_grid.y - 1});
-        const CoreRange program_range(CoreCoord{0, 0}, CoreCoord{program_grid.x - 1, program_grid.y - 1});
-        TT_FATAL(
-            device_range.contains(program_range),
-            "program_config grid ({}x{}) must be contained within device grid ({}x{})",
-            program_grid.x,
-            program_grid.y,
-            device_grid.x,
-            device_grid.y);
-
-        const auto shard_bbox = shard_grid.bounding_box();
-        const auto shard_offset = shard_bbox.start_coord;
-        const CoreRange shifted_shard_bbox(
-            CoreCoord{0, 0},
-            CoreCoord{shard_bbox.end_coord.x - shard_offset.x, shard_bbox.end_coord.y - shard_offset.y});
-        TT_FATAL(
-            program_range.contains(shifted_shard_bbox),
-            "shard_spec.grid size {}x{} does not fit within program_config grid {}x{}",
-            shard_bbox.end_coord.x - shard_bbox.start_coord.x + 1,
-            shard_bbox.end_coord.y - shard_bbox.start_coord.y + 1,
-            program_grid.x,
-            program_grid.y);
-
-        TT_FATAL(
-            shard_shape[0] > 0 && shard_shape[1] > 0,
-            "shard shape must be non-zero, got H={} W={}",
-            shard_shape[0],
-            shard_shape[1]);
-
-        TT_FATAL(
-            shard_shape[0] % tile_height == 0,
-            "shard height {} must be divisible by tile height {}",
-            shard_shape[0],
-            tile_height);
-
-        const auto num_cores = shard_grid.num_cores();
-        const auto total_from_shards = static_cast<uint64_t>(num_cores) * shard_shape[0] * shard_shape[1];
-        TT_FATAL(
-            total_from_shards == a.physical_volume(),
-            "Total elements from shards ({} cores * {}x{}) = {} does not match tensor physical volume {}",
-            num_cores,
-            shard_shape[0],
-            shard_shape[1],
-            total_from_shards,
-            a.physical_volume());
+        // groupnorm operates on per-channel slices, so its kernels accept shard widths that are not tile-aligned.
+        ttnn::operations::normalization::detail::validate_sharded_input(
+            a, program_grid, /*require_shard_width_tile_aligned=*/false);
     }
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
