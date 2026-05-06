@@ -2062,27 +2062,43 @@ def prepare_compressed_sram_slots(
     mesh_shape_for_predict = (mesh_rows, mesh_cols)
     selected_experts: list[int] = []
 
+    # Per-phase wall-clock accounting for the slot loop.  Emitted as one
+    # log line per layer below so the relative cost of state_dict I/O,
+    # the host-side predictor, the build/upload pipeline, and the
+    # allocator refresh can be attributed without a separate profiler run.
+    t_io = t_predict = t_build = t_refresh = 0.0
+    n_candidates = 0
+
     for slot_idx, expert_idx in enumerate(requested_experts):
+        n_candidates += 1
         gate_key = _key(layer_idx, f"mlp.experts.{expert_idx}.gate_proj.weight")
         up_key = _key(layer_idx, f"mlp.experts.{expert_idx}.up_proj.weight")
         down_key = _key(layer_idx, f"mlp.experts.{expert_idx}.down_proj.weight")
 
+        _t_phase = time.perf_counter()
         gate_full = state_dict[gate_key].T.contiguous()
         up_full = state_dict[up_key].T.contiguous()
+        # Read down once and reuse for both predict and build.  The underlying
+        # tensor is cached by ``LazyStateDict`` but the ``.T.contiguous()``
+        # memcpy was previously paid twice (predict arg + build site).
+        down_raw = state_dict[down_key].T.contiguous()
+        t_io += time.perf_counter() - _t_phase
 
         # Predict the next expert's per-core L1 cost (host-side, one-step
         # lookahead) so we can stop *before* an over-budget allocation.
+        _t_phase = time.perf_counter()
         predicted_delta = _predict_expert_per_core_bytes(
             expert_idx,
             gate_full,
             up_full,
-            state_dict[down_key].T.contiguous(),
+            down_raw,
             grids,
             assigner=assigner,
             assignment_provider=assignment_provider,
             tile_hw=tile_hw,
             mesh_shape=mesh_shape_for_predict,
         )
+        t_predict += time.perf_counter() - _t_phase
         # Cores untouched so far are assumed empty: their next allocation
         # would land just below ``l1_top_addr`` (top-down growth).
         overflow_core = next(
@@ -2104,6 +2120,7 @@ def prepare_compressed_sram_slots(
             )
             break
 
+        _t_phase = time.perf_counter()
         if use_shared_expert_gate_up:
             # Shared-expert-style HEIGHT_SHARDED gate/up: reshuffle +
             # TP-stack once per expert, then build CTs for both projections
@@ -2174,7 +2191,7 @@ def prepare_compressed_sram_slots(
         # ``shared_down_torch_for_cache``'s hardcoded ``(2048, 7168)``
         # shape assertion, so we fall back to the legacy WIDTH_SHARDED
         # path for single-device tests.
-        down_raw = state_dict[down_key].T.contiguous()
+        # ``down_raw`` was read above at I/O time and is reused here.
         if use_shared_expert_gate_up:
             down_preprocessed = shared_down_torch_for_cache(down_raw, moe_tp, (mesh_rows, mesh_cols))
             down_cts.append(
@@ -2199,12 +2216,14 @@ def prepare_compressed_sram_slots(
                     mesh_mapper_config=mesh_mapper_config,
                 )
             )
+        t_build += time.perf_counter() - _t_phase
         selected_experts.append(expert_idx)
         logger.debug("  SRAM slot {} ← expert {} prepared", slot_idx, expert_idx)
 
         # Refresh per-core lowest occupied L1 address from the real
         # allocator so the next iteration's fit check uses ground truth
         # (not prefix-summed host predictions).
+        _t_phase = time.perf_counter()
         _refresh_lowest_addr_from_alloc(
             curr_addr,
             cts=(
@@ -2213,14 +2232,30 @@ def prepare_compressed_sram_slots(
                 (down_cts[-1], grids.down),
             ),
         )
+        t_refresh += time.perf_counter() - _t_phase
 
     num_slots = len(selected_experts)
+    elapsed = time.perf_counter() - t0
     logger.info(
         "Compressed SRAM slots for layer {} done in {:.3f}s ({} of {} slots accepted)",
         layer_idx,
-        time.perf_counter() - t0,
+        elapsed,
         num_slots,
         len(requested_experts),
+    )
+    t_accounted = t_io + t_predict + t_build + t_refresh
+    logger.info(
+        "  SRAM slots phase breakdown (layer {}): "
+        "io={:.3f}s predict={:.3f}s build={:.3f}s refresh={:.3f}s "
+        "(unaccounted={:.3f}s, candidates_seen={}, accepted={})",
+        layer_idx,
+        t_io,
+        t_predict,
+        t_build,
+        t_refresh,
+        max(0.0, elapsed - t_accounted),
+        n_candidates,
+        num_slots,
     )
     return SramCompressedExpertSlots(
         num_slots=num_slots,
