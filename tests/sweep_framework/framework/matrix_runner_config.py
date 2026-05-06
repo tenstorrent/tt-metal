@@ -15,7 +15,10 @@ parsing such as ``.mesh_*`` and ``.hw_*`` suffix semantics; this file maps those
 already-parsed routing hints to logical test groups and runner profiles.
 """
 
-from constants import strip_grouping_suffix
+import re
+
+_MESH_SUFFIX_RE = re.compile(r"\.mesh_\d+x\d+$")
+_HW_SUFFIX_RE = re.compile(r"\.hw_[^_]+_.+_[0-9]+c$")
 
 
 # ── Run type detection (workflow inputs vs cron schedule) ────────────────────
@@ -188,10 +191,14 @@ MODEL_TRACED_CCL_OP_PREFIXES = (
 )
 
 
+def _strip_grouping_suffix(module_name):
+    """Remove .mesh_* and .hw_* suffixes (local copy to avoid circular import)."""
+    return _HW_SUFFIX_RE.sub("", _MESH_SUFFIX_RE.sub("", module_name))
+
+
 def is_model_traced_ccl_module(module_name):
     """Return True if a model-traced module name represents a CCL op."""
-    base = strip_grouping_suffix(module_name)
-    # Remove the common ``_model_traced`` tail to get the raw op name.
+    base = _strip_grouping_suffix(module_name)
     stem = base.rsplit(".", 1)[-1]
     if stem.endswith("_model_traced"):
         stem = stem[: -len("_model_traced")]
