@@ -52,6 +52,11 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
+// TEMP (experiment branch): when true, skips constructor host/device sync (`run_sync`),
+// initial SYNC_CHECK loop, and `trigger_sync_check()` on finish. Used to isolate CI
+// wall-time cost of RT profiler sync on large meshes. Set false before merging.
+constexpr bool kDisableRealtimeProfilerSyncExperiment = true;
+
 // Sync marker ID — must match device-side REALTIME_PROFILER_SYNC_MARKER_ID.
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 
@@ -525,24 +530,39 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
     }
 
-    // Run our own host-device sync; the device profiler's SyncInfo masks the high word to
-    // 12 bits and would shift RT zones by hours in Tracy.
-    for (auto& dev_state : devices_) {
-        constexpr uint32_t kMaxSyncRetries = 3;
-        constexpr uint32_t kRetryDelayMs = 500;
-        for (uint32_t attempt = 0; attempt <= kMaxSyncRetries; attempt++) {
-            if (attempt > 0) {
-                log_info(
-                    tt::LogMetal,
-                    "[Real-time profiler] Device {} sync retry {}/{}",
-                    dev_state.chip_id,
-                    attempt,
-                    kMaxSyncRetries);
-                std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
-            }
-            run_sync(dev_state, 100);
-            if (dev_state.first_timestamp != 0) {
-                break;
+    auto& cluster = MetalContext::instance().get_cluster();
+
+    if (kDisableRealtimeProfilerSyncExperiment) {
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] TEMP: kDisableRealtimeProfilerSyncExperiment=true — skipping constructor "
+            "run_sync and initial SYNC_CHECK; Tracy/device time mapping may be inaccurate.");
+        const int64_t host_start = rt_profiler_host_ticks();
+        for (auto& dev_state : devices_) {
+            dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
+            dev_state.first_timestamp = 0;
+            dev_state.sync_host_start = host_start;
+        }
+    } else {
+        // Run our own host-device sync; the device profiler's SyncInfo masks the high word to
+        // 12 bits and would shift RT zones by hours in Tracy.
+        for (auto& dev_state : devices_) {
+            constexpr uint32_t kMaxSyncRetries = 3;
+            constexpr uint32_t kRetryDelayMs = 500;
+            for (uint32_t attempt = 0; attempt <= kMaxSyncRetries; attempt++) {
+                if (attempt > 0) {
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {} sync retry {}/{}",
+                        dev_state.chip_id,
+                        attempt,
+                        kMaxSyncRetries);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+                }
+                run_sync(dev_state, 100);
+                if (dev_state.first_timestamp != 0) {
+                    break;
+                }
             }
         }
     }
@@ -556,75 +576,77 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             dev_state.sync_frequency);
     }
 
-    // Emit sync verification markers: take one independent device measurement per device
-    // and push paired host + device events. In Tracy, the horizontal distance between the
-    // host "SYNC_CHECK" zone and the device "SYNC_CHECK" zone is the sync error.
-    for (auto& dev_state : devices_) {
-        std::vector<uint32_t> sync_req = {1};
-        tt::tt_metal::detail::WriteToDeviceL1(
-            dev_state.device,
-            dev_state.realtime_profiler_core,
-            dev_state.sync_request_addr,
-            sync_req,
-            CoreType::WORKER);
+    if (!kDisableRealtimeProfilerSyncExperiment) {
+        // Emit sync verification markers: take one independent device measurement per device
+        // and push paired host + device events. In Tracy, the horizontal distance between the
+        // host "SYNC_CHECK" zone and the device "SYNC_CHECK" zone is the sync error.
+        for (auto& dev_state : devices_) {
+            std::vector<uint32_t> sync_req = {1};
+            tt::tt_metal::detail::WriteToDeviceL1(
+                dev_state.device,
+                dev_state.realtime_profiler_core,
+                dev_state.sync_request_addr,
+                sync_req,
+                CoreType::WORKER);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-        // Same anchor convention as trigger_sync_check: capture host TSC, emit Tracy
-        // message, then PCIe write; CalibrateDevice must run before PushSyncCheckMarker
-        // or extrapolation skew can exceed the ±10µs test bound.
-        int64_t sync_check_host_anchor = rt_profiler_host_ticks();
-        uint32_t host_time_id = 0x5C5C5C5C;
-        std::vector<uint32_t> host_time_data = {host_time_id};
-        TracyMessageL("SYNC_CHECK");
-        tt::tt_metal::detail::WriteToDeviceL1(
-            dev_state.device,
-            dev_state.realtime_profiler_core,
-            dev_state.sync_host_ts_addr,
-            host_time_data,
-            CoreType::WORKER);
+            // Same anchor convention as trigger_sync_check: capture host TSC, emit Tracy
+            // message, then PCIe write; CalibrateDevice must run before PushSyncCheckMarker
+            // or extrapolation skew can exceed the ±10µs test bound.
+            int64_t sync_check_host_anchor = rt_profiler_host_ticks();
+            uint32_t host_time_id = 0x5C5C5C5C;
+            std::vector<uint32_t> host_time_data = {host_time_id};
+            TracyMessageL("SYNC_CHECK");
+            tt::tt_metal::detail::WriteToDeviceL1(
+                dev_state.device,
+                dev_state.realtime_profiler_core,
+                dev_state.sync_host_ts_addr,
+                host_time_data,
+                CoreType::WORKER);
 
-        constexpr uint32_t kSyncCheckTimeoutMs = 3000;
-        auto sc_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kSyncCheckTimeoutMs);
-        bool sc_got_response = false;
-        while (std::chrono::steady_clock::now() < sc_deadline) {
-            if (dev_state.socket->pages_available() > 0) {
-                sc_got_response = true;
-                break;
+            constexpr uint32_t kSyncCheckTimeoutMs = 3000;
+            auto sc_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kSyncCheckTimeoutMs);
+            bool sc_got_response = false;
+            while (std::chrono::steady_clock::now() < sc_deadline) {
+                if (dev_state.socket->pages_available() > 0) {
+                    sc_got_response = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
             }
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-        }
 
-        sync_req[0] = 0;
-        tt::tt_metal::detail::WriteToDeviceL1(
-            dev_state.device,
-            dev_state.realtime_profiler_core,
-            dev_state.sync_request_addr,
-            sync_req,
-            CoreType::WORKER);
+            sync_req[0] = 0;
+            tt::tt_metal::detail::WriteToDeviceL1(
+                dev_state.device,
+                dev_state.realtime_profiler_core,
+                dev_state.sync_request_addr,
+                sync_req,
+                CoreType::WORKER);
 
-        if (sc_got_response) {
-            std::vector<uint32_t> sync_page(RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t));
-            dev_state.socket->read(sync_page.data(), 1);
-            uint64_t device_time = (static_cast<uint64_t>(sync_page[0]) << 32) | sync_page[1];
+            if (sc_got_response) {
+                std::vector<uint32_t> sync_page(RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t));
+                dev_state.socket->read(sync_page.data(), 1);
+                uint64_t device_time = (static_cast<uint64_t>(sync_page[0]) << 32) | sync_page[1];
 
-            tracy_handler_->CalibrateDevice(
-                dev_state.chip_id, sync_check_host_anchor, device_time, dev_state.sync_frequency);
-            tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+                tracy_handler_->CalibrateDevice(
+                    dev_state.chip_id, sync_check_host_anchor, device_time, dev_state.sync_frequency);
+                tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
 
-            dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
+                dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
 
-            log_info(
-                tt::LogMetal,
-                "[Real-time profiler] Device {} sync check: device_time={} cycles",
-                dev_state.chip_id,
-                device_time);
-        } else {
-            log_warning(
-                tt::LogMetal,
-                "[Real-time profiler] Device {} sync check timed out after {}ms, skipping",
-                dev_state.chip_id,
-                kSyncCheckTimeoutMs);
+                log_info(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} sync check: device_time={} cycles",
+                    dev_state.chip_id,
+                    device_time);
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {} sync check timed out after {}ms, skipping",
+                    dev_state.chip_id,
+                    kSyncCheckTimeoutMs);
+            }
         }
     }
 
@@ -971,6 +993,10 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
 }
 
 void RealtimeProfilerManager::trigger_sync_check() {
+    if (kDisableRealtimeProfilerSyncExperiment) {
+        return;
+    }
+
     if (devices_.empty() || !tracy_handler_) {
         return;
     }
