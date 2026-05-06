@@ -302,13 +302,11 @@ inline void llk_pack_dest_section_done() {
 
 template <bool untilize = false, bool diagonal = false>
 inline void llk_init_packer_dest_offset_registers([[maybe_unused]] const std::uint32_t pack_output = 16) {
-    LLK_ASSERT(pack_output == 16, "pack_output is unused for blackhole and must remain default value.");
     _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE>();
 }
 
 template <bool is_fp32_dest_acc_en, bool untilize = false>
 inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output = 16) {
-    LLK_ASSERT(pack_output == 16, "pack_output is unused for blackhole and must remain default value.");
     _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
