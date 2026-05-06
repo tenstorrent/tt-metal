@@ -32,7 +32,7 @@ void kernel_main() {
 
 #ifndef IN0_SHARDED
     experimental::Noc noc;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
 #else
     cb0.reserve_back(num_tiles);

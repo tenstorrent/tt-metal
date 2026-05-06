@@ -41,7 +41,8 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CircularBuffer cb0(cb_id_in0);
     experimental::CircularBuffer cb1(cb_id_in1);
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
+    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
     uint32_t i_nc = 0;
     for (uint32_t nc = 0; nc < NC; nc++) {
