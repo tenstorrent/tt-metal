@@ -725,7 +725,13 @@ struct MatmulExpertCompressedDRAM {
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
                         CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
                     uint32_t fmt_meta_offset = 0;
-                    uint32_t act_rd_ptr = in0_base + exp_i * num_tiles_k * in0_page_size;
+                    // cb_in0 is COMPACT: upstream gate_proj/up_proj skip SRAM-
+                    // flagged TopK via `continue`, so DRAM-expert outputs are
+                    // pushed back-to-back. Index by `dram_idx` (count of
+                    // DRAM-flagged TopK positions encountered so far), NOT by
+                    // `exp_i` (TopK position) — using exp_i would read at the
+                    // wrong cb position whenever any earlier TopK was SRAM.
+                    uint32_t act_rd_ptr = in0_base + dram_idx * num_tiles_k * in0_page_size;
 
                     for (uint32_t ng = 0; ng < num_subblocks_n; ng++) {
                         tile_regs_acquire();

@@ -88,7 +88,10 @@ class MoeSem:
     # vice versa), causing lost increments.
     SRAM_AG_GATHER = 19
     SRAM_BG_GATHER = 20
-    NUM_SEMAPHORES = 21
+    # Dedicated SRAM down mcast receiver sem (can't reuse DOWN_PROJ_MCAST_RECEIVER:
+    # both mcasts target overlapping receivers and run back-to-back, racey otherwise).
+    SRAM_DOWN_MCAST_RECEIVER = 21
+    NUM_SEMAPHORES = 22
 
 
 @dataclass
@@ -215,6 +218,7 @@ class _MoeRoutedExpertContext:
     mul_params: dict
     down_proj_gather_params: dict
     down_proj_mcast_params: dict
+    sram_down_mcast_params: dict
     down_proj_params: dict
     add_params: dict
 
@@ -351,9 +355,11 @@ class _MoeRoutedExpertContext:
     sram_intermed_cb: int = 0
     sram_mcast_src_cb: int = 0
     sram_gr_scalar_cb: int = 0
+    sram_down_mcast_dst_cb: int = 0
     sram_intermed_cb_descriptor: Any = None
     sram_mcast_src_cb_descriptor: Any = None
     sram_gr_scalar_cb_descriptor: Any = None
+    sram_down_mcast_dst_cb_descriptor: Any = None
     sram_mcast_src_dummy_tensor: Any = None  # sender-core L1 backing for sram_mcast_src_cb
     # Face-tile descriptor + size (= [16, 16] face) — shared by all SRAM
     # gather-output and gated-reduce CBs so they all use face_view.
@@ -1348,6 +1354,7 @@ class MoeRoutedExpertOp:
         expert_scale_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.EXPERT_SCALE_MCAST_RECEIVER]
         index_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.INDEX_MCAST_RECEIVER]
         down_proj_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.DOWN_PROJ_MCAST_RECEIVER]
+        sram_down_mcast_receiver_semaphore_addr = sem_addrs[MoeSem.SRAM_DOWN_MCAST_RECEIVER]
 
         # ==================================================================
         # Derive config from shared_residual_mcast_src_tensor (the actual input activation)
@@ -1486,6 +1493,11 @@ class MoeRoutedExpertOp:
         # TRISC reads via mul_tiles_bcast_scalar (BroadcastType::SCALAR
         # uses [0,0] only — the rest of the tile is unused).
         sram_gr_scalar_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
+        # Dedicated SRAM down mcast destination CB on the 112 shared mcast
+        # receiver cores (kv_buf-overlaid like the DRAM dst CB). Separate from
+        # down_proj_mcast_dst_cb to avoid layout collisions — DRAM mcast keeps
+        # using its own CB at base, SRAM mcast lands here at base.
+        sram_down_mcast_dst_cb = cb_id_context.get_cb_id(data_format, TD_1x32)
 
         # Routing-only CB indices (0 when routing disabled)
         if enable_routing:
@@ -2002,6 +2014,32 @@ class MoeRoutedExpertOp:
         )
 
         # ==================================================================
+        # SRAM down Mcast — sender_core's GatedReduce output → all 128 mcast
+        # cores (DRAM streamers + shared mcast receivers). dst CB shared with
+        # DRAM down_proj input (down_proj_mcast_dst_cb, kv_buf-overlaid on the
+        # full mcast grid). data_size_bytes / src_num_pages are CT worst-case
+        # (n_active_experts faces); kernel overrides to n_sram_active × face
+        # size at runtime.
+        # ==================================================================
+        sram_down_mcast_num_tiles = (
+            gate_up_num_active_experts if (sram_gate_proj_weights_tensor is not None and enable_routing) else 0
+        )
+        sram_down_mcast_data_size_bytes = sram_down_mcast_num_tiles * face_tile_size
+        sram_down_mcast_params = MoeOp.setup_mcast(
+            device=device,
+            sender_core=sender_core,
+            mcast_grid=mcast_grid,
+            src_cb=sram_mcast_src_cb,
+            src_tensor=None,
+            dst_cb=sram_down_mcast_dst_cb,
+            dst_tensor=None,
+            sender_semaphore_addr=mcast_data_sender_semaphore_addr,
+            receiver_semaphore_addr=sram_down_mcast_receiver_semaphore_addr,
+            data_size_bytes=sram_down_mcast_data_size_bytes,
+            src_num_pages=sram_down_mcast_num_tiles,
+        )
+
+        # ==================================================================
         # MatmulExpertCompressedDRAM: down_proj (Phase 1B)
         # ==================================================================
         # See gate/up note above: derive num_active_experts so dense MLP (one CT,
@@ -2332,6 +2370,7 @@ class MoeRoutedExpertOp:
             mul_params=mul_params,
             down_proj_gather_params=down_proj_gather_params,
             down_proj_mcast_params=down_proj_mcast_params,
+            sram_down_mcast_params=sram_down_mcast_params,
             down_proj_params=down_proj_params,
             add_params=add_params,
             # Derived
@@ -2427,6 +2466,7 @@ class MoeRoutedExpertOp:
             sram_intermed_cb=sram_intermed_cb,
             sram_mcast_src_cb=sram_mcast_src_cb,
             sram_gr_scalar_cb=sram_gr_scalar_cb,
+            sram_down_mcast_dst_cb=sram_down_mcast_dst_cb,
             sram_intermed_cb_descriptor=sram_intermed_cb_descriptor,
             sram_mcast_src_cb_descriptor=sram_mcast_src_cb_descriptor,
             sram_gr_scalar_cb_descriptor=sram_gr_scalar_cb_descriptor,
@@ -2724,6 +2764,38 @@ class MoeRoutedExpertOp:
             ("down_proj_mcast_src_num_pages", ctx.down_proj_mcast_params["src_num_pages"]),
             # down_proj mcast receiver
             ("down_proj_mcast_dst_num_pages", ctx.down_proj_mcast_params["dst_num_pages"]),
+            # Per-expert byte/page counts for the [SRAM | DRAM] concat layout.
+            # SRAM face byte size = DRAM per-expert byte size, so the same value
+            # is used to size the SRAM mcast and to offset the DRAM mcast past
+            # the SRAM portion at runtime.
+            (
+                "down_proj_mcast_per_expert_bytes",
+                ctx.down_proj_mcast_params["data_size_bytes"] // ctx.down_proj_params["num_active_experts"],
+            ),
+            (
+                "down_proj_mcast_per_expert_pages",
+                ctx.down_proj_mcast_params["src_num_pages"] // ctx.down_proj_params["num_active_experts"],
+            ),
+            ("down_proj_num_active_experts", ctx.down_proj_params["num_active_experts"]),
+            # SRAM down mcast (sender + receiver). data_size_bytes / num_pages
+            # are CT worst-case (n_active faces); kernel overrides at runtime to
+            # n_sram_active × face_tile_size.
+            (
+                "sram_down_mcast_sender_semaphore_addr",
+                ctx.sram_down_mcast_params.get("sender_semaphore_addr", 0),
+            ),
+            (
+                "sram_down_mcast_receiver_semaphore_addr",
+                ctx.sram_down_mcast_params.get("receiver_semaphore_addr", 0),
+            ),
+            (
+                "sram_down_mcast_data_size_bytes",
+                ctx.sram_down_mcast_params.get("data_size_bytes", 0),
+            ),
+            ("sram_down_mcast_src_cb", ctx.sram_down_mcast_params.get("src_cb", 0)),
+            ("sram_down_mcast_dst_cb", ctx.sram_down_mcast_params.get("dst_cb", 0)),
+            ("sram_down_mcast_src_num_pages", ctx.sram_down_mcast_params.get("src_num_pages", 0)),
+            ("sram_down_mcast_dst_num_pages", ctx.sram_down_mcast_params.get("dst_num_pages", 0)),
             # Eltwise add CB (needed by output mcast sender for get_write_ptr)
             ("add_cb_in1", ctx.add_cb_in1),
             # Routing flag
@@ -3133,6 +3205,9 @@ class MoeRoutedExpertOp:
         # SRAM GatedReduce scalar CB (sender_core, n_active face tiles).
         if ctx.sram_gr_scalar_cb_descriptor is not None:
             descriptors.append(ctx.sram_gr_scalar_cb_descriptor)
+        # SRAM down mcast dst CB (kv_buf-overlaid on the 112 mcast receiver cores).
+        if ctx.sram_down_mcast_dst_cb_descriptor is not None:
+            descriptors.append(ctx.sram_down_mcast_dst_cb_descriptor)
 
         if ctx.enable_routing:
             descriptors.append(ctx.gate_proj_cb_index_descriptor)
@@ -5311,6 +5386,28 @@ class MoeOp:
         cb26_desc.format_descriptors = [cb26_fmt]
         routed_ctx.residual_mcast_params["dst_cb_descriptor"] = cb26_desc
         out_offset += cb26_total_size
+
+        # SRAM down mcast dst CB on the 112 shared mcast receiver cores. Lives in
+        # out_buf since kv_buf is full — and the 112-core grid is a superset of
+        # cb26's grid (residual_mcast_dst is on the same shared receivers), so
+        # out_buf has the right per-core L1 backing here.
+        sram_dst_cb_id = routed_ctx.sram_down_mcast_dst_cb
+        sram_dst_total_size = 4096
+        sram_dst_desc = ttnn.cb_descriptor_from_sharded_tensor(
+            sram_dst_cb_id,
+            out_buf,
+            address_offset=out_offset,
+            total_size=sram_dst_total_size,
+        )
+        sram_dst_fmt = ttnn.CBFormatDescriptor(
+            buffer_index=sram_dst_cb_id,
+            data_format=ttnn.bfloat16,
+            page_size=64,
+            tile=ttnn.TileDescriptor(ttnn.Tile([1, 32])),
+        )
+        sram_dst_desc.format_descriptors = [sram_dst_fmt]
+        routed_ctx.sram_down_mcast_dst_cb_descriptor = sram_dst_desc
+        out_offset += sram_dst_total_size
 
         # Sender-core-only region starts here (CB 30, 31, 38 are only on sender core).
         # Reduce scratch CBs (43-45) can reuse these offsets since they live on

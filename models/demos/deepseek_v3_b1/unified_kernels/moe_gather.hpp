@@ -97,46 +97,22 @@ struct MoeGather {
     // pop_src: whether to pop the source CB after sending
     // UsePerCoreSenderIdx: compile-time flag for scattered vs grid-based indexing
     // ========================================================================
-    // IsSramExpert: when true, the per-core write count (BRISC) and total
-    //   received pages (NCRISC) are dynamic — caller passes n_per_core at
-    //   the call site. When false (default), the count comes from args's
-    //   compile-time fields (num_experts / dst_num_pages).
-    template <
-        bool IsSenderCore,
-        bool IsReceiverCore,
-        bool pop_src,
-        bool UsePerCoreSenderIdx = false,
-        bool IsSramExpert = false>
+    // The dynamic SRAM gather case (per-core count varies with n_sram_active)
+    // is handled by overriding args.num_experts / args.dst_num_pages at the
+    // call site before invoking the Op — no extra template flag needed.
+    template <bool IsSenderCore, bool IsReceiverCore, bool pop_src, bool UsePerCoreSenderIdx = false>
     class Op {
     public:
-        // n_per_core: BRISC per-core write count (tiles per sender per gather round).
-        // total_dst_pages: NCRISC total pages reserved in dst CB (in dst-CB tile
-        //   units). Decoupled from n_per_core because dst CB tile size can differ
-        //   from sender data_size (e.g. face_view: dst = [16,16] face = 8 sender
-        //   writes per face).
-        void operator()(const RTArgs& args, uint32_t n_per_core = 0, uint32_t total_dst_pages = 0) {
-            impl(args, n_per_core, total_dst_pages);
-        }
+        void operator()(const RTArgs& args) { impl(args); }
 
     private:
-        void impl(
-            [[maybe_unused]] const RTArgs& args,
-            [[maybe_unused]] uint32_t n_per_core_runtime,
-            [[maybe_unused]] uint32_t total_dst_pages_runtime) {
-            // SRAM mode early-out: when n_per_core_runtime=0, nothing to send.
-            // Both sender and receiver skip — sem stays at 0 across the round
-            // so the next gather sees a clean slate.
-            if constexpr (IsSramExpert) {
-                if (n_per_core_runtime == 0) {
-                    return;
-                }
-            }
+        void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC (Sender) - DataMovementProcessor.RISCV_0
             // ================================================================
             if constexpr (IsSenderCore) {
-                const uint32_t n_per_core = IsSramExpert ? n_per_core_runtime : args.num_experts;
+                const uint32_t n_per_core = args.num_experts;
                 // Compute per-core offset using compile-time branching
                 // For scattered cores (UsePerCoreSenderIdx=true), use the provided sender_idx
                 // For rectangular grids (UsePerCoreSenderIdx=false), compute from grid position
@@ -190,10 +166,8 @@ struct MoeGather {
                 volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
 
-                const uint32_t total_pages = IsSramExpert ? total_dst_pages_runtime : args.dst_num_pages;
-
                 // Reserve space in destination CB
-                cb_reserve_back(args.dst_cb, total_pages);
+                cb_reserve_back(args.dst_cb, args.dst_num_pages);
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
                 if (args.noc1_num_senders > 0) {
@@ -204,7 +178,7 @@ struct MoeGather {
                 }
 
                 // Push to destination CB after data arrived
-                cb_push_back(args.dst_cb, total_pages);
+                cb_push_back(args.dst_cb, args.dst_num_pages);
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

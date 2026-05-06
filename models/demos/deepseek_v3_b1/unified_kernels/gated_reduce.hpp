@@ -55,10 +55,12 @@ struct GatedReduce {
         static constexpr uint32_t num_active = num_active_;
     };
 
-    template <uint32_t TilesPerK, uint32_t KNumTiles>
+    // tiles_per_k stays compile-time (face inner-reduce count, fixed for both
+    // shared and SRAM paths). k_num_tiles moved to runtime (ComputeArgs)
+    // so the SRAM path can supply n_sram_active without an extra template flag.
+    template <uint32_t TilesPerK>
     struct ComputeCTArgs {
         static constexpr uint32_t tiles_per_k = TilesPerK;
-        static constexpr uint32_t k_num_tiles = KNumTiles;
     };
 
     struct ReaderArgs {};
@@ -69,32 +71,28 @@ struct GatedReduce {
         uint32_t group2_cb;    // up partials CB
         uint32_t intermed_cb;  // intermediate CB (2 tiles, reused)
         uint32_t out_cb;       // output CB (1 tile per iteration)
-        uint32_t scalar_cb;    // SRAM scale CB (1 tile per iter, bf16 at [0,0]); 0 = unused
+        uint32_t scalar_cb;    // SRAM scale CB (1 tile per iter, bf16 at [0,0]); 0 = scale disabled
+        uint32_t k_num_tiles;  // outer loop count (1 for shared, n_sram_active for SRAM)
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
 
-    // IsSramExpert: when true, k_num_tiles is taken at runtime (n_sram_active)
-    //   instead of from CT args. Used by SRAM extended GatedReduce — outer
-    //   loop over n_sram active experts, each producing 1 output face from
-    //   tiles_per_k K-partial faces. When false (default), CT k_num_tiles
-    //   drives the loop (existing shared-expert behavior).
-    template <typename CTArgs, bool IsActiveCore, bool IsSramExpert = false>
+    template <typename CTArgs, bool IsActiveCore>
     class Op {
     public:
-        void operator()(const RTArgs& args, uint32_t k_num_tiles_runtime = 0) {
+        void operator()(const RTArgs& args) {
             if constexpr (IsActiveCore) {
-                impl(args, k_num_tiles_runtime);
+                impl(args);
             }
         }
 
     private:
-        void impl(const RTArgs& args, [[maybe_unused]] uint32_t k_num_tiles_runtime) {
+        void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             // SRAM path: copy one bf16 score per SRAM-flagged TopK position into
             // scalar_cb (at byte 0 of each face tile page). TRISC consumes via
             // BroadcastType::SCALAR. No-op when CTArgs::scalar_cb == 0 (shared path).
-            if constexpr (IsSramExpert && CTArgs::scalar_cb != 0) {
+            if constexpr (CTArgs::scalar_cb != 0) {
                 volatile tt_l1_ptr uint16_t* score_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::scalar_src_l1_addr);
                 volatile tt_l1_ptr uint16_t* idx_ptr =
@@ -111,14 +109,8 @@ struct GatedReduce {
             }
 #elif defined(COMPILE_FOR_TRISC)
             constexpr uint32_t tiles_per_k = CTArgs::tiles_per_k;
-            const uint32_t k_num_tiles = IsSramExpert ? k_num_tiles_runtime : CTArgs::k_num_tiles;
+            const uint32_t k_num_tiles = args.k_num_tiles;
             static_assert(tiles_per_k >= 2 && tiles_per_k % 2 == 0, "tiles_per_k must be even and >= 2");
-
-            if constexpr (IsSramExpert) {
-                if (k_num_tiles == 0) {
-                    return;
-                }
-            }
 
             // Init once before the loop
             // Assumes all input cbs are configured the same, and the intermediate cb is configured the same as the
@@ -168,7 +160,7 @@ struct GatedReduce {
                 cb_wait_front(args.intermed_cb, 2);
                 cb_reserve_back(args.out_cb, 1);
 
-                if constexpr (IsSramExpert) {
+                if (args.scalar_cb != 0) {
                     // Wait for this iteration's scalar (BRISC pushes one bf16 per
                     // active expert into scalar_cb in TopK SRAM-flagged order).
                     cb_wait_front(args.scalar_cb, 1);
