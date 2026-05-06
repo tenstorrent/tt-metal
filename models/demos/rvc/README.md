@@ -98,10 +98,11 @@ uv run --active models/demos/rvc/scripts/infer_ttnn.py \
 ```
 
 
-## Development
+## Testing
 
 Running tests
 ```sh
+# includes both pcc and perf tests
 uv run --active pytest ./models/demos/rvc/tests
 ```
 
@@ -175,6 +176,22 @@ convolution layers:
 ```python
 if i == 3:
     x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+```
+
+The VITS text encoder uses relative-position multi-head attention. See
+`models/demos/rvc/tt_impl/vc/synthesizer.py`, where `MultiHeadAttention` starts at
+line 85. The TTNN implementation avoids a padding-heavy relative-position attention
+conversion by generating device-side position index tensors and a zero mask, then
+using `ttnn.scatter` to map relative positional logits into absolute attention
+positions. This keeps the positional embedding path in TTNN and avoids doing the
+relative-to-absolute attention transform through host-side padding logic.
+
+The relevant methods are:
+
+```python
+_get_absolute_position_index_and_zero_mask(...)
+_relative_to_absolute_position(...)
+_absolute_to_relative_position(...)
 ```
 
 The performant runner also uses trace capture and replay to reduce repeated
