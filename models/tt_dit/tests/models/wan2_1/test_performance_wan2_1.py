@@ -15,14 +15,87 @@ from models.tt_dit.pipelines.wan.pipeline_wan2_1 import WanPipeline21
 
 from ....utils.test import line_params, ring_params, ring_params_8k
 
-# (label, width, height) — ordered small to large
-RESOLUTIONS = [
-    # ("480p", 832, 480),
-    # ("720p", 1280, 720),
-    # ("1k", 1024, 1024),
-    # ("2k", 2048, 2048),
-    ("1536p", 1536, 2048),
-    # ("4k", 4096, 4096),
+# (batch_size, height, width) — B x H x W as provided
+SHAPES = [
+    (4, 1536, 2048),
+    (1, 1536, 2048),
+    (4, 1152, 2048),
+    (2, 1536, 2048),
+    (1, 1152, 2048),
+    (4, 2048, 1152),
+    (4, 2048, 2048),
+    (2, 1152, 2048),
+    (4, 1344, 2016),
+    (4, 2048, 1536),
+    (3, 1536, 2048),
+    (1, 2048, 1152),
+    (1, 2048, 2048),
+    (2, 2048, 1152),
+    (3, 1152, 2048),
+    (2, 2048, 2048),
+    (4, 1152, 1536),
+    (1, 2048, 1536),
+    (1, 1344, 2016),
+    (1, 1152, 1536),
+    (2, 1344, 2016),
+    (4, 960, 1696),
+    (2, 2048, 1536),
+    (4, 2016, 1344),
+    (1, 960, 1696),
+    (3, 2048, 1152),
+    (2, 1152, 1536),
+    (4, 1696, 960),
+    (3, 2048, 2048),
+    (3, 1344, 2016),
+    (2, 960, 1696),
+    (4, 1536, 1536),
+    (3, 1152, 1536),
+    (1, 2016, 1344),
+    (2, 2016, 1344),
+    (3, 2048, 1536),
+    (1, 1536, 1536),
+    (1, 1696, 960),
+    (4, 1536, 1152),
+    (4, 1088, 1632),
+    (1, 1024, 1280),
+    (3, 2016, 1344),
+    (2, 1536, 1536),
+    (1, 1536, 1152),
+    (1, 768, 1024),
+    (2, 1696, 960),
+    (3, 960, 1696),
+    (1, 1088, 1632),
+    (2, 1632, 1088),
+    (2, 1088, 1632),
+    (2, 1536, 1152),
+    (3, 1696, 960),
+    (4, 1632, 1088),
+    (3, 1536, 1536),
+    (4, 1152, 2560),
+    (3, 1536, 1152),
+    (3, 1088, 1632),
+    (1, 2048, 880),
+    (1, 1632, 1088),
+    (2, 2048, 880),
+    (4, 2048, 880),
+    (4, 2560, 1152),
+    (3, 1632, 1088),
+    (1, 1024, 1024),
+    (1, 1680, 720),
+    (1, 1280, 720),
+    (1, 1080, 1920),
+    (3, 2048, 880),
+    (1, 576, 1024),
+    (1, 832, 1216),
+    (2, 1344, 768),
+    (4, 1680, 720),
+    (1, 1344, 768),
+    (4, 1344, 768),
+    (2, 1680, 720),
+    (1, 768, 1344),
+    (1, 1152, 896),
+    (1, 1344, 2048),
+    (1, 2048, 1344),
 ]
 
 NUM_FRAMES = 1
@@ -64,9 +137,9 @@ def test_resolution_sweep(
     is_fsdp: bool,
 ) -> None:
     """
-    Sweep 480p / 720p / 1k / 2k / 4k at num_frames=1 (image-generation mode).
-    Creates a fresh pipeline per resolution so latent buffers never collide.
-    Uses run_warmup=False to skip the default 81-frame warmup (would OOM at 2k/4k).
+    Sweep all shapes in SHAPES at num_frames=1 (image-generation mode).
+    Creates a fresh pipeline per shape so latent buffers never collide.
+    Uses run_warmup=False to skip the default 81-frame warmup.
     Prints a summary table at the end.
     """
 
@@ -81,8 +154,10 @@ def test_resolution_sweep(
 
     results = {}  # label -> {"encoder": float, ...} | {"error": str}
 
-    for label, width, height in RESOLUTIONS:
-        logger.info(f"=== {label} ({width}x{height}) ===")
+    for batch_size, height, width in SHAPES:
+        label = f"{batch_size}x{height}x{width}"
+        prompts = [PROMPT] * batch_size
+        logger.info(f"=== {label} ===")
         pipeline = None
         try:
             pipeline = WanPipeline21.create_pipeline(
@@ -96,13 +171,13 @@ def test_resolution_sweep(
                 target_height=height,
                 target_width=width,
                 num_frames=NUM_FRAMES,
-                run_warmup=False,  # We warmup manually with num_frames=1 below
+                run_warmup=False,
             )
 
             logger.info(f"  Warmup {label}...")
             with torch.no_grad():
                 pipeline(
-                    prompt=PROMPT,
+                    prompt=prompts,
                     height=height,
                     width=width,
                     num_frames=NUM_FRAMES,
@@ -117,7 +192,7 @@ def test_resolution_sweep(
             with profiler("run", iteration=0):
                 with torch.no_grad():
                     result = pipeline(
-                        prompt=PROMPT,
+                        prompt=prompts,
                         height=height,
                         width=width,
                         num_frames=NUM_FRAMES,
@@ -142,13 +217,12 @@ def test_resolution_sweep(
                 f"vae={results[label]['vae']:.2f}s"
             )
 
-            # Save image (first frame of the single-frame output)
+            # Save first image of the batch
             if not is_ci_env and int(ttnn.distributed_context_get_rank()) == 0:
                 frames = result.frames if hasattr(result, "frames") else result[0]
-                # frames shape: (B, T, H, W, C) -> take batch 0, frame 0
-                frame = frames[0][0]
-                Image.fromarray(frame).save(f"wan2_1_{label}_{width}x{height}.png")
-                logger.info(f"  Saved wan2_1_{label}_{width}x{height}.png")
+                frame = frames[0][0]  # (B, T, H, W, C) -> batch 0, frame 0
+                Image.fromarray(frame).save(f"wan2_1_{label}.png")
+                logger.info(f"  Saved wan2_1_{label}.png")
 
         except Exception as e:
             logger.warning(f"  {label} FAILED: {e}")
@@ -162,13 +236,13 @@ def test_resolution_sweep(
 
 
 def _print_table(results, mesh_shape, sp_factor, tp_factor):
-    col_widths = [12, 12, 14, 14, 10, 12]
-    headers = ["Resolution", "Encoder(s)", "Denoising(s)", "Step(s)", "VAE(s)", "Total(s)"]
+    col_widths = [14, 8, 12, 14, 14, 10, 12]
+    headers = ["Shape(BxHxW)", "Tokens", "Encoder(s)", "Denoising(s)", "Step(s)", "VAE(s)", "Total(s)"]
     divider = "-+-".join("-" * w for w in col_widths)
     total_w = sum(col_widths) + 3 * (len(col_widths) - 1)
 
     title = (
-        f"WAN2.1 RESOLUTION SWEEP | mesh={mesh_shape} | sp={sp_factor} | tp={tp_factor} "
+        f"WAN2.1 SHAPE SWEEP | mesh={mesh_shape} | sp={sp_factor} | tp={tp_factor} "
         f"| steps={NUM_INFERENCE_STEPS} | frames={NUM_FRAMES}"
     )
     print()
@@ -177,18 +251,21 @@ def _print_table(results, mesh_shape, sp_factor, tp_factor):
     print(" | ".join(h.ljust(w) for h, w in zip(headers, col_widths)))
     print(divider)
 
-    for label, _, _ in RESOLUTIONS:
+    for batch_size, height, width in SHAPES:
+        label = f"{batch_size}x{height}x{width}"
+        tokens = height * width // 256  # seq len per image after patching (patch=(1,2,2), vae=8x)
         r = results.get(label)
         if r is None:
-            cells = [label, "N/A", "N/A", "N/A", "N/A", "N/A"]
+            cells = [label, str(tokens), "N/A", "N/A", "N/A", "N/A", "N/A"]
         elif "error" in r:
-            err_w = total_w - col_widths[0] - 3
+            err_w = total_w - col_widths[0] - col_widths[1] - 6
             err_msg = r["error"][:err_w]
-            print(f"{label.ljust(col_widths[0])} | FAILED: {err_msg}")
+            print(f"{label.ljust(col_widths[0])} | {str(tokens).ljust(col_widths[1])} | FAILED: {err_msg}")
             continue
         else:
             cells = [
                 label,
+                str(tokens),
                 f"{r['encoder']:.3f}",
                 f"{r['denoising']:.3f}",
                 f"{r['denoising'] / NUM_INFERENCE_STEPS:.3f}",
