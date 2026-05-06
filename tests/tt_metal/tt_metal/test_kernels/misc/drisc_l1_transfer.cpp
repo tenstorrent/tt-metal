@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DRISC test kernel: DRISC enters stream mode, reads a uint32_t from Tensix L1 into DRISC L1,
-//     then restores NOC2AXI.
+// DRISC test kernel: enters stream mode, reads a uint32_t from Tensix L1 into DRISC L1, restores NOC2AXI.
 
 #include "api/compile_time_args.h"
 #include "experimental/drisc_mode.h"
