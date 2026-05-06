@@ -1,6 +1,6 @@
 import ttnn
 import ttml
-from ttml.common.utils import round_up_to_tile
+from ttml.common.utils import round_up_to_tile, build_logits_mask
 import numpy as np
 
 
