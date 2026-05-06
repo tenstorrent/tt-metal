@@ -42,7 +42,15 @@ static uint32_t find_best_n_1d(uint32_t dim, uint32_t max_n, uint32_t align) {
 
 // Returns a sharded output MemoryConfig, or INTERLEAVED if no valid grid exists.
 // Callers must check is_sharded() before calling interleaved_to_sharded.
-MemoryConfig recompute_shard_spec_for_output(const MemoryConfig& memory_config, const TensorSpec& output_shape) {
+//
+// `explicit_memory_config` indicates the caller explicitly passed `memory_config` to the
+// public reshape API (vs. defaulting to the input tensor's). When true, the supplied spec
+// is honored as-is provided it tile-aligns and its grid covers the output's physical
+// shape (over-cover allowed). This lets a model lock in the layout its downstream ops are
+// tuned for; if the supplied spec does not cover the output we fall through to the
+// derivation logic below.
+MemoryConfig recompute_shard_spec_for_output(
+    const MemoryConfig& memory_config, const TensorSpec& output_shape, bool explicit_memory_config = false) {
     auto output_mem_config = memory_config;
     TT_FATAL(memory_config.shard_spec().has_value(), "Shard spec has no value");
     const auto& input_shard_spec = memory_config.shard_spec().value();
@@ -71,6 +79,23 @@ MemoryConfig recompute_shard_spec_for_output(const MemoryConfig& memory_config, 
     const uint32_t grid_x = input_bbox.grid_size().x;
     const uint32_t grid_y = input_bbox.grid_size().y;
     const auto layout = memory_config.memory_layout();
+
+    // Caller-explicit override: keep the supplied spec when it tile-aligns and its
+    // grid covers the output's physical extent. Lets callers preserve a layout their
+    // downstream ops are tuned for, even when our derived sub-grid would be smaller.
+    if (explicit_memory_config && layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        const auto& shard_shape = input_shard_spec.shape;
+        uint32_t shard_h = shard_shape[0];
+        uint32_t shard_w = shard_shape[1];
+        bool is_rm = (orientation == ShardOrientation::ROW_MAJOR);
+        uint32_t cores_h = is_rm ? grid_y : grid_x;
+        uint32_t cores_w = is_rm ? grid_x : grid_y;
+        bool tile_aligned = (align_h == 0 || shard_h % align_h == 0) && (align_w == 0 || shard_w % align_w == 0);
+        bool covers_output = ((uint64_t)cores_h * shard_h >= phys_h) && ((uint64_t)cores_w * shard_w >= phys_w);
+        if (tile_aligned && covers_output) {
+            return memory_config;
+        }
+    }
 
     if (layout == TensorMemoryLayout::BLOCK_SHARDED) {
         bool is_rm = (orientation == ShardOrientation::ROW_MAJOR);
@@ -262,7 +287,8 @@ ttnn::Tensor reshape_tiled(
     const MemoryConfig& memory_config,
     const PadValue& /*pad_value*/,
     const bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    bool explicit_memory_config) {
     // squeeze input tensor and requested shape to 3D
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {
@@ -310,8 +336,8 @@ ttnn::Tensor reshape_tiled(
                 sub_core_grid);
             output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
             if (memory_config.is_sharded()) {
-                auto output_mem_config =
-                    detail::recompute_shard_spec_for_output(memory_config, output_tensor_3d.tensor_spec());
+                auto output_mem_config = detail::recompute_shard_spec_for_output(
+                    memory_config, output_tensor_3d.tensor_spec(), explicit_memory_config);
                 if (output_mem_config.is_sharded()) {
                     output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
                 }
@@ -332,7 +358,8 @@ ttnn::Tensor reshape_tiled(
                     interleaved_output_mem_config,
                     requested_shape_3d,
                     requested_padded_shape_3d));
-            target_output_mem_config = detail::recompute_shard_spec_for_output(memory_config, interleaved_output_spec);
+            target_output_mem_config =
+                detail::recompute_shard_spec_for_output(memory_config, interleaved_output_spec, explicit_memory_config);
         }
 
         // Defensive: if recompute fell back to INTERLEAVED while input is sharded,
@@ -380,7 +407,8 @@ ttnn::Tensor reshape_tiled(
         tt::tt_metal::TensorSpec synthetic_spec(requested_shape_3d, synthetic_layout);
 
         // Recompute the shard spec for the output tensor shape
-        updated_mem_config = detail::recompute_shard_spec_for_output(updated_mem_config, synthetic_spec);
+        updated_mem_config =
+            detail::recompute_shard_spec_for_output(updated_mem_config, synthetic_spec, explicit_memory_config);
     }
 
     auto output_tensor_3d = ttnn::prim::reshape_view(
@@ -411,6 +439,7 @@ ttnn::Tensor ttnn::reshape(
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
+    const bool explicit_memory_config = memory_config.has_value();
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
 
@@ -495,7 +524,8 @@ ttnn::Tensor ttnn::reshape(
         mem_config,
         pad_value.value_or(default_pad_value),
         reshape_map_mode == TileReshapeMapMode::RECREATE,
-        sub_core_grid);
+        sub_core_grid,
+        explicit_memory_config);
 }
 
 ttnn::Tensor ttnn::reshape(
