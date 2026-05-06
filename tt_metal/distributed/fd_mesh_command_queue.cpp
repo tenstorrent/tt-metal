@@ -316,20 +316,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         auto& trace_node = trace_nodes_.back();
         bool use_prefetcher_cache = mesh_workload.impl().max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_;
         for (auto& [device_range, program] : mesh_workload.get_programs()) {
-#if defined(TRACY_ENABLE)
-            // With tracy enabled, each device has a different program runtime ID in the launch message, so we need to
-            // handle each device separately rather than grouping them.
-            for (const auto& coord : device_range) {
-                trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
-                    coord,
-                    program_dispatch::create_trace_node(
-                        program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
-            }
-#else
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
                 device_range,
                 program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
-#endif
         }
         trace_node.multicast_go_signals = mcast_go_signals;
         trace_node.unicast_go_signals = unicast_go_signals;
@@ -416,8 +405,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             program_cmd_seq,
             dispatch_metadata.stall_first,
             dispatch_metadata.stall_before_program,
-            chip_ids_in_workload,
-            program.get_runtime_id());
+            chip_ids_in_workload);
     }
     // Send go signals to devices not running a program to ensure consistent global state
     this->write_go_signal_to_unused_sub_grids(
@@ -979,15 +967,13 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program,
-    std::unordered_set<uint32_t>& chip_ids_in_workload,
-    uint32_t program_runtime_id) {
+    std::unordered_set<uint32_t>& chip_ids_in_workload) {
     auto dispatch_core_config = MetalContext::instance(mesh_device_->impl().get_context_id())
                                     .get_dispatch_core_manager()
                                     .get_dispatch_core_config();
     CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
         auto device = mesh_device_->impl().get_device(coord);
-        this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
         chip_ids_in_workload.insert(device->id());
@@ -1350,15 +1336,6 @@ void FDMeshCommandQueue::record_end() {
                 sub_device_id,
                 ProgramBinaryStatus::Committed,
                 std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores));
-#if defined(TRACY_ENABLE)
-            for (auto& [is_multicast, original_launch_msg, launch_msg] :
-                 cached_program_command_sequence.launch_messages) {
-                auto* device = mesh_device_->get_device(range.start_coord());
-                TT_ASSERT(range.start_coord() == range.end_coord());
-                launch_msg.kernel_config().host_assigned_id() =
-                    tt_metal::detail::EncodePerDeviceProgramID(node.program_runtime_id, device->id());
-            }
-#endif
 
             // Issue dispatch commands for this program
             program_dispatch::write_program_command_sequence(
@@ -1435,18 +1412,6 @@ void FDMeshCommandQueue::record_end() {
 SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
     auto local_devices = mesh_device_->get_devices();
     return local_devices.at(0)->sysmem_manager();
-}
-
-void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
-    ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device) {
-    if (tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .rtoptions()
-            .get_profiler_enabled()) {
-        for (auto& [is_multicast, original_launch_msg, launch_msg] : program_cmd_seq.launch_messages) {
-            launch_msg.kernel_config().host_assigned_id() =
-                tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
-        }
-    }
 }
 
 std::pair<bool, size_t> FDMeshCommandQueue::query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB) {
