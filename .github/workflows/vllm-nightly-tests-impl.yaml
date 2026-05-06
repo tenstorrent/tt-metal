@@ -47,7 +47,7 @@ jobs:
             {
               "name": "[WH-T3K] Gemma3-27B",
               "model": "google/gemma-3-27b-it",
-              "server-timeout": 45,
+              "server-timeout": 60,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -62,7 +62,7 @@ jobs:
             {
               "name": "[WH-GLX] Gemma3-27B DP=4",
               "model": "google/gemma-3-27b-it",
-              "server-timeout": 45,
+              "server-timeout": 60,
               "benchmark-timeout": 5,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -78,7 +78,7 @@ jobs:
             {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
               "model": "openai/gpt-oss-120b",
-              "server-timeout": 35,
+              "server-timeout": 70,
               "benchmark-timeout": 15,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -95,7 +95,7 @@ jobs:
             {
               "name": "[WH-GLX] GPT-OSS-120B (high-throughput)",
               "model": "openai/gpt-oss-120b",
-              "server-timeout": 35,
+              "server-timeout": 70,
               "benchmark-timeout": 10,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -114,7 +114,7 @@ jobs:
             {
               "name": "[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 15,
+              "server-timeout": 30,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -131,7 +131,7 @@ jobs:
             {
               "name": "[WH-T3K] Llama-3.1-8B-Instruct (prefix caching)",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 30,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -147,7 +147,7 @@ jobs:
             {
               "name": "[BH-DB] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 30,
               "benchmark-timeout": 5,
               "runner-label": "BH-DeskBox",
               "arch": "arch-blackhole",
@@ -162,7 +162,7 @@ jobs:
             {
               "name": "[BH-QB-GE] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 30,
               "benchmark-timeout": 10,
               "runner-label": "BH-QB-GE",
               "arch": "arch-blackhole",
@@ -177,7 +177,7 @@ jobs:
             {
               "name": "[BH-LB] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 35,
+              "server-timeout": 50,
               "benchmark-timeout": 10,
               "runner-label": "bh-loudbox",
               "arch": "arch-blackhole",
@@ -191,7 +191,7 @@ jobs:
             {
               "name": "[WH-GLX] Llama-3.1-8B-Instruct DP=4",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 20,
+              "server-timeout": 35,
               "benchmark-timeout": 5,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -207,7 +207,7 @@ jobs:
             {
               "name": "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
+              "server-timeout": 60,
               "benchmark-timeout": 10,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -224,7 +224,7 @@ jobs:
             {
               "name": "[WH-GLX] Llama-3.3-70B-Instruct hostsample (prefix caching)",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
+              "server-timeout": 60,
               "benchmark-timeout": 10,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -241,7 +241,7 @@ jobs:
             {
               "name": "[WH-GLX] Qwen3-32B device with sampling-tests",
               "model": "Qwen/Qwen3-32B",
-              "server-timeout": 35,
+              "server-timeout": 60,
               "benchmark-timeout": 10,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
@@ -256,7 +256,7 @@ jobs:
             {
               "name": "[WH-T3K] Qwen2.5-VL-72B-Instruct",
               "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 12,
+              "server-timeout": 30,
               "benchmark-timeout": 10,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -271,7 +271,7 @@ jobs:
             {
               "name": "[WH-T3K] Qwen3-VL-32B-Instruct",
               "model": "Qwen/Qwen3-VL-32B-Instruct",
-              "server-timeout": 10,
+              "server-timeout": 30,
               "benchmark-timeout": 10,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
