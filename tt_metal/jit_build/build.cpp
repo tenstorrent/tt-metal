@@ -746,7 +746,7 @@ void JitBuildState::extract_zone_src_locations(const std::filesystem::path& out_
         std::lock_guard<std::mutex> lk(zone_log_mutex);
         if (new_log.exchange(false) &&
             tt::filesystem::safe_exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG).value_or(false)) {
-            std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
+            tt::filesystem::safe_remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
         }
 
         if (!tt::filesystem::safe_exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG).value_or(false)) {
@@ -796,7 +796,13 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 // 2. JIT compiler is not deterministic. Different .o files can be produced from the same source.
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
                 //    getting confused.
-                hard_link_or_copy(out_dir / this->objs_[i], temp_obj);
+                if (!hard_link_or_copy(out_dir / this->objs_[i], temp_obj)) {
+                    log_warning(
+                        tt::LogBuildKernels,
+                        "Failed to hard-link or copy {} to {}",
+                        (out_dir / this->objs_[i]).string(),
+                        temp_obj.string());
+                }
                 ++reused_objs;
             }
             link_objs += temp_obj.string();
